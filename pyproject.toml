@@ -1,0 +1,47 @@
+[project]
+name = "resume-agent"
+version = "0.1.0"
+description = "Phase-1 job matching agent system built with FastAPI and PostgreSQL."
+readme = "agent开发文档.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.16.0",
+    "fastapi>=0.115.0",
+    "pydantic-settings>=2.9.0",
+    "pypdf>=5.4.0",
+    "psycopg[binary]>=3.2.0",
+    "python-docx>=1.1.2",
+    "python-multipart>=0.0.20",
+    "sqlalchemy>=2.0.40",
+    "uvicorn>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8.3.5",
+    "pytest-cov>=6.1.1",
+    "reportlab>=4.4.0",
+    "ruff>=0.11.6",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

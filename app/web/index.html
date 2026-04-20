@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Resume Control Room</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="grain"></div>
+    <main class="shell">
+      <section class="masthead panel panel-wide reveal">
+        <div class="eyebrow">
+          <span class="eyebrow-dot"></span>
+          Phase-1 Job Matching Agent
+        </div>
+        <div class="masthead-grid">
+          <div>
+            <p class="kicker">Resume Control Room</p>
+            <h1>把第一阶段后端闭环直接跑在一个可审查的测试台上。</h1>
+            <p class="lede">
+              这个页面只做一件事：让你快速验证上传、解析、画像、匹配、定向优化和审核结果是否闭合。
+            </p>
+            <p class="lede">
+              当前任务模型已切成入队执行：API 只创建任务，worker 在后台消费，页面会自动轮询任务状态。
+            </p>
+          </div>
+          <div class="masthead-stats">
+            <article class="stat-card">
+              <span class="stat-label">Health</span>
+              <strong id="health-status">Checking</strong>
+              <p id="health-meta">Connecting to backend…</p>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Job Base</span>
+              <strong id="job-count">0</strong>
+              <p>Seeded postings available for matching.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <div class="column">
+          <section class="panel reveal" style="--delay: 0.08s">
+            <div class="section-heading">
+              <p class="kicker">Step 1</p>
+              <h2>上传简历</h2>
+            </div>
+            <form id="upload-form" class="stack-form">
+              <label class="field file-drop">
+                <span class="field-label">PDF / DOCX</span>
+                <input id="resume-file" type="file" accept=".pdf,.docx" required />
+                <span class="file-drop-hint">拖入文件或点击选择，上传后自动生成 `resume_id`。</span>
+              </label>
+              <button class="action action-primary" type="submit">Upload Resume</button>
+            </form>
+            <div class="result-strip">
+              <div>
+                <span class="strip-label">Candidate ID</span>
+                <code id="candidate-id">-</code>
+              </div>
+              <div>
+                <span class="strip-label">Resume ID</span>
+                <code id="resume-id">-</code>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel reveal" style="--delay: 0.16s">
+            <div class="section-heading">
+              <p class="kicker">Step 2</p>
+              <h2>跑匹配任务</h2>
+            </div>
+            <form id="match-form" class="stack-form">
+              <label class="field">
+                <span class="field-label">Resume ID</span>
+                <input id="match-resume-id" type="text" placeholder="Upload 后自动填充，也可手工粘贴" required />
+              </label>
+              <label class="field">
+                <span class="field-label">Target City</span>
+                <input id="target-city" type="text" value="Shanghai" placeholder="例如 Shanghai" />
+              </label>
+              <p class="file-drop-hint">创建后不会同步返回结果，而是返回 `task_id` 并进入 queued/running。</p>
+              <button class="action action-ink" type="submit">Create Match Task</button>
+            </form>
+            <div class="result-strip">
+              <div>
+                <span class="strip-label">Match Task ID</span>
+                <code id="match-task-id">-</code>
+              </div>
+              <div>
+                <span class="strip-label">Stage</span>
+                <code id="match-stage">-</code>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel reveal" style="--delay: 0.24s">
+            <div class="section-heading">
+              <p class="kicker">Step 3</p>
+              <h2>生成定向优化稿</h2>
+            </div>
+            <form id="optimization-form" class="stack-form">
+              <label class="field">
+                <span class="field-label">Resume ID</span>
+                <input id="optimization-resume-id" type="text" placeholder="默认沿用当前简历" required />
+              </label>
+              <label class="field">
+                <span class="field-label">Target Job ID</span>
+                <input id="target-job-id" type="text" placeholder="从右侧岗位卡片点击 Select" required />
+              </label>
+              <p class="file-drop-hint">优化任务同样由 worker 消费，页面会持续轮询直到 completed / blocked / failed。</p>
+              <button class="action action-accent" type="submit">Create Optimization Task</button>
+            </form>
+            <div class="result-strip">
+              <div>
+                <span class="strip-label">Optimization Task ID</span>
+                <code id="optimization-task-id">-</code>
+              </div>
+              <div>
+                <span class="strip-label">Review</span>
+                <code id="review-status">-</code>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="column column-large">
+          <section class="panel reveal" style="--delay: 0.1s">
+            <div class="section-heading section-heading-row">
+              <div>
+                <p class="kicker">Job Matches</p>
+                <h2>候选岗位与差距解释</h2>
+              </div>
+              <div class="pill" id="selected-job-pill">No job selected</div>
+            </div>
+            <div id="match-results" class="cards-grid empty-state">
+              先上传简历并运行匹配任务，结果会显示在这里。
+            </div>
+          </section>
+
+          <section class="panel reveal" style="--delay: 0.18s">
+            <div class="section-heading">
+              <p class="kicker">Optimization Output</p>
+              <h2>优化稿与审核结果</h2>
+            </div>
+            <div class="optimization-grid">
+              <article class="output-card">
+                <div class="subhead">
+                  <span>Rendered Preview</span>
+                  <button id="copy-markdown" class="ghost-button" type="button">Copy Markdown</button>
+                </div>
+                <div id="markdown-preview" class="markdown-preview empty-state">
+                  选择岗位并运行优化任务后，这里会显示优化版简历。
+                </div>
+              </article>
+              <article class="output-card">
+                <div class="subhead">
+                  <span>Audit + Raw Output</span>
+                </div>
+                <div id="review-panel" class="review-panel empty-state">
+                  ReviewGuard 结果会显示在这里。
+                </div>
+                <pre id="raw-markdown" class="code-block"># optimized_resume.md</pre>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel reveal" style="--delay: 0.26s">
+            <div class="section-heading">
+              <p class="kicker">Observability</p>
+              <h2>任务事件流与岗位库</h2>
+            </div>
+            <div class="observability-grid">
+              <article class="output-card">
+                <div class="subhead">
+                  <span>Event Timeline</span>
+                </div>
+                <div id="event-timeline" class="timeline empty-state">
+                  任务执行事件会按时间写在这里。
+                </div>
+              </article>
+              <article class="output-card">
+                <div class="subhead">
+                  <span>Seeded Jobs</span>
+                </div>
+                <div id="job-library" class="job-library empty-state">
+                  正在加载岗位库…
+                </div>
+              </article>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <div id="toast" class="toast" aria-live="polite"></div>
+    </main>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>
