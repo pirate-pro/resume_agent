@@ -15,3 +15,18 @@
 - 影响范围：仅文档，无代码行为变更。
 - 验证：文件创建成功。
 
+2. [完成] 落地 Memory Phase A 核心骨架（不切现网逻辑）。
+- 说明：
+  - 新增 `app/memory/` 核心模块：`models/contracts/policies/retrieval/consolidation/lifecycle/facade`。
+  - 新增 `app/memory/stores/`：`jsonl_file_store.py`（文件存储实现）与 `legacy_adapter.py`（迁移适配器）。
+  - 新增 `app/memory/__init__.py` 与 `stores/__init__.py` 统一导出。
+- 影响范围：
+  - 新增代码，不改现有 `runtime/tool/service` 调用链，当前行为不变。
+  - 为后续双写/灰度切换提供接口基础。
+- 验证：待运行 `mypy/pytest` 回归。
+
+3. [完成] Phase A 回归验证。
+- 说明：完成类型检查与测试回归，确认新增模块未影响现有行为。
+- 验证结果：
+  - `uv run mypy app tests`：通过（`Success: no issues found in 57 source files`）
+  - `uv run pytest -q`：通过（`28 passed`）
