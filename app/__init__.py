@@ -1,1 +1,3 @@
-"""Resume agent application package."""
+"""Application package."""
+
+__all__ = []

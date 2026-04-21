@@ -1,1 +1,3 @@
-"""Built-in web console for manual workflow verification."""
+"""Frontend web package."""
+
+__all__ = ["routes"]
