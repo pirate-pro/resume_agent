@@ -162,7 +162,11 @@ class WorkspaceReadFileTool:
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="workspace_read_file",
-            description="Read content from a session workspace file.",
+            description=(
+                "Read content from file with workspace-first lookup. "
+                "Workspace is data/sessions/<session_id>/workspace. "
+                "If missing in workspace, search parent directories upward to filesystem root."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -175,11 +179,20 @@ class WorkspaceReadFileTool:
     def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
         _validate_session_id(session_id)
         relative_path = _require_non_empty_argument(arguments, "path")
-        workspace = self._session_repository.get_workspace_path(session_id)
-        target = _resolve_workspace_path(workspace, relative_path)
-        if not target.exists() or not target.is_file():
-            raise ToolExecutionError(f"File does not exist: {relative_path}")
-        _logger.debug("执行 workspace_read_file: session_id=%s path=%s", session_id, relative_path)
+        workspace = self._session_repository.get_workspace_path(session_id).resolve()
+        target = _find_file_with_workspace_fallback(workspace, relative_path)
+        if target is None:
+            raise ToolExecutionError(
+                "File does not exist after workspace-first lookup. "
+                f"path={relative_path} workspace={workspace}"
+            )
+        _logger.debug(
+            "执行 workspace_read_file: session_id=%s path=%s resolved_path=%s workspace=%s",
+            session_id,
+            relative_path,
+            target,
+            workspace,
+        )
         try:
             content = target.read_text(encoding="utf-8")
         except OSError as exc:
@@ -228,3 +241,19 @@ def _resolve_workspace_path(workspace: Path, relative_path: str) -> Path:
     if not target.is_relative_to(workspace_resolved):
         raise ToolExecutionError("Path traversal is not allowed.")
     return target
+
+
+def _find_file_with_workspace_fallback(workspace: Path, relative_path: str) -> Path | None:
+    candidate = Path(relative_path)
+    if candidate.is_absolute():
+        raise ToolExecutionError("Absolute paths are not allowed.")
+    if ".." in candidate.parts:
+        raise ToolExecutionError("Path traversal is not allowed.")
+
+    # 查找顺序：workspace -> workspace 的父目录 ... -> 文件系统根目录
+    search_roots = [workspace, *list(workspace.parents)]
+    for root in search_roots:
+        target = root / candidate
+        if target.exists() and target.is_file():
+            return target
+    return None

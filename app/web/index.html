@@ -47,6 +47,9 @@
         </header>
 
         <section id="thread" class="thread" aria-live="polite"></section>
+        <button id="jumpToLatestBtn" class="jump-to-latest" type="button" aria-label="jump to latest">
+          回到底部
+        </button>
 
         <form id="composerForm" class="composer" autocomplete="off">
           <textarea
@@ -99,6 +102,10 @@
         <div class="avatar"></div>
         <div class="content-wrap">
           <div class="meta"></div>
+          <details class="thinking-block">
+            <summary>执行过程</summary>
+            <pre class="thinking-content"></pre>
+          </details>
           <div class="content"></div>
         </div>
       </article>

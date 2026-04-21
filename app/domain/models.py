@@ -99,11 +99,14 @@ class ToolDefinition:
 class ToolCall:
     name: str
     arguments: dict[str, Any]
+    tool_call_id: str | None = None
 
     def __post_init__(self) -> None:
         self.name = _require_non_empty("name", self.name)
         if not isinstance(self.arguments, dict):
             raise ValidationError("arguments must be a dictionary.")
+        if self.tool_call_id is not None:
+            self.tool_call_id = _require_non_empty("tool_call_id", self.tool_call_id)
 
 
 @dataclass(slots=True)

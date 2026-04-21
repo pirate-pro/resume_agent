@@ -94,9 +94,4 @@ class ContextAssembler:
                 content = str(event.payload.get("content", "")).strip()
                 if content:
                     messages.append({"role": "assistant", "content": content})
-            elif event.type == "tool_result":
-                content = str(event.payload.get("content", "")).strip()
-                tool_name = str(event.payload.get("tool_name", "tool")).strip() or "tool"
-                if content:
-                    messages.append({"role": "tool", "name": tool_name, "content": content})
         return messages

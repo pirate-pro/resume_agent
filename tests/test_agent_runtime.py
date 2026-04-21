@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from app.domain.models import AgentRunInput, ToolCall
 from app.domain.protocols import ChatModelClient, ModelResponse
@@ -129,3 +130,51 @@ def test_runtime_stops_when_tool_round_limit_exceeded(tmp_path: Path) -> None:
     )
 
     assert "Tool call limit reached" in output.answer
+
+
+def test_runtime_builds_valid_tool_message_flow(tmp_path: Path) -> None:
+    class CapturingModelClient:
+        def __init__(self) -> None:
+            self.calls: list[list[dict[str, Any]]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, tools)
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="memory_write",
+                            arguments={"content": "remember", "tags": ["t"]},
+                            tool_call_id="call_test_1",
+                        )
+                    ],
+                )
+            return ModelResponse(content="done", tool_calls=[])
+
+    model = CapturingModelClient()
+    runtime, _, _ = _build_runtime(tmp_path, model)
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_4",
+            user_message="run tools",
+            skill_names=["base", "tools"],
+            max_tool_rounds=2,
+        )
+    )
+
+    second_call_messages = model.calls[1]
+    assistant_tool_call_message = next(
+        msg for msg in second_call_messages if msg.get("role") == "assistant" and "tool_calls" in msg
+    )
+    tool_result_message = next(msg for msg in second_call_messages if msg.get("role") == "tool")
+
+    assert output.answer == "done"
+    assert assistant_tool_call_message["tool_calls"][0]["id"] == "call_test_1"
+    assert tool_result_message["tool_call_id"] == "call_test_1"

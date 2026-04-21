@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -47,3 +48,53 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
         assert len(memories_resp.json()) >= 1
 
     app.dependency_overrides.clear()
+
+
+def test_chat_stream_endpoint(tmp_path: Path) -> None:
+    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="stream-ok"))
+    app.dependency_overrides[get_chat_service] = lambda: service
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat/stream",
+                json={
+                    "session_id": None,
+                    "message": "hello stream",
+                    "skill_names": ["base", "memory", "tools"],
+                    "max_tool_rounds": 3,
+                },
+            )
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/event-stream")
+
+            events = _parse_sse_events(response.text)
+            event_names = [name for name, _ in events]
+            assert "session" in event_names
+            assert "answer_delta" in event_names
+            assert "done" in event_names
+
+            done_payload = next(payload for name, payload in events if name == "done")
+            assert done_payload["answer"] == "stream-ok"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _parse_sse_events(raw: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+    for block in raw.split("\n\n"):
+        if not block.strip():
+            continue
+        event_name = "message"
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event_name = line[6:].strip() or "message"
+            elif line.startswith("data:"):
+                data_lines.append(line[5:].strip())
+
+        payload_text = "\n".join(data_lines)
+        payload = json.loads(payload_text) if payload_text else {}
+        if isinstance(payload, dict):
+            events.append((event_name, payload))
+    return events

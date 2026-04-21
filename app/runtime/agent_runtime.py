@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
+from uuid import uuid4
 
 from app.core.errors import AppError, ToolExecutionError, ValidationError
 from app.domain.models import AgentRunInput, AgentRunOutput, ToolCall, ToolExecutionResult
@@ -92,7 +94,9 @@ class AgentRuntime:
                 len(model_response.tool_calls),
             )
 
-            if not model_response.tool_calls:
+            resolved_tool_calls = self._ensure_tool_call_ids(model_response.tool_calls)
+
+            if not resolved_tool_calls:
                 answer = (model_response.content or "").strip() or "(no answer)"
                 break
 
@@ -101,16 +105,28 @@ class AgentRuntime:
                 answer = "Tool call limit reached before generating final answer."
                 break
 
-            assistant_content = (model_response.content or "").strip()
-            if assistant_content:
-                messages.append({"role": "assistant", "content": assistant_content})
+            if model_response.content.strip():
+                # 一些模型会在 tool_call 前返回推理摘要，记录下来供前端“执行过程/思考”展示。
+                self._event_recorder.record(
+                    session_id=session_id,
+                    event_type="assistant_thinking",
+                    payload={"content": model_response.content},
+                )
 
-            for tool_call in model_response.tool_calls:
+            # 遇到工具调用时，必须先把 assistant 的 tool_calls 消息回填到上下文，
+            # 后续 tool 角色消息才是协议上合法的。
+            messages.append(self._build_assistant_tool_call_message(model_response.content, resolved_tool_calls))
+
+            for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)
                 self._event_recorder.record(
                     session_id=session_id,
                     event_type="tool_call",
-                    payload={"name": tool_call.name, "arguments": tool_call.arguments},
+                    payload={
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                        "tool_call_id": tool_call.tool_call_id,
+                    },
                 )
                 result = self._execute_tool_safely(tool_call, session_id)
                 _logger.info(
@@ -127,6 +143,7 @@ class AgentRuntime:
                         "tool_name": result.tool_name,
                         "success": result.success,
                         "content": result.content,
+                        "tool_call_id": tool_call.tool_call_id,
                     },
                 )
                 if tool_call.name == "memory_write" and result.success:
@@ -141,7 +158,7 @@ class AgentRuntime:
                 messages.append(
                     {
                         "role": "tool",
-                        "name": tool_call.name,
+                        "tool_call_id": tool_call.tool_call_id,
                         "content": result.content,
                     }
                 )
@@ -198,4 +215,28 @@ class AgentRuntime:
                 "description": definition.description,
                 "parameters": definition.parameters_schema,
             },
+        }
+
+    def _ensure_tool_call_ids(self, tool_calls: list[ToolCall]) -> list[ToolCall]:
+        resolved: list[ToolCall] = []
+        for call in tool_calls:
+            call_id = call.tool_call_id or f"call_{uuid4().hex[:12]}"
+            resolved.append(ToolCall(name=call.name, arguments=call.arguments, tool_call_id=call_id))
+        return resolved
+
+    def _build_assistant_tool_call_message(self, content: str, tool_calls: list[ToolCall]) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "content": content or "",
+            "tool_calls": [
+                {
+                    "id": call.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                    },
+                }
+                for call in tool_calls
+            ],
         }

@@ -81,13 +81,13 @@ class OpenAICompatibleClient:
                     response.raise_for_status()
                 except httpx.HTTPError as retry_exc:
                     _logger.exception("模型请求回退后仍失败: %s", retry_exc)
-                    raise ModelClientError(f"Model request failed: {retry_exc}") from retry_exc
+                    raise ModelClientError(_build_model_request_error_message(retry_exc)) from retry_exc
             else:
                 _logger.exception("模型请求失败(HTTP 状态异常): %s", exc)
-                raise ModelClientError(f"Model request failed: {exc}") from exc
+                raise ModelClientError(_build_model_request_error_message(exc)) from exc
         except httpx.HTTPError as exc:
             _logger.exception("模型请求失败(网络异常): %s", exc)
-            raise ModelClientError(f"Model request failed: {exc}") from exc
+            raise ModelClientError(_build_model_request_error_message(exc)) from exc
 
         try:
             body = response.json()
@@ -132,6 +132,12 @@ def _parse_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
     for entry in raw_tool_calls:
         if not isinstance(entry, dict):
             raise ModelClientError("tool call entry must be an object.")
+        tool_call_id_raw = entry.get("id")
+        tool_call_id: str | None = None
+        if tool_call_id_raw is not None:
+            if not isinstance(tool_call_id_raw, str) or not tool_call_id_raw.strip():
+                raise ModelClientError("tool call id must be a non-empty string when present.")
+            tool_call_id = tool_call_id_raw.strip()
         function_block = entry.get("function")
         if not isinstance(function_block, dict):
             raise ModelClientError("tool call missing function object.")
@@ -148,7 +154,13 @@ def _parse_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
             raise ModelClientError("tool arguments must be object or JSON string.")
         if not isinstance(arguments, dict):
             raise ModelClientError("tool arguments must decode to object.")
-        parsed.append(ToolCall(name=_validate_non_empty("tool_name", str(name)), arguments=arguments))
+        parsed.append(
+            ToolCall(
+                name=_validate_non_empty("tool_name", str(name)),
+                arguments=arguments,
+                tool_call_id=tool_call_id,
+            )
+        )
     return parsed
 
 
@@ -187,3 +199,33 @@ def _build_chat_completions_url(base_url: str) -> str:
     if normalized.endswith("/chat/completions"):
         return normalized
     return f"{normalized}/chat/completions"
+
+
+def _build_model_request_error_message(error: httpx.HTTPError) -> str:
+    base = f"Model request failed: {error}"
+    if not isinstance(error, httpx.HTTPStatusError):
+        return base
+
+    response = error.response
+    detail = _extract_provider_error_detail(response)
+    if detail:
+        return f"{base} | provider_detail={detail}"
+    return base
+
+
+def _extract_provider_error_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except json.JSONDecodeError:
+        return response.text.strip()[:400]
+
+    if isinstance(payload, dict):
+        error_block = payload.get("error")
+        if isinstance(error_block, dict):
+            message = error_block.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return json.dumps(payload, ensure_ascii=False)[:400]

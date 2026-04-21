@@ -19,6 +19,7 @@ _ALLOWED_EVENT_TYPES = {
     "user_message",
     "tool_call",
     "tool_result",
+    "assistant_thinking",
     "assistant_message",
     "memory_write",
     "run_finished",
