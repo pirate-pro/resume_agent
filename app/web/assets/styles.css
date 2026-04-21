@@ -328,6 +328,17 @@ body {
   backdrop-filter: blur(8px);
 }
 
+.composer-left {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.composer-input-wrap {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+
 textarea {
   width: 100%;
   min-height: 50px;
@@ -379,6 +390,119 @@ textarea:focus {
   min-height: 50px;
   border-color: rgba(74, 222, 128, 0.45);
   background: linear-gradient(135deg, #19462c, #1f5f3a);
+}
+
+.btn-upload-trigger {
+  width: 50px;
+  min-width: 50px;
+  min-height: 50px;
+  border-radius: 14px;
+  font-size: 1.35rem;
+  line-height: 1;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-color: rgba(255, 255, 255, 0.16);
+  background: linear-gradient(160deg, #303030, #262626);
+}
+
+.btn-upload-trigger:hover {
+  border-color: rgba(74, 222, 128, 0.45);
+}
+
+.composer-upload-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 6;
+  min-width: 220px;
+  padding: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: rgba(26, 26, 26, 0.98);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.45);
+  display: none;
+}
+
+.composer-upload-menu.show {
+  display: grid;
+  gap: 6px;
+}
+
+.composer-upload-item {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+}
+
+.composer-upload-item:hover {
+  border-color: rgba(74, 222, 128, 0.45);
+  background: rgba(74, 222, 128, 0.07);
+}
+
+.composer-upload-item-title {
+  font-size: 0.83rem;
+}
+
+.composer-upload-item-desc {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.mention-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 5;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: rgba(24, 24, 24, 0.98);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.45);
+  display: none;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.mention-menu.show {
+  display: grid;
+}
+
+.mention-item {
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  display: grid;
+  gap: 2px;
+}
+
+.mention-item:last-child {
+  border-bottom: 0;
+}
+
+.mention-item:hover,
+.mention-item.active {
+  background: rgba(74, 222, 128, 0.12);
+}
+
+.mention-item-title {
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.mention-item-meta {
+  font-size: 0.7rem;
+  color: var(--text-faint);
 }
 
 .card {
@@ -511,6 +635,44 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
+}
+
+.tiny-text {
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.file-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 160px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.file-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.file-item-meta {
+  margin-top: 4px;
+  font-size: 0.7rem;
+  color: var(--text-faint);
 }
 
 .json-view {

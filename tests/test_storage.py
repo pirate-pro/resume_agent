@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.domain.models import EventRecord, MemoryItem
+import pytest
+
+from app.domain.models import EventRecord, MemoryItem, SessionFile
+from app.core.errors import StorageError
 from app.infra.storage.jsonl_memory_repository import JsonlMemoryRepository
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -55,13 +58,92 @@ def test_memory_write_and_search(tmp_path: Path) -> None:
 
 
 
-def test_skill_file_read(tmp_path: Path) -> None:
+def test_skill_file_read_standard_layout(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    (skills_dir / "base.md").write_text("# Base\n\ncontent", encoding="utf-8")
+    skill_dir = skills_dir / "base"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "name: base",
+                "description: Base behavior skill",
+                "---",
+                "# Base",
+                "",
+                "content",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     repository = MarkdownSkillRepository(skills_dir=skills_dir)
     loaded = repository.load_skills(["base"])
 
     assert "base" in loaded
     assert "content" in loaded["base"]
+
+
+def test_skill_file_read_legacy_layout(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    (skills_dir / "base.md").write_text("# Base\n\nlegacy-content", encoding="utf-8")
+
+    repository = MarkdownSkillRepository(skills_dir=skills_dir)
+    loaded = repository.load_skills(["base"])
+
+    assert "base" in loaded
+    assert "legacy-content" in loaded["base"]
+
+
+def test_session_file_manifest_and_active_files(tmp_path: Path) -> None:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session("sess_file")
+    workspace = repository.get_workspace_path("sess_file")
+    text_path = workspace / ".parsed" / "file_1.txt"
+    text_path.parent.mkdir(parents=True, exist_ok=True)
+    text_path.write_text("hello file", encoding="utf-8")
+
+    file_record = SessionFile(
+        file_id="file_1",
+        session_id="sess_file",
+        filename="a.txt",
+        media_type="text/plain",
+        size_bytes=10,
+        status="ready",
+        uploaded_at=datetime.now(UTC),
+        storage_relpath="workspace/uploads/file_1_a.txt",
+        text_relpath="workspace/.parsed/file_1.txt",
+        error=None,
+    )
+    repository.add_or_update_session_file(file_record)
+
+    files = repository.list_session_files("sess_file")
+    active = repository.set_active_file_ids("sess_file", ["file_1"])
+    text = repository.read_session_file_text("sess_file", "file_1")
+
+    assert len(files) == 1
+    assert files[0].file_id == "file_1"
+    assert active == ["file_1"]
+    assert "hello file" in text
+
+
+def test_skill_file_invalid_frontmatter_raises(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "bad-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "name: bad-skill",
+                "---",
+                "body",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    repository = MarkdownSkillRepository(skills_dir=skills_dir)
+    with pytest.raises(StorageError):
+        repository.load_skills(["bad-skill"])

@@ -14,6 +14,7 @@ __all__ = [
     "ContextBundle",
     "EventRecord",
     "MemoryItem",
+    "SessionFile",
     "SessionMeta",
     "ToolCall",
     "ToolDefinition",
@@ -56,6 +57,44 @@ class EventRecord:
         self.type = _require_non_empty("type", self.type)
         if not isinstance(self.payload, dict):
             raise ValidationError("payload must be a dictionary.")
+
+
+@dataclass(slots=True)
+class SessionFile:
+    file_id: str
+    session_id: str
+    filename: str
+    media_type: str
+    size_bytes: int
+    status: str
+    uploaded_at: datetime
+    storage_relpath: str
+    text_relpath: str | None = None
+    error: str | None = None
+    parsed_char_count: int | None = None
+    parsed_token_estimate: int | None = None
+    parsed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        self.file_id = _require_non_empty("file_id", self.file_id)
+        self.session_id = _require_non_empty("session_id", self.session_id)
+        self.filename = _require_non_empty("filename", self.filename)
+        self.media_type = _require_non_empty("media_type", self.media_type)
+        self.storage_relpath = _require_non_empty("storage_relpath", self.storage_relpath)
+        if self.size_bytes < 0:
+            raise ValidationError("size_bytes cannot be negative.")
+        normalized_status = _require_non_empty("status", self.status).lower()
+        if normalized_status not in {"uploaded", "ready", "failed"}:
+            raise ValidationError("status must be one of uploaded/ready/failed.")
+        self.status = normalized_status
+        if self.text_relpath is not None:
+            self.text_relpath = _require_non_empty("text_relpath", self.text_relpath)
+        if self.error is not None:
+            self.error = _require_non_empty("error", self.error)
+        if self.parsed_char_count is not None and self.parsed_char_count < 0:
+            raise ValidationError("parsed_char_count cannot be negative.")
+        if self.parsed_token_estimate is not None and self.parsed_token_estimate < 0:
+            raise ValidationError("parsed_token_estimate cannot be negative.")
 
 
 @dataclass(slots=True)

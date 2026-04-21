@@ -5,22 +5,34 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from datetime import UTC
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.core.errors import ValidationError
-from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, SessionMeta
+from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, SessionFile, SessionMeta
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
-from app.schemas.chat import ChatRequest, ChatResponse, MemoryView, ToolCallView
+from app.schemas.chat import (
+    ActiveFilesRequest,
+    ChatRequest,
+    ChatResponse,
+    MemoryView,
+    SessionFileView,
+    SessionFilesResponse,
+    ToolCallView,
+)
 
 __all__ = ["ChatService"]
 _logger = logging.getLogger(__name__)
 _STREAM_POLL_INTERVAL_SECONDS = 0.12
 _ANSWER_CHUNK_SIZE = 28
+_SUPPORTED_FILE_EXTENSIONS = {".pdf", ".md", ".markdown", ".json", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
+_MAX_UPLOAD_SIZE_BYTES = 12 * 1024 * 1024
 
 
 class ChatService:
@@ -149,9 +161,104 @@ class ChatService:
         _logger.debug("检索记忆: query=%s limit=%s result_count=%s", normalized, limit, len(memories))
         return memories
 
+    async def upload_session_file(
+        self,
+        session_id: str,
+        filename: str,
+        content_bytes: bytes,
+        *,
+        auto_activate: bool = True,
+    ) -> SessionFileView:
+        if not isinstance(filename, str):
+            raise ValidationError("filename must be string.")
+        if not isinstance(content_bytes, bytes):
+            raise ValidationError("content_bytes must be bytes.")
+        session = self._session_manager.get_or_create_session(session_id)
+        lock = self._session_lock_manager.get_lock(session.session_id)
+        async with lock:
+            filename = _sanitize_filename(filename)
+            extension = _normalized_extension(filename)
+            if extension not in _SUPPORTED_FILE_EXTENSIONS:
+                supported = ", ".join(sorted(_SUPPORTED_FILE_EXTENSIONS))
+                raise ValidationError(f"Unsupported file type '{extension}'. supported={supported}")
+
+            size_bytes = len(content_bytes)
+            if size_bytes <= 0:
+                raise ValidationError("Uploaded file is empty.")
+            if size_bytes > _MAX_UPLOAD_SIZE_BYTES:
+                raise ValidationError(f"Uploaded file too large, max={_MAX_UPLOAD_SIZE_BYTES} bytes.")
+
+            file_id = f"file_{uuid4().hex[:12]}"
+            workspace = self._session_repository.get_workspace_path(session.session_id)
+            session_root = self._session_repository.get_session_root_path(session.session_id)
+            uploads_dir = workspace / "uploads"
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+
+            storage_path = uploads_dir / f"{file_id}_{filename}"
+            storage_path.write_bytes(content_bytes)
+
+            media_type = _infer_media_type(extension)
+            record = SessionFile(
+                file_id=file_id,
+                session_id=session.session_id,
+                filename=filename,
+                media_type=media_type,
+                size_bytes=size_bytes,
+                status="uploaded",
+                uploaded_at=_utc_now(),
+                storage_relpath=str(storage_path.resolve().relative_to(session_root.resolve())),
+                text_relpath=None,
+                error=None,
+                parsed_char_count=None,
+                parsed_token_estimate=None,
+                parsed_at=None,
+            )
+            self._session_repository.add_or_update_session_file(record)
+            if auto_activate:
+                current = self._session_repository.get_active_file_ids(session.session_id)
+                self._session_repository.set_active_file_ids(session.session_id, [*current, file_id])
+
+            _logger.info(
+                "上传会话文件完成: session_id=%s file_id=%s filename=%s status=%s size=%s",
+                session.session_id,
+                file_id,
+                filename,
+                record.status,
+                size_bytes,
+            )
+            return self._to_file_view(record)
+
+    def list_session_files(self, session_id: str) -> SessionFilesResponse:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValidationError("session_id must be a non-empty string.")
+        normalized = session_id.strip()
+        files = self._session_repository.list_session_files(normalized)
+        active_file_ids = self._session_repository.get_active_file_ids(normalized)
+        return SessionFilesResponse(
+            session_id=normalized,
+            active_file_ids=active_file_ids,
+            files=[self._to_file_view(item) for item in files],
+        )
+
+    def set_active_files(self, session_id: str, request: ActiveFilesRequest) -> SessionFilesResponse:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValidationError("session_id must be a non-empty string.")
+        if not isinstance(request, ActiveFilesRequest):
+            raise ValidationError("request must be ActiveFilesRequest.")
+        normalized = session_id.strip()
+        active = self._session_repository.set_active_file_ids(normalized, request.file_ids)
+        files = self._session_repository.list_session_files(normalized)
+        return SessionFilesResponse(
+            session_id=normalized,
+            active_file_ids=active,
+            files=[self._to_file_view(item) for item in files],
+        )
+
     def _prepare_run_input(self, request: ChatRequest) -> tuple[SessionMeta, AgentRunInput]:
         session = self._session_manager.get_or_create_session(request.session_id)
-        skill_names = request.skill_names or ["base", "memory", "tools"]
+        if request.active_file_ids is not None:
+            self._session_repository.set_active_file_ids(session.session_id, request.active_file_ids)
+        skill_names = request.skill_names or ["base", "memory", "tools", "file-reader"]
         run_input = AgentRunInput(
             session_id=session.session_id,
             user_message=request.message,
@@ -171,6 +278,20 @@ class ChatService:
             ],
         )
 
+    def _to_file_view(self, item: SessionFile) -> SessionFileView:
+        return SessionFileView(
+            file_id=item.file_id,
+            filename=item.filename,
+            media_type=item.media_type,
+            size_bytes=item.size_bytes,
+            status=item.status,
+            uploaded_at=item.uploaded_at,
+            error=item.error,
+            parsed_char_count=item.parsed_char_count,
+            parsed_token_estimate=item.parsed_token_estimate,
+            parsed_at=item.parsed_at,
+        )
+
     def _serialize_event(self, event: EventRecord) -> dict[str, Any]:
         return {
             "event_id": event.event_id,
@@ -188,3 +309,36 @@ def _chunk_text(text: str, chunk_size: int) -> list[str]:
     if chunk_size <= 0:
         return [normalized]
     return [normalized[index : index + chunk_size] for index in range(0, len(normalized), chunk_size)]
+
+
+def _sanitize_filename(raw: str) -> str:
+    candidate = Path(raw).name.strip()
+    if not candidate:
+        raise ValidationError("filename cannot be empty.")
+    return candidate.replace("/", "_").replace("\\", "_")
+
+
+def _normalized_extension(filename: str) -> str:
+    suffix = Path(filename).suffix.lower().strip()
+    if not suffix:
+        raise ValidationError("filename must have extension.")
+    return suffix
+
+
+def _infer_media_type(extension: str) -> str:
+    mapping = {
+        ".pdf": "application/pdf",
+        ".md": "text/markdown",
+        ".markdown": "text/markdown",
+        ".json": "application/json",
+        ".txt": "text/plain",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    return mapping.get(extension, "application/octet-stream")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)

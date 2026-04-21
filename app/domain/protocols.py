@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.domain.models import EventRecord, MemoryItem, SessionMeta, ToolCall, ToolDefinition, ToolExecutionResult
+from app.domain.models import EventRecord, MemoryItem, SessionFile, SessionMeta, ToolCall, ToolDefinition, ToolExecutionResult
 
 __all__ = [
     "ChatModelClient",
@@ -36,6 +36,20 @@ class SessionRepository(Protocol):
     def list_recent_events(self, session_id: str, limit: int) -> list[EventRecord]: ...
 
     def get_workspace_path(self, session_id: str) -> Path: ...
+
+    def get_session_root_path(self, session_id: str) -> Path: ...
+
+    def add_or_update_session_file(self, file_record: SessionFile) -> None: ...
+
+    def list_session_files(self, session_id: str) -> list[SessionFile]: ...
+
+    def get_session_file(self, session_id: str, file_id: str) -> SessionFile | None: ...
+
+    def set_active_file_ids(self, session_id: str, file_ids: list[str]) -> list[str]: ...
+
+    def get_active_file_ids(self, session_id: str) -> list[str]: ...
+
+    def read_session_file_text(self, session_id: str, file_id: str) -> str: ...
 
 
 class MemoryRepository(Protocol):

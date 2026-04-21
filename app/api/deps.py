@@ -17,7 +17,16 @@ from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.services.chat_service import ChatService
-from app.tools.builtins import MemorySearchTool, MemoryWriteTool, WorkspaceReadFileTool, WorkspaceWriteFileTool
+from app.tools.builtins import (
+    MemorySearchTool,
+    MemoryWriteTool,
+    SessionListFilesTool,
+    SessionPlanFileAccessTool,
+    SessionReadFileTool,
+    SessionSearchFileTool,
+    WorkspaceReadFileTool,
+    WorkspaceWriteFileTool,
+)
 from app.tools.registry import ToolRegistry
 
 __all__ = [
@@ -67,6 +76,10 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(MemorySearchTool(memory_repository=get_memory_repository()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
+    registry.register(SessionListFilesTool(session_repository=get_session_repository()))
+    registry.register(SessionPlanFileAccessTool(session_repository=get_session_repository()))
+    registry.register(SessionReadFileTool(session_repository=get_session_repository()))
+    registry.register(SessionSearchFileTool(session_repository=get_session_repository()))
     return registry
 
 

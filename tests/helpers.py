@@ -17,7 +17,16 @@ from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.services.chat_service import ChatService
-from app.tools.builtins import MemorySearchTool, MemoryWriteTool, WorkspaceReadFileTool, WorkspaceWriteFileTool
+from app.tools.builtins import (
+    MemorySearchTool,
+    MemoryWriteTool,
+    SessionListFilesTool,
+    SessionPlanFileAccessTool,
+    SessionReadFileTool,
+    SessionSearchFileTool,
+    WorkspaceReadFileTool,
+    WorkspaceWriteFileTool,
+)
 from app.tools.registry import ToolRegistry
 
 __all__ = [
@@ -75,6 +84,10 @@ def build_chat_service(data_dir: Path, model_client: ChatModelClient) -> tuple[C
     tool_registry.register(MemorySearchTool(memory_repository=memory_repository))
     tool_registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     tool_registry.register(WorkspaceReadFileTool(session_repository=session_repository))
+    tool_registry.register(SessionListFilesTool(session_repository=session_repository))
+    tool_registry.register(SessionPlanFileAccessTool(session_repository=session_repository))
+    tool_registry.register(SessionReadFileTool(session_repository=session_repository))
+    tool_registry.register(SessionSearchFileTool(session_repository=session_repository))
 
     memory_manager = MemoryManager(memory_repository=memory_repository)
     session_manager = SessionManager(session_repository=session_repository)

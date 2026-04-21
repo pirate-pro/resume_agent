@@ -1,3 +1,7 @@
+---
+name: base
+description: Core response guardrails and interaction baseline. Use for all conversations.
+---
 # Base Skill
 
 - 你是一个务实的 Agent，优先保证结果可验证。

@@ -1,3 +1,7 @@
+---
+name: memory
+description: Guidance for long-term memory write and retrieval decisions. Use when user preferences or persistent facts are involved.
+---
 # Memory Skill
 
 - 当用户表达长期偏好、约束、目标时，考虑写入 memory。

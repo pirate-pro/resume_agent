@@ -8,9 +8,13 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 __all__ = [
+    "ActiveFilesRequest",
     "ChatRequest",
     "ChatResponse",
     "EventView",
+    "FileUploadRequest",
+    "SessionFileView",
+    "SessionFilesResponse",
     "MemoryView",
     "ToolCallView",
 ]
@@ -21,6 +25,7 @@ class ChatRequest(BaseModel):
     message: str
     skill_names: list[str] = Field(default_factory=list)
     max_tool_rounds: int = Field(default=3, ge=0, le=10)
+    active_file_ids: list[str] | None = None
 
     @field_validator("session_id")
     @classmethod
@@ -51,6 +56,23 @@ class ChatRequest(BaseModel):
             normalized.append(skill)
         return normalized
 
+    @field_validator("active_file_ids")
+    @classmethod
+    def _validate_active_file_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for file_id in value:
+            item = file_id.strip()
+            if not item:
+                raise ValueError("active_file_ids cannot contain blank entries.")
+            if item in seen:
+                continue
+            normalized.append(item)
+            seen.add(item)
+        return normalized
+
 
 class ToolCallView(BaseModel):
     name: str
@@ -76,3 +98,63 @@ class EventView(BaseModel):
     type: str
     payload: dict[str, Any]
     created_at: datetime
+
+
+class SessionFileView(BaseModel):
+    file_id: str
+    filename: str
+    media_type: str
+    size_bytes: int
+    status: str
+    uploaded_at: datetime
+    error: str | None = None
+    parsed_char_count: int | None = None
+    parsed_token_estimate: int | None = None
+    parsed_at: datetime | None = None
+
+
+class SessionFilesResponse(BaseModel):
+    session_id: str
+    active_file_ids: list[str]
+    files: list[SessionFileView]
+
+
+class ActiveFilesRequest(BaseModel):
+    file_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("file_ids")
+    @classmethod
+    def _validate_file_ids(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for file_id in value:
+            item = file_id.strip()
+            if not item:
+                raise ValueError("file_ids cannot contain blank entries.")
+            if item in seen:
+                continue
+            normalized.append(item)
+            seen.add(item)
+        return normalized
+
+
+class FileUploadRequest(BaseModel):
+    filename: str
+    content_base64: str
+    auto_activate: bool = True
+
+    @field_validator("filename")
+    @classmethod
+    def _validate_filename(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("filename cannot be empty.")
+        return normalized
+
+    @field_validator("content_base64")
+    @classmethod
+    def _validate_content_base64(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("content_base64 cannot be empty.")
+        return normalized

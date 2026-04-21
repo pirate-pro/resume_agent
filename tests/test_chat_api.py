@@ -47,6 +47,29 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
         assert memories_resp.status_code == 200
         assert len(memories_resp.json()) >= 1
 
+        upload_resp = client.post(
+            f"/api/sessions/{session_id}/files/upload",
+            json={
+                "filename": "notes.txt",
+                "content_base64": "YWxwaGEgYmV0YQ==",
+                "auto_activate": True,
+            },
+        )
+        assert upload_resp.status_code == 200
+        file_id = upload_resp.json()["file_id"]
+        assert upload_resp.json()["status"] in {"uploaded", "ready", "failed"}
+
+        files_resp = client.get(f"/api/sessions/{session_id}/files")
+        assert files_resp.status_code == 200
+        assert any(item["file_id"] == file_id for item in files_resp.json()["files"])
+
+        active_resp = client.post(
+            f"/api/sessions/{session_id}/active-files",
+            json={"file_ids": [file_id]},
+        )
+        assert active_resp.status_code == 200
+        assert file_id in active_resp.json()["active_file_ids"]
+
     app.dependency_overrides.clear()
 
 
