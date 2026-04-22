@@ -9,8 +9,9 @@ from typing import Any
 from app.core.errors import ValidationError
 from app.domain.models import MemoryItem, RunContext
 from app.memory.contracts import MemoryFacade
-from app.memory.intake import build_candidate_request
-from app.memory.models import MemoryConsolidateRequest, MemoryReadBundle, MemoryReadRequest
+from app.memory.intake import build_candidate_request, infer_scope_hint_from_tags
+from app.memory.models import MemoryConsolidateRequest, MemoryReadBundle, MemoryReadRequest, MemoryScope
+from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 
 __all__ = ["MemoryManager"]
 _logger = logging.getLogger(__name__)
@@ -22,13 +23,10 @@ class MemoryManager:
     def __init__(
         self,
         memory_facade: MemoryFacade,
-        *,
-        allow_cross_agent_read: bool = False,
-        allow_cross_agent_write: bool = False,
+        capability_registry: AgentCapabilityRegistry,
     ) -> None:
         self._memory_facade = memory_facade
-        self._allow_cross_agent_read = allow_cross_agent_read
-        self._allow_cross_agent_write = allow_cross_agent_write
+        self._capability_registry = capability_registry
 
     def write_memory(
         self,
@@ -50,12 +48,17 @@ class MemoryManager:
         )
         normalized_content = content.strip()
         normalized_tags = [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
-        # 默认写入当前执行 agent；仅在策略放开时允许跨 agent 写入。
+        requester_capability = self._capability_registry.require(run_context.agent_id)
+        target_scope = infer_scope_hint_from_tags(normalized_tags)
+        if not requester_capability.can_write_scope(target_scope):
+            raise ValidationError(f"Memory write scope not allowed for agent '{run_context.agent_id}': {target_scope.value}")
+        # 默认写入当前执行 agent；仅在能力矩阵放开时允许跨 agent 写入。
         resolved_agent_id = run_context.agent_id
         if isinstance(target_agent_id, str) and target_agent_id.strip():
             normalized_target = target_agent_id.strip()
-            if normalized_target != run_context.agent_id and not self._allow_cross_agent_write:
-                raise ValidationError("Cross-agent write is disabled by memory policy.")
+            if normalized_target != run_context.agent_id and not requester_capability.allow_cross_agent_memory_write:
+                raise ValidationError("Cross-agent write is disabled by agent capability.")
+            self._capability_registry.require(normalized_target)
             resolved_agent_id = normalized_target
         request = build_candidate_request(
             agent_id=resolved_agent_id,
@@ -132,10 +135,14 @@ class MemoryManager:
         run_context = _normalize_context(context)
         normalized_query = _normalize_query(query)
         normalized_limit = _normalize_limit(limit)
+        requester_capability = self._capability_registry.require(run_context.agent_id)
+        read_plan = _build_context_read_plan(capability=requester_capability, session_id=run_context.session_id)
         bundle = self._read_bundle(
             agent_id=run_context.agent_id,
             query=normalized_query,
             limit=normalized_limit,
+            include_scopes=read_plan.include_scopes,
+            short_session_id=read_plan.short_session_id,
         )
         return normalized_query, normalized_limit, bundle
 
@@ -149,18 +156,29 @@ class MemoryManager:
         normalized_query = _normalize_query(query)
         normalized_limit = _normalize_limit(limit)
         normalized_request_agent_id = _normalize_agent_id(request_agent_id)
+        requester_capability = self._capability_registry.require(normalized_request_agent_id)
         normalized_target_agent_id = (
             _normalize_agent_id(target_agent_id)
             if isinstance(target_agent_id, str) and target_agent_id.strip()
             else normalized_request_agent_id
         )
-        # 跨 agent 读取需要显式开关，默认关闭，避免越权读取私有记忆。
-        if normalized_target_agent_id != normalized_request_agent_id and not self._allow_cross_agent_read:
-            raise ValidationError("Cross-agent read is disabled by memory policy.")
+        # 跨 agent 读取需要能力矩阵显式放行，默认关闭，避免越权读取私有记忆。
+        if (
+            normalized_target_agent_id != normalized_request_agent_id
+            and not requester_capability.allow_cross_agent_memory_read
+        ):
+            raise ValidationError("Cross-agent read is disabled by agent capability.")
+        self._capability_registry.require(normalized_target_agent_id)
+        read_plan = _build_agent_read_plan(
+            capability=requester_capability,
+            session_id=None,
+        )
         bundle = self._read_bundle(
             agent_id=normalized_target_agent_id,
             query=normalized_query,
             limit=normalized_limit,
+            include_scopes=read_plan.include_scopes,
+            short_session_id=read_plan.short_session_id,
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
@@ -181,18 +199,29 @@ class MemoryManager:
     ) -> list[MemoryItem]:
         normalized_limit = _normalize_limit(limit)
         normalized_request_agent_id = _normalize_agent_id(request_agent_id)
+        requester_capability = self._capability_registry.require(normalized_request_agent_id)
         normalized_target_agent_id = (
             _normalize_agent_id(target_agent_id)
             if isinstance(target_agent_id, str) and target_agent_id.strip()
             else normalized_request_agent_id
         )
         # 列表读取同样受跨 agent 开关约束。
-        if normalized_target_agent_id != normalized_request_agent_id and not self._allow_cross_agent_read:
-            raise ValidationError("Cross-agent read is disabled by memory policy.")
+        if (
+            normalized_target_agent_id != normalized_request_agent_id
+            and not requester_capability.allow_cross_agent_memory_read
+        ):
+            raise ValidationError("Cross-agent read is disabled by agent capability.")
+        self._capability_registry.require(normalized_target_agent_id)
+        read_plan = _build_agent_read_plan(
+            capability=requester_capability,
+            session_id=None,
+        )
         bundle = self._read_bundle(
             agent_id=normalized_target_agent_id,
             query="*",
             limit=normalized_limit,
+            include_scopes=read_plan.include_scopes,
+            short_session_id=read_plan.short_session_id,
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
@@ -211,16 +240,25 @@ class MemoryManager:
         agent_id: str,
         query: str,
         limit: int,
+        include_scopes: list[MemoryScope],
+        short_session_id: str | None,
     ) -> MemoryReadBundle:
         return self._memory_facade.read_context(
             MemoryReadRequest(
                 agent_id=agent_id,
-                session_id=None,
+                session_id=short_session_id,
                 query=query,
+                include_scopes=include_scopes,
                 limit=limit,
                 token_budget=max(600, limit * 280),
             )
         )
+
+
+class _ReadPlan:
+    def __init__(self, include_scopes: list[MemoryScope], short_session_id: str | None) -> None:
+        self.include_scopes = include_scopes
+        self.short_session_id = short_session_id
 
 
 def _normalize_context(context: RunContext) -> RunContext:
@@ -276,3 +314,26 @@ def _to_memory_item(record: Any) -> MemoryItem:
         created_at=record.created_at,
         source_event_id=record.source_event_id,
     )
+
+
+def _build_context_read_plan(capability: AgentCapability, session_id: str) -> _ReadPlan:
+    scopes = list(capability.memory_read_scopes)
+    short_session_id = None
+    if MemoryScope.AGENT_SHORT in scopes and not capability.allow_cross_session_short_read:
+        short_session_id = session_id
+    return _ReadPlan(include_scopes=scopes, short_session_id=short_session_id)
+
+
+def _build_agent_read_plan(capability: AgentCapability, session_id: str | None) -> _ReadPlan:
+    scopes = list(capability.memory_read_scopes)
+    short_session_id = None
+    if MemoryScope.AGENT_SHORT in scopes:
+        if capability.allow_cross_session_short_read:
+            short_session_id = None
+        else:
+            # 非会话上下文查询默认不扫描 short，防止在 API/管理接口跨会话泄露短期记忆。
+            if session_id is None:
+                scopes = [scope for scope in scopes if scope != MemoryScope.AGENT_SHORT]
+            else:
+                short_session_id = session_id
+    return _ReadPlan(include_scopes=scopes, short_session_id=short_session_id)

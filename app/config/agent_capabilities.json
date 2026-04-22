@@ -1,0 +1,24 @@
+{
+  "schema": "agent_capabilities_v1",
+  "agents": [
+    {
+      "agent_id": "agent_main",
+      "allowed_tools": [
+        "*"
+      ],
+      "memory_read_scopes": [
+        "agent_short",
+        "agent_long",
+        "shared_long"
+      ],
+      "memory_write_scopes": [
+        "agent_short",
+        "agent_long",
+        "shared_long"
+      ],
+      "allow_cross_session_short_read": true,
+      "allow_cross_agent_memory_read": false,
+      "allow_cross_agent_memory_write": false
+    }
+  ]
+}

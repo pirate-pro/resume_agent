@@ -6,7 +6,7 @@ from hashlib import sha256
 
 from app.memory.models import MemoryScope, MemoryType, MemoryWriteCandidateRequest
 
-__all__ = ["build_candidate_request"]
+__all__ = ["build_candidate_request", "infer_scope_hint_from_tags"]
 
 _SHARED_SCOPE_TAGS = {"shared", "global", "cross_agent"}
 _LONG_SCOPE_TAGS = {"long", "long_term", "preference", "constraint", "policy", "profile", "memory"}
@@ -30,7 +30,7 @@ def build_candidate_request(
 ) -> MemoryWriteCandidateRequest:
     normalized_tags = _normalize_tags(tags)
     memory_type = _infer_memory_type(normalized_tags)
-    scope_hint = _infer_scope_hint(normalized_tags)
+    scope_hint = infer_scope_hint_from_tags(normalized_tags)
     confidence = _infer_confidence(normalized_tags)
     idempotency_key = _build_idempotency_key(
         agent_id=agent_id,
@@ -68,7 +68,7 @@ def _normalize_tags(tags: list[str]) -> list[str]:
     return dedup
 
 
-def _infer_scope_hint(tags: list[str]) -> MemoryScope:
+def infer_scope_hint_from_tags(tags: list[str]) -> MemoryScope:
     values = set(tags)
     if values.intersection(_SHARED_SCOPE_TAGS):
         return MemoryScope.SHARED_LONG

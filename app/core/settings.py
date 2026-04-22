@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     app_name: str = Field(default="single-agent-runtime", validation_alias=AliasChoices("APP_NAME"))
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG"))
     data_dir: Path = Field(default=Path("data"), validation_alias=AliasChoices("DATA_DIR"))
+    agent_capabilities_path: Path = Field(
+        default=Path("app/config/agent_capabilities.json"),
+        validation_alias=AliasChoices("AGENT_CAPABILITIES_PATH"),
+    )
     llm_base_url: str = Field(
         default="http://localhost:8000/v1",
         validation_alias=AliasChoices("LLM_BASE_URL", "VL_MODEL_API_URL"),
@@ -61,12 +65,12 @@ class Settings(BaseSettings):
                 return False
         raise ValidationError("DEBUG must be a boolean-like value.")
 
-    @field_validator("data_dir")
+    @field_validator("data_dir", "agent_capabilities_path")
     @classmethod
-    def _validate_data_dir(cls, value: Path) -> Path:
+    def _validate_path_value(cls, value: Path) -> Path:
         raw_value = str(value).strip()
         if not raw_value:
-            raise ValidationError("DATA_DIR cannot be empty.")
+            raise ValidationError("Path configuration cannot be empty.")
         return Path(raw_value)
 
     @field_validator("llm_timeout_seconds")

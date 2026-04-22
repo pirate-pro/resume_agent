@@ -13,9 +13,6 @@ from uuid import uuid4
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
-from app.memory.contracts import MemoryFacade
-from app.memory.intake import build_candidate_request
-from app.memory.models import MemoryConsolidateRequest
 from app.runtime.memory_manager import MemoryManager
 
 __all__ = [
@@ -34,10 +31,10 @@ _LARGE_FILE_TOKEN_THRESHOLD = 20000
 
 
 class MemoryWriteTool:
-    """Write long-term memory entries."""
+    """写入记忆候选。"""
 
-    def __init__(self, memory_facade: MemoryFacade) -> None:
-        self._memory_facade = memory_facade
+    def __init__(self, memory_manager: MemoryManager) -> None:
+        self._memory_manager = memory_manager
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -63,40 +60,33 @@ class MemoryWriteTool:
 
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = _validate_context(context)
-        session_id = run_context.session_id
         content = _require_non_empty_argument(arguments, "content")
         tags = _normalize_tags(arguments.get("tags", []))
         _logger.debug(
             "执行 memory_write: session_id=%s agent_id=%s tags=%s content_len=%s",
-            session_id,
+            run_context.session_id,
             run_context.agent_id,
             len(tags),
             len(content),
         )
-        request = build_candidate_request(
-            agent_id=run_context.agent_id,
-            session_id=session_id,
+        memory = self._memory_manager.write_memory(
             content=content,
             tags=tags,
+            context=run_context,
             source_event_id=None,
             source="memory_write_tool",
         )
-        candidate = self._memory_facade.write_candidate(request)
-        consolidate_result = self._memory_facade.consolidate(MemoryConsolidateRequest(max_candidates=8))
-        resolved_memory_id = (
-            consolidate_result.written_memory_ids[0]
-            if consolidate_result.written_memory_ids
-            else f"cand_{candidate.candidate_id}"
-        )
+        # memory_id 统一使用 memory manager 返回值，避免工具层重复实现入库与合并策略。
+        payload = {
+            "memory_id": memory.memory_id,
+            "written_records": 1,
+            "scope_hint": "inferred_by_tags",
+        }
         return ToolExecutionResult(
             tool_name="memory_write",
             success=True,
             content=json.dumps(
-                {
-                    "memory_id": resolved_memory_id,
-                    "candidate_id": candidate.candidate_id,
-                    "written_records": consolidate_result.written_records,
-                },
+                payload,
                 ensure_ascii=False,
             ),
         )

@@ -13,6 +13,7 @@ from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
@@ -36,6 +37,7 @@ __all__ = [
     "get_chat_service",
     "get_context_assembler",
     "get_event_recorder",
+    "get_agent_capability_registry",
     "get_lock_manager",
     "get_memory_manager",
     "get_model_client",
@@ -72,6 +74,12 @@ def get_memory_facade() -> FileMemoryFacade:
 
 
 @lru_cache(maxsize=1)
+def get_agent_capability_registry() -> AgentCapabilityRegistry:
+    settings = get_settings()
+    return load_agent_capability_registry(settings.agent_capabilities_path)
+
+
+@lru_cache(maxsize=1)
 def get_skill_repository() -> MarkdownSkillRepository:
     skills_dir = Path(__file__).resolve().parents[1] / "skills"
     return MarkdownSkillRepository(skills_dir=skills_dir)
@@ -79,8 +87,8 @@ def get_skill_repository() -> MarkdownSkillRepository:
 
 @lru_cache(maxsize=1)
 def get_tool_registry() -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(MemoryWriteTool(memory_facade=get_memory_facade()))
+    registry = ToolRegistry(capability_registry=get_agent_capability_registry())
+    registry.register(MemoryWriteTool(memory_manager=get_memory_manager()))
     registry.register(MemorySearchTool(memory_manager=get_memory_manager()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
@@ -93,7 +101,10 @@ def get_tool_registry() -> ToolRegistry:
 
 @lru_cache(maxsize=1)
 def get_memory_manager() -> MemoryManager:
-    return MemoryManager(memory_facade=get_memory_facade())
+    return MemoryManager(
+        memory_facade=get_memory_facade(),
+        capability_registry=get_agent_capability_registry(),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -150,5 +161,6 @@ def get_chat_service() -> ChatService:
         session_manager=get_session_manager(),
         session_repository=get_session_repository(),
         memory_manager=get_memory_manager(),
+        capability_registry=get_agent_capability_registry(),
         session_lock_manager=get_lock_manager(),
     )

@@ -14,6 +14,7 @@ from app.core.errors import ValidationError
 from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, RunContext, SessionFile, SessionMeta
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
+from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
@@ -44,12 +45,14 @@ class ChatService:
         session_manager: SessionManager,
         session_repository: SessionRepository,
         memory_manager: MemoryManager,
+        capability_registry: AgentCapabilityRegistry,
         session_lock_manager: SessionLockManager,
     ) -> None:
         self._runtime = runtime
         self._session_manager = session_manager
         self._session_repository = session_repository
         self._memory_manager = memory_manager
+        self._capability_registry = capability_registry
         self._session_lock_manager = session_lock_manager
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
@@ -296,6 +299,8 @@ class ChatService:
             self._session_repository.set_active_file_ids(session.session_id, request.active_file_ids)
         skill_names = request.skill_names or ["base", "memory", "tools", "file-reader"]
         normalized_agent_id = request.entry_agent_id.strip()
+        # 入口 agent 必须先在能力矩阵中声明，避免隐式 agent 绕过权限模型。
+        self._capability_registry.require(normalized_agent_id)
         run_context = RunContext(
             session_id=session.session_id,
             run_id=f"run_{uuid4().hex[:12]}",
