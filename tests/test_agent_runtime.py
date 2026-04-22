@@ -13,6 +13,7 @@ from app.memory.facade import FileMemoryFacade
 from app.memory.models import MemoryReadRequest
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
@@ -23,6 +24,10 @@ from app.tools.registry import ToolRegistry
 from tests.helpers import SequenceModelClient, StaticModelClient
 
 __all__ = []
+
+
+def _capability_registry() -> AgentCapabilityRegistry:
+    return AgentCapabilityRegistry.for_tests()
 
 
 def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
@@ -46,13 +51,14 @@ def _build_runtime(
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
+    capability_registry = _capability_registry()
 
-    tool_registry = ToolRegistry()
-    tool_registry.register(MemoryWriteTool(memory_facade=memory_facade))
+    memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
+    tool_registry = ToolRegistry(capability_registry=capability_registry)
+    tool_registry.register(MemoryWriteTool(memory_manager=memory_manager))
 
     session_manager = SessionManager(session_repository=session_repo)
     event_recorder = EventRecorder(session_repository=session_repo)
-    memory_manager = MemoryManager(memory_facade=memory_facade)
     context_assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,

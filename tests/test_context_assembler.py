@@ -11,12 +11,17 @@ from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.memory_manager import MemoryManager
 from app.tools.builtins import MemorySearchTool
 from app.tools.registry import ToolRegistry
 
 __all__ = []
+
+
+def _capability_registry() -> AgentCapabilityRegistry:
+    return AgentCapabilityRegistry.for_tests()
 
 
 def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
@@ -47,6 +52,8 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
             type="user_message",
             payload={"content": "remember storage"},
             created_at=datetime.now(UTC),
+            agent_id="agent_main",
+            run_id="run_sess_1",
         ),
     )
     session_repo.append_event(
@@ -57,16 +64,19 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
             type="assistant_message",
             payload={"content": "I will remember"},
             created_at=datetime.now(UTC),
+            agent_id="agent_main",
+            run_id="run_sess_1",
         ),
     )
-    memory_manager = MemoryManager(memory_facade=memory_facade)
+    capability_registry = _capability_registry()
+    memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
     memory_manager.write_memory(
         content="Use JSONL storage",
         tags=["storage"],
         context=_context("sess_1"),
         source_event_id="evt_1",
     )
-    tool_registry = ToolRegistry()
+    tool_registry = ToolRegistry(capability_registry=capability_registry)
     tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     assembler = ContextAssembler(
@@ -119,8 +129,8 @@ def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) 
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
-        memory_manager=MemoryManager(memory_facade=memory_facade),
-        tool_executor=ToolRegistry(),
+        memory_manager=MemoryManager(memory_facade=memory_facade, capability_registry=_capability_registry()),
+        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
     )
 
     bundle = assembler.assemble(
@@ -144,7 +154,8 @@ def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: P
     session_repo.create_session("sess_a")
     session_repo.create_session("sess_b")
 
-    memory_manager = MemoryManager(memory_facade=memory_facade)
+    capability_registry = _capability_registry()
+    memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
     memory_manager.write_memory(
         content='用户要求以后叫我"李华"，这是我的新名字/称呼。',
         tags=["preference", "long_term"],
@@ -156,7 +167,7 @@ def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: P
         session_repository=session_repo,
         skill_repository=skill_repo,
         memory_manager=memory_manager,
-        tool_executor=ToolRegistry(),
+        tool_executor=ToolRegistry(capability_registry=capability_registry),
     )
     bundle = assembler.assemble(
         context=_context("sess_b"),

@@ -13,6 +13,7 @@ from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
@@ -80,11 +81,12 @@ def build_chat_service(data_dir: Path, model_client: ChatModelClient) -> tuple[C
     session_repository = JsonlSessionRepository(data_dir=data_dir)
     memory_store = JsonlFileMemoryStore(root_dir=data_dir / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = MemoryManager(memory_facade=memory_facade)
+    capability_registry = AgentCapabilityRegistry.for_tests()
+    memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
     skill_repository = MarkdownSkillRepository(skills_dir=Path("app/skills"))
 
-    tool_registry = ToolRegistry()
-    tool_registry.register(MemoryWriteTool(memory_facade=memory_facade))
+    tool_registry = ToolRegistry(capability_registry=capability_registry)
+    tool_registry.register(MemoryWriteTool(memory_manager=memory_manager))
     tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
     tool_registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     tool_registry.register(WorkspaceReadFileTool(session_repository=session_repository))
@@ -112,6 +114,7 @@ def build_chat_service(data_dir: Path, model_client: ChatModelClient) -> tuple[C
         session_manager=session_manager,
         session_repository=session_repository,
         memory_manager=memory_manager,
+        capability_registry=capability_registry,
         session_lock_manager=SessionLockManager(),
     )
     return service, memory_manager

@@ -265,3 +265,25 @@
 - 影响范围：
   - 运行链路参数边界更统一，后续接多 agent 调度时上下文更稳定。
   - 记忆跨 agent 访问行为从“隐式可读”改为“显式策略控制”。
+
+21. [完成] 落地 AgentCapability 权限矩阵并打通到工具与记忆链路。
+- 说明：
+  - 新增 `app/runtime/agent_capability.py` 与 `app/config/agent_capabilities.json`，提供文件化能力矩阵：
+    - `allowed_tools`
+    - `memory_read_scopes` / `memory_write_scopes`
+    - `allow_cross_session_short_read`
+    - `allow_cross_agent_memory_read` / `allow_cross_agent_memory_write`
+  - `Settings` 与 `deps` 接入能力配置加载，`ChatService` 在入口校验 `entry_agent_id` 必须存在于能力矩阵。
+  - `ToolRegistry.execute` 增加按 `context.agent_id` 的工具权限校验，未授权工具直接拒绝执行。
+  - `MemoryManager` 增加能力约束：
+    - 写入按 tags 推断目标 scope，并校验写权限。
+    - 跨 agent 读写走显式开关控制。
+    - `allow_cross_session_short_read=false` 时，`agent_short` 读取自动收敛到当前 session。
+  - `MemoryWriteTool` 改为复用 `MemoryManager.write_memory`，避免工具层绕开统一策略。
+  - 同步迁移测试装配与用例，补充权限矩阵相关回归测试。
+- 影响范围：
+  - 多 agent 场景下工具权限和记忆作用域边界可配置、可审计，且默认最小权限。
+  - 单 agent 现有行为保持可用（默认配置 `agent_main` 维持全工具 + 全 scope）。
+- 验证结果：
+  - `uv run mypy app tests`：通过（`Success: no issues found in 61 source files`）
+  - `uv run pytest -q`：通过（`48 passed`）

@@ -11,9 +11,10 @@ from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.facade import FileMemoryFacade
-from app.memory.models import MemoryReadRequest
+from app.memory.models import MemoryReadRequest, MemoryScope
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 from app.runtime.memory_manager import MemoryManager
 from app.tools.builtins import (
     MemorySearchTool,
@@ -42,26 +43,47 @@ def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
     )
 
 
+def _capability_registry() -> AgentCapabilityRegistry:
+    return AgentCapabilityRegistry.for_tests()
+
+
+def _registry(
+    capability_registry: AgentCapabilityRegistry | None = None,
+) -> ToolRegistry:
+    resolved = capability_registry if capability_registry is not None else _capability_registry()
+    return ToolRegistry(capability_registry=resolved)
+
+
+def _memory_manager(
+    memory_facade: FileMemoryFacade,
+    capability_registry: AgentCapabilityRegistry | None = None,
+) -> MemoryManager:
+    resolved = capability_registry if capability_registry is not None else _capability_registry()
+    return MemoryManager(memory_facade=memory_facade, capability_registry=resolved)
+
+
 
 def test_tool_register_success_and_duplicate_error(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    registry = ToolRegistry()
+    memory_manager = _memory_manager(memory_facade)
+    registry = _registry()
 
-    registry.register(MemoryWriteTool(memory_facade=memory_facade))
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
 
     assert len(registry.list_definitions()) == 1
 
     with pytest.raises(ValidationError):
-        registry.register(MemoryWriteTool(memory_facade=memory_facade))
+        registry.register(MemoryWriteTool(memory_manager=memory_manager))
 
 
 def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
 
-    registry = ToolRegistry()
-    registry.register(MemoryWriteTool(memory_facade=memory_facade))
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
 
     result = registry.execute(
         ToolCall(name="memory_write", arguments={"content": "Use markdown format", "tags": ["preference"]}),
@@ -85,10 +107,10 @@ def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
 def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = MemoryManager(memory_facade=memory_facade)
+    memory_manager = _memory_manager(memory_facade)
 
-    registry = ToolRegistry()
-    registry.register(MemoryWriteTool(memory_facade=memory_facade))
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
     registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     write_result = registry.execute(
@@ -119,13 +141,13 @@ def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tm
 def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = MemoryManager(memory_facade=memory_facade)
+    memory_manager = _memory_manager(memory_facade)
 
-    main_registry = ToolRegistry()
-    main_registry.register(MemoryWriteTool(memory_facade=memory_facade))
+    main_registry = _registry()
+    main_registry.register(MemoryWriteTool(memory_manager=memory_manager))
     main_registry.register(MemorySearchTool(memory_manager=memory_manager))
 
-    other_registry = ToolRegistry()
+    other_registry = _registry()
     other_registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     write_result = main_registry.execute(
@@ -151,7 +173,7 @@ def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
 
 def test_execute_missing_tool_raises(tmp_path: Path) -> None:
     _ = tmp_path
-    registry = ToolRegistry()
+    registry = _registry()
 
     with pytest.raises(ToolExecutionError):
         registry.execute(ToolCall(name="missing", arguments={}), context=_context("sess_1"))
@@ -162,7 +184,7 @@ def test_workspace_path_traversal_is_blocked(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_1")
 
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(WorkspaceWriteFileTool(session_repository=session_repo))
 
     with pytest.raises(ToolExecutionError):
@@ -177,7 +199,7 @@ def test_workspace_read_file_fallback_to_parent_directories(tmp_path: Path) -> N
     session_repo.create_session("sess_2")
     (tmp_path / ".env.example").write_text("HELLO=1", encoding="utf-8")
 
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(WorkspaceReadFileTool(session_repository=session_repo))
 
     result = registry.execute(
@@ -194,7 +216,7 @@ def test_workspace_read_file_error_contains_workspace(tmp_path: Path) -> None:
     session_repo.create_session("sess_3")
     workspace = session_repo.get_workspace_path("sess_3").resolve()
 
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(WorkspaceReadFileTool(session_repository=session_repo))
 
     with pytest.raises(ToolExecutionError) as exc_info:
@@ -212,7 +234,7 @@ def test_workspace_read_file_blocks_explicit_parent_segments(tmp_path: Path) -> 
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_4")
 
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(WorkspaceReadFileTool(session_repository=session_repo))
 
     with pytest.raises(ToolExecutionError):
@@ -245,7 +267,7 @@ def test_session_list_files_returns_uploaded_file(tmp_path: Path) -> None:
     )
     session_repo.set_active_file_ids("sess_file_1", ["file_1"])
 
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(SessionListFilesTool(session_repository=session_repo))
 
     result = registry.execute(
@@ -280,7 +302,7 @@ def test_session_read_file_lazy_parse_uploaded_text(tmp_path: Path) -> None:
         )
     )
 
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(SessionReadFileTool(session_repository=session_repo))
 
     result = registry.execute(
@@ -323,7 +345,7 @@ def test_session_search_file_returns_hits(tmp_path: Path) -> None:
         )
     )
 
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(SessionSearchFileTool(session_repository=session_repo))
 
     result = registry.execute(
@@ -356,7 +378,7 @@ def test_session_plan_file_access_returns_direct_read_for_small_file(tmp_path: P
             parsed_at=meta.created_at,
         )
     )
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(SessionPlanFileAccessTool(session_repository=session_repo))
     result = registry.execute(
         ToolCall(name="session_plan_file_access", arguments={"file_id": "file_4"}),
@@ -386,7 +408,7 @@ def test_session_plan_file_access_returns_search_for_precision_goal(tmp_path: Pa
             parsed_at=meta.created_at,
         )
     )
-    registry = ToolRegistry()
+    registry = _registry()
     registry.register(SessionPlanFileAccessTool(session_repository=session_repo))
     result = registry.execute(
         ToolCall(
@@ -397,3 +419,32 @@ def test_session_plan_file_access_returns_search_for_precision_goal(tmp_path: Pa
     )
     assert result.success is True
     assert "\"strategy\": \"search_then_read\"" in result.content
+
+
+def test_tool_registry_blocks_tool_when_agent_not_allowed(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_perm_1")
+    restricted_registry = AgentCapabilityRegistry(
+        {
+            "agent_main": AgentCapability(
+                agent_id="agent_main",
+                allowed_tools=["memory_search"],
+                memory_read_scopes=[MemoryScope.AGENT_SHORT, MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
+                memory_write_scopes=[MemoryScope.AGENT_SHORT, MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
+                allow_cross_session_short_read=True,
+                allow_cross_agent_memory_read=False,
+                allow_cross_agent_memory_write=False,
+            )
+        }
+    )
+    registry = _registry(restricted_registry)
+    registry.register(WorkspaceWriteFileTool(session_repository=session_repo))
+
+    with pytest.raises(ToolExecutionError):
+        registry.execute(
+            ToolCall(
+                name="workspace_write_file",
+                arguments={"path": "notes.txt", "content": "hello"},
+            ),
+            context=_context("sess_perm_1", agent_id="agent_main"),
+        )
