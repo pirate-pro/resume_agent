@@ -149,17 +149,33 @@ class ChatService:
         _logger.debug("读取会话事件: session_id=%s event_count=%s", normalized, len(events))
         return events
 
-    def list_memories(self, query: str | None, limit: int, agent_id: str) -> list[MemoryItem]:
+    def list_memories(
+        self,
+        query: str | None,
+        limit: int,
+        request_agent_id: str,
+        target_agent_id: str | None = None,
+    ) -> list[MemoryItem]:
         if limit <= 0:
             raise ValidationError("limit must be positive.")
-        if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValidationError("agent_id must be a non-empty string.")
-        normalized_agent_id = agent_id.strip()
+        if not isinstance(request_agent_id, str) or not request_agent_id.strip():
+            raise ValidationError("request_agent_id must be a non-empty string.")
+        normalized_request_agent_id = request_agent_id.strip()
+        normalized_target_agent_id = (
+            target_agent_id.strip()
+            if isinstance(target_agent_id, str) and target_agent_id.strip()
+            else None
+        )
         if query is None or not query.strip():
-            memories = self._memory_manager.list_memories_for_agent(limit=limit, agent_id=normalized_agent_id)
+            memories = self._memory_manager.list_memories_for_agent(
+                limit=limit,
+                request_agent_id=normalized_request_agent_id,
+                target_agent_id=normalized_target_agent_id,
+            )
             _logger.debug(
-                "读取记忆列表: agent_id=%s limit=%s result_count=%s",
-                normalized_agent_id,
+                "读取记忆列表: request_agent=%s target_agent=%s limit=%s result_count=%s",
+                normalized_request_agent_id,
+                normalized_target_agent_id or normalized_request_agent_id,
                 limit,
                 len(memories),
             )
@@ -168,11 +184,13 @@ class ChatService:
         memories = self._memory_manager.search_for_agent(
             query=normalized,
             limit=limit,
-            agent_id=normalized_agent_id,
+            request_agent_id=normalized_request_agent_id,
+            target_agent_id=normalized_target_agent_id,
         )
         _logger.debug(
-            "检索记忆: agent_id=%s query=%s limit=%s result_count=%s",
-            normalized_agent_id,
+            "检索记忆: request_agent=%s target_agent=%s query=%s limit=%s result_count=%s",
+            normalized_request_agent_id,
+            normalized_target_agent_id or normalized_request_agent_id,
             normalized,
             limit,
             len(memories),

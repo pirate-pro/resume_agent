@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.domain.models import AgentRunInput, ToolCall
+from app.domain.models import AgentRunInput, RunContext, ToolCall
 from app.domain.protocols import ChatModelClient, ModelResponse
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -23,6 +23,18 @@ from app.tools.registry import ToolRegistry
 from tests.helpers import SequenceModelClient, StaticModelClient
 
 __all__ = []
+
+
+def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
+    return RunContext(
+        session_id=session_id,
+        run_id=f"run_{session_id}",
+        agent_id=agent_id,
+        turn_id=f"turn_{session_id}",
+        entry_agent_id=agent_id,
+        parent_run_id=None,
+        trace_flags={},
+    )
 
 
 
@@ -67,6 +79,7 @@ def test_runtime_without_tool_calls_finishes(tmp_path: Path) -> None:
             user_message="hi",
             skill_names=["base"],
             max_tool_rounds=3,
+            context=_context("sess_1"),
         )
     )
 
@@ -101,6 +114,7 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
             user_message="remember this",
             skill_names=["base", "memory"],
             max_tool_rounds=3,
+            context=_context("sess_2"),
         )
     )
 
@@ -141,6 +155,7 @@ def test_runtime_stops_when_tool_round_limit_exceeded(tmp_path: Path) -> None:
             user_message="loop",
             skill_names=["base"],
             max_tool_rounds=0,
+            context=_context("sess_3"),
         )
     )
 
@@ -181,6 +196,7 @@ def test_runtime_builds_valid_tool_message_flow(tmp_path: Path) -> None:
             user_message="run tools",
             skill_names=["base", "tools"],
             max_tool_rounds=2,
+            context=_context("sess_4"),
         )
     )
 

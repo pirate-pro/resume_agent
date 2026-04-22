@@ -51,20 +51,14 @@ class AgentRuntime:
         run_context = self._resolve_run_context(session_id=session_id, run_input=run_input)
 
         self._event_recorder.record(
-            session_id=session_id,
+            context=run_context,
             event_type="run_started",
             payload={"max_tool_rounds": run_input.max_tool_rounds},
-            agent_id=run_context.agent_id,
-            run_id=run_context.run_id,
-            parent_run_id=run_context.parent_run_id,
         )
         self._event_recorder.record(
-            session_id=session_id,
+            context=run_context,
             event_type="user_message",
             payload={"content": run_input.user_message},
-            agent_id=run_context.agent_id,
-            run_id=run_context.run_id,
-            parent_run_id=run_context.parent_run_id,
         )
 
         context = self._context_assembler.assemble(
@@ -80,12 +74,9 @@ class AgentRuntime:
             len(context.tool_definitions),
         )
         self._event_recorder.record(
-            session_id=session_id,
+            context=run_context,
             event_type="memory_retrieval",
             payload=context.memory_summary,
-            agent_id=run_context.agent_id,
-            run_id=run_context.run_id,
-            parent_run_id=run_context.parent_run_id,
         )
 
         tools_payload = [self._to_model_tool_schema(tool) for tool in context.tool_definitions]
@@ -123,12 +114,9 @@ class AgentRuntime:
             if model_response.content.strip():
                 # 一些模型会在 tool_call 前返回推理摘要，记录下来供前端“执行过程/思考”展示。
                 self._event_recorder.record(
-                    session_id=session_id,
+                    context=run_context,
                     event_type="assistant_thinking",
                     payload={"content": model_response.content},
-                    agent_id=run_context.agent_id,
-                    run_id=run_context.run_id,
-                    parent_run_id=run_context.parent_run_id,
                 )
 
             # 遇到工具调用时，必须先把 assistant 的 tool_calls 消息回填到上下文，
@@ -138,16 +126,13 @@ class AgentRuntime:
             for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)
                 self._event_recorder.record(
-                    session_id=session_id,
+                    context=run_context,
                     event_type="tool_call",
                     payload={
                         "name": tool_call.name,
                         "arguments": tool_call.arguments,
                         "tool_call_id": tool_call.tool_call_id,
                     },
-                    agent_id=run_context.agent_id,
-                    run_id=run_context.run_id,
-                    parent_run_id=run_context.parent_run_id,
                 )
                 result = self._execute_tool_safely(tool_call, run_context)
                 _logger.info(
@@ -158,7 +143,7 @@ class AgentRuntime:
                     len(result.content),
                 )
                 self._event_recorder.record(
-                    session_id=session_id,
+                    context=run_context,
                     event_type="tool_result",
                     payload={
                         "tool_name": result.tool_name,
@@ -166,21 +151,15 @@ class AgentRuntime:
                         "content": result.content,
                         "tool_call_id": tool_call.tool_call_id,
                     },
-                    agent_id=run_context.agent_id,
-                    run_id=run_context.run_id,
-                    parent_run_id=run_context.parent_run_id,
                 )
                 if tool_call.name == "memory_write" and result.success:
                     self._event_recorder.record(
-                        session_id=session_id,
+                        context=run_context,
                         event_type="memory_write",
                         payload={
                             "arguments": tool_call.arguments,
                             "result": result.content,
                         },
-                        agent_id=run_context.agent_id,
-                        run_id=run_context.run_id,
-                        parent_run_id=run_context.parent_run_id,
                     )
                 messages.append(
                     {
@@ -194,20 +173,14 @@ class AgentRuntime:
             answer = "(no answer)"
 
         self._event_recorder.record(
-            session_id=session_id,
+            context=run_context,
             event_type="assistant_message",
             payload={"content": answer},
-            agent_id=run_context.agent_id,
-            run_id=run_context.run_id,
-            parent_run_id=run_context.parent_run_id,
         )
         self._event_recorder.record(
-            session_id=session_id,
+            context=run_context,
             event_type="run_finished",
             payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls)},
-            agent_id=run_context.agent_id,
-            run_id=run_context.run_id,
-            parent_run_id=run_context.parent_run_id,
         )
         _logger.info(
             "agent run 完成: session_id=%s answer_len=%s tool_calls=%s",
@@ -292,16 +265,8 @@ class AgentRuntime:
         }
 
     def _resolve_run_context(self, session_id: str, run_input: AgentRunInput) -> RunContext:
-        if run_input.context is not None:
-            if run_input.context.session_id != session_id:
-                raise ValidationError("run_input.context.session_id must match resolved session_id.")
-            return run_input.context
-        return RunContext(
-            session_id=session_id,
-            run_id=f"run_{uuid4().hex[:12]}",
-            agent_id="agent_main",
-            turn_id=f"turn_{uuid4().hex[:12]}",
-            entry_agent_id="agent_main",
-            parent_run_id=None,
-            trace_flags={},
-        )
+        if run_input.context is None:
+            raise ValidationError("run_input.context is required.")
+        if run_input.context.session_id != session_id:
+            raise ValidationError("run_input.context.session_id must match resolved session_id.")
+        return run_input.context

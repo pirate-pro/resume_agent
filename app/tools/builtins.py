@@ -36,13 +36,8 @@ _LARGE_FILE_TOKEN_THRESHOLD = 20000
 class MemoryWriteTool:
     """Write long-term memory entries."""
 
-    def __init__(
-        self,
-        memory_facade: MemoryFacade,
-        default_agent_id: str = "agent_main",
-    ) -> None:
+    def __init__(self, memory_facade: MemoryFacade) -> None:
         self._memory_facade = memory_facade
-        self._default_agent_id = default_agent_id.strip() if default_agent_id.strip() else "agent_main"
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -79,7 +74,7 @@ class MemoryWriteTool:
             len(content),
         )
         request = build_candidate_request(
-            agent_id=run_context.agent_id or self._default_agent_id,
+            agent_id=run_context.agent_id,
             session_id=session_id,
             content=content,
             tags=tags,

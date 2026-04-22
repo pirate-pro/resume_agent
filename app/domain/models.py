@@ -240,16 +240,15 @@ class AgentRunInput:
     user_message: str
     skill_names: list[str]
     max_tool_rounds: int
-    context: RunContext | None = None
+    context: RunContext
 
     def __post_init__(self) -> None:
         self.session_id = _require_non_empty("session_id", self.session_id)
         self.user_message = _require_non_empty("user_message", self.user_message)
-        if self.context is not None:
-            if not isinstance(self.context, RunContext):
-                raise ValidationError("context must be RunContext.")
-            if self.context.session_id != self.session_id:
-                raise ValidationError("context.session_id must equal session_id.")
+        if not isinstance(self.context, RunContext):
+            raise ValidationError("context must be RunContext.")
+        if self.context.session_id != self.session_id:
+            raise ValidationError("context.session_id must equal session_id.")
         if not isinstance(self.skill_names, list):
             raise ValidationError("skill_names must be a list.")
         normalized_skill_names: list[str] = []

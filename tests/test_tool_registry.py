@@ -122,7 +122,7 @@ def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
     memory_manager = MemoryManager(memory_facade=memory_facade)
 
     main_registry = ToolRegistry()
-    main_registry.register(MemoryWriteTool(memory_facade=memory_facade, default_agent_id="agent_main"))
+    main_registry.register(MemoryWriteTool(memory_facade=memory_facade))
     main_registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     other_registry = ToolRegistry()

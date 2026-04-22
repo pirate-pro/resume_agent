@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ValidationError
-from app.domain.models import EventRecord
+from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import SessionRepository
 
 __all__ = ["EventRecorder"]
@@ -35,45 +35,36 @@ class EventRecorder:
 
     def record(
         self,
-        session_id: str,
+        context: RunContext,
         event_type: str,
         payload: dict[str, Any],
         *,
-        agent_id: str = "agent_main",
-        run_id: str | None = None,
-        parent_run_id: str | None = None,
         event_version: int = 2,
     ) -> EventRecord:
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValidationError("session_id must be a non-empty string.")
+        if not isinstance(context, RunContext):
+            raise ValidationError("context must be RunContext.")
         if not isinstance(event_type, str) or event_type not in _ALLOWED_EVENT_TYPES:
             raise ValidationError(f"Unsupported event type: {event_type}")
         if not isinstance(payload, dict):
             raise ValidationError("payload must be a dictionary.")
-        if not isinstance(agent_id, str) or not agent_id.strip():
-            raise ValidationError("agent_id must be a non-empty string.")
-        if run_id is not None and (not isinstance(run_id, str) or not run_id.strip()):
-            raise ValidationError("run_id must be a non-empty string when provided.")
-        if parent_run_id is not None and (not isinstance(parent_run_id, str) or not parent_run_id.strip()):
-            raise ValidationError("parent_run_id must be a non-empty string when provided.")
         if event_version <= 0:
             raise ValidationError("event_version must be positive.")
 
         event = EventRecord(
             event_id=f"evt_{uuid4().hex[:12]}",
-            session_id=session_id.strip(),
+            session_id=context.session_id,
             type=event_type,
             payload=payload,
             created_at=datetime.now(UTC),
-            agent_id=agent_id.strip(),
-            run_id=run_id.strip() if isinstance(run_id, str) and run_id.strip() else f"run_legacy_{session_id.strip()}",
-            parent_run_id=parent_run_id.strip() if isinstance(parent_run_id, str) and parent_run_id.strip() else None,
+            agent_id=context.agent_id,
+            run_id=context.run_id,
+            parent_run_id=context.parent_run_id,
             event_version=event_version,
         )
-        self._session_repository.append_event(session_id.strip(), event)
+        self._session_repository.append_event(context.session_id, event)
         _logger.debug(
             "记录事件成功: session_id=%s agent_id=%s run_id=%s event_type=%s event_id=%s",
-            session_id,
+            context.session_id,
             event.agent_id,
             event.run_id,
             event_type,

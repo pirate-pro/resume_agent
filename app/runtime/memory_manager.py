@@ -22,8 +22,13 @@ class MemoryManager:
     def __init__(
         self,
         memory_facade: MemoryFacade,
+        *,
+        allow_cross_agent_read: bool = False,
+        allow_cross_agent_write: bool = False,
     ) -> None:
         self._memory_facade = memory_facade
+        self._allow_cross_agent_read = allow_cross_agent_read
+        self._allow_cross_agent_write = allow_cross_agent_write
 
     def write_memory(
         self,
@@ -32,6 +37,7 @@ class MemoryManager:
         context: RunContext,
         source_event_id: str | None,
         source: str = "memory_manager",
+        target_agent_id: str | None = None,
     ) -> MemoryItem:
         run_context = _normalize_context(context)
         if not isinstance(content, str) or not content.strip():
@@ -44,8 +50,15 @@ class MemoryManager:
         )
         normalized_content = content.strip()
         normalized_tags = [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
+        # 默认写入当前执行 agent；仅在策略放开时允许跨 agent 写入。
+        resolved_agent_id = run_context.agent_id
+        if isinstance(target_agent_id, str) and target_agent_id.strip():
+            normalized_target = target_agent_id.strip()
+            if normalized_target != run_context.agent_id and not self._allow_cross_agent_write:
+                raise ValidationError("Cross-agent write is disabled by memory policy.")
+            resolved_agent_id = normalized_target
         request = build_candidate_request(
-            agent_id=run_context.agent_id,
+            agent_id=resolved_agent_id,
             session_id=run_context.session_id,
             content=normalized_content,
             tags=normalized_tags,
@@ -71,7 +84,7 @@ class MemoryManager:
             "写入记忆成功(v2): memory_id=%s session_id=%s agent_id=%s tag_count=%s",
             memory.memory_id,
             memory.session_id,
-            run_context.agent_id,
+            resolved_agent_id,
             len(memory.tags),
         )
         return memory
@@ -126,37 +139,66 @@ class MemoryManager:
         )
         return normalized_query, normalized_limit, bundle
 
-    def search_for_agent(self, query: str, limit: int, agent_id: str) -> list[MemoryItem]:
+    def search_for_agent(
+        self,
+        query: str,
+        limit: int,
+        request_agent_id: str,
+        target_agent_id: str | None = None,
+    ) -> list[MemoryItem]:
         normalized_query = _normalize_query(query)
         normalized_limit = _normalize_limit(limit)
-        normalized_agent_id = _normalize_agent_id(agent_id)
+        normalized_request_agent_id = _normalize_agent_id(request_agent_id)
+        normalized_target_agent_id = (
+            _normalize_agent_id(target_agent_id)
+            if isinstance(target_agent_id, str) and target_agent_id.strip()
+            else normalized_request_agent_id
+        )
+        # 跨 agent 读取需要显式开关，默认关闭，避免越权读取私有记忆。
+        if normalized_target_agent_id != normalized_request_agent_id and not self._allow_cross_agent_read:
+            raise ValidationError("Cross-agent read is disabled by memory policy.")
         bundle = self._read_bundle(
-            agent_id=normalized_agent_id,
+            agent_id=normalized_target_agent_id,
             query=normalized_query,
             limit=normalized_limit,
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
-            "检索记忆完成(v2): query=%s limit=%s agent_id=%s hit_count=%s",
+            "检索记忆完成(v2): query=%s limit=%s request_agent=%s target_agent=%s hit_count=%s",
             normalized_query,
             normalized_limit,
-            normalized_agent_id,
+            normalized_request_agent_id,
+            normalized_target_agent_id,
             len(result),
         )
         return result
 
-    def list_memories_for_agent(self, limit: int, agent_id: str) -> list[MemoryItem]:
+    def list_memories_for_agent(
+        self,
+        limit: int,
+        request_agent_id: str,
+        target_agent_id: str | None = None,
+    ) -> list[MemoryItem]:
         normalized_limit = _normalize_limit(limit)
-        normalized_agent_id = _normalize_agent_id(agent_id)
+        normalized_request_agent_id = _normalize_agent_id(request_agent_id)
+        normalized_target_agent_id = (
+            _normalize_agent_id(target_agent_id)
+            if isinstance(target_agent_id, str) and target_agent_id.strip()
+            else normalized_request_agent_id
+        )
+        # 列表读取同样受跨 agent 开关约束。
+        if normalized_target_agent_id != normalized_request_agent_id and not self._allow_cross_agent_read:
+            raise ValidationError("Cross-agent read is disabled by memory policy.")
         bundle = self._read_bundle(
-            agent_id=normalized_agent_id,
+            agent_id=normalized_target_agent_id,
             query="*",
             limit=normalized_limit,
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
-            "读取记忆列表完成(v2): agent_id=%s limit=%s count=%s",
-            normalized_agent_id,
+            "读取记忆列表完成(v2): request_agent=%s target_agent=%s limit=%s count=%s",
+            normalized_request_agent_id,
+            normalized_target_agent_id,
             normalized_limit,
             len(result),
         )
