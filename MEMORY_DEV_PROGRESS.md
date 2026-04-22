@@ -210,3 +210,20 @@
 - 验证结果：
   - `uv run mypy app tests`：通过（`Success: no issues found in 59 source files`）
   - `uv run pytest -q`：通过（`42 passed`）
+
+18. [完成] Phase B 第二批改造（工具执行链路全面切换 RunContext）。
+- 说明：
+  - `Tool` 协议签名统一为 `execute(arguments, context: RunContext)`，移除 `session_id` 直传模式。
+  - `ToolExecutor` 协议同步切换为 `execute(call, context: RunContext)`。
+  - `ToolRegistry.execute` 全链路改为接收 `RunContext`，并在日志中显式输出 `session_id/agent_id`。
+  - `AgentRuntime._execute_tool_safely` 改为传递 `RunContext`，工具执行错误日志补齐 `agent_id` 维度。
+  - 内置工具 `builtins` 全部改为通过 `context` 读取运行信息：
+    - 文件工具读取 `context.session_id`。
+    - memory 工具读取 `context.agent_id` + `context.session_id`，不再依赖隐式会话参数。
+  - `tests/test_tool_registry.py` 全量迁移为 `_context(...)` 调用，消除旧签名测试路径。
+- 影响范围：
+  - 工具层已完成多 Agent 预备改造，后续可在不改工具接口的前提下接入 orchestrator 子运行链路。
+  - 统一上下文对象后，排查问题时可稳定关联到具体 `run/agent/session`。
+- 验证结果：
+  - `uv run mypy app tests`：通过（`Success: no issues found in 59 source files`）
+  - `uv run pytest -q`：通过（`42 passed`）
