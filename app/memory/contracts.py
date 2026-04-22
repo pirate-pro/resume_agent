@@ -7,9 +7,11 @@ from typing import Protocol
 
 from app.memory.models import (
     CandidateResult,
+    CompactResult,
     ConsolidateResult,
     ForgetResult,
     MemoryCandidate,
+    MemoryCompactRequest,
     MemoryConsolidateRequest,
     MemoryForgetRequest,
     MemoryReadBundle,
@@ -30,6 +32,8 @@ class MemoryFacade(Protocol):
     def consolidate(self, request: MemoryConsolidateRequest) -> ConsolidateResult: ...
 
     def forget(self, request: MemoryForgetRequest) -> ForgetResult: ...
+
+    def compact(self, request: MemoryCompactRequest) -> CompactResult: ...
 
 
 class MemoryStore(Protocol):
@@ -52,5 +56,16 @@ class MemoryStore(Protocol):
         now: datetime,
     ) -> list[MemoryRecord]: ...
 
+    def count_active_records_by_hash(
+        self,
+        *,
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        content_hash: str,
+        now: datetime,
+    ) -> int: ...
+
     def forget(self, request: MemoryForgetRequest, now: datetime) -> ForgetResult: ...
 
+    def compact(self, request: MemoryCompactRequest, now: datetime) -> CompactResult: ...

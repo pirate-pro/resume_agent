@@ -11,8 +11,11 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
+from app.memory.contracts import MemoryFacade
+from app.memory.intake import build_candidate_request
+from app.memory.models import MemoryConsolidateRequest, MemoryReadRequest
 from app.domain.models import MemoryItem, SessionFile, ToolDefinition, ToolExecutionResult
-from app.domain.protocols import MemoryRepository, SessionRepository
+from app.domain.protocols import SessionRepository
 
 __all__ = [
     "MemorySearchTool",
@@ -32,13 +35,22 @@ _LARGE_FILE_TOKEN_THRESHOLD = 20000
 class MemoryWriteTool:
     """Write long-term memory entries."""
 
-    def __init__(self, memory_repository: MemoryRepository) -> None:
-        self._memory_repository = memory_repository
+    def __init__(
+        self,
+        memory_facade: MemoryFacade,
+        default_agent_id: str = "agent_main",
+    ) -> None:
+        self._memory_facade = memory_facade
+        self._default_agent_id = default_agent_id.strip() if default_agent_id.strip() else "agent_main"
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="memory_write",
-            description="Write a long-term memory item.",
+            description=(
+                "Write a memory candidate. Default route is agent_short. "
+                "Use tags like preference/constraint/long_term for agent_long, "
+                "and shared/global/cross_agent for shared_long candidate."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -58,30 +70,41 @@ class MemoryWriteTool:
         content = _require_non_empty_argument(arguments, "content")
         tags = _normalize_tags(arguments.get("tags", []))
         _logger.debug("执行 memory_write: session_id=%s tags=%s content_len=%s", session_id, len(tags), len(content))
-        memory_item = MemoryItem(
-            memory_id=f"mem_{uuid4().hex[:12]}",
+        request = build_candidate_request(
+            agent_id=self._default_agent_id,
             session_id=session_id,
             content=content,
             tags=tags,
-            created_at=datetime.now(UTC),
             source_event_id=None,
+            source="memory_write_tool",
         )
-        try:
-            self._memory_repository.add_memory(memory_item)
-        except StorageError as exc:
-            raise ToolExecutionError(str(exc)) from exc
+        candidate = self._memory_facade.write_candidate(request)
+        consolidate_result = self._memory_facade.consolidate(MemoryConsolidateRequest(max_candidates=8))
+        resolved_memory_id = (
+            consolidate_result.written_memory_ids[0]
+            if consolidate_result.written_memory_ids
+            else f"cand_{candidate.candidate_id}"
+        )
         return ToolExecutionResult(
             tool_name="memory_write",
             success=True,
-            content=json.dumps({"memory_id": memory_item.memory_id}, ensure_ascii=False),
+            content=json.dumps(
+                {
+                    "memory_id": resolved_memory_id,
+                    "candidate_id": candidate.candidate_id,
+                    "written_records": consolidate_result.written_records,
+                },
+                ensure_ascii=False,
+            ),
         )
 
 
 class MemorySearchTool:
     """Search memory items by query."""
 
-    def __init__(self, memory_repository: MemoryRepository) -> None:
-        self._memory_repository = memory_repository
+    def __init__(self, memory_facade: MemoryFacade, default_agent_id: str = "agent_main") -> None:
+        self._memory_facade = memory_facade
+        self._default_agent_id = default_agent_id.strip() if default_agent_id.strip() else "agent_main"
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -104,13 +127,24 @@ class MemorySearchTool:
         if not isinstance(raw_limit, int) or raw_limit <= 0:
             raise ToolExecutionError("'limit' must be a positive integer.")
         limit = min(raw_limit, 20)
-        hits = self._memory_repository.search(query, limit)
+        bundle = self._memory_facade.read_context(
+            MemoryReadRequest(
+                agent_id=self._default_agent_id,
+                session_id=session_id,
+                query=query,
+                limit=limit,
+                token_budget=max(600, limit * 280),
+            )
+        )
+        hits = bundle.items
         _logger.debug("执行 memory_search: session_id=%s query=%s hit_count=%s", session_id, query, len(hits))
         payload = [
             {
                 "memory_id": item.memory_id,
                 "content": item.content,
                 "tags": item.tags,
+                "scope": item.scope.value,
+                "confidence": item.confidence,
             }
             for item in hits
         ]

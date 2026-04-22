@@ -7,9 +7,12 @@ from typing import Any
 
 from app.domain.models import AgentRunInput, ToolCall
 from app.domain.protocols import ChatModelClient, ModelResponse
-from app.infra.storage.jsonl_memory_repository import JsonlMemoryRepository
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.memory.facade import FileMemoryFacade
+from app.memory.models import MemoryReadRequest
+from app.memory.policies import default_memory_policy
+from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
@@ -23,17 +26,21 @@ __all__ = []
 
 
 
-def _build_runtime(tmp_path: Path, model_client: ChatModelClient) -> tuple[AgentRuntime, JsonlSessionRepository, JsonlMemoryRepository]:
+def _build_runtime(
+    tmp_path: Path,
+    model_client: ChatModelClient,
+) -> tuple[AgentRuntime, JsonlSessionRepository, FileMemoryFacade]:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    memory_repo = JsonlMemoryRepository(data_dir=tmp_path)
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
 
     tool_registry = ToolRegistry()
-    tool_registry.register(MemoryWriteTool(memory_repository=memory_repo))
+    tool_registry.register(MemoryWriteTool(memory_facade=memory_facade))
 
     session_manager = SessionManager(session_repository=session_repo)
     event_recorder = EventRecorder(session_repository=session_repo)
-    memory_manager = MemoryManager(memory_repository=memory_repo)
+    memory_manager = MemoryManager(memory_facade=memory_facade)
     context_assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
@@ -47,7 +54,7 @@ def _build_runtime(tmp_path: Path, model_client: ChatModelClient) -> tuple[Agent
         model_client=model_client,
         tool_executor=tool_registry,
     )
-    return runtime, session_repo, memory_repo
+    return runtime, session_repo, memory_facade
 
 
 
@@ -86,7 +93,7 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
             ModelResponse(content="saved", tool_calls=[]),
         ]
     )
-    runtime, session_repo, memory_repo = _build_runtime(tmp_path, model)
+    runtime, session_repo, memory_facade = _build_runtime(tmp_path, model)
 
     output = runtime.run(
         AgentRunInput(
@@ -98,7 +105,15 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
     )
 
     events = session_repo.list_events("sess_2")
-    memories = memory_repo.list_memories(limit=10)
+    memories = memory_facade.read_context(
+        MemoryReadRequest(
+            agent_id="agent_main",
+            session_id="sess_2",
+            query="jsonl",
+            limit=10,
+            token_budget=2400,
+        )
+    ).items
 
     assert output.answer == "saved"
     assert len(output.tool_calls) == 1

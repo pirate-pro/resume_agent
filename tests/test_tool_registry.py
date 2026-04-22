@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import SessionFile, ToolCall
-from app.infra.storage.jsonl_memory_repository import JsonlMemoryRepository
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.memory.facade import FileMemoryFacade
+from app.memory.models import MemoryReadRequest
+from app.memory.policies import default_memory_policy
+from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.tools.builtins import (
+    MemorySearchTool,
     MemoryWriteTool,
     SessionListFilesTool,
     SessionPlanFileAccessTool,
@@ -26,15 +31,74 @@ __all__ = []
 
 
 def test_tool_register_success_and_duplicate_error(tmp_path: Path) -> None:
-    memory_repo = JsonlMemoryRepository(data_dir=tmp_path)
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
     registry = ToolRegistry()
 
-    registry.register(MemoryWriteTool(memory_repository=memory_repo))
+    registry.register(MemoryWriteTool(memory_facade=memory_facade))
 
     assert len(registry.list_definitions()) == 1
 
     with pytest.raises(ValidationError):
-        registry.register(MemoryWriteTool(memory_repository=memory_repo))
+        registry.register(MemoryWriteTool(memory_facade=memory_facade))
+
+
+def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+
+    registry = ToolRegistry()
+    registry.register(MemoryWriteTool(memory_facade=memory_facade))
+
+    result = registry.execute(
+        ToolCall(name="memory_write", arguments={"content": "Use markdown format", "tags": ["preference"]}),
+        session_id="sess_1",
+    )
+
+    assert result.success is True
+    bundle = memory_facade.read_context(
+        MemoryReadRequest(
+            agent_id="agent_main",
+            session_id="sess_1",
+            query="markdown",
+            limit=5,
+            token_budget=1200,
+        )
+    )
+    assert len(bundle.items) == 1
+    assert bundle.items[0].scope.value == "agent_long"
+
+
+def test_memory_write_tool_without_tags_defaults_to_short_and_is_session_scoped(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+
+    registry = ToolRegistry()
+    registry.register(MemoryWriteTool(memory_facade=memory_facade))
+    registry.register(MemorySearchTool(memory_facade=memory_facade))
+
+    write_result = registry.execute(
+        ToolCall(name="memory_write", arguments={"content": "User likes concise replies"}),
+        session_id="sess_1",
+    )
+    same_session_result = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "concise", "limit": 5}),
+        session_id="sess_1",
+    )
+    other_session_result = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "concise", "limit": 5}),
+        session_id="sess_2",
+    )
+
+    assert write_result.success is True
+    assert same_session_result.success is True
+    same_payload = json.loads(same_session_result.content)
+    assert len(same_payload) >= 1
+    assert same_payload[0]["scope"] == "agent_short"
+
+    assert other_session_result.success is True
+    other_payload = json.loads(other_session_result.content)
+    assert other_payload == []
 
 
 

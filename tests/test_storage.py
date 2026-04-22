@@ -84,16 +84,14 @@ def test_skill_file_read_standard_layout(tmp_path: Path) -> None:
     assert "content" in loaded["base"]
 
 
-def test_skill_file_read_legacy_layout(tmp_path: Path) -> None:
+def test_skill_file_read_legacy_layout_is_rejected(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
     (skills_dir / "base.md").write_text("# Base\n\nlegacy-content", encoding="utf-8")
 
     repository = MarkdownSkillRepository(skills_dir=skills_dir)
-    loaded = repository.load_skills(["base"])
-
-    assert "base" in loaded
-    assert "legacy-content" in loaded["base"]
+    with pytest.raises(StorageError):
+        repository.load_skills(["base"])
 
 
 def test_session_file_manifest_and_active_files(tmp_path: Path) -> None:

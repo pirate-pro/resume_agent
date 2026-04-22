@@ -10,9 +10,11 @@ from app.memory.contracts import MemoryStore
 from app.memory.lifecycle import MemoryLifecycleService
 from app.memory.models import (
     CandidateResult,
+    CompactResult,
     ConsolidateResult,
     ForgetResult,
     MemoryCandidate,
+    MemoryCompactRequest,
     MemoryConsolidateRequest,
     MemoryForgetRequest,
     MemoryReadBundle,
@@ -62,3 +64,5 @@ class FileMemoryFacade:
     def forget(self, request: MemoryForgetRequest) -> ForgetResult:
         return self._lifecycle.forget(request)
 
+    def compact(self, request: MemoryCompactRequest) -> CompactResult:
+        return self._lifecycle.compact(request)

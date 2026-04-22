@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.domain.models import EventRecord, MemoryItem, SessionFile
-from app.infra.storage.jsonl_memory_repository import JsonlMemoryRepository
+from app.domain.models import EventRecord, SessionFile
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.memory.facade import FileMemoryFacade
+from app.memory.policies import default_memory_policy
+from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.memory_manager import MemoryManager
 from app.tools.builtins import MemorySearchTool
@@ -20,7 +22,8 @@ __all__ = []
 
 def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    memory_repo = JsonlMemoryRepository(data_dir=tmp_path)
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
 
     session_repo.create_session("sess_1")
@@ -44,20 +47,15 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
             created_at=datetime.now(UTC),
         ),
     )
-    memory_repo.add_memory(
-        MemoryItem(
-            memory_id="mem_1",
-            session_id="sess_1",
-            content="Use JSONL storage",
-            tags=["storage"],
-            created_at=datetime.now(UTC),
-            source_event_id="evt_1",
-        )
+    memory_manager = MemoryManager(memory_facade=memory_facade)
+    memory_manager.write_memory(
+        content="Use JSONL storage",
+        tags=["storage"],
+        session_id="sess_1",
+        source_event_id="evt_1",
     )
-
-    memory_manager = MemoryManager(memory_repository=memory_repo)
     tool_registry = ToolRegistry()
-    tool_registry.register(MemorySearchTool(memory_repository=memory_repo))
+    tool_registry.register(MemorySearchTool(memory_facade=memory_facade))
 
     assembler = ContextAssembler(
         session_repository=session_repo,
@@ -75,13 +73,14 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
     assert "[base]" in bundle.system_prompt
     assert any(message["role"] == "user" for message in bundle.messages)
     assert len(bundle.memory_hits) == 1
-    assert bundle.memory_hits[0].memory_id == "mem_1"
+    assert bundle.memory_hits[0].content == "Use JSONL storage"
     assert len(bundle.tool_definitions) == 1
 
 
 def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    memory_repo = JsonlMemoryRepository(data_dir=tmp_path)
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     session_repo.create_session("sess_2")
 
@@ -108,7 +107,7 @@ def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) 
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
-        memory_manager=MemoryManager(memory_repository=memory_repo),
+        memory_manager=MemoryManager(memory_facade=memory_facade),
         tool_executor=ToolRegistry(),
     )
 

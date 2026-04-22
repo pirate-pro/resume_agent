@@ -11,9 +11,11 @@ from app.core.errors import ValidationError
 
 __all__ = [
     "CandidateResult",
+    "CompactResult",
     "ConsolidateResult",
     "ForgetResult",
     "MemoryCandidate",
+    "MemoryCompactRequest",
     "MemoryConsolidateRequest",
     "MemoryForgetRequest",
     "MemoryReadBundle",
@@ -217,6 +219,7 @@ class ConsolidateResult:
     merged_records: int
     promoted_shared: int
     conflicts: int
+    written_memory_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.consumed_candidates < 0:
@@ -229,6 +232,10 @@ class ConsolidateResult:
             raise ValidationError("promoted_shared cannot be negative.")
         if self.conflicts < 0:
             raise ValidationError("conflicts cannot be negative.")
+        normalized_ids: list[str] = []
+        for memory_id in self.written_memory_ids:
+            normalized_ids.append(_require_non_empty("written_memory_id", memory_id))
+        self.written_memory_ids = normalized_ids
 
 
 @dataclass(slots=True)
@@ -266,6 +273,66 @@ class ForgetResult:
             raise ValidationError("deleted_records cannot be negative.")
         if self.archived_records < 0:
             raise ValidationError("archived_records cannot be negative.")
+
+
+@dataclass(slots=True)
+class MemoryCompactRequest:
+    scopes: list[MemoryScope] = field(
+        default_factory=lambda: [MemoryScope.AGENT_SHORT, MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG]
+    )
+    agent_id: str | None = None
+    session_id: str | None = None
+    remove_deleted: bool = True
+    remove_expired: bool = True
+    dedupe_by_memory_id: bool = True
+    dedupe_by_content_hash: bool = False
+    write_index: bool = True
+
+    def __post_init__(self) -> None:
+        self.scopes = _normalize_scopes(self.scopes)
+        self.agent_id = _normalize_optional("agent_id", self.agent_id)
+        self.session_id = _normalize_optional("session_id", self.session_id)
+        if not isinstance(self.remove_deleted, bool):
+            raise ValidationError("remove_deleted must be bool.")
+        if not isinstance(self.remove_expired, bool):
+            raise ValidationError("remove_expired must be bool.")
+        if not isinstance(self.dedupe_by_memory_id, bool):
+            raise ValidationError("dedupe_by_memory_id must be bool.")
+        if not isinstance(self.dedupe_by_content_hash, bool):
+            raise ValidationError("dedupe_by_content_hash must be bool.")
+        if not isinstance(self.write_index, bool):
+            raise ValidationError("write_index must be bool.")
+
+
+@dataclass(slots=True)
+class CompactResult:
+    scanned_files: int
+    rewritten_files: int
+    scanned_rows: int
+    kept_rows: int
+    dropped_deleted: int
+    dropped_expired: int
+    dropped_superseded: int
+    dropped_duplicate_hash: int
+    invalid_rows: int
+    index_files_written: int
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "scanned_files",
+            "rewritten_files",
+            "scanned_rows",
+            "kept_rows",
+            "dropped_deleted",
+            "dropped_expired",
+            "dropped_superseded",
+            "dropped_duplicate_hash",
+            "invalid_rows",
+            "index_files_written",
+        ):
+            value = getattr(self, field_name)
+            if value < 0:
+                raise ValidationError(f"{field_name} cannot be negative.")
 
 
 def make_content_hash(content: str) -> str:
@@ -349,4 +416,3 @@ def _validate_scope_fields(scope: MemoryScope, owner_agent_id: str | None, sessi
         raise ValidationError("owner_agent_id is required for agent scope memories.")
     if scope == MemoryScope.AGENT_SHORT and session_id is None:
         raise ValidationError("session_id is required for agent_short memories.")
-

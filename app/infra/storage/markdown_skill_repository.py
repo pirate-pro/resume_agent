@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,12 +9,11 @@ from pathlib import Path
 from app.core.errors import StorageError, ValidationError
 
 __all__ = ["MarkdownSkillRepository"]
-_logger = logging.getLogger(__name__)
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class MarkdownSkillRepository:
-    """Read skills from standard SKILL.md layout, with legacy compatibility."""
+    """Read skills from standard `skills/<name>/SKILL.md` layout."""
 
     def __init__(self, skills_dir: Path) -> None:
         if not isinstance(skills_dir, Path):
@@ -31,7 +29,7 @@ class MarkdownSkillRepository:
             if not isinstance(name, str) or not name.strip():
                 raise ValidationError("skill name must be a non-empty string.")
             normalized = name.strip()
-            selected = _resolve_skill_entry(skill_index, normalized)
+            selected = skill_index.get(normalized)
             if selected is None:
                 raise StorageError(f"Skill not found: {normalized}")
             loaded[normalized] = selected.instructions
@@ -57,20 +55,6 @@ class MarkdownSkillRepository:
                 raise StorageError(f"Duplicate skill name: {entry.name}")
             entries[entry.name] = entry
 
-        # 兼容旧结构：skills/<name>.md（无 frontmatter）。
-        for child in sorted(self._skills_dir.iterdir(), key=lambda item: item.name):
-            if child.is_dir():
-                continue
-            if child.suffix.lower() != ".md":
-                continue
-            legacy_name = child.stem.strip()
-            if not legacy_name:
-                continue
-            if legacy_name in entries:
-                _logger.debug("跳过同名 legacy skill 文件: name=%s path=%s", legacy_name, child)
-                continue
-            entry = _read_legacy_skill(path=child, skill_name=legacy_name)
-            entries[entry.name] = entry
         return entries
 
 
@@ -81,19 +65,6 @@ class _SkillEntry:
     instructions: str
     path: Path
     source: str
-
-
-def _resolve_skill_entry(index: dict[str, _SkillEntry], requested_name: str) -> _SkillEntry | None:
-    direct = index.get(requested_name)
-    if direct is not None:
-        return direct
-    # 兼容历史命名：下划线和连字符可互转（例如 file_reader -> file-reader）。
-    hyphen_alias = requested_name.replace("_", "-")
-    by_hyphen = index.get(hyphen_alias)
-    if by_hyphen is not None:
-        return by_hyphen
-    underscore_alias = requested_name.replace("-", "_")
-    return index.get(underscore_alias)
 
 
 def _read_standard_skill(skill_file: Path, expected_dir_name: str) -> _SkillEntry:
@@ -113,24 +84,6 @@ def _read_standard_skill(skill_file: Path, expected_dir_name: str) -> _SkillEntr
     if not body:
         raise StorageError(f"Skill body is empty: {skill_file}")
     return _SkillEntry(name=name, description=description, instructions=body, path=skill_file, source="standard")
-
-
-def _read_legacy_skill(path: Path, skill_name: str) -> _SkillEntry:
-    try:
-        instructions = path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        raise StorageError(f"Failed to read legacy skill '{path}': {exc}") from exc
-    if not instructions:
-        raise StorageError(f"Legacy skill body is empty: {path}")
-    # legacy 技能没有 frontmatter，这里给一个最小描述用于调试和观察。
-    description = f"Legacy skill loaded from {path.name}"
-    return _SkillEntry(
-        name=skill_name,
-        description=description,
-        instructions=instructions,
-        path=path,
-        source="legacy",
-    )
 
 
 def _split_frontmatter(raw: str, path: Path) -> tuple[str, str]:

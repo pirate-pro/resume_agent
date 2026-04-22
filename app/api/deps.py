@@ -8,9 +8,11 @@ from pathlib import Path
 from app.core.settings import Settings
 from app.infra.llm.openai_compatible_client import OpenAICompatibleClient
 from app.infra.locks.session_lock_manager import SessionLockManager
-from app.infra.storage.jsonl_memory_repository import JsonlMemoryRepository
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.memory.facade import FileMemoryFacade
+from app.memory.policies import default_memory_policy
+from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
@@ -36,8 +38,9 @@ __all__ = [
     "get_event_recorder",
     "get_lock_manager",
     "get_memory_manager",
-    "get_memory_repository",
     "get_model_client",
+    "get_memory_facade",
+    "get_memory_store",
     "get_session_manager",
     "get_session_repository",
     "get_settings",
@@ -58,9 +61,14 @@ def get_session_repository() -> JsonlSessionRepository:
 
 
 @lru_cache(maxsize=1)
-def get_memory_repository() -> JsonlMemoryRepository:
+def get_memory_store() -> JsonlFileMemoryStore:
     settings = get_settings()
-    return JsonlMemoryRepository(data_dir=settings.data_dir)
+    return JsonlFileMemoryStore(root_dir=settings.data_dir / "memory_v2")
+
+
+@lru_cache(maxsize=1)
+def get_memory_facade() -> FileMemoryFacade:
+    return FileMemoryFacade(store=get_memory_store(), policy=default_memory_policy())
 
 
 @lru_cache(maxsize=1)
@@ -72,8 +80,8 @@ def get_skill_repository() -> MarkdownSkillRepository:
 @lru_cache(maxsize=1)
 def get_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register(MemoryWriteTool(memory_repository=get_memory_repository()))
-    registry.register(MemorySearchTool(memory_repository=get_memory_repository()))
+    registry.register(MemoryWriteTool(memory_facade=get_memory_facade()))
+    registry.register(MemorySearchTool(memory_facade=get_memory_facade()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
     registry.register(SessionListFilesTool(session_repository=get_session_repository()))
@@ -85,7 +93,7 @@ def get_tool_registry() -> ToolRegistry:
 
 @lru_cache(maxsize=1)
 def get_memory_manager() -> MemoryManager:
-    return MemoryManager(memory_repository=get_memory_repository())
+    return MemoryManager(memory_facade=get_memory_facade())
 
 
 @lru_cache(maxsize=1)

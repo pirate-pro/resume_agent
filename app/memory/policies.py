@@ -23,6 +23,8 @@ class MemoryPolicy:
         }
     )
     short_ttl_seconds: int = 24 * 60 * 60
+    agent_long_promotion_min_confidence: float = 0.7
+    agent_long_promotion_min_repeat: int = 2
     shared_promotion_min_confidence: float = 0.85
     shared_promotion_min_repeat: int = 2
 
@@ -41,6 +43,10 @@ class MemoryPolicy:
                 raise ValidationError("per_scope_limit value must be positive integer.")
         if self.short_ttl_seconds <= 0:
             raise ValidationError("short_ttl_seconds must be positive.")
+        if self.agent_long_promotion_min_confidence < 0 or self.agent_long_promotion_min_confidence > 1:
+            raise ValidationError("agent_long_promotion_min_confidence must be in range [0,1].")
+        if self.agent_long_promotion_min_repeat <= 0:
+            raise ValidationError("agent_long_promotion_min_repeat must be positive.")
         if self.shared_promotion_min_confidence < 0 or self.shared_promotion_min_confidence > 1:
             raise ValidationError("shared_promotion_min_confidence must be in range [0,1].")
         if self.shared_promotion_min_repeat <= 0:
@@ -49,4 +55,3 @@ class MemoryPolicy:
 
 def default_memory_policy() -> MemoryPolicy:
     return MemoryPolicy()
-

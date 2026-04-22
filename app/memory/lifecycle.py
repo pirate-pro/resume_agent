@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.memory.contracts import MemoryStore
-from app.memory.models import ForgetResult, MemoryForgetRequest, MemoryScope
+from app.memory.models import CompactResult, ForgetResult, MemoryCompactRequest, MemoryForgetRequest, MemoryScope
 
 __all__ = ["MemoryLifecycleService"]
 
@@ -19,6 +19,9 @@ class MemoryLifecycleService:
     def forget(self, request: MemoryForgetRequest) -> ForgetResult:
         return self._store.forget(request, now=datetime.now(UTC))
 
+    def compact(self, request: MemoryCompactRequest) -> CompactResult:
+        return self._store.compact(request, now=datetime.now(UTC))
+
     def expire_short_memory(self, agent_id: str, session_id: str | None = None) -> ForgetResult:
         request = MemoryForgetRequest(
             agent_id=agent_id,
@@ -30,4 +33,3 @@ class MemoryLifecycleService:
             reason="ttl_expired",
         )
         return self._store.forget(request, now=datetime.now(UTC))
-

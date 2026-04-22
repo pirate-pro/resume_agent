@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.core.errors import StorageError, ValidationError
 from app.memory.models import (
+    CompactResult,
     ForgetResult,
     MemoryCandidate,
+    MemoryCompactRequest,
     MemoryForgetRequest,
     MemoryRecord,
     MemoryScope,
@@ -120,7 +124,12 @@ class JsonlFileMemoryStore:
             raise ValidationError("agent_id must be non-empty string.")
         if limit <= 0:
             raise ValidationError("limit must be positive.")
-        tokens = [token for token in query.lower().split() if token]
+        # 约定 "*" / "__all__" 代表全量读取，不做关键词过滤。
+        normalized_query = query.strip().lower()
+        if normalized_query in {"*", "__all__"}:
+            tokens: list[str] = []
+        else:
+            tokens = [token for token in normalized_query.split() if token]
         candidates: list[tuple[int, MemoryRecord]] = []
 
         for path in self._iter_scope_files(scope=scope, agent_id=agent_id.strip(), session_id=session_id):
@@ -145,6 +154,36 @@ class JsonlFileMemoryStore:
             reverse=True,
         )
         return [record for _, record in candidates[:limit]]
+
+    def count_active_records_by_hash(
+        self,
+        *,
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        content_hash: str,
+        now: datetime,
+    ) -> int:
+        normalized_hash = str(content_hash).strip()
+        if not normalized_hash:
+            raise ValidationError("content_hash must be non-empty string.")
+        count = 0
+        for path in self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id):
+            rows = _read_jsonl_rows(path)
+            for row in rows:
+                try:
+                    record = _payload_to_record(row)
+                except ValidationError as exc:
+                    _logger.warning("memory record 不合法，已跳过: path=%s error=%s row=%s", path, exc, row)
+                    continue
+                if record.status != MemoryStatus.ACTIVE:
+                    continue
+                if record.expires_at is not None and record.expires_at <= now:
+                    continue
+                if record.content_hash != normalized_hash:
+                    continue
+                count += 1
+        return count
 
     def forget(self, request: MemoryForgetRequest, now: datetime) -> ForgetResult:
         touched = 0
@@ -204,6 +243,59 @@ class JsonlFileMemoryStore:
 
         return ForgetResult(touched_records=touched, deleted_records=deleted, archived_records=archived)
 
+    def compact(self, request: MemoryCompactRequest, now: datetime) -> CompactResult:
+        if not isinstance(request, MemoryCompactRequest):
+            raise ValidationError("request must be MemoryCompactRequest.")
+        unique_paths = _dedupe_paths(self._collect_compact_paths(request))
+
+        scanned_files = 0
+        rewritten_files = 0
+        scanned_rows = 0
+        kept_rows = 0
+        dropped_deleted = 0
+        dropped_expired = 0
+        dropped_superseded = 0
+        dropped_duplicate_hash = 0
+        invalid_rows = 0
+        index_files_written = 0
+
+        for path in unique_paths:
+            rows = _read_jsonl_rows(path)
+            if not rows:
+                continue
+            scanned_files += 1
+            scanned_rows += len(rows)
+
+            compacted = _compact_rows(rows=rows, request=request, now=now)
+            kept_rows += compacted.kept_rows
+            dropped_deleted += compacted.dropped_deleted
+            dropped_expired += compacted.dropped_expired
+            dropped_superseded += compacted.dropped_superseded
+            dropped_duplicate_hash += compacted.dropped_duplicate_hash
+            invalid_rows += compacted.invalid_rows
+
+            if _rows_changed(original_rows=rows, compacted_rows=compacted.rows):
+                _write_jsonl_rows(path, compacted.rows)
+                rewritten_files += 1
+            if request.write_index:
+                self._write_index_file(path=path, records=compacted.records, invalid_rows=compacted.invalid_rows, now=now)
+                index_files_written += 1
+
+        result = CompactResult(
+            scanned_files=scanned_files,
+            rewritten_files=rewritten_files,
+            scanned_rows=scanned_rows,
+            kept_rows=kept_rows,
+            dropped_deleted=dropped_deleted,
+            dropped_expired=dropped_expired,
+            dropped_superseded=dropped_superseded,
+            dropped_duplicate_hash=dropped_duplicate_hash,
+            invalid_rows=invalid_rows,
+            index_files_written=index_files_written,
+        )
+        self._append_compact_log(request=request, result=result, now=now)
+        return result
+
     def _load_pending_idempotency_keys(self) -> set[str]:
         keys: set[str] = set()
         for row in _read_jsonl_rows(self._pending_file):
@@ -238,6 +330,90 @@ class JsonlFileMemoryStore:
             raise ValidationError("session_id is required for agent_short records.")
         return self._agents_dir / owner_agent_id / "short" / f"{session_id}.jsonl"
 
+    def _collect_compact_paths(self, request: MemoryCompactRequest) -> list[Path]:
+        paths: list[Path] = []
+        for scope in request.scopes:
+            paths.extend(self._iter_scope_files(scope=scope, agent_id=request.agent_id, session_id=request.session_id))
+        return paths
+
+    def _write_index_file(
+        self,
+        *,
+        path: Path,
+        records: list[MemoryRecord],
+        invalid_rows: int,
+        now: datetime,
+    ) -> None:
+        index_path = self._resolve_index_file_path(path)
+        tag_counter = Counter[str]()
+        active_count = 0
+        deleted_count = 0
+        expired_count = 0
+        for record in records:
+            tag_counter.update(record.tags)
+            if record.status == MemoryStatus.ACTIVE:
+                active_count += 1
+            if record.status == MemoryStatus.DELETED:
+                deleted_count += 1
+            if record.expires_at is not None and record.expires_at <= now:
+                expired_count += 1
+        payload = {
+            "schema": "memory_index_v1",
+            "source_file": str(path.relative_to(self._root_dir)),
+            "record_count": len(records),
+            "active_count": active_count,
+            "deleted_count": deleted_count,
+            "expired_count": expired_count,
+            "invalid_rows": invalid_rows,
+            "top_tags": [{"tag": item[0], "count": item[1]} for item in tag_counter.most_common(20)],
+            "updated_at": _to_iso(now),
+        }
+        _write_json_file(index_path, payload)
+
+    def _resolve_index_file_path(self, record_file_path: Path) -> Path:
+        if record_file_path == self._shared_dir / "long.jsonl":
+            return self._shared_dir / "index.json"
+        try:
+            relative = record_file_path.relative_to(self._agents_dir)
+        except ValueError:
+            return record_file_path.with_suffix(".index.json")
+        parts = relative.parts
+        if len(parts) == 2 and parts[1] == "long.jsonl":
+            return self._agents_dir / parts[0] / "long.index.json"
+        if len(parts) >= 3 and parts[1] == "short":
+            stem = Path(parts[-1]).stem
+            return record_file_path.with_name(f"{stem}.index.json")
+        return record_file_path.with_suffix(".index.json")
+
+    def _append_compact_log(self, *, request: MemoryCompactRequest, result: CompactResult, now: datetime) -> None:
+        payload = {
+            "operation": "compact",
+            "timestamp": _to_iso(now),
+            "request": {
+                "scopes": [scope.value for scope in request.scopes],
+                "agent_id": request.agent_id,
+                "session_id": request.session_id,
+                "remove_deleted": request.remove_deleted,
+                "remove_expired": request.remove_expired,
+                "dedupe_by_memory_id": request.dedupe_by_memory_id,
+                "dedupe_by_content_hash": request.dedupe_by_content_hash,
+                "write_index": request.write_index,
+            },
+            "result": {
+                "scanned_files": result.scanned_files,
+                "rewritten_files": result.rewritten_files,
+                "scanned_rows": result.scanned_rows,
+                "kept_rows": result.kept_rows,
+                "dropped_deleted": result.dropped_deleted,
+                "dropped_expired": result.dropped_expired,
+                "dropped_superseded": result.dropped_superseded,
+                "dropped_duplicate_hash": result.dropped_duplicate_hash,
+                "invalid_rows": result.invalid_rows,
+                "index_files_written": result.index_files_written,
+            },
+        }
+        _append_jsonl_rows(self._ops_dir / "compact.log.jsonl", [payload])
+
 
 def _score_record(record: MemoryRecord, tokens: list[str]) -> int:
     if not tokens:
@@ -265,6 +441,125 @@ def _match_forget(record: MemoryRecord, request: MemoryForgetRequest, target_ids
     if request.before is not None and record.updated_at >= request.before:
         return False
     return True
+
+
+@dataclass(slots=True)
+class _CompactionRows:
+    rows: list[dict[str, Any]]
+    records: list[MemoryRecord]
+    kept_rows: int
+    dropped_deleted: int
+    dropped_expired: int
+    dropped_superseded: int
+    dropped_duplicate_hash: int
+    invalid_rows: int
+
+
+def _compact_rows(rows: list[dict[str, Any]], request: MemoryCompactRequest, now: datetime) -> _CompactionRows:
+    valid_records: list[MemoryRecord] = []
+    invalid_rows: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            valid_records.append(_payload_to_record(row))
+        except ValidationError as exc:
+            _logger.warning("compact 遇到非法记录，已保留原始行: error=%s row=%s", exc, row)
+            invalid_rows.append(row)
+
+    dropped_deleted = 0
+    dropped_expired = 0
+    filtered: list[MemoryRecord] = []
+    for record in valid_records:
+        if request.remove_deleted and record.status == MemoryStatus.DELETED:
+            dropped_deleted += 1
+            continue
+        if request.remove_expired and record.expires_at is not None and record.expires_at <= now:
+            dropped_expired += 1
+            continue
+        filtered.append(record)
+
+    dropped_superseded = 0
+    if request.dedupe_by_memory_id:
+        filtered, dropped_superseded = _dedupe_records(
+            records=filtered,
+            key_fn=lambda item: item.memory_id,
+        )
+
+    dropped_duplicate_hash = 0
+    if request.dedupe_by_content_hash:
+        filtered, dropped_duplicate_hash = _dedupe_records(
+            records=filtered,
+            key_fn=lambda item: f"{item.scope.value}|{item.owner_agent_id or '-'}|{item.session_id or '-'}|{item.content_hash}",
+        )
+
+    # 保持文件内容稳定可预期，按更新时间与 memory_id 排序写回。
+    filtered.sort(key=lambda item: (item.updated_at, item.created_at, item.memory_id))
+    compacted_rows = [_record_to_payload(item) for item in filtered]
+    compacted_rows.extend(invalid_rows)
+    return _CompactionRows(
+        rows=compacted_rows,
+        records=filtered,
+        kept_rows=len(filtered),
+        dropped_deleted=dropped_deleted,
+        dropped_expired=dropped_expired,
+        dropped_superseded=dropped_superseded,
+        dropped_duplicate_hash=dropped_duplicate_hash,
+        invalid_rows=len(invalid_rows),
+    )
+
+
+def _dedupe_records(
+    *,
+    records: list[MemoryRecord],
+    key_fn: Callable[[MemoryRecord], str],
+) -> tuple[list[MemoryRecord], int]:
+    kept: dict[str, MemoryRecord] = {}
+    dropped = 0
+    for record in records:
+        key = str(key_fn(record))
+        existing = kept.get(key)
+        if existing is None:
+            kept[key] = record
+            continue
+        dropped += 1
+        if _is_newer_record(record, existing):
+            kept[key] = record
+    return list(kept.values()), dropped
+
+
+def _is_newer_record(current: MemoryRecord, existing: MemoryRecord) -> bool:
+    return (
+        current.updated_at,
+        current.version,
+        current.created_at,
+        current.memory_id,
+    ) > (
+        existing.updated_at,
+        existing.version,
+        existing.created_at,
+        existing.memory_id,
+    )
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    output: list[Path] = []
+    seen: set[Path] = set()
+    for path in sorted(paths):
+        if path in seen:
+            continue
+        seen.add(path)
+        output.append(path)
+    return output
+
+
+def _rows_changed(*, original_rows: list[dict[str, Any]], compacted_rows: list[dict[str, Any]]) -> bool:
+    if len(original_rows) != len(compacted_rows):
+        return True
+    for left, right in zip(original_rows, compacted_rows, strict=False):
+        left_json = json.dumps(left, ensure_ascii=False, sort_keys=True)
+        right_json = json.dumps(right, ensure_ascii=False, sort_keys=True)
+        if left_json != right_json:
+            return True
+    return False
 
 
 def _candidate_to_payload(candidate: MemoryCandidate) -> dict[str, Any]:
@@ -393,6 +688,17 @@ def _write_jsonl_rows(path: Path, rows: list[dict[str, Any]]) -> None:
         raise StorageError(f"Failed to rewrite memory jsonl '{path}': {exc}") from exc
 
 
+def _write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        tmp_path.replace(path)
+    except OSError as exc:
+        raise StorageError(f"Failed to write memory json file '{path}': {exc}") from exc
+
+
 def _to_iso(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
@@ -401,4 +707,3 @@ def _from_iso(value: str) -> datetime:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     return datetime.fromisoformat(value).astimezone(UTC)
-
