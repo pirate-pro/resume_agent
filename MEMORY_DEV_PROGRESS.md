@@ -227,3 +227,23 @@
 - 验证结果：
   - `uv run mypy app tests`：通过（`Success: no issues found in 59 source files`）
   - `uv run pytest -q`：通过（`42 passed`）
+
+19. [完成] 统一 memory 检索入口并改为显式 agent 上下文驱动。
+- 说明：
+  - `MemoryManager` 移除隐式默认 agent，读写改为显式接收 `RunContext` 或 `agent_id`。
+  - 新增统一检索入口：
+    - `search_bundle(...)`（返回原始检索 bundle，供工具保留 scope/confidence）
+    - `search_with_summary(...)`（返回命中结果与检索摘要，供上下文注入）
+    - `search_for_agent(...)` / `list_memories_for_agent(...)`（供 API 显式按 agent 查询）
+  - `ContextAssembler` 改为接收 `RunContext`，并把检索摘要写入 `ContextBundle.memory_summary`。
+  - `AgentRuntime` 新增 `memory_retrieval` 事件，记录 query、命中数、scope、扫描量等信息，便于排查召回问题。
+  - `memory_search` 工具改为复用 `MemoryManager.search_bundle(...)`，和自动上下文检索走同一检索链路。
+  - `/api/memories` 新增 `agent_id` 查询参数（默认 `agent_main`），避免“全局混查”。
+  - 同步更新依赖注入与测试装配，补齐上下文签名迁移后的测试用例。
+- 影响范围：
+  - 同一 agent 下，自动上下文检索与工具检索行为一致。
+  - 记忆读取边界更清晰：按 agent 显式检索，shared 仍由 memory 层策略统一合并。
+  - 运行事件可观测性增强，定位“为什么没召回”更直接。
+- 验证结果：
+  - `uv run mypy app tests`：通过（`Success: no issues found in 59 source files`）
+  - `uv run pytest -q`：通过（`42 passed`）
