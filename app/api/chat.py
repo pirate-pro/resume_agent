@@ -185,16 +185,17 @@ async def get_session_events(
 @router.get("/memories", response_model=list[MemoryView])
 async def get_memories(
     q: str | None = Query(default=None),
+    agent_id: str = Query(default="agent_main"),
     limit: int = Query(default=20, ge=1, le=200),
     service: ChatService = Depends(get_chat_service),
 ) -> list[MemoryView]:
-    _logger.info("查询记忆: query=%s limit=%s", q, limit)
+    _logger.info("查询记忆: agent_id=%s query=%s limit=%s", agent_id, q, limit)
     try:
-        items = service.list_memories(q, limit)
-        _logger.info("记忆查询完成: query=%s result_count=%s", q, len(items))
+        items = service.list_memories(q, limit, agent_id=agent_id)
+        _logger.info("记忆查询完成: agent_id=%s query=%s result_count=%s", agent_id, q, len(items))
         return [MemoryView(memory_id=item.memory_id, content=item.content, tags=item.tags) for item in items]
     except AppError as exc:
-        _logger.exception("查询记忆失败: query=%s limit=%s error=%s", q, limit, exc)
+        _logger.exception("查询记忆失败: agent_id=%s query=%s limit=%s error=%s", agent_id, q, limit, exc)
         raise _map_app_error(exc) from exc
 
 

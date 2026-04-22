@@ -149,16 +149,34 @@ class ChatService:
         _logger.debug("读取会话事件: session_id=%s event_count=%s", normalized, len(events))
         return events
 
-    def list_memories(self, query: str | None, limit: int) -> list[MemoryItem]:
+    def list_memories(self, query: str | None, limit: int, agent_id: str) -> list[MemoryItem]:
         if limit <= 0:
             raise ValidationError("limit must be positive.")
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValidationError("agent_id must be a non-empty string.")
+        normalized_agent_id = agent_id.strip()
         if query is None or not query.strip():
-            memories = self._memory_manager.list_memories(limit)
-            _logger.debug("读取记忆列表: limit=%s result_count=%s", limit, len(memories))
+            memories = self._memory_manager.list_memories_for_agent(limit=limit, agent_id=normalized_agent_id)
+            _logger.debug(
+                "读取记忆列表: agent_id=%s limit=%s result_count=%s",
+                normalized_agent_id,
+                limit,
+                len(memories),
+            )
             return memories
         normalized = query.strip()
-        memories = self._memory_manager.search(normalized, limit)
-        _logger.debug("检索记忆: query=%s limit=%s result_count=%s", normalized, limit, len(memories))
+        memories = self._memory_manager.search_for_agent(
+            query=normalized,
+            limit=limit,
+            agent_id=normalized_agent_id,
+        )
+        _logger.debug(
+            "检索记忆: agent_id=%s query=%s limit=%s result_count=%s",
+            normalized_agent_id,
+            normalized,
+            limit,
+            len(memories),
+        )
         return memories
 
     async def upload_session_file(

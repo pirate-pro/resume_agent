@@ -80,19 +80,18 @@ def build_chat_service(data_dir: Path, model_client: ChatModelClient) -> tuple[C
     session_repository = JsonlSessionRepository(data_dir=data_dir)
     memory_store = JsonlFileMemoryStore(root_dir=data_dir / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = MemoryManager(memory_facade=memory_facade)
     skill_repository = MarkdownSkillRepository(skills_dir=Path("app/skills"))
 
     tool_registry = ToolRegistry()
     tool_registry.register(MemoryWriteTool(memory_facade=memory_facade))
-    tool_registry.register(MemorySearchTool(memory_facade=memory_facade))
+    tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
     tool_registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     tool_registry.register(WorkspaceReadFileTool(session_repository=session_repository))
     tool_registry.register(SessionListFilesTool(session_repository=session_repository))
     tool_registry.register(SessionPlanFileAccessTool(session_repository=session_repository))
     tool_registry.register(SessionReadFileTool(session_repository=session_repository))
     tool_registry.register(SessionSearchFileTool(session_repository=session_repository))
-
-    memory_manager = MemoryManager(memory_facade=memory_facade)
     session_manager = SessionManager(session_repository=session_repository)
     event_recorder = EventRecorder(session_repository=session_repository)
     context_assembler = ContextAssembler(

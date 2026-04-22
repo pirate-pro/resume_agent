@@ -11,11 +11,12 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
-from app.domain.models import MemoryItem, RunContext, SessionFile, ToolDefinition, ToolExecutionResult
+from app.domain.models import RunContext, SessionFile, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
 from app.memory.contracts import MemoryFacade
 from app.memory.intake import build_candidate_request
-from app.memory.models import MemoryConsolidateRequest, MemoryReadRequest
+from app.memory.models import MemoryConsolidateRequest
+from app.runtime.memory_manager import MemoryManager
 
 __all__ = [
     "MemorySearchTool",
@@ -109,9 +110,8 @@ class MemoryWriteTool:
 class MemorySearchTool:
     """Search memory items by query."""
 
-    def __init__(self, memory_facade: MemoryFacade, default_agent_id: str = "agent_main") -> None:
-        self._memory_facade = memory_facade
-        self._default_agent_id = default_agent_id.strip() if default_agent_id.strip() else "agent_main"
+    def __init__(self, memory_manager: MemoryManager) -> None:
+        self._memory_manager = memory_manager
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -137,23 +137,19 @@ class MemorySearchTool:
         if not isinstance(raw_limit, int) or raw_limit <= 0:
             raise ToolExecutionError("'limit' must be a positive integer.")
         limit = min(raw_limit, 20)
-        bundle = self._memory_facade.read_context(
-            MemoryReadRequest(
-                agent_id=run_context.agent_id or self._default_agent_id,
-                # 与自动上下文检索保持一致：按 agent 作用域检索，允许跨会话读取 short 记忆。
-                session_id=None,
-                query=query,
-                limit=limit,
-                token_budget=max(600, limit * 280),
-            )
+        _, _, bundle = self._memory_manager.search_bundle(
+            query=query,
+            limit=limit,
+            context=run_context,
         )
         hits = bundle.items
         _logger.debug(
-            "执行 memory_search: session_id=%s agent_id=%s query=%s hit_count=%s",
+            "执行 memory_search: session_id=%s agent_id=%s query=%s hit_count=%s scanned=%s",
             run_context.session_id,
             run_context.agent_id,
             query,
             len(hits),
+            bundle.total_scanned,
         )
         payload = [
             {

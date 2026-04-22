@@ -8,10 +8,23 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_chat_service
+from app.domain.models import RunContext
 from app.main import app
 from tests.helpers import StaticModelClient, build_chat_service
 
 __all__ = []
+
+
+def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
+    return RunContext(
+        session_id=session_id,
+        run_id=f"run_{session_id}",
+        agent_id=agent_id,
+        turn_id=f"turn_{session_id}",
+        entry_agent_id=agent_id,
+        parent_run_id=None,
+        trace_flags={},
+    )
 
 
 
@@ -20,7 +33,7 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
     memory_manager.write_memory(
         content="Use JSONL storage",
         tags=["storage"],
-        session_id="sess_seed",
+        context=_context("sess_seed"),
         source_event_id=None,
     )
 

@@ -68,7 +68,7 @@ class AgentRuntime:
         )
 
         context = self._context_assembler.assemble(
-            session_id=session_id,
+            context=run_context,
             user_message=run_input.user_message,
             skill_names=run_input.skill_names,
         )
@@ -78,6 +78,14 @@ class AgentRuntime:
             len(context.messages),
             len(context.memory_hits),
             len(context.tool_definitions),
+        )
+        self._event_recorder.record(
+            session_id=session_id,
+            event_type="memory_retrieval",
+            payload=context.memory_summary,
+            agent_id=run_context.agent_id,
+            run_id=run_context.run_id,
+            parent_run_id=run_context.parent_run_id,
         )
 
         tools_payload = [self._to_model_tool_schema(tool) for tool in context.tool_definitions]

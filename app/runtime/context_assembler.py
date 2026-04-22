@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.core.errors import ValidationError
-from app.domain.models import ContextBundle, EventRecord, MemoryItem, SessionFile
+from app.domain.models import ContextBundle, EventRecord, MemoryItem, RunContext, SessionFile
 from app.domain.protocols import SessionRepository, SkillRepository, ToolExecutor
 from app.runtime.memory_manager import MemoryManager
 
@@ -29,19 +29,19 @@ class ContextAssembler:
         self._memory_manager = memory_manager
         self._tool_executor = tool_executor
 
-    def assemble(self, session_id: str, user_message: str, skill_names: list[str]) -> ContextBundle:
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValidationError("session_id must be a non-empty string.")
+    def assemble(self, context: RunContext, user_message: str, skill_names: list[str]) -> ContextBundle:
+        if not isinstance(context, RunContext):
+            raise ValidationError("context must be RunContext.")
         if not isinstance(user_message, str) or not user_message.strip():
             raise ValidationError("user_message must be a non-empty string.")
         if not isinstance(skill_names, list):
             raise ValidationError("skill_names must be a list.")
 
-        normalized_session_id = session_id.strip()
+        normalized_session_id = context.session_id
         normalized_message = user_message.strip()
 
         skills = self._skill_repository.load_skills(skill_names) if skill_names else {}
-        memory_hits = self._safe_memory_search(normalized_message, limit=5)
+        memory_hits, memory_summary = self._safe_memory_search(normalized_message, limit=5, context=context)
         active_files = self._load_active_files(normalized_session_id)
         recent_events = self._session_repository.list_recent_events(normalized_session_id, limit=12)
         messages = self._build_messages_from_events(recent_events)
@@ -65,14 +65,44 @@ class ContextAssembler:
             messages=messages,
             memory_hits=memory_hits,
             tool_definitions=tool_definitions,
+            memory_summary=memory_summary,
         )
 
-    def _safe_memory_search(self, query: str, limit: int) -> list[MemoryItem]:
+    def _safe_memory_search(
+        self,
+        query: str,
+        limit: int,
+        context: RunContext,
+    ) -> tuple[list[MemoryItem], dict[str, str | int | bool | list[str]]]:
         try:
-            return self._memory_manager.search(query=query, limit=limit)
+            hits, summary = self._memory_manager.search_with_summary(
+                query=query,
+                limit=limit,
+                context=context,
+            )
+            normalized_summary: dict[str, str | int | bool | list[str]] = {
+                "query": str(summary.get("query", "")),
+                "agent_id": str(summary.get("agent_id", "")),
+                "session_id": str(summary.get("session_id", "")),
+                "hit_count": int(summary.get("hit_count", 0)),
+                "total_scanned": int(summary.get("total_scanned", 0)),
+                "truncated": bool(summary.get("truncated", False)),
+                "searched_scopes": [str(item) for item in summary.get("searched_scopes", [])],
+                "notes": [str(item) for item in summary.get("notes", [])],
+            }
+            return hits, normalized_summary
         except ValidationError as exc:
             _logger.warning("记忆检索参数不合法，跳过检索: query=%s limit=%s error=%s", query, limit, exc)
-            return []
+            return [], {
+                "query": query,
+                "agent_id": context.agent_id,
+                "session_id": context.session_id,
+                "hit_count": 0,
+                "total_scanned": 0,
+                "truncated": False,
+                "searched_scopes": [],
+                "notes": [f"validation_error: {exc}"],
+            }
 
     def _build_system_prompt(
         self,

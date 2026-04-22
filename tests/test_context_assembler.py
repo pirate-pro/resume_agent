@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.domain.models import EventRecord, SessionFile
+from app.domain.models import EventRecord, RunContext, SessionFile
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
@@ -17,6 +17,18 @@ from app.tools.builtins import MemorySearchTool
 from app.tools.registry import ToolRegistry
 
 __all__ = []
+
+
+def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
+    return RunContext(
+        session_id=session_id,
+        run_id=f"run_{session_id}",
+        agent_id=agent_id,
+        turn_id=f"turn_{session_id}",
+        entry_agent_id=agent_id,
+        parent_run_id=None,
+        trace_flags={},
+    )
 
 
 
@@ -51,11 +63,11 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
     memory_manager.write_memory(
         content="Use JSONL storage",
         tags=["storage"],
-        session_id="sess_1",
+        context=_context("sess_1"),
         source_event_id="evt_1",
     )
     tool_registry = ToolRegistry()
-    tool_registry.register(MemorySearchTool(memory_facade=memory_facade))
+    tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     assembler = ContextAssembler(
         session_repository=session_repo,
@@ -65,7 +77,7 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
     )
 
     bundle = assembler.assemble(
-        session_id="sess_1",
+        context=_context("sess_1"),
         user_message="how is storage",
         skill_names=["base", "memory"],
     )
@@ -112,7 +124,7 @@ def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) 
     )
 
     bundle = assembler.assemble(
-        session_id="sess_2",
+        context=_context("sess_2"),
         user_message="summarize uploaded",
         skill_names=["base"],
     )
@@ -132,11 +144,11 @@ def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: P
     session_repo.create_session("sess_a")
     session_repo.create_session("sess_b")
 
-    memory_manager = MemoryManager(memory_facade=memory_facade, default_agent_id="agent_main")
+    memory_manager = MemoryManager(memory_facade=memory_facade)
     memory_manager.write_memory(
         content='用户要求以后叫我"李华"，这是我的新名字/称呼。',
         tags=["preference", "long_term"],
-        session_id="sess_a",
+        context=_context("sess_a"),
         source_event_id="evt_rename",
     )
 
@@ -147,7 +159,7 @@ def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: P
         tool_executor=ToolRegistry(),
     )
     bundle = assembler.assemble(
-        session_id="sess_b",
+        context=_context("sess_b"),
         user_message="你叫什么名字",
         skill_names=["base", "memory"],
     )

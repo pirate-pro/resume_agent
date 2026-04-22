@@ -81,7 +81,7 @@ def get_skill_repository() -> MarkdownSkillRepository:
 def get_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(MemoryWriteTool(memory_facade=get_memory_facade()))
-    registry.register(MemorySearchTool(memory_facade=get_memory_facade()))
+    registry.register(MemorySearchTool(memory_manager=get_memory_manager()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
     registry.register(SessionListFilesTool(session_repository=get_session_repository()))

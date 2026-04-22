@@ -14,6 +14,7 @@ from app.memory.facade import FileMemoryFacade
 from app.memory.models import MemoryReadRequest
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.runtime.memory_manager import MemoryManager
 from app.tools.builtins import (
     MemorySearchTool,
     MemoryWriteTool,
@@ -84,10 +85,11 @@ def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
 def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = MemoryManager(memory_facade=memory_facade)
 
     registry = ToolRegistry()
     registry.register(MemoryWriteTool(memory_facade=memory_facade))
-    registry.register(MemorySearchTool(memory_facade=memory_facade))
+    registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     write_result = registry.execute(
         ToolCall(name="memory_write", arguments={"content": "User likes concise replies"}),
@@ -117,13 +119,14 @@ def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tm
 def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = MemoryManager(memory_facade=memory_facade)
 
     main_registry = ToolRegistry()
     main_registry.register(MemoryWriteTool(memory_facade=memory_facade, default_agent_id="agent_main"))
-    main_registry.register(MemorySearchTool(memory_facade=memory_facade, default_agent_id="agent_main"))
+    main_registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     other_registry = ToolRegistry()
-    other_registry.register(MemorySearchTool(memory_facade=memory_facade, default_agent_id="agent_other"))
+    other_registry.register(MemorySearchTool(memory_manager=memory_manager))
 
     write_result = main_registry.execute(
         ToolCall(name="memory_write", arguments={"content": "用户明天要多喝水"}),

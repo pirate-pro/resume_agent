@@ -22,6 +22,7 @@ _ALLOWED_EVENT_TYPES = {
     "assistant_thinking",
     "assistant_message",
     "memory_write",
+    "memory_retrieval",
     "run_finished",
 }
 

@@ -220,6 +220,7 @@ class ContextBundle:
     messages: list[dict[str, Any]]
     memory_hits: list[MemoryItem]
     tool_definitions: list[ToolDefinition]
+    memory_summary: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.system_prompt = _require_non_empty("system_prompt", self.system_prompt)
@@ -229,6 +230,8 @@ class ContextBundle:
             raise ValidationError("memory_hits must be a list.")
         if not isinstance(self.tool_definitions, list):
             raise ValidationError("tool_definitions must be a list.")
+        if not isinstance(self.memory_summary, dict):
+            raise ValidationError("memory_summary must be a dictionary.")
 
 
 @dataclass(slots=True)
