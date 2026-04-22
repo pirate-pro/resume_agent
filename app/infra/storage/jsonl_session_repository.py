@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,17 @@ class JsonlSessionRepository:
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
             raise StorageError(f"Failed to read session metadata for '{session_id}': {exc}") from exc
+
+    def delete_session(self, session_id: str) -> None:
+        session_id = self._validate_session_id(session_id)
+        session_dir = self._session_dir(session_id)
+        if not session_dir.exists() or not session_dir.is_dir():
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        try:
+            shutil.rmtree(session_dir)
+        except OSError as exc:
+            raise StorageError(f"Failed to delete session '{session_id}': {exc}") from exc
+        _logger.info("会话删除完成: session_id=%s", session_id)
 
     def append_event(self, session_id: str, event: EventRecord) -> None:
         session_id = self._validate_session_id(session_id)

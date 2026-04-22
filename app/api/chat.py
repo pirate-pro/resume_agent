@@ -27,6 +27,7 @@ from app.schemas.chat import (
     EventView,
     FileUploadRequest,
     MemoryView,
+    SessionDeleteResponse,
     SessionFileView,
     SessionFilesResponse,
 )
@@ -179,6 +180,21 @@ async def get_session_events(
         ]
     except AppError as exc:
         _logger.exception("查询会话事件失败: session_id=%s error=%s", session_id, exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionDeleteResponse)
+async def delete_session(
+    session_id: str,
+    service: ChatService = Depends(get_chat_service),
+) -> SessionDeleteResponse:
+    normalized = session_id.strip()
+    _logger.info("删除会话请求: session_id=%s", normalized)
+    try:
+        await service.delete_session(normalized)
+        return SessionDeleteResponse(session_id=normalized, deleted=True)
+    except AppError as exc:
+        _logger.exception("删除会话失败: session_id=%s error=%s", normalized, exc)
         raise _map_app_error(exc) from exc
 
 

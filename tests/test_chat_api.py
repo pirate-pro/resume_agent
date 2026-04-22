@@ -116,6 +116,34 @@ def test_chat_stream_endpoint(tmp_path: Path) -> None:
         app.dependency_overrides.clear()
 
 
+def test_delete_session_endpoint(tmp_path: Path) -> None:
+    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="delete-ok"))
+    app.dependency_overrides[get_chat_service] = lambda: service
+
+    try:
+        with TestClient(app) as client:
+            chat_resp = client.post(
+                "/api/chat",
+                json={
+                    "session_id": None,
+                    "message": "create then delete",
+                    "skill_names": ["base"],
+                    "max_tool_rounds": 1,
+                },
+            )
+            assert chat_resp.status_code == 200
+            session_id = chat_resp.json()["session_id"]
+
+            delete_resp = client.delete(f"/api/sessions/{session_id}")
+            assert delete_resp.status_code == 200
+            assert delete_resp.json()["deleted"] is True
+
+            events_resp = client.get(f"/api/sessions/{session_id}/events")
+            assert events_resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
 def _parse_sse_events(raw: str) -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
     for block in raw.split("\n\n"):

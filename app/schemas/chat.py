@@ -16,6 +16,7 @@ __all__ = [
     "SessionFileView",
     "SessionFilesResponse",
     "MemoryView",
+    "SessionDeleteResponse",
     "ToolCallView",
 ]
 
@@ -131,6 +132,11 @@ class SessionFilesResponse(BaseModel):
     session_id: str
     active_file_ids: list[str]
     files: list[SessionFileView]
+
+
+class SessionDeleteResponse(BaseModel):
+    session_id: str
+    deleted: bool
 
 
 class ActiveFilesRequest(BaseModel):

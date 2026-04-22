@@ -47,3 +47,21 @@ def test_chat_service_returns_runtime_response(tmp_path: Path) -> None:
 
     assert response.session_id == "sess_explicit"
     assert response.answer == "result"
+
+
+def test_chat_service_delete_session(tmp_path: Path) -> None:
+    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="result"))
+    created = asyncio.run(
+        service.chat(
+            ChatRequest(
+                session_id=None,
+                message="to be deleted",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        )
+    )
+
+    asyncio.run(service.delete_session(created.session_id))
+
+    assert service._session_repository.get_session(created.session_id) is None  # noqa: SLF001

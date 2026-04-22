@@ -44,6 +44,7 @@ const elements = {
   sendBtn: document.getElementById("sendBtn"),
   jumpToLatestBtn: document.getElementById("jumpToLatestBtn"),
   newSessionBtn: document.getElementById("newSessionBtn"),
+  deleteSessionBtn: document.getElementById("deleteSessionBtn"),
   sessionIdText: document.getElementById("sessionIdText"),
   sessionList: document.getElementById("sessionList"),
   healthBadge: document.getElementById("healthBadge"),
@@ -145,6 +146,10 @@ function bindEvents() {
 
   elements.newSessionBtn.addEventListener("click", () => {
     createNewSession();
+  });
+
+  elements.deleteSessionBtn.addEventListener("click", () => {
+    void deleteCurrentSession();
   });
 
   elements.refreshEventsBtn.addEventListener("click", () => {
@@ -449,6 +454,43 @@ function createNewSession() {
   elements.uploadStatusText.textContent = "";
   renderAll();
   persistState();
+}
+
+async function deleteCurrentSession() {
+  if (state.isSending || state.isUploading) {
+    return;
+  }
+  if (!state.currentSessionId) {
+    elements.uploadStatusText.textContent = "当前没有可删除的会话。";
+    return;
+  }
+  const sessionId = state.currentSessionId;
+  const confirmed = window.confirm(`确认删除会话 ${sessionId} 吗？此操作不可撤销。`);
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    if (!response.ok && response.status !== 404) {
+      const detail = await readErrorDetail(response);
+      throw new Error(detail);
+    }
+    removeSessionSnapshot(sessionId);
+    if (state.currentSessionId === sessionId) {
+      const fallback = state.sessions[0];
+      if (fallback) {
+        switchToSession(fallback.sessionId);
+      } else {
+        createNewSession();
+      }
+    }
+    elements.uploadStatusText.textContent = `已删除会话: ${sessionId}`;
+    renderAll();
+    persistState();
+  } catch (error) {
+    elements.uploadStatusText.textContent = `删除会话失败: ${String(error)}`;
+  }
 }
 
 async function sendMessage() {
@@ -800,6 +842,7 @@ function renderAll() {
 
 function renderSessionHeader() {
   elements.sessionIdText.textContent = state.currentSessionId ?? "(尚未创建)";
+  elements.deleteSessionBtn.disabled = !state.currentSessionId || state.isSending || state.isUploading;
 }
 
 function renderThread() {
@@ -874,18 +917,30 @@ function renderSessionList() {
       `<div class="session-item-body">${escapeHtml(snapshot.preview || "(empty)")}</div>`,
     ].join("");
     li.addEventListener("click", () => {
-      state.currentSessionId = snapshot.sessionId;
-      state.messages = normalizeMessages(snapshot.messages);
-      state.streamEvents = [];
-      state.sessionFiles = [];
-      state.activeFileIds = [];
-      state.shouldAutoFollow = true;
-      renderAll();
-      persistState();
-      void refreshSessionFiles();
+      switchToSession(snapshot.sessionId);
     });
     elements.sessionList.appendChild(li);
   }
+}
+
+function switchToSession(sessionId) {
+  const snapshot = state.sessions.find((item) => item.sessionId === sessionId);
+  if (!snapshot) {
+    return;
+  }
+  state.currentSessionId = snapshot.sessionId;
+  state.messages = normalizeMessages(snapshot.messages);
+  state.streamEvents = [];
+  state.sessionFiles = [];
+  state.activeFileIds = [];
+  state.shouldAutoFollow = true;
+  renderAll();
+  persistState();
+  void refreshSessionFiles();
+}
+
+function removeSessionSnapshot(sessionId) {
+  state.sessions = state.sessions.filter((item) => item.sessionId !== sessionId);
 }
 
 function persistCurrentSessionSnapshot() {
@@ -1148,6 +1203,7 @@ function setSending(isSending) {
   elements.sendBtn.disabled = isSending;
   elements.sendBtn.textContent = isSending ? "发送中..." : "发送";
   elements.composerUploadBtn.disabled = isSending || state.isUploading;
+  renderSessionHeader();
   if (isSending) {
     closeComposerUploadMenu();
   }
@@ -1158,6 +1214,7 @@ function setUploading(isUploading, text = "") {
   state.isUploading = isUploading;
   elements.composerUploadBtn.disabled = isUploading || state.isSending;
   elements.composerUploadBtn.textContent = isUploading ? "…" : "+";
+  renderSessionHeader();
   if (isUploading) {
     closeComposerUploadMenu();
   }

@@ -287,3 +287,23 @@
 - 验证结果：
   - `uv run mypy app tests`：通过（`Success: no issues found in 61 source files`）
   - `uv run pytest -q`：通过（`48 passed`）
+
+22. [完成] 增加会话删除能力并修复前端右侧调试面板滚动问题。
+- 说明：
+  - 后端新增会话删除链路：
+    - `SessionRepository` 协议增加 `delete_session(session_id)`。
+    - `JsonlSessionRepository` 实现删除会话目录（`data/sessions/<session_id>`）。
+    - `ChatService` 增加 `delete_session(...)`，串行加锁后执行删除。
+    - API 新增 `DELETE /api/sessions/{session_id}`，返回 `SessionDeleteResponse`。
+  - 前端新增“删除当前会话”按钮：
+    - 调用删除接口后同步清理本地会话快照并自动切换到其他会话/空白会话。
+  - 修复右侧面板滚动：
+    - `panel-right` 与其 `grow` 卡片增加独立滚动，解决 `Memories` 区域超出不可见问题。
+    - 增加对应滚动条样式，保持视觉一致。
+  - 新增测试：
+    - `tests/test_storage.py`：会话删除后目录与事件不可读校验。
+    - `tests/test_chat_service.py`：服务层删除会话校验。
+    - `tests/test_chat_api.py`：删除接口端到端校验。
+- 验证结果：
+  - `uv run mypy app tests`：通过（`Success: no issues found in 61 source files`）
+  - `uv run pytest -q`：通过（`51 passed`）

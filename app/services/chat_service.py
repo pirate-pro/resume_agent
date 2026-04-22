@@ -293,6 +293,14 @@ class ChatService:
             files=[self._to_file_view(item) for item in files],
         )
 
+    async def delete_session(self, session_id: str) -> None:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValidationError("session_id must be a non-empty string.")
+        normalized = session_id.strip()
+        lock = self._session_lock_manager.get_lock(normalized)
+        async with lock:
+            await asyncio.to_thread(self._session_repository.delete_session, normalized)
+
     def _prepare_run_input(self, request: ChatRequest) -> tuple[SessionMeta, AgentRunInput]:
         session = self._session_manager.get_or_create_session(request.session_id)
         if request.active_file_ids is not None:

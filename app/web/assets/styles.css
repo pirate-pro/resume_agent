@@ -87,6 +87,8 @@ body {
 }
 
 .panel-right {
+  overflow: auto;
+  scrollbar-gutter: stable;
   animation-delay: 180ms;
 }
 
@@ -204,13 +206,19 @@ body {
 
 .thread::-webkit-scrollbar,
 .json-view::-webkit-scrollbar,
-.session-list::-webkit-scrollbar {
+.session-list::-webkit-scrollbar,
+.file-list::-webkit-scrollbar,
+.panel-right::-webkit-scrollbar,
+.panel-right .card.grow::-webkit-scrollbar {
   width: 9px;
 }
 
 .thread::-webkit-scrollbar-thumb,
 .json-view::-webkit-scrollbar-thumb,
-.session-list::-webkit-scrollbar-thumb {
+.session-list::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb,
+.panel-right::-webkit-scrollbar-thumb,
+.panel-right .card.grow::-webkit-scrollbar-thumb {
   background: #474747;
   border-radius: 999px;
 }
@@ -383,6 +391,17 @@ textarea:focus {
 .btn-primary {
   background: #323232;
   border-color: #4f4f4f;
+}
+
+.btn-danger {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: #ffd6d6;
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.btn-danger:hover {
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(248, 113, 113, 0.18);
 }
 
 .btn-send {
@@ -635,6 +654,11 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
+}
+
+.panel-right .card.grow {
+  min-height: 0;
+  overflow: auto;
 }
 
 .tiny-text {

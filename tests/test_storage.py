@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.domain.models import EventRecord, MemoryItem, SessionFile
-from app.core.errors import StorageError
+from app.core.errors import SessionNotFoundError, StorageError
 from app.infra.storage.jsonl_memory_repository import JsonlMemoryRepository
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -145,3 +145,24 @@ def test_skill_file_invalid_frontmatter_raises(tmp_path: Path) -> None:
     repository = MarkdownSkillRepository(skills_dir=skills_dir)
     with pytest.raises(StorageError):
         repository.load_skills(["bad-skill"])
+
+
+def test_session_delete_removes_session_directory(tmp_path: Path) -> None:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session("sess_delete")
+    repository.append_event(
+        "sess_delete",
+        EventRecord(
+            event_id="evt_delete",
+            session_id="sess_delete",
+            type="user_message",
+            payload={"content": "hello"},
+            created_at=datetime.now(UTC),
+        ),
+    )
+
+    repository.delete_session("sess_delete")
+
+    assert repository.get_session("sess_delete") is None
+    with pytest.raises(SessionNotFoundError):
+        repository.list_events("sess_delete")
