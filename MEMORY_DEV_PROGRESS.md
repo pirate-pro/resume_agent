@@ -4,7 +4,7 @@
 
 - 记录位置：仓库根目录（本文件）。
 - 记录方式：每完成一项即追加一条，包含时间、变更内容、影响范围、验证结果。
-- 当前目标：按 `MEMORY_FILE_BASED_DESIGN.md` 继续推进（v2 直连基线下，推进 Step B 治理与检索质量）。
+- 当前目标：按 `MEMORY_FILE_BASED_DESIGN.md` 继续推进（在 v2 直连基线上完善治理与检索质量）。
 
 ## 进度日志
 
@@ -15,7 +15,7 @@
 - 影响范围：仅文档，无代码行为变更。
 - 验证：文件创建成功。
 
-2. [完成] 落地 Memory Phase A 核心骨架（不切现网逻辑）。
+2. [完成] 搭建 memory 核心骨架（不切现网逻辑）。
 - 说明：
   - 新增 `app/memory/` 核心模块：`models/contracts/policies/retrieval/consolidation/lifecycle/facade`。
   - 新增 `app/memory/stores/`：`jsonl_file_store.py`（文件存储实现）与 `legacy_adapter.py`（迁移适配器）。
@@ -25,13 +25,13 @@
   - 为后续双写/灰度切换提供接口基础。
 - 验证：待运行 `mypy/pytest` 回归。
 
-3. [完成] Phase A 回归验证。
+3. [完成] 核心骨架接入后的回归验证。
 - 说明：完成类型检查与测试回归，确认新增模块未影响现有行为。
 - 验证结果：
   - `uv run mypy app tests`：通过（`Success: no issues found in 57 source files`）
   - `uv run pytest -q`：通过（`28 passed`）
 
-4. [完成] 落地 Phase B（双写）核心接入。
+4. [完成] 接入 memory 双写核心链路。
 - 说明：
   - 新增 `app/memory/bridge.py`，统一 legacy 写入 -> v2 candidate 的映射策略。
   - `MemoryManager` 接入可选 `memory_facade`，在 legacy 成功写入后 best-effort 写候选。
@@ -42,7 +42,7 @@
   - 读路径仍保持旧逻辑（未切换）。
   - 写路径变为 legacy + candidate 双写（best-effort）。
 
-5. [完成] Phase B 测试补充与回归验证。
+5. [完成] 补充双写链路测试并完成回归验证。
 - 说明：
   - 新增测试覆盖：
     - `MemoryManager` 双写后 candidate 生成与 consolidate 基本链路。
@@ -82,7 +82,7 @@
   - `uv run mypy app tests`：通过（`Success: no issues found in 57 source files`）
   - `uv run pytest -q`：通过（`30 passed`）
 
-10. [完成] 推进 Step B：shared 晋升阈值与跨轮去重落地。
+10. [完成] 落地 shared 晋升阈值与跨轮去重治理。
 - 说明：
   - `MemoryStore` 新增 `count_active_records_by_hash(...)` 契约。
   - `JsonlFileMemoryStore` 实现按 scope/agent/session/content_hash 统计 active 记录数。
@@ -98,7 +98,7 @@
   - `uv run mypy app tests`：通过（`Success: no issues found in 58 source files`）
   - `uv run pytest -q`：通过（`32 passed`）
 
-11. [完成] 推进 Step B：compact V1 落地（memory JSONL 压缩治理）。
+11. [完成] 落地 compact V1（memory JSONL 压缩治理）。
 - 说明：
   - 新增模型与接口：
     - `MemoryCompactRequest`、`CompactResult`。
@@ -191,7 +191,7 @@
 - 影响范围：
   - 统一后续改造口径，避免“边开发边改口径”导致的返工。
 
-17. [完成] Phase A 第一批代码骨架（RunContext + 事件/会话元数据升级）。
+17. [完成] 新增 RunContext 并升级事件/会话元数据骨架。
 - 说明：
   - `domain.models` 新增 `RunContext`，并扩展：
     - `EventRecord`：`agent_id/run_id/parent_run_id/event_version`
@@ -211,7 +211,7 @@
   - `uv run mypy app tests`：通过（`Success: no issues found in 59 source files`）
   - `uv run pytest -q`：通过（`42 passed`）
 
-18. [完成] Phase B 第二批改造（工具执行链路全面切换 RunContext）。
+18. [完成] 工具执行链路全面切换到 RunContext。
 - 说明：
   - `Tool` 协议签名统一为 `execute(arguments, context: RunContext)`，移除 `session_id` 直传模式。
   - `ToolExecutor` 协议同步切换为 `execute(call, context: RunContext)`。
