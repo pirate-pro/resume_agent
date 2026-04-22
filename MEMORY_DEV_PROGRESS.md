@@ -183,3 +183,30 @@
 - 影响范围：
   - 解决“同一系统两条读取路径返回不一致”问题。
   - 保持 agent 隔离边界：不同 agent 仍不可见彼此记忆。
+
+16. [完成] 多 Agent 前置改造文档落地（详细设计版）。
+- 说明：
+  - 新增根目录文档 `MULTI_AGENT_PREP_DESIGN.md`。
+  - 覆盖 session/run/agent 边界定义、数据模型升级、接口改造、分阶段实施、测试验收、迁移与回滚策略。
+- 影响范围：
+  - 统一后续改造口径，避免“边开发边改口径”导致的返工。
+
+17. [完成] Phase A 第一批代码骨架（RunContext + 事件/会话元数据升级）。
+- 说明：
+  - `domain.models` 新增 `RunContext`，并扩展：
+    - `EventRecord`：`agent_id/run_id/parent_run_id/event_version`
+    - `SessionMeta`：`participants/entry_agent_id`
+    - `AgentRunInput`：可挂载 `context`
+  - `schemas.chat` 新增：
+    - `ChatRequest.entry_agent_id/trace_level`
+    - `EventView` 对应新增字段
+  - `ChatService` 在请求编排阶段生成 `RunContext` 并挂载到 `AgentRunInput`。
+  - `AgentRuntime` 增加 `_resolve_run_context`，并将 run/agent 元信息写入所有 runtime 事件。
+  - `EventRecorder`、`JsonlSessionRepository` 完成新字段读写：
+    - 事件落盘包含 `agent_id/run_id/...`
+    - metadata 维护 `participants/entry_agent_id`
+    - 旧数据读取提供安全默认值
+  - SSE 事件序列化同步输出新增字段。
+- 验证结果：
+  - `uv run mypy app tests`：通过（`Success: no issues found in 59 source files`）
+  - `uv run pytest -q`：通过（`42 passed`）

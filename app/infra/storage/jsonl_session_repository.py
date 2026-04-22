@@ -45,6 +45,8 @@ class JsonlSessionRepository:
             title="New Session",
             created_at=now,
             updated_at=now,
+            participants=[],
+            entry_agent_id=None,
         )
         try:
             session_dir.mkdir(parents=True, exist_ok=True)
@@ -56,6 +58,8 @@ class JsonlSessionRepository:
                 "title": meta.title,
                 "created_at": _to_iso(meta.created_at),
                 "updated_at": _to_iso(meta.updated_at),
+                "participants": meta.participants,
+                "entry_agent_id": meta.entry_agent_id,
             }
             metadata_path.write_text(
                 json.dumps(metadata_payload, ensure_ascii=False, indent=2),
@@ -78,6 +82,8 @@ class JsonlSessionRepository:
                 title=str(data["title"]),
                 created_at=_from_iso(str(data["created_at"])),
                 updated_at=_from_iso(str(data["updated_at"])),
+                participants=_read_participants_payload(data.get("participants")),
+                entry_agent_id=_read_optional_text(data.get("entry_agent_id")),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
             raise StorageError(f"Failed to read session metadata for '{session_id}': {exc}") from exc
@@ -91,6 +97,10 @@ class JsonlSessionRepository:
         line = {
             "event_id": event.event_id,
             "session_id": event.session_id,
+            "agent_id": event.agent_id,
+            "run_id": event.run_id,
+            "parent_run_id": event.parent_run_id,
+            "event_version": event.event_version,
             "type": event.type,
             "payload": event.payload,
             "created_at": _to_iso(event.created_at),
@@ -99,7 +109,11 @@ class JsonlSessionRepository:
         try:
             with events_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(line, ensure_ascii=False) + "\n")
-            self._touch_updated_at(session_id)
+            self._touch_updated_at(
+                session_id,
+                participant=event.agent_id,
+                entry_agent_id=event.agent_id if event.type == "run_started" else None,
+            )
         except OSError as exc:
             raise StorageError(f"Failed to append event for '{session_id}': {exc}") from exc
         _logger.debug("事件已写入: session_id=%s event_id=%s event_type=%s", session_id, event.event_id, event.type)
@@ -124,6 +138,11 @@ class JsonlSessionRepository:
                             type=str(payload["type"]),
                             payload=dict(payload["payload"]),
                             created_at=_from_iso(str(payload["created_at"])),
+                            agent_id=_read_optional_text(payload.get("agent_id")) or "agent_main",
+                            run_id=_read_optional_text(payload.get("run_id"))
+                            or f"run_legacy_{str(payload['session_id'])}",
+                            parent_run_id=_read_optional_text(payload.get("parent_run_id")),
+                            event_version=_read_event_version(payload.get("event_version")),
                         )
                     )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
@@ -295,15 +314,31 @@ class JsonlSessionRepository:
         except OSError as exc:
             raise StorageError(f"Failed to write files manifest for '{session_id}': {exc}") from exc
 
-    def _touch_updated_at(self, session_id: str) -> None:
+    def _touch_updated_at(
+        self,
+        session_id: str,
+        *,
+        participant: str | None = None,
+        entry_agent_id: str | None = None,
+    ) -> None:
         meta = self.get_session(session_id)
         if meta is None:
             return
+        participants = list(meta.participants)
+        if isinstance(participant, str) and participant.strip():
+            normalized_participant = participant.strip()
+            if normalized_participant not in participants:
+                participants.append(normalized_participant)
+        resolved_entry_agent_id = meta.entry_agent_id
+        if isinstance(entry_agent_id, str) and entry_agent_id.strip():
+            resolved_entry_agent_id = entry_agent_id.strip()
         updated = SessionMeta(
             session_id=meta.session_id,
             title=meta.title,
             created_at=meta.created_at,
             updated_at=_utc_now(),
+            participants=participants,
+            entry_agent_id=resolved_entry_agent_id,
         )
         metadata_path = self._session_dir(session_id) / "metadata.json"
         payload = {
@@ -311,6 +346,8 @@ class JsonlSessionRepository:
             "title": updated.title,
             "created_at": _to_iso(updated.created_at),
             "updated_at": _to_iso(updated.updated_at),
+            "participants": updated.participants,
+            "entry_agent_id": updated.entry_agent_id,
         }
         try:
             metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -338,6 +375,41 @@ def _from_iso(value: str) -> datetime:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     return datetime.fromisoformat(value).astimezone(UTC)
+
+
+def _read_optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _read_participants_payload(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        if not isinstance(raw, str):
+            continue
+        participant = raw.strip()
+        if not participant or participant in seen:
+            continue
+        normalized.append(participant)
+        seen.add(participant)
+    return normalized
+
+
+def _read_event_version(value: Any) -> int:
+    if value is None:
+        return 2
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 2
+    return parsed if parsed > 0 else 2
 
 
 def _validate_file_id(file_id: str) -> str:

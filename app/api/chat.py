@@ -167,6 +167,10 @@ async def get_session_events(
             EventView(
                 event_id=item.event_id,
                 session_id=item.session_id,
+                agent_id=item.agent_id,
+                run_id=item.run_id,
+                parent_run_id=item.parent_run_id,
+                event_version=item.event_version,
                 type=item.type,
                 payload=item.payload,
                 created_at=item.created_at,

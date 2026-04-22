@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +14,7 @@ __all__ = [
     "ContextBundle",
     "EventRecord",
     "MemoryItem",
+    "RunContext",
     "SessionFile",
     "SessionMeta",
     "ToolCall",
@@ -30,17 +31,61 @@ def _require_non_empty(name: str, value: str) -> str:
 
 
 @dataclass(slots=True)
+class RunContext:
+    session_id: str
+    run_id: str
+    agent_id: str
+    turn_id: str
+    entry_agent_id: str
+    parent_run_id: str | None = None
+    trace_flags: dict[str, bool] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.session_id = _require_non_empty("session_id", self.session_id)
+        self.run_id = _require_non_empty("run_id", self.run_id)
+        self.agent_id = _require_non_empty("agent_id", self.agent_id)
+        self.turn_id = _require_non_empty("turn_id", self.turn_id)
+        self.entry_agent_id = _require_non_empty("entry_agent_id", self.entry_agent_id)
+        if self.parent_run_id is not None:
+            self.parent_run_id = _require_non_empty("parent_run_id", self.parent_run_id)
+        if not isinstance(self.trace_flags, dict):
+            raise ValidationError("trace_flags must be a dictionary.")
+        normalized_flags: dict[str, bool] = {}
+        for raw_key, raw_value in self.trace_flags.items():
+            key = _require_non_empty("trace_flag_key", str(raw_key))
+            if not isinstance(raw_value, bool):
+                raise ValidationError("trace_flags value must be bool.")
+            normalized_flags[key] = raw_value
+        self.trace_flags = normalized_flags
+
+
+@dataclass(slots=True)
 class SessionMeta:
     session_id: str
     title: str
     created_at: datetime
     updated_at: datetime
+    participants: list[str] = field(default_factory=list)
+    entry_agent_id: str | None = None
 
     def __post_init__(self) -> None:
         self.session_id = _require_non_empty("session_id", self.session_id)
         self.title = _require_non_empty("title", self.title)
         if self.updated_at < self.created_at:
             raise ValidationError("updated_at cannot be earlier than created_at.")
+        if self.entry_agent_id is not None:
+            self.entry_agent_id = _require_non_empty("entry_agent_id", self.entry_agent_id)
+        if not isinstance(self.participants, list):
+            raise ValidationError("participants must be a list.")
+        normalized_participants: list[str] = []
+        seen: set[str] = set()
+        for raw in self.participants:
+            participant = _require_non_empty("participant", raw)
+            if participant in seen:
+                continue
+            normalized_participants.append(participant)
+            seen.add(participant)
+        self.participants = normalized_participants
 
 
 @dataclass(slots=True)
@@ -50,6 +95,10 @@ class EventRecord:
     type: str
     payload: dict[str, Any]
     created_at: datetime
+    agent_id: str = "agent_main"
+    run_id: str = "run_legacy"
+    parent_run_id: str | None = None
+    event_version: int = 2
 
     def __post_init__(self) -> None:
         self.event_id = _require_non_empty("event_id", self.event_id)
@@ -57,6 +106,12 @@ class EventRecord:
         self.type = _require_non_empty("type", self.type)
         if not isinstance(self.payload, dict):
             raise ValidationError("payload must be a dictionary.")
+        self.agent_id = _require_non_empty("agent_id", self.agent_id)
+        self.run_id = _require_non_empty("run_id", self.run_id)
+        if self.parent_run_id is not None:
+            self.parent_run_id = _require_non_empty("parent_run_id", self.parent_run_id)
+        if self.event_version <= 0:
+            raise ValidationError("event_version must be positive.")
 
 
 @dataclass(slots=True)
@@ -182,10 +237,16 @@ class AgentRunInput:
     user_message: str
     skill_names: list[str]
     max_tool_rounds: int
+    context: RunContext | None = None
 
     def __post_init__(self) -> None:
         self.session_id = _require_non_empty("session_id", self.session_id)
         self.user_message = _require_non_empty("user_message", self.user_message)
+        if self.context is not None:
+            if not isinstance(self.context, RunContext):
+                raise ValidationError("context must be RunContext.")
+            if self.context.session_id != self.session_id:
+                raise ValidationError("context.session_id must equal session_id.")
         if not isinstance(self.skill_names, list):
             raise ValidationError("skill_names must be a list.")
         normalized_skill_names: list[str] = []

@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ValidationError
-from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, SessionFile, SessionMeta
+from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, RunContext, SessionFile, SessionMeta
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.runtime.agent_runtime import AgentRuntime
@@ -259,11 +259,22 @@ class ChatService:
         if request.active_file_ids is not None:
             self._session_repository.set_active_file_ids(session.session_id, request.active_file_ids)
         skill_names = request.skill_names or ["base", "memory", "tools", "file-reader"]
+        normalized_agent_id = request.entry_agent_id.strip()
+        run_context = RunContext(
+            session_id=session.session_id,
+            run_id=f"run_{uuid4().hex[:12]}",
+            agent_id=normalized_agent_id,
+            turn_id=f"turn_{uuid4().hex[:12]}",
+            entry_agent_id=normalized_agent_id,
+            parent_run_id=None,
+            trace_flags={"verbose": request.trace_level == "verbose"},
+        )
         run_input = AgentRunInput(
             session_id=session.session_id,
             user_message=request.message,
             skill_names=skill_names,
             max_tool_rounds=request.max_tool_rounds,
+            context=run_context,
         )
         return session, run_input
 
@@ -296,6 +307,10 @@ class ChatService:
         return {
             "event_id": event.event_id,
             "session_id": event.session_id,
+            "agent_id": event.agent_id,
+            "run_id": event.run_id,
+            "parent_run_id": event.parent_run_id,
+            "event_version": event.event_version,
             "type": event.type,
             "payload": event.payload,
             "created_at": event.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),

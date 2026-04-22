@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -26,6 +26,8 @@ class ChatRequest(BaseModel):
     skill_names: list[str] = Field(default_factory=list)
     max_tool_rounds: int = Field(default=3, ge=0, le=10)
     active_file_ids: list[str] | None = None
+    entry_agent_id: str = "agent_main"
+    trace_level: Literal["basic", "verbose"] = "basic"
 
     @field_validator("session_id")
     @classmethod
@@ -73,6 +75,14 @@ class ChatRequest(BaseModel):
             seen.add(item)
         return normalized
 
+    @field_validator("entry_agent_id")
+    @classmethod
+    def _validate_entry_agent_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("entry_agent_id cannot be empty.")
+        return normalized
+
 
 class ToolCallView(BaseModel):
     name: str
@@ -95,6 +105,10 @@ class ChatResponse(BaseModel):
 class EventView(BaseModel):
     event_id: str
     session_id: str
+    agent_id: str
+    run_id: str
+    parent_run_id: str | None = None
+    event_version: int
     type: str
     payload: dict[str, Any]
     created_at: datetime
