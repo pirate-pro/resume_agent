@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,26 @@ from app.memory.models import (
 
 __all__ = ["JsonlFileMemoryStore"]
 _logger = logging.getLogger(__name__)
+
+_NAME_INTENT_TRIGGERS = (
+    "你叫什么名字",
+    "叫什么名字",
+    "你的名字",
+    "叫你什么",
+    "怎么称呼",
+    "称呼",
+    "名字",
+)
+_NAME_INTENT_EXPANSIONS = ("名字", "称呼", "叫我", "叫你", "名称")
+_CHAR_STOPWORDS = {"的", "了", "呢", "吗", "啊", "呀", "是", "在", "和", "与", "及", "你", "我", "他", "她", "它"}
+
+
+@dataclass(slots=True)
+class _QueryPlan:
+    normalized_query: str
+    strict_tokens: list[str]
+    fallback_tokens: list[str]
+    wildcard: bool
 
 
 class JsonlFileMemoryStore:
@@ -124,13 +145,17 @@ class JsonlFileMemoryStore:
             raise ValidationError("agent_id must be non-empty string.")
         if limit <= 0:
             raise ValidationError("limit must be positive.")
-        # 约定 "*" / "__all__" 代表全量读取，不做关键词过滤。
-        normalized_query = query.strip().lower()
-        if normalized_query in {"*", "__all__"}:
-            tokens: list[str] = []
-        else:
-            tokens = [token for token in normalized_query.split() if token]
-        candidates: list[tuple[int, MemoryRecord]] = []
+        query_plan = _build_query_plan(query)
+        _logger.debug(
+            "memory 检索预处理: query=%s normalized=%s strict_tokens=%s fallback_tokens=%s wildcard=%s",
+            query,
+            query_plan.normalized_query,
+            len(query_plan.strict_tokens),
+            len(query_plan.fallback_tokens),
+            query_plan.wildcard,
+        )
+        strict_candidates: list[tuple[int, MemoryRecord]] = []
+        fallback_candidates: list[tuple[int, MemoryRecord]] = []
 
         for path in self._iter_scope_files(scope=scope, agent_id=agent_id.strip(), session_id=session_id):
             rows = _read_jsonl_rows(path)
@@ -144,10 +169,35 @@ class JsonlFileMemoryStore:
                     continue
                 if record.expires_at is not None and record.expires_at <= now:
                     continue
-                score = _score_record(record=record, tokens=tokens)
-                if tokens and score <= 0:
+                if query_plan.wildcard:
+                    strict_candidates.append((1, record))
                     continue
-                candidates.append((score, record))
+
+                strict_score = _score_record(
+                    record=record,
+                    tokens=query_plan.strict_tokens,
+                    normalized_query=query_plan.normalized_query,
+                )
+                if strict_score > 0:
+                    strict_candidates.append((strict_score, record))
+                    continue
+
+                # 两阶段召回：严格阶段未命中时，再尝试更宽松的中文短词兜底召回。
+                fallback_score = _score_record(
+                    record=record,
+                    tokens=query_plan.fallback_tokens,
+                    normalized_query="",
+                )
+                if fallback_score > 0:
+                    fallback_candidates.append((fallback_score, record))
+
+        candidates = strict_candidates if strict_candidates else fallback_candidates
+        if not strict_candidates and fallback_candidates:
+            _logger.debug(
+                "memory 检索使用兜底召回: query=%s fallback_hit_count=%s",
+                query_plan.normalized_query,
+                len(fallback_candidates),
+            )
 
         candidates.sort(
             key=lambda item: (item[0], item[1].confidence, item[1].importance, item[1].updated_at),
@@ -415,18 +465,140 @@ class JsonlFileMemoryStore:
         _append_jsonl_rows(self._ops_dir / "compact.log.jsonl", [payload])
 
 
-def _score_record(record: MemoryRecord, tokens: list[str]) -> int:
-    if not tokens:
-        return 1
+def _score_record(record: MemoryRecord, tokens: list[str], normalized_query: str) -> int:
+    if not tokens and not normalized_query:
+        return 0
     content = record.content.lower()
     tags = [tag.lower() for tag in record.tags]
     score = 0
+
+    # 完整查询串命中优先级最高，提升“明确提问词”的召回稳定性。
+    if normalized_query and normalized_query in content:
+        score += 8
+    if normalized_query and any(normalized_query in tag for tag in tags):
+        score += 4
+
     for token in tokens:
+        weight = _token_weight(token)
         if token in content:
-            score += 2
+            score += weight
         if any(token in tag for tag in tags):
-            score += 1
+            score += max(1, weight // 2)
     return score
+
+
+def _build_query_plan(query: str) -> _QueryPlan:
+    raw_query = query.strip().lower()
+    if raw_query in {"*", "__all__"}:
+        return _QueryPlan(
+            normalized_query=raw_query,
+            strict_tokens=[],
+            fallback_tokens=[],
+            wildcard=True,
+        )
+
+    normalized_query = _normalize_query_text(query)
+    if normalized_query in {"*", "__all__"}:
+        return _QueryPlan(
+            normalized_query=normalized_query,
+            strict_tokens=[],
+            fallback_tokens=[],
+            wildcard=True,
+        )
+
+    strict_tokens = _build_strict_tokens(normalized_query)
+    fallback_tokens = _build_fallback_tokens(normalized_query, strict_tokens)
+    return _QueryPlan(
+        normalized_query=normalized_query,
+        strict_tokens=strict_tokens,
+        fallback_tokens=fallback_tokens,
+        wildcard=False,
+    )
+
+
+def _normalize_query_text(query: str) -> str:
+    lowered = query.strip().lower()
+    if not lowered:
+        return ""
+    # 将符号统一替换为空格，保证中英文查询都能稳定分词。
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", " ", lowered)
+    return " ".join(token for token in normalized.split() if token)
+
+
+def _build_strict_tokens(normalized_query: str) -> list[str]:
+    tokens: list[str] = []
+    seen: set[str] = set()
+
+    def add_token(value: str) -> None:
+        candidate = value.strip()
+        if not candidate:
+            return
+        if candidate in seen:
+            return
+        seen.add(candidate)
+        tokens.append(candidate)
+
+    for token in normalized_query.split():
+        add_token(token)
+        # 中文片段补齐 2-3 gram，解决“你叫什么名字”这类整句无法命中的问题。
+        for gram in _cjk_ngrams(token, min_n=2, max_n=3):
+            add_token(gram)
+
+    compact_query = normalized_query.replace(" ", "")
+    if compact_query:
+        for gram in _cjk_ngrams(compact_query, min_n=2, max_n=3):
+            add_token(gram)
+
+    if any(trigger in compact_query for trigger in _NAME_INTENT_TRIGGERS):
+        for item in _NAME_INTENT_EXPANSIONS:
+            add_token(item)
+
+    return tokens[:80]
+
+
+def _build_fallback_tokens(normalized_query: str, strict_tokens: list[str]) -> list[str]:
+    strict_set = set(strict_tokens)
+    compact_query = normalized_query.replace(" ", "")
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for char in compact_query:
+        if char in _CHAR_STOPWORDS:
+            continue
+        if char in strict_set:
+            continue
+        if char in seen:
+            continue
+        seen.add(char)
+        dedup.append(char)
+    return dedup[:40]
+
+
+def _cjk_ngrams(text: str, min_n: int, max_n: int) -> list[str]:
+    chars = [char for char in text if _is_cjk(char)]
+    if not chars:
+        return []
+    grams: list[str] = []
+    for n in range(min_n, max_n + 1):
+        if len(chars) < n:
+            continue
+        for idx in range(0, len(chars) - n + 1):
+            grams.append("".join(chars[idx : idx + n]))
+    return grams
+
+
+def _is_cjk(char: str) -> bool:
+    return "\u4e00" <= char <= "\u9fff"
+
+
+def _token_weight(token: str) -> int:
+    length = len(token)
+    if length >= 4:
+        return 4
+    if length == 3:
+        return 3
+    if length == 2:
+        return 2
+    return 1
 
 
 def _match_forget(record: MemoryRecord, request: MemoryForgetRequest, target_ids: set[str]) -> bool:

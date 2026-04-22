@@ -7,7 +7,7 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
 可用工具：
 
 1. `memory_write(content, tags=[])`：写入记忆候选（默认短期；可通过 tags 指定长期/共享倾向）。
-2. `memory_search(query, limit=5)`：检索相关记忆。
+2. `memory_search(query, limit=5)`：按当前 agent 作用域检索相关记忆（包含同 agent 的跨会话 short 记忆）。
 3. `workspace_write_file(path, content)`：写入当前 session 的 workspace 文件。
 4. `workspace_read_file(path)`：读取文件，查找顺序为“workspace 优先，若未命中则逐级向上到文件系统根目录”。
 5. `session_list_files()`：列出当前会话上传文件及 active 状态。

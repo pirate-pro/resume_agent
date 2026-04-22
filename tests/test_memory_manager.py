@@ -80,3 +80,21 @@ def test_memory_manager_write_without_tags_defaults_to_agent_short(tmp_path: Pat
     )
     assert len(bundle.items) == 1
     assert bundle.items[0].scope.value == "agent_short"
+
+
+def test_memory_manager_search_recalls_chinese_long_memory_by_question_form(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    manager = MemoryManager(memory_facade=facade, default_agent_id="agent_main")
+
+    manager.write_memory(
+        content='用户要求以后叫我"李华"，这是我的新名字/称呼。',
+        tags=["preference", "long_term"],
+        session_id="sess_first",
+        source_event_id="evt_name",
+    )
+
+    hits = manager.search(query="你叫什么名字", limit=5)
+
+    assert len(hits) >= 1
+    assert any("李华" in item.content for item in hits)

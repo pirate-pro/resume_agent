@@ -121,3 +121,36 @@ def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) 
     assert "file_id=file_1" in bundle.system_prompt
     assert "doc.txt" in bundle.system_prompt
     assert "session_read_file" in bundle.system_prompt
+
+
+def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
+
+    session_repo.create_session("sess_a")
+    session_repo.create_session("sess_b")
+
+    memory_manager = MemoryManager(memory_facade=memory_facade, default_agent_id="agent_main")
+    memory_manager.write_memory(
+        content='用户要求以后叫我"李华"，这是我的新名字/称呼。',
+        tags=["preference", "long_term"],
+        session_id="sess_a",
+        source_event_id="evt_rename",
+    )
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=skill_repo,
+        memory_manager=memory_manager,
+        tool_executor=ToolRegistry(),
+    )
+    bundle = assembler.assemble(
+        session_id="sess_b",
+        user_message="你叫什么名字",
+        skill_names=["base", "memory"],
+    )
+
+    assert any("李华" in item.content for item in bundle.memory_hits)
+    assert "Relevant memories:" in bundle.system_prompt

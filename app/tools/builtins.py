@@ -109,7 +109,10 @@ class MemorySearchTool:
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="memory_search",
-            description="Search memory items using plain-text matching.",
+            description=(
+                "Search memory items in current agent scope using plain-text matching. "
+                "Includes agent_short across sessions for the same agent."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -130,7 +133,8 @@ class MemorySearchTool:
         bundle = self._memory_facade.read_context(
             MemoryReadRequest(
                 agent_id=self._default_agent_id,
-                session_id=session_id,
+                # 与自动上下文检索保持一致：按 agent 作用域检索，允许跨会话读取 short 记忆。
+                session_id=None,
                 query=query,
                 limit=limit,
                 token_budget=max(600, limit * 280),

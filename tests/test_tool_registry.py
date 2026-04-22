@@ -69,7 +69,7 @@ def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
     assert bundle.items[0].scope.value == "agent_long"
 
 
-def test_memory_write_tool_without_tags_defaults_to_short_and_is_session_scoped(tmp_path: Path) -> None:
+def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
 
@@ -98,7 +98,39 @@ def test_memory_write_tool_without_tags_defaults_to_short_and_is_session_scoped(
 
     assert other_session_result.success is True
     other_payload = json.loads(other_session_result.content)
-    assert other_payload == []
+    assert len(other_payload) >= 1
+    assert other_payload[0]["scope"] == "agent_short"
+
+
+def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+
+    main_registry = ToolRegistry()
+    main_registry.register(MemoryWriteTool(memory_facade=memory_facade, default_agent_id="agent_main"))
+    main_registry.register(MemorySearchTool(memory_facade=memory_facade, default_agent_id="agent_main"))
+
+    other_registry = ToolRegistry()
+    other_registry.register(MemorySearchTool(memory_facade=memory_facade, default_agent_id="agent_other"))
+
+    write_result = main_registry.execute(
+        ToolCall(name="memory_write", arguments={"content": "用户明天要多喝水"}),
+        session_id="sess_1",
+    )
+    main_search_result = main_registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "多喝水", "limit": 5}),
+        session_id="sess_2",
+    )
+    other_search_result = other_registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "多喝水", "limit": 5}),
+        session_id="sess_2",
+    )
+
+    assert write_result.success is True
+    assert main_search_result.success is True
+    assert len(json.loads(main_search_result.content)) >= 1
+    assert other_search_result.success is True
+    assert json.loads(other_search_result.content) == []
 
 
 

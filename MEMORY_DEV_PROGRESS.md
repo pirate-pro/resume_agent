@@ -148,3 +148,38 @@
 - 影响范围：
   - 分层更符合“记忆形成过程”：short 记录 -> long 沉淀 -> shared 共识。
   - 降低长期层污染和膨胀风险。
+
+### 2026-04-22
+
+14. [完成] 优化 memory 检索前置处理与中文召回质量（不改 memory 结构）。
+- 说明：
+  - 在 `JsonlFileMemoryStore.search_records` 增加查询预处理 `_QueryPlan`：
+    - 查询归一化（符号清洗、空白规整）。
+    - 严格召回 token（原词 + 中文 2/3-gram + 名称意图扩展词）。
+    - 兜底召回 token（去停用字后的单字集合）。
+  - 落地“两阶段召回”：
+    - 第一阶段使用严格 token 打分。
+    - 严格阶段无命中时自动启用兜底 token 召回，并打印调试日志。
+  - 升级 `_score_record`：
+    - 增加“完整查询串命中”加分。
+    - 按 token 长度加权，提升关键短语命中排序质量。
+  - 新增测试：
+    - `test_memory_manager_search_recalls_chinese_long_memory_by_question_form`
+    - `test_context_assembler_recalls_cross_session_chinese_name_memory`
+- 影响范围：
+  - 修复“长期记忆已存在，但中文问句（如‘你叫什么名字’）未召回”的问题。
+  - 不引入新 memory 结构，兼容现有 `agent_long/shared_long/agent_short` 文件布局。
+
+15. [完成] 统一 memory 检索作用域：`memory_search` 与自动上下文检索对齐为 agent 级。
+- 说明：
+  - 修复行为不一致问题：
+    - 自动上下文检索（`MemoryManager.search`）原本按 agent 级检索（`session_id=None`）。
+    - `memory_search` 工具原本按当前 session 检索（`session_id=<current>`）。
+  - 变更 `MemorySearchTool.execute`：读取时固定传 `session_id=None`，使同一 agent 下可跨会话检索 `agent_short`。
+  - 更新工具描述与 skill 文案，明确 `memory_search` 为“同 agent 跨会话可见”语义。
+  - 新增测试：
+    - `test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped`
+    - `test_memory_search_tool_isolated_by_agent_id`
+- 影响范围：
+  - 解决“同一系统两条读取路径返回不一致”问题。
+  - 保持 agent 隔离边界：不同 agent 仍不可见彼此记忆。
