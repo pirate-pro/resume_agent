@@ -141,7 +141,7 @@ class AgentRuntime:
                     run_id=run_context.run_id,
                     parent_run_id=run_context.parent_run_id,
                 )
-                result = self._execute_tool_safely(tool_call, session_id)
+                result = self._execute_tool_safely(tool_call, run_context)
                 _logger.info(
                     "工具调用完成: session_id=%s tool=%s success=%s content_len=%s",
                     session_id,
@@ -215,17 +215,34 @@ class AgentRuntime:
             memory_hits=context.memory_hits,
         )
 
-    def _execute_tool_safely(self, call: ToolCall, session_id: str) -> ToolExecutionResult:
+    def _execute_tool_safely(self, call: ToolCall, context: RunContext) -> ToolExecutionResult:
         try:
-            return self._tool_executor.execute(call, session_id)
+            return self._tool_executor.execute(call, context)
         except ToolExecutionError as exc:
-            _logger.warning("工具执行失败: session_id=%s tool=%s error=%s", session_id, call.name, exc)
+            _logger.warning(
+                "工具执行失败: session_id=%s agent_id=%s tool=%s error=%s",
+                context.session_id,
+                context.agent_id,
+                call.name,
+                exc,
+            )
             return ToolExecutionResult(tool_name=call.name, success=False, content=str(exc))
         except AppError as exc:
-            _logger.warning("工具执行失败(应用错误): session_id=%s tool=%s error=%s", session_id, call.name, exc)
+            _logger.warning(
+                "工具执行失败(应用错误): session_id=%s agent_id=%s tool=%s error=%s",
+                context.session_id,
+                context.agent_id,
+                call.name,
+                exc,
+            )
             return ToolExecutionResult(tool_name=call.name, success=False, content=str(exc))
         except Exception as exc:
-            _logger.exception("工具执行异常: session_id=%s tool=%s", session_id, call.name)
+            _logger.exception(
+                "工具执行异常: session_id=%s agent_id=%s tool=%s",
+                context.session_id,
+                context.agent_id,
+                call.name,
+            )
             return ToolExecutionResult(
                 tool_name=call.name,
                 success=False,

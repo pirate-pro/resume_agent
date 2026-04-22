@@ -11,11 +11,11 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
+from app.domain.models import MemoryItem, RunContext, SessionFile, ToolDefinition, ToolExecutionResult
+from app.domain.protocols import SessionRepository
 from app.memory.contracts import MemoryFacade
 from app.memory.intake import build_candidate_request
 from app.memory.models import MemoryConsolidateRequest, MemoryReadRequest
-from app.domain.models import MemoryItem, SessionFile, ToolDefinition, ToolExecutionResult
-from app.domain.protocols import SessionRepository
 
 __all__ = [
     "MemorySearchTool",
@@ -65,13 +65,20 @@ class MemoryWriteTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        session_id = run_context.session_id
         content = _require_non_empty_argument(arguments, "content")
         tags = _normalize_tags(arguments.get("tags", []))
-        _logger.debug("执行 memory_write: session_id=%s tags=%s content_len=%s", session_id, len(tags), len(content))
+        _logger.debug(
+            "执行 memory_write: session_id=%s agent_id=%s tags=%s content_len=%s",
+            session_id,
+            run_context.agent_id,
+            len(tags),
+            len(content),
+        )
         request = build_candidate_request(
-            agent_id=self._default_agent_id,
+            agent_id=run_context.agent_id or self._default_agent_id,
             session_id=session_id,
             content=content,
             tags=tags,
@@ -123,8 +130,8 @@ class MemorySearchTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
         query = _require_non_empty_argument(arguments, "query")
         raw_limit = arguments.get("limit", 5)
         if not isinstance(raw_limit, int) or raw_limit <= 0:
@@ -132,7 +139,7 @@ class MemorySearchTool:
         limit = min(raw_limit, 20)
         bundle = self._memory_facade.read_context(
             MemoryReadRequest(
-                agent_id=self._default_agent_id,
+                agent_id=run_context.agent_id or self._default_agent_id,
                 # 与自动上下文检索保持一致：按 agent 作用域检索，允许跨会话读取 short 记忆。
                 session_id=None,
                 query=query,
@@ -141,7 +148,13 @@ class MemorySearchTool:
             )
         )
         hits = bundle.items
-        _logger.debug("执行 memory_search: session_id=%s query=%s hit_count=%s", session_id, query, len(hits))
+        _logger.debug(
+            "执行 memory_search: session_id=%s agent_id=%s query=%s hit_count=%s",
+            run_context.session_id,
+            run_context.agent_id,
+            query,
+            len(hits),
+        )
         payload = [
             {
                 "memory_id": item.memory_id,
@@ -179,8 +192,9 @@ class WorkspaceWriteFileTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        session_id = run_context.session_id
         relative_path = _require_non_empty_argument(arguments, "path")
         content = _require_non_empty_argument(arguments, "content")
         workspace = self._session_repository.get_workspace_path(session_id)
@@ -221,8 +235,9 @@ class WorkspaceReadFileTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        session_id = run_context.session_id
         relative_path = _require_non_empty_argument(arguments, "path")
         workspace = self._session_repository.get_workspace_path(session_id).resolve()
         target = _find_file_with_workspace_fallback(workspace, relative_path)
@@ -261,8 +276,9 @@ class SessionListFilesTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        session_id = run_context.session_id
         if not isinstance(arguments, dict):
             raise ToolExecutionError("Tool arguments must be an object.")
         files = self._session_repository.list_session_files(session_id)
@@ -324,8 +340,9 @@ class SessionReadFileTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        session_id = run_context.session_id
         file_id = _require_non_empty_argument(arguments, "file_id")
         offset = _parse_non_negative_int(arguments.get("offset", 0), field_name="offset")
         max_chars = _parse_positive_int(arguments.get("max_chars", 3000), field_name="max_chars")
@@ -380,8 +397,9 @@ class SessionPlanFileAccessTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        session_id = run_context.session_id
         file_id = _require_non_empty_argument(arguments, "file_id")
         raw_goal = arguments.get("user_goal")
         user_goal = raw_goal.strip() if isinstance(raw_goal, str) and raw_goal.strip() else None
@@ -431,8 +449,9 @@ class SessionSearchFileTool:
             },
         )
 
-    def execute(self, arguments: dict[str, Any], session_id: str) -> ToolExecutionResult:
-        _validate_session_id(session_id)
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        session_id = run_context.session_id
         file_id = _require_non_empty_argument(arguments, "file_id")
         query = _require_non_empty_argument(arguments, "query")
         top_k = min(_parse_positive_int(arguments.get("top_k", 3), field_name="top_k"), 8)
@@ -457,10 +476,10 @@ class SessionSearchFileTool:
 
 
 
-def _validate_session_id(session_id: str) -> str:
-    if not isinstance(session_id, str) or not session_id.strip():
-        raise ValidationError("session_id must be a non-empty string.")
-    return session_id.strip()
+def _validate_context(context: RunContext) -> RunContext:
+    if not isinstance(context, RunContext):
+        raise ValidationError("context must be RunContext.")
+    return context
 
 
 

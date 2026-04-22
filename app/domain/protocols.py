@@ -6,7 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.domain.models import EventRecord, MemoryItem, SessionFile, SessionMeta, ToolCall, ToolDefinition, ToolExecutionResult
+from app.domain.models import (
+    EventRecord,
+    MemoryItem,
+    RunContext,
+    SessionFile,
+    SessionMeta,
+    ToolCall,
+    ToolDefinition,
+    ToolExecutionResult,
+)
 
 __all__ = [
     "ChatModelClient",
@@ -76,4 +85,4 @@ class ChatModelClient(Protocol):
 class ToolExecutor(Protocol):
     def list_definitions(self) -> list[ToolDefinition]: ...
 
-    def execute(self, call: ToolCall, session_id: str) -> ToolExecutionResult: ...
+    def execute(self, call: ToolCall, context: RunContext) -> ToolExecutionResult: ...

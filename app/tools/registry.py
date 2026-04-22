@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.core.errors import ToolExecutionError, ValidationError
-from app.domain.models import ToolCall, ToolDefinition, ToolExecutionResult
+from app.domain.models import RunContext, ToolCall, ToolDefinition, ToolExecutionResult
 from app.tools.base import Tool
 
 __all__ = ["ToolRegistry"]
@@ -28,18 +28,24 @@ class ToolRegistry:
     def list_definitions(self) -> list[ToolDefinition]:
         return [tool.definition() for tool in self._tools.values()]
 
-    def execute(self, call: ToolCall, session_id: str) -> ToolExecutionResult:
+    def execute(self, call: ToolCall, context: RunContext) -> ToolExecutionResult:
         if not isinstance(call, ToolCall):
             raise ValidationError("call must be a ToolCall instance.")
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValidationError("session_id must be a non-empty string.")
+        if not isinstance(context, RunContext):
+            raise ValidationError("context must be a RunContext instance.")
         tool = self._tools.get(call.name)
         if tool is None:
             raise ToolExecutionError(f"Tool not found: {call.name}")
-        _logger.debug("开始执行工具: session_id=%s tool=%s", session_id, call.name)
+        _logger.debug("开始执行工具: session_id=%s agent_id=%s tool=%s", context.session_id, context.agent_id, call.name)
         try:
-            result = tool.execute(call.arguments, session_id=session_id.strip())
-            _logger.debug("工具执行结束: session_id=%s tool=%s success=%s", session_id, call.name, result.success)
+            result = tool.execute(call.arguments, context=context)
+            _logger.debug(
+                "工具执行结束: session_id=%s agent_id=%s tool=%s success=%s",
+                context.session_id,
+                context.agent_id,
+                call.name,
+                result.success,
+            )
             return result
         except ToolExecutionError:
             raise

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.core.errors import ToolExecutionError, ValidationError
-from app.domain.models import SessionFile, ToolCall
+from app.domain.models import RunContext, SessionFile, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.models import MemoryReadRequest
@@ -27,6 +27,18 @@ from app.tools.builtins import (
 from app.tools.registry import ToolRegistry
 
 __all__ = []
+
+
+def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
+    return RunContext(
+        session_id=session_id,
+        run_id=f"run_{session_id}",
+        agent_id=agent_id,
+        turn_id=f"turn_{session_id}",
+        entry_agent_id=agent_id,
+        parent_run_id=None,
+        trace_flags={},
+    )
 
 
 
@@ -52,7 +64,7 @@ def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
 
     result = registry.execute(
         ToolCall(name="memory_write", arguments={"content": "Use markdown format", "tags": ["preference"]}),
-        session_id="sess_1",
+        context=_context("sess_1"),
     )
 
     assert result.success is True
@@ -79,15 +91,15 @@ def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tm
 
     write_result = registry.execute(
         ToolCall(name="memory_write", arguments={"content": "User likes concise replies"}),
-        session_id="sess_1",
+        context=_context("sess_1"),
     )
     same_session_result = registry.execute(
         ToolCall(name="memory_search", arguments={"query": "concise", "limit": 5}),
-        session_id="sess_1",
+        context=_context("sess_1"),
     )
     other_session_result = registry.execute(
         ToolCall(name="memory_search", arguments={"query": "concise", "limit": 5}),
-        session_id="sess_2",
+        context=_context("sess_2"),
     )
 
     assert write_result.success is True
@@ -115,15 +127,15 @@ def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
 
     write_result = main_registry.execute(
         ToolCall(name="memory_write", arguments={"content": "用户明天要多喝水"}),
-        session_id="sess_1",
+        context=_context("sess_1", agent_id="agent_main"),
     )
     main_search_result = main_registry.execute(
         ToolCall(name="memory_search", arguments={"query": "多喝水", "limit": 5}),
-        session_id="sess_2",
+        context=_context("sess_2", agent_id="agent_main"),
     )
     other_search_result = other_registry.execute(
         ToolCall(name="memory_search", arguments={"query": "多喝水", "limit": 5}),
-        session_id="sess_2",
+        context=_context("sess_2", agent_id="agent_other"),
     )
 
     assert write_result.success is True
@@ -139,7 +151,7 @@ def test_execute_missing_tool_raises(tmp_path: Path) -> None:
     registry = ToolRegistry()
 
     with pytest.raises(ToolExecutionError):
-        registry.execute(ToolCall(name="missing", arguments={}), session_id="sess_1")
+        registry.execute(ToolCall(name="missing", arguments={}), context=_context("sess_1"))
 
 
 
@@ -153,7 +165,7 @@ def test_workspace_path_traversal_is_blocked(tmp_path: Path) -> None:
     with pytest.raises(ToolExecutionError):
         registry.execute(
             ToolCall(name="workspace_write_file", arguments={"path": "../escape.txt", "content": "x"}),
-            session_id="sess_1",
+            context=_context("sess_1"),
         )
 
 
@@ -167,7 +179,7 @@ def test_workspace_read_file_fallback_to_parent_directories(tmp_path: Path) -> N
 
     result = registry.execute(
         ToolCall(name="workspace_read_file", arguments={"path": ".env.example"}),
-        session_id="sess_2",
+        context=_context("sess_2"),
     )
 
     assert result.success is True
@@ -185,7 +197,7 @@ def test_workspace_read_file_error_contains_workspace(tmp_path: Path) -> None:
     with pytest.raises(ToolExecutionError) as exc_info:
         registry.execute(
             ToolCall(name="workspace_read_file", arguments={"path": "missing.txt"}),
-            session_id="sess_3",
+            context=_context("sess_3"),
         )
 
     message = str(exc_info.value)
@@ -203,7 +215,7 @@ def test_workspace_read_file_blocks_explicit_parent_segments(tmp_path: Path) -> 
     with pytest.raises(ToolExecutionError):
         registry.execute(
             ToolCall(name="workspace_read_file", arguments={"path": "../.env"}),
-            session_id="sess_4",
+            context=_context("sess_4"),
         )
 
 
@@ -233,7 +245,10 @@ def test_session_list_files_returns_uploaded_file(tmp_path: Path) -> None:
     registry = ToolRegistry()
     registry.register(SessionListFilesTool(session_repository=session_repo))
 
-    result = registry.execute(ToolCall(name="session_list_files", arguments={}), session_id="sess_file_1")
+    result = registry.execute(
+        ToolCall(name="session_list_files", arguments={}),
+        context=_context("sess_file_1"),
+    )
     assert result.success is True
     assert "file_1" in result.content
     assert "\"is_active\": true" in result.content
@@ -267,7 +282,7 @@ def test_session_read_file_lazy_parse_uploaded_text(tmp_path: Path) -> None:
 
     result = registry.execute(
         ToolCall(name="session_read_file", arguments={"file_id": "file_2", "offset": 0, "max_chars": 12}),
-        session_id="sess_file_2",
+        context=_context("sess_file_2"),
     )
     updated = session_repo.get_session_file("sess_file_2", "file_2")
 
@@ -310,7 +325,7 @@ def test_session_search_file_returns_hits(tmp_path: Path) -> None:
 
     result = registry.execute(
         ToolCall(name="session_search_file", arguments={"file_id": "file_3", "query": "beta", "top_k": 2}),
-        session_id="sess_file_3",
+        context=_context("sess_file_3"),
     )
 
     assert result.success is True
@@ -342,7 +357,7 @@ def test_session_plan_file_access_returns_direct_read_for_small_file(tmp_path: P
     registry.register(SessionPlanFileAccessTool(session_repository=session_repo))
     result = registry.execute(
         ToolCall(name="session_plan_file_access", arguments={"file_id": "file_4"}),
-        session_id="sess_file_4",
+        context=_context("sess_file_4"),
     )
     assert result.success is True
     assert "\"strategy\": \"direct_read\"" in result.content
@@ -375,7 +390,7 @@ def test_session_plan_file_access_returns_search_for_precision_goal(tmp_path: Pa
             name="session_plan_file_access",
             arguments={"file_id": "file_5", "user_goal": "quote_exact"},
         ),
-        session_id="sess_file_5",
+        context=_context("sess_file_5"),
     )
     assert result.success is True
     assert "\"strategy\": \"search_then_read\"" in result.content
