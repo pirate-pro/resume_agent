@@ -123,6 +123,7 @@ data/
 2. `write_candidate(req)`：写入候选记忆（不直接写 shared/long 最终层）。
 3. `consolidate(req)`：去重、合并、冲突处理、晋升 shared。
 4. `forget(req)`：软删除/归档/TTL 清理。
+5. `compact(req)`：压缩 JSONL、清理过期/删除记录、重建索引。
 
 建议请求最小字段：
 
@@ -158,6 +159,9 @@ data/
 
 - Agent 仅调用 `write_candidate`，把候选记忆写入 `candidates/pending.jsonl`。
 - 使用 `idempotency_key` 防重复写。
+- 默认路由：候选先进入 `agent_short`，而不是直接进入长期层。
+- 显式长期信号（如 `preference/constraint/long_term/policy`）可直接路由 `agent_long`。
+- 显式共享信号（`shared/global/cross_agent`）先作为 `shared_long` 候选，最终是否进入 shared 由治理层判定。
 
 ### 7.2 治理（Memory Subsystem 侧）
 
@@ -174,6 +178,11 @@ data/
 - 重复出现次数达到阈值。
 - 来自工具可验证结果或用户明确确认。
 - 置信度超过阈值。
+- 例外直通：`explicit_user_rule/system_policy` 可跳过重复次数门槛，但仍需满足高置信度要求。
+
+`agent_short -> agent_long` 晋升（已落地）：
+- 达到重复次数阈值且置信度达标时晋升。
+- `explicit_user_rule/system_policy` 可直接晋升长期。
 
 ---
 
@@ -183,8 +192,19 @@ data/
 - `agent_long/shared_long`：软删除优先，支持恢复；低价值记录转归档。
 - 周期清理任务：
   - 清理过期短期记忆。
-  - 压缩 JSONL（compact），剔除已删除旧版本。
+  - 压缩 JSONL（compact），剔除已删除/过期记录与重复版本。
   - 重建索引文件。
+
+Compact V1（已落地）：
+- 支持按 `scope/agent_id/session_id` 指定 compact 范围。
+- 规则：
+  - 可配置删除 `status=deleted` 记录（默认开启）。
+  - 可配置删除过期记录（默认开启）。
+  - 默认按 `memory_id` 去重，仅保留最新版本。
+  - 可选按 `(scope, owner, session, content_hash)` 做内容去重。
+- 输出：
+  - 生成 `ops/compact.log.jsonl` 审计日志。
+  - 重建对应索引文件（`shared/index.json`、`long.index.json`、`<session>.index.json`）。
 
 ---
 
@@ -212,48 +232,44 @@ data/
 - `app/runtime/memory_manager.py`
 - `app/runtime/context_assembler.py`
 - `app/tools/builtins.py` 中 `memory_write` / `memory_search`
-- `app/infra/storage/jsonl_memory_repository.py`
+- `app/api/deps.py`（DI 注入）
 
-改造策略：
+当前落地策略（纯 v2）：
 
-1. 新增 `app/memory/*`（Facade + 文件存储实现 + 治理模块）。
-2. `MemoryManager` 改为依赖 `MemoryFacade`。
-3. 工具层调用 Facade，而非直接操作 Repository。
-4. 保留 `jsonl_memory_repository` 作为 legacy adapter，保证兼容旧数据。
+1. `MemoryManager` 仅依赖 `MemoryFacade`，不再依赖 legacy repository。
+2. `memory_write` / `memory_search` 工具仅调用 `MemoryFacade`。
+3. 兼容桥接层（bridge/dual-write/legacy adapter）已删除，不再新增补丁式兼容逻辑。
+4. 旧 `jsonl_memory_repository` 仅保留为历史代码与独立测试场景，不参与运行时主链路。
 
 ---
 
-## 11. 迁移计划（不影响现有模块）
+## 11. 演进计划（v2 基线上扩展）
 
-### Phase A（骨架引入）
-- 新增 `app/memory/` 模块与接口。
-- 不改现有逻辑，仅完成编译与测试接入。
+### Step A（已完成）
+- 核心模型、Facade、store、检索/治理/生命周期服务可用。
+- Runtime 与 Tool 链路切换到 v2 直连。
 
-### Phase B（双写）
-- `memory_write` 同时写旧仓储与 candidate 文件。
-- 读取仍走旧逻辑（风险最低）。
+### Step B（进行中）
+- 持续补充治理策略（冲突消解、合并质量、shared 晋升）。
+  - 近期优先：`shared_long` 晋升严格化（置信度阈值 + 重复出现阈值）。
+  - 近期优先：跨轮去重（与既有记录比对，避免重复写入）。
+- 生命周期治理：
+  - 已落地 compact V1（删除/过期清理、去重、索引重建、审计日志）。
+- 提升检索质量（评分策略、索引与回退策略）。
 
-### Phase C（灰度读切换）
-- `context_assembler` 引入 `MemoryFacade.read_context`。
-- 用 feature flag 控制：`MEMORY_ENGINE=v1|v2`。
-
-### Phase D（启用治理）
-- 打开 consolidation/forget 周期任务。
-- 观测冲突率、命中率、重复率。
-
-### Phase E（收敛）
-- 稳定后默认 v2。
-- 旧仓储退化为只读迁移兼容层。
+### Step C（后续）
+- 多 Agent 下的跨 agent/shared 策略细化。
+- 替换存储后端（DB/向量库）时保持 Facade 接口不变。
 
 ---
 
 ## 12. 配置建议（文件版）
 
 ```env
-MEMORY_ENGINE=v1
-MEMORY_DUAL_WRITE=true
 MEMORY_V2_ROOT=data/memory_v2
 MEMORY_SHORT_TTL_SECONDS=86400
+MEMORY_AGENT_LONG_PROMOTION_MIN_CONFIDENCE=0.70
+MEMORY_AGENT_LONG_PROMOTION_MIN_REPEAT=2
 MEMORY_CONSOLIDATE_INTERVAL_SECONDS=300
 MEMORY_FORGET_INTERVAL_SECONDS=600
 MEMORY_SHARED_PROMOTION_MIN_CONFIDENCE=0.85
@@ -287,4 +303,3 @@ MEMORY_SHARED_PROMOTION_MIN_REPEAT=2
 - 不引入外部数据库/向量数据库。
 - 不做复杂语义向量检索（后续可插拔）。
 - 不做跨机器分布式一致性（先单机文件版稳定）。
-
