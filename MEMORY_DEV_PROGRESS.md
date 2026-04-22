@@ -247,3 +247,21 @@
 - 验证结果：
   - `uv run mypy app tests`：通过（`Success: no issues found in 59 source files`）
   - `uv run pytest -q`：通过（`42 passed`）
+
+20. [完成] 补齐上下文强约束与记忆跨 agent 策略开关，并补充契约测试。
+- 说明：
+  - `EventRecorder.record` 改为只接收 `RunContext`，移除 `agent_id/run_id/parent_run_id` 散参写法。
+  - `AgentRuntime` 全部事件写入改为传 `context=RunContext`，并移除 `agent_main` 兜底上下文分支（`run_input.context` 改为必填）。
+  - `MemoryWriteTool` 移除 `default_agent_id` 兜底，写入 agent 仅来自运行上下文。
+  - `MemoryManager` 新增跨 agent 策略开关：
+    - `allow_cross_agent_read`（默认关闭）
+    - `allow_cross_agent_write`（默认关闭）
+    - 未开启时，拒绝跨 agent 指定目标读写请求。
+  - `/api/memories` 新增 `target_agent_id` 参数，配合策略开关控制是否允许跨 agent 指定读取目标。
+  - 新增契约测试文件 `tests/test_multi_agent_contracts.py`，覆盖：
+    - 单 agent 路径下事件字段与 participants 维护不回退；
+    - 双 agent 私有记忆隔离；
+    - shared 记忆跨 agent 可见 + 跨 agent 私有读取默认受限。
+- 影响范围：
+  - 运行链路参数边界更统一，后续接多 agent 调度时上下文更稳定。
+  - 记忆跨 agent 访问行为从“隐式可读”改为“显式策略控制”。
