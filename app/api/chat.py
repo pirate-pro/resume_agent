@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_chat_service
+from app.api.deps import get_chat_service, get_skill_repository
 from app.core.errors import (
     AppError,
     ModelClientError,
@@ -20,16 +20,20 @@ from app.core.errors import (
     ToolExecutionError,
     ValidationError,
 )
+from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.schemas.chat import (
     ActiveFilesRequest,
     ChatRequest,
     ChatResponse,
+    CreateSessionResponse,
     EventView,
     FileUploadRequest,
     MemoryView,
+    SessionView,
     SessionDeleteResponse,
     SessionFileView,
     SessionFilesResponse,
+    SkillView,
 )
 from app.services.chat_service import ChatService
 
@@ -63,6 +67,63 @@ async def post_chat(
         return response
     except AppError as exc:
         _logger.exception("聊天请求失败: %s", exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.get("/sessions", response_model=list[SessionView])
+async def get_sessions(
+    service: ChatService = Depends(get_chat_service),
+) -> list[SessionView]:
+    _logger.info("查询会话列表")
+    try:
+        sessions = service.list_sessions()
+        return [
+            SessionView(
+                id=item.session_id,
+                title=item.title,
+                preview=None,
+                messages=[],
+                updated_at=item.updated_at,
+            )
+            for item in sessions
+        ]
+    except AppError as exc:
+        _logger.exception("查询会话列表失败: %s", exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.post("/sessions", response_model=CreateSessionResponse)
+async def post_session(
+    service: ChatService = Depends(get_chat_service),
+) -> CreateSessionResponse:
+    _logger.info("创建会话请求")
+    try:
+        session = service.create_session()
+        return CreateSessionResponse(session_id=session.session_id)
+    except AppError as exc:
+        _logger.exception("创建会话失败: %s", exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.get("/skills", response_model=list[SkillView])
+async def get_skills(
+    skill_repository: MarkdownSkillRepository = Depends(get_skill_repository),
+) -> list[SkillView]:
+    _logger.info("查询技能列表")
+    try:
+        # 复用 Skill 仓库索引，返回前端需要的 id/name/description 结构。
+        skill_index = skill_repository._build_skill_index()
+        return [
+            SkillView(
+                id=item.name,
+                name=item.name,
+                description=item.description,
+                enabled=True,
+            )
+            for item in skill_index.values()
+        ]
+    except AppError as exc:
+        _logger.exception("查询技能列表失败: %s", exc)
         raise _map_app_error(exc) from exc
 
 

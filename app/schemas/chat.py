@@ -11,8 +11,11 @@ __all__ = [
     "ActiveFilesRequest",
     "ChatRequest",
     "ChatResponse",
+    "CreateSessionResponse",
     "EventView",
     "FileUploadRequest",
+    "SkillView",
+    "SessionView",
     "SessionFileView",
     "SessionFilesResponse",
     "MemoryView",
@@ -101,6 +104,25 @@ class ChatResponse(BaseModel):
     answer: str
     tool_calls: list[ToolCallView]
     memory_hits: list[MemoryView]
+
+
+class SessionView(BaseModel):
+    id: str
+    title: str
+    preview: str | None = None
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    updated_at: datetime
+
+
+class CreateSessionResponse(BaseModel):
+    session_id: str
+
+
+class SkillView(BaseModel):
+    id: str
+    name: str
+    description: str
+    enabled: bool = True
 
 
 class EventView(BaseModel):

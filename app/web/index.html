@@ -4,131 +4,44 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Runtime Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      window.tailwind = window.tailwind || {};
+      window.tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              shell: "#171717",
+              canvas: "#212121",
+              hover: "#2f2f2f",
+              textMain: "#ececec",
+              textSub: "#b4b4b4",
+            },
+            borderRadius: {
+              xl: "0.8rem",
+              "2xl": "1rem",
+            },
+            boxShadow: {
+              composer: "0 8px 24px rgba(0,0,0,0.32)",
+            },
+            fontFamily: {
+              sans: ["IBM Plex Sans", "PingFang SC", "Noto Sans SC", "sans-serif"],
+              mono: ["IBM Plex Mono", "JetBrains Mono", "Fira Code", "monospace"],
+            },
+          },
+        },
+      };
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
-    <div class="ambient"></div>
-    <div class="layout">
-      <aside class="panel panel-left">
-        <div class="panel-head">
-          <div class="brand-mark">AR</div>
-          <div>
-            <h1>Agent Runtime</h1>
-            <p>Frontend Test Console</p>
-          </div>
-        </div>
-
-        <div class="stack-actions">
-          <button id="newSessionBtn" class="btn btn-primary" type="button">+ 新建会话</button>
-          <button id="deleteSessionBtn" class="btn btn-danger" type="button">删除当前会话</button>
-        </div>
-
-        <div class="card">
-          <label class="field-label" for="sessionIdText">当前 Session</label>
-          <div id="sessionIdText" class="mono session-id">(尚未创建)</div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">快捷测试</div>
-          <div class="quick-grid">
-            <button class="chip" type="button" data-prompt="请记住我先不用数据库">记忆偏好</button>
-            <button class="chip" type="button" data-prompt="请在 workspace 写一个 hello.txt">写文件</button>
-            <button class="chip" type="button" data-prompt="请帮我读取 workspace 里的文件">读文件</button>
-          </div>
-        </div>
-
-        <div class="card grow">
-          <div class="card-title">本地会话历史</div>
-          <ul id="sessionList" class="session-list"></ul>
-        </div>
-      </aside>
-
-      <main class="chat-shell">
-        <header class="chat-head">
-          <div class="chat-head-title">Single Agent Runtime</div>
-          <div id="healthBadge" class="health-badge health-unknown">连接中...</div>
-        </header>
-
-        <section id="thread" class="thread" aria-live="polite"></section>
-        <button id="jumpToLatestBtn" class="jump-to-latest" type="button" aria-label="jump to latest">
-          回到底部
-        </button>
-
-        <form id="composerForm" class="composer" autocomplete="off">
-          <div class="composer-left">
-            <button
-              id="composerUploadBtn"
-              type="button"
-              class="btn btn-upload-trigger"
-              aria-label="上传文件"
-              title="上传图片或文件"
-              aria-haspopup="menu"
-              aria-expanded="false"
-            >
-              +
-            </button>
-            <div id="composerUploadMenu" class="composer-upload-menu" role="menu" aria-hidden="true"></div>
-          </div>
-          <input
-            id="composerFileInput"
-            type="file"
-            hidden
-            accept=".pdf,.md,.markdown,.json,.txt,.png,.jpg,.jpeg,.webp"
-          />
-          <div id="composerInputWrap" class="composer-input-wrap">
-            <textarea
-              id="messageInput"
-              rows="1"
-              placeholder="输入消息后回车发送，Shift+Enter 换行；输入 @ 可引用会话文件"
-              aria-label="message input"
-            ></textarea>
-            <div id="mentionMenu" class="mention-menu" role="listbox" aria-hidden="true"></div>
-          </div>
-          <button id="sendBtn" type="submit" class="btn btn-send">发送</button>
-        </form>
-      </main>
-
-      <aside class="panel panel-right">
-        <div class="card">
-          <div class="card-title">请求参数</div>
-          <label class="field-label">Skills</label>
-          <div class="skill-row">
-            <label><input type="checkbox" value="base" checked /> base</label>
-            <label><input type="checkbox" value="memory" checked /> memory</label>
-            <label><input type="checkbox" value="tools" checked /> tools</label>
-          </div>
-
-          <label class="field-label" for="maxRoundsInput">max_tool_rounds</label>
-          <input id="maxRoundsInput" class="number-input" type="number" min="0" max="10" value="3" />
-        </div>
-
-        <div class="card">
-          <div class="card-title">调试查询</div>
-          <div class="stack-actions">
-            <button id="refreshFilesBtn" class="btn" type="button">刷新 Files</button>
-            <button id="refreshEventsBtn" class="btn" type="button">刷新 Events</button>
-            <button id="refreshMemoriesBtn" class="btn" type="button">刷新 Memories</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">会话文件</div>
-          <div id="uploadStatusText" class="tiny-text"></div>
-          <ul id="sessionFilesList" class="file-list"></ul>
-        </div>
-
-        <div class="card grow">
-          <div class="card-title">最近工具调用</div>
-          <pre id="toolCallsView" class="json-view">[]</pre>
-          <div class="card-title spacing">最近 Memory 命中</div>
-          <pre id="memoryHitsView" class="json-view">[]</pre>
-          <div class="card-title spacing">Events</div>
-          <pre id="eventsView" class="json-view">[]</pre>
-          <div class="card-title spacing">Memories</div>
-          <pre id="memoriesView" class="json-view">[]</pre>
-        </div>
-      </aside>
-    </div>
+    <div id="root"></div>
 
     <template id="messageTemplate">
       <article class="message">
@@ -144,6 +57,7 @@
       </article>
     </template>
 
+    <script type="module" src="/assets/ui-shell.js"></script>
     <script type="module" src="/assets/app.js"></script>
   </body>
 </html>

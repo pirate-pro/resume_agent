@@ -127,6 +127,16 @@ class ChatService:
             await channel.close()
             yield {"event": "error", "data": {"detail": str(exc)}}
 
+    def list_sessions(self) -> list[SessionMeta]:
+        sessions = self._session_repository.list_sessions()
+        _logger.debug("读取会话列表: count=%s", len(sessions))
+        return sessions
+
+    def create_session(self, session_id: str | None = None) -> SessionMeta:
+        session = self._session_manager.get_or_create_session(session_id)
+        _logger.info("创建会话请求完成: session_id=%s", session.session_id)
+        return session
+
     def list_session_events(self, session_id: str) -> list[EventRecord]:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValidationError("session_id must be a non-empty string.")

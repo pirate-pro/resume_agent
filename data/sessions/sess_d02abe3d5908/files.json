@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "file_id": "file_b07c0b5ae24c",
+      "filename": "黄彦科-年终总结.md",
+      "media_type": "text/markdown",
+      "size_bytes": 4590,
+      "status": "ready",
+      "uploaded_at": "2026-04-23T11:18:32.040321Z",
+      "storage_relpath": "workspace/uploads/file_b07c0b5ae24c_黄彦科-年终总结.md",
+      "text_relpath": "workspace/.parsed/file_b07c0b5ae24c.txt",
+      "error": null,
+      "parsed_char_count": 1882,
+      "parsed_token_estimate": 471,
+      "parsed_at": "2026-04-23T11:18:50.015515Z"
+    }
+  ],
+  "active_file_ids": []
+}

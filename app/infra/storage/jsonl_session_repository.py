@@ -26,6 +26,22 @@ class JsonlSessionRepository:
         self._sessions_dir = self._data_dir / "sessions"
         self._sessions_dir.mkdir(parents=True, exist_ok=True)
 
+    def list_sessions(self) -> list[SessionMeta]:
+        sessions: list[SessionMeta] = []
+        if not self._sessions_dir.exists():
+            return sessions
+        for child in self._sessions_dir.iterdir():
+            if not child.is_dir():
+                continue
+            metadata_path = child / "metadata.json"
+            if not metadata_path.exists():
+                continue
+            item = self.get_session(child.name)
+            if item is not None:
+                sessions.append(item)
+        sessions.sort(key=lambda item: item.updated_at, reverse=True)
+        return sessions
+
     def create_session(self, session_id: str) -> SessionMeta:
         session_id = self._validate_session_id(session_id)
         session_dir = self._session_dir(session_id)
