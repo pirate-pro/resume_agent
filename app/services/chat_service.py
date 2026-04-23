@@ -16,6 +16,7 @@ from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
+from app.runtime.event_channel import EventChannel
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.schemas.chat import (
@@ -30,8 +31,6 @@ from app.schemas.chat import (
 
 __all__ = ["ChatService"]
 _logger = logging.getLogger(__name__)
-_STREAM_POLL_INTERVAL_SECONDS = 0.12
-_ANSWER_CHUNK_SIZE = 28
 _SUPPORTED_FILE_EXTENSIONS = {".pdf", ".md", ".markdown", ".json", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
 _MAX_UPLOAD_SIZE_BYTES = 12 * 1024 * 1024
 
@@ -79,7 +78,7 @@ class ChatService:
         return chat_response
 
     async def chat_stream(self, request: ChatRequest) -> AsyncIterator[dict[str, Any]]:
-        """以流式方式执行对话：先推送运行事件，再推送答案增量。"""
+        """以流式方式执行对话：runtime 直接推送 run_event/answer_delta。"""
         if not isinstance(request, ChatRequest):
             raise ValidationError("request must be ChatRequest.")
 
@@ -92,41 +91,24 @@ class ChatService:
             len(run_input.skill_names),
         )
 
-        # 只推送本次 run 新增事件，避免把历史会话事件重复回放给前端。
-        historical_events = await asyncio.to_thread(self._session_repository.list_events, session_id)
-        next_event_index = len(historical_events)
-
         lock = self._session_lock_manager.get_lock(session_id)
+        channel = EventChannel(maxsize=512)
 
         async def _run_with_lock() -> AgentRunOutput:
-            async with lock:
-                return await asyncio.to_thread(self._runtime.run, run_input)
+            try:
+                async with lock:
+                    return await self._runtime.run_stream(run_input, channel)
+            finally:
+                await channel.close()
 
         run_task = asyncio.create_task(_run_with_lock())
         yield {"event": "session", "data": {"session_id": session_id}}
 
         try:
-            while True:
-                events = await asyncio.to_thread(self._session_repository.list_events, session_id)
-                for event in events[next_event_index:]:
-                    yield {"event": "run_event", "data": self._serialize_event(event)}
-                next_event_index = len(events)
-
-                if run_task.done():
-                    break
-                await asyncio.sleep(_STREAM_POLL_INTERVAL_SECONDS)
-
+            async for item in channel.listen():
+                yield item
             run_output = await run_task
-
-            # run 结束后再补拉一次，避免最后一批事件遗漏。
-            events = await asyncio.to_thread(self._session_repository.list_events, session_id)
-            for event in events[next_event_index:]:
-                yield {"event": "run_event", "data": self._serialize_event(event)}
-
             chat_response = self._to_chat_response(run_output)
-            for delta in _chunk_text(chat_response.answer, _ANSWER_CHUNK_SIZE):
-                yield {"event": "answer_delta", "data": {"delta": delta}}
-
             yield {"event": "done", "data": chat_response.model_dump(mode="json")}
             _logger.info(
                 "chat_stream 完成: session_id=%s answer_len=%s tool_calls=%s",
@@ -142,6 +124,7 @@ class ChatService:
                     await run_task
                 except asyncio.CancelledError:
                     pass
+            await channel.close()
             yield {"event": "error", "data": {"detail": str(exc)}}
 
     def list_session_events(self, session_id: str) -> list[EventRecord]:
@@ -351,28 +334,6 @@ class ChatService:
             parsed_token_estimate=item.parsed_token_estimate,
             parsed_at=item.parsed_at,
         )
-
-    def _serialize_event(self, event: EventRecord) -> dict[str, Any]:
-        return {
-            "event_id": event.event_id,
-            "session_id": event.session_id,
-            "agent_id": event.agent_id,
-            "run_id": event.run_id,
-            "parent_run_id": event.parent_run_id,
-            "event_version": event.event_version,
-            "type": event.type,
-            "payload": event.payload,
-            "created_at": event.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        }
-
-
-def _chunk_text(text: str, chunk_size: int) -> list[str]:
-    normalized = text.strip()
-    if not normalized:
-        return [""]
-    if chunk_size <= 0:
-        return [normalized]
-    return [normalized[index : index + chunk_size] for index in range(0, len(normalized), chunk_size)]
 
 
 def _sanitize_filename(raw: str) -> str:

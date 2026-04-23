@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -11,6 +12,7 @@ from app.core.errors import AppError, ToolExecutionError, ValidationError
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall, ToolExecutionResult
 from app.domain.protocols import ChatModelClient, ToolExecutor
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.session_manager import SessionManager
 
@@ -196,6 +198,195 @@ class AgentRuntime:
             memory_hits=context.memory_hits,
         )
 
+    async def run_stream(self, run_input: AgentRunInput, channel: EventChannel) -> AgentRunOutput:
+        if not isinstance(run_input, AgentRunInput):
+            raise ValidationError("run_input must be an AgentRunInput.")
+        if not isinstance(channel, EventChannel):
+            raise ValidationError("channel must be an EventChannel.")
+
+        _logger.info(
+            "开始执行流式 agent run: session_id=%s message_len=%s skill_count=%s max_tool_rounds=%s",
+            run_input.session_id,
+            len(run_input.user_message),
+            len(run_input.skill_names),
+            run_input.max_tool_rounds,
+        )
+        session_meta = await asyncio.to_thread(self._session_manager.get_or_create_session, run_input.session_id)
+        session_id = session_meta.session_id
+        run_context = self._resolve_run_context(session_id=session_id, run_input=run_input)
+
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="run_started",
+            payload={"max_tool_rounds": run_input.max_tool_rounds},
+            channel=channel,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="user_message",
+            payload={"content": run_input.user_message},
+            channel=channel,
+        )
+
+        context = await asyncio.to_thread(
+            self._context_assembler.assemble,
+            context=run_context,
+            user_message=run_input.user_message,
+            skill_names=run_input.skill_names,
+        )
+        _logger.debug(
+            "流式上下文组装完成: session_id=%s messages=%s memories=%s tools=%s",
+            session_id,
+            len(context.messages),
+            len(context.memory_hits),
+            len(context.tool_definitions),
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="memory_retrieval",
+            payload=context.memory_summary,
+            channel=channel,
+        )
+
+        tools_payload = [self._to_model_tool_schema(tool) for tool in context.tool_definitions]
+        messages = list(context.messages)
+        used_tool_calls: list[ToolCall] = []
+        answer = ""
+
+        for round_index in range(run_input.max_tool_rounds + 1):
+            _logger.debug("流式模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
+            round_content_parts: list[str] = []
+            resolved_tool_calls: list[ToolCall] = []
+            saw_tool_call_delta = False
+            emitted_answer_delta = False
+
+            async for chunk in self._model_client.generate_stream(
+                system_prompt=context.system_prompt,
+                messages=messages,
+                tools=tools_payload,
+            ):
+                if chunk.has_tool_call_delta:
+                    saw_tool_call_delta = True
+
+                if chunk.delta:
+                    round_content_parts.append(chunk.delta)
+                    if not saw_tool_call_delta:
+                        await channel.emit("answer_delta", {"delta": chunk.delta})
+                        emitted_answer_delta = True
+
+                if chunk.finished:
+                    resolved_tool_calls = self._ensure_tool_call_ids(chunk.tool_calls or [])
+
+            round_content = "".join(round_content_parts).strip()
+            _logger.debug(
+                "流式模型调用完成: session_id=%s round=%s content_len=%s tool_call_count=%s",
+                session_id,
+                round_index,
+                len(round_content),
+                len(resolved_tool_calls),
+            )
+
+            if not resolved_tool_calls:
+                answer = round_content or "(no answer)"
+                break
+
+            # 若本轮先流出了部分正文，后续又出现 tool_call，需要回滚临时正文。
+            if emitted_answer_delta:
+                await channel.emit("answer_reset", {})
+
+            if round_index == run_input.max_tool_rounds:
+                _logger.warning("达到工具调用上限(流式): session_id=%s round=%s", session_id, round_index)
+                answer = "Tool call limit reached before generating final answer."
+                break
+
+            if round_content:
+                await self._event_recorder.record_async(
+                    context=run_context,
+                    event_type="assistant_thinking",
+                    payload={"content": round_content},
+                    channel=channel,
+                )
+
+            messages.append(self._build_assistant_tool_call_message(round_content, resolved_tool_calls))
+
+            for tool_call in resolved_tool_calls:
+                used_tool_calls.append(tool_call)
+                await self._event_recorder.record_async(
+                    context=run_context,
+                    event_type="tool_call",
+                    payload={
+                        "name": tool_call.name,
+                        "arguments": tool_call.arguments,
+                        "tool_call_id": tool_call.tool_call_id,
+                    },
+                    channel=channel,
+                )
+                result = await self._execute_tool_safely_async(tool_call, run_context)
+                _logger.info(
+                    "流式工具调用完成: session_id=%s tool=%s success=%s content_len=%s",
+                    session_id,
+                    tool_call.name,
+                    result.success,
+                    len(result.content),
+                )
+                await self._event_recorder.record_async(
+                    context=run_context,
+                    event_type="tool_result",
+                    payload={
+                        "tool_name": result.tool_name,
+                        "success": result.success,
+                        "content": result.content,
+                        "tool_call_id": tool_call.tool_call_id,
+                    },
+                    channel=channel,
+                )
+                if tool_call.name == "memory_write" and result.success:
+                    await self._event_recorder.record_async(
+                        context=run_context,
+                        event_type="memory_write",
+                        payload={
+                            "arguments": tool_call.arguments,
+                            "result": result.content,
+                        },
+                        channel=channel,
+                    )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.tool_call_id,
+                        "content": result.content,
+                    }
+                )
+
+        if not answer:
+            answer = "(no answer)"
+
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="assistant_message",
+            payload={"content": answer},
+            channel=channel,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="run_finished",
+            payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls)},
+            channel=channel,
+        )
+        _logger.info(
+            "流式 agent run 完成: session_id=%s answer_len=%s tool_calls=%s",
+            session_id,
+            len(answer),
+            len(used_tool_calls),
+        )
+
+        return AgentRunOutput(
+            session_id=session_id,
+            answer=answer,
+            tool_calls=used_tool_calls,
+            memory_hits=context.memory_hits,
+        )
+
     def _execute_tool_safely(self, call: ToolCall, context: RunContext) -> ToolExecutionResult:
         try:
             return self._tool_executor.execute(call, context)
@@ -229,6 +420,9 @@ class AgentRuntime:
                 success=False,
                 content=f"Unexpected tool error: {exc}",
             )
+
+    async def _execute_tool_safely_async(self, call: ToolCall, context: RunContext) -> ToolExecutionResult:
+        return await asyncio.to_thread(self._execute_tool_safely, call, context)
 
     def _to_model_tool_schema(self, definition: Any) -> dict[str, Any]:
         return {

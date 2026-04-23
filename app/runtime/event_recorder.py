@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,7 @@ from uuid import uuid4
 from app.core.errors import ValidationError
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import SessionRepository
+from app.runtime.event_channel import EventChannel
 
 __all__ = ["EventRecorder"]
 _logger = logging.getLogger(__name__)
@@ -70,4 +72,25 @@ class EventRecorder:
             event_type,
             event.event_id,
         )
+        return event
+
+    async def record_async(
+        self,
+        context: RunContext,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        event_version: int = 2,
+        channel: EventChannel | None = None,
+    ) -> EventRecord:
+        # record() 包含同步磁盘写入；在异步链路里放到线程池执行，避免阻塞事件循环。
+        event = await asyncio.to_thread(
+            self.record,
+            context,
+            event_type,
+            payload,
+            event_version=event_version,
+        )
+        if channel is not None:
+            await channel.emit_run_event(event)
         return event
