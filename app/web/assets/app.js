@@ -44,7 +44,6 @@ const elements = {
   sendBtn: document.getElementById("sendBtn"),
   jumpToLatestBtn: document.getElementById("jumpToLatestBtn"),
   newSessionBtn: document.getElementById("newSessionBtn"),
-  deleteSessionBtn: document.getElementById("deleteSessionBtn"),
   sessionIdText: document.getElementById("sessionIdText"),
   sessionList: document.getElementById("sessionList"),
   healthBadge: document.getElementById("healthBadge"),
@@ -146,10 +145,6 @@ function bindEvents() {
 
   elements.newSessionBtn.addEventListener("click", () => {
     createNewSession();
-  });
-
-  elements.deleteSessionBtn.addEventListener("click", () => {
-    void deleteCurrentSession();
   });
 
   elements.refreshEventsBtn.addEventListener("click", () => {
@@ -456,38 +451,52 @@ function createNewSession() {
   persistState();
 }
 
-async function deleteCurrentSession() {
+async function deleteSession(sessionId) {
   if (state.isSending || state.isUploading) {
     return;
   }
-  if (!state.currentSessionId) {
+  const targetSessionId = typeof sessionId === "string" && sessionId ? sessionId : state.currentSessionId;
+  if (!targetSessionId) {
     elements.uploadStatusText.textContent = "当前没有可删除的会话。";
     return;
   }
-  const sessionId = state.currentSessionId;
-  const confirmed = window.confirm(`确认删除会话 ${sessionId} 吗？此操作不可撤销。`);
+  const confirmed = window.confirm(`确认删除会话 ${targetSessionId} 吗？此操作不可撤销。`);
   if (!confirmed) {
     return;
   }
 
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    const response = await fetch(`/api/sessions/${encodeURIComponent(targetSessionId)}`, { method: "DELETE" });
     if (!response.ok && response.status !== 404) {
       const detail = await readErrorDetail(response);
       throw new Error(detail);
     }
-    removeSessionSnapshot(sessionId);
-    if (state.currentSessionId === sessionId) {
+    removeSessionSnapshot(targetSessionId);
+
+    if (state.currentSessionId === targetSessionId) {
       const fallback = state.sessions[0];
       if (fallback) {
         switchToSession(fallback.sessionId);
       } else {
-        createNewSession();
+        closeComposerUploadMenu();
+        hideMentionMenu();
+        state.currentSessionId = null;
+        state.messages = [];
+        state.lastToolCalls = [];
+        state.lastMemoryHits = [];
+        state.streamEvents = [];
+        state.sessionFiles = [];
+        state.activeFileIds = [];
+        state.shouldAutoFollow = true;
+        renderAll();
+        persistState();
       }
+    } else {
+      renderSessionList();
+      persistState();
     }
-    elements.uploadStatusText.textContent = `已删除会话: ${sessionId}`;
-    renderAll();
-    persistState();
+
+    elements.uploadStatusText.textContent = `已删除会话: ${targetSessionId}`;
   } catch (error) {
     elements.uploadStatusText.textContent = `删除会话失败: ${String(error)}`;
   }
@@ -689,6 +698,10 @@ function handleStreamEvent(item, assistantIndex, donePayload) {
       appendAssistantDelta(assistantIndex, String(payload.delta ?? ""));
       return donePayload;
     }
+    case "answer_reset": {
+      resetAssistantAnswer(assistantIndex);
+      return donePayload;
+    }
     case "done": {
       return payload;
     }
@@ -755,6 +768,16 @@ function appendAssistantDelta(assistantIndex, delta) {
     return;
   }
   message.content = `${String(message.content ?? "")}${delta}`;
+  message.streaming = true;
+  renderThread();
+}
+
+function resetAssistantAnswer(assistantIndex) {
+  const message = state.messages[assistantIndex];
+  if (!message || message.role !== "assistant") {
+    return;
+  }
+  message.content = "";
   message.streaming = true;
   renderThread();
 }
@@ -842,7 +865,6 @@ function renderAll() {
 
 function renderSessionHeader() {
   elements.sessionIdText.textContent = state.currentSessionId ?? "(尚未创建)";
-  elements.deleteSessionBtn.disabled = !state.currentSessionId || state.isSending || state.isUploading;
 }
 
 function renderThread() {
@@ -901,7 +923,12 @@ function renderSessionList() {
   if (state.sessions.length === 0) {
     const empty = document.createElement("li");
     empty.className = "session-item";
-    empty.innerHTML = '<div class="session-item-head">无历史</div><div class="session-item-body">开始一次对话后会记录在本地。</div>';
+    empty.innerHTML = [
+      '<div class="session-item-main">',
+      '<div class="session-item-head">无历史</div>',
+      '<div class="session-item-body">开始一次对话后会记录在本地。</div>',
+      "</div>",
+    ].join("");
     elements.sessionList.appendChild(empty);
     return;
   }
@@ -912,13 +939,46 @@ function renderSessionList() {
     if (snapshot.sessionId === state.currentSessionId) {
       li.classList.add("active");
     }
-    li.innerHTML = [
-      `<div class="session-item-head">${snapshot.sessionId}</div>`,
-      `<div class="session-item-body">${escapeHtml(snapshot.preview || "(empty)")}</div>`,
+
+    const main = document.createElement("div");
+    main.className = "session-item-main";
+
+    const title = document.createElement("div");
+    title.className = "session-item-head";
+    title.textContent = (snapshot.preview || "").trim() || "(empty)";
+
+    const sub = document.createElement("div");
+    sub.className = "session-item-body";
+    sub.textContent = snapshot.sessionId;
+
+    main.appendChild(title);
+    main.appendChild(sub);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "session-delete-btn";
+    deleteBtn.title = `删除 ${snapshot.sessionId}`;
+    deleteBtn.setAttribute("aria-label", `删除会话 ${snapshot.sessionId}`);
+    deleteBtn.innerHTML = [
+      '<svg viewBox="0 0 24 24" aria-hidden="true">',
+      "<path d='M3 6h18'></path>",
+      "<path d='M8 6V4h8v2'></path>",
+      "<path d='M19 6l-1 14H6L5 6'></path>",
+      "<path d='M10 11v6'></path>",
+      "<path d='M14 11v6'></path>",
+      "</svg>",
     ].join("");
+    deleteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      void deleteSession(snapshot.sessionId);
+    });
+
     li.addEventListener("click", () => {
       switchToSession(snapshot.sessionId);
     });
+
+    li.appendChild(main);
+    li.appendChild(deleteBtn);
     elements.sessionList.appendChild(li);
   }
 }
