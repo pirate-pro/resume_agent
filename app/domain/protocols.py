@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -21,6 +22,7 @@ __all__ = [
     "ChatModelClient",
     "MemoryRepository",
     "ModelResponse",
+    "StreamChunk",
     "SessionRepository",
     "SkillRepository",
     "ToolExecutor",
@@ -31,6 +33,14 @@ __all__ = [
 class ModelResponse:
     content: str
     tool_calls: list[ToolCall]
+
+
+@dataclass(slots=True)
+class StreamChunk:
+    delta: str = ""
+    tool_calls: list[ToolCall] | None = None
+    finished: bool = False
+    has_tool_call_delta: bool = False
 
 
 class SessionRepository(Protocol):
@@ -82,6 +92,13 @@ class ChatModelClient(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ModelResponse: ...
+
+    def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]: ...
 
 
 class ToolExecutor(Protocol):

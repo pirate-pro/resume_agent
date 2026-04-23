@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from app.domain.protocols import ChatModelClient, ModelResponse
+from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -56,6 +57,17 @@ class StaticModelClient:
         _ = (system_prompt, messages, tools)
         return ModelResponse(content=self._content, tool_calls=[])
 
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        _ = (system_prompt, messages, tools)
+        if self._content:
+            yield StreamChunk(delta=self._content, finished=False, has_tool_call_delta=False)
+        yield StreamChunk(delta="", tool_calls=[], finished=True, has_tool_call_delta=False)
+
 
 class SequenceModelClient:
     """Return a predefined sequence of model responses."""
@@ -76,6 +88,22 @@ class SequenceModelClient:
         if self._responses:
             self._last_response = self._responses.popleft()
         return self._last_response
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        response = self.generate(system_prompt=system_prompt, messages=messages, tools=tools)
+        if response.content:
+            yield StreamChunk(delta=response.content, finished=False, has_tool_call_delta=False)
+        yield StreamChunk(
+            delta="",
+            tool_calls=response.tool_calls,
+            finished=True,
+            has_tool_call_delta=bool(response.tool_calls),
+        )
 
 
 

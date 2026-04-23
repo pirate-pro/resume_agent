@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 
 from app.core.errors import ModelClientError, ValidationError
 from app.domain.models import ToolCall
-from app.domain.protocols import ModelResponse
+from app.domain.protocols import ModelResponse, StreamChunk
 
 __all__ = ["OpenAICompatibleClient"]
 _logger = logging.getLogger(__name__)
@@ -102,6 +103,66 @@ class OpenAICompatibleClient:
         _logger.debug("模型响应解析完成: content_len=%s tool_call_count=%s", len(content), len(tool_calls))
         return ModelResponse(content=content, tool_calls=tool_calls)
 
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        system_prompt = _validate_non_empty("system_prompt", system_prompt)
+        if not isinstance(messages, list):
+            raise ValidationError("messages must be a list.")
+        if not isinstance(tools, list):
+            raise ValidationError("tools must be a list.")
+
+        base_payload: dict[str, Any] = {
+            "model": self._model,
+            "stream": True,
+            "messages": [{"role": "system", "content": system_prompt}, *messages],
+        }
+        if tools:
+            base_payload["tools"] = tools
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = dict(base_payload)
+        tools_enabled = bool(tools)
+
+        async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            while True:
+                _logger.debug(
+                    "发起流式模型请求: model=%s message_count=%s tools=%s",
+                    self._model,
+                    len(payload["messages"]),
+                    len(payload.get("tools", [])),
+                )
+                async with client.stream("POST", self._chat_completions_url, headers=headers, json=payload) as response:
+                    if response.status_code >= 400:
+                        detail = await _read_stream_error_detail(response)
+                        # 与同步路径保持一致：当 provider 未开启 auto tool choice 时，自动回退一次。
+                        if tools_enabled and _is_auto_tool_choice_error_detail(response.status_code, detail):
+                            _logger.warning("模型端未开启 auto tool choice，流式请求自动回退到无 tools。")
+                            payload = dict(base_payload)
+                            payload.pop("tools", None)
+                            tools_enabled = False
+                            continue
+                        raise ModelClientError(
+                            f"Model request failed: HTTP {response.status_code} | provider_detail={detail}"
+                        )
+
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "text/event-stream" not in content_type:
+                        async for chunk in _iter_chunks_from_non_sse_response(response):
+                            yield chunk
+                        return
+
+                    async for chunk in _iter_stream_chunks(response):
+                        yield chunk
+                    return
+
 
 
 def _normalize_content(content: Any) -> str:
@@ -118,6 +179,23 @@ def _normalize_content(content: Any) -> str:
             if isinstance(chunk_text, str) and chunk_text.strip():
                 chunks.append(chunk_text.strip())
         return "\n".join(chunks)
+    return str(content)
+
+
+def _normalize_stream_content(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for chunk in content:
+            if not isinstance(chunk, dict):
+                continue
+            chunk_text = chunk.get("text")
+            if isinstance(chunk_text, str):
+                chunks.append(chunk_text)
+        return "".join(chunks)
     return str(content)
 
 
@@ -164,6 +242,162 @@ def _parse_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
     return parsed
 
 
+async def _iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamChunk]:
+    data_lines: list[str] = []
+    tool_calls_accumulator: dict[int, dict[str, Any]] = {}
+    saw_tool_call_delta = False
+
+    async for raw_line in response.aiter_lines():
+        line = raw_line.strip("\r")
+        if not line:
+            if not data_lines:
+                continue
+            payload_text = "\n".join(data_lines)
+            data_lines.clear()
+
+            if payload_text == "[DONE]":
+                break
+
+            delta, tool_call_entries, _ = _parse_stream_payload(payload_text)
+            if tool_call_entries:
+                saw_tool_call_delta = True
+                _merge_stream_tool_call_entries(tool_calls_accumulator, tool_call_entries)
+                if not delta:
+                    yield StreamChunk(delta="", tool_calls=None, finished=False, has_tool_call_delta=True)
+            if delta:
+                yield StreamChunk(delta=delta, tool_calls=None, finished=False, has_tool_call_delta=bool(tool_call_entries))
+            continue
+
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+
+    # 兼容某些 provider 最后一个 block 没有空行分隔。
+    if data_lines:
+        payload_text = "\n".join(data_lines)
+        if payload_text != "[DONE]":
+            delta, tool_call_entries, _ = _parse_stream_payload(payload_text)
+            if tool_call_entries:
+                saw_tool_call_delta = True
+                _merge_stream_tool_call_entries(tool_calls_accumulator, tool_call_entries)
+                if not delta:
+                    yield StreamChunk(delta="", tool_calls=None, finished=False, has_tool_call_delta=True)
+            if delta:
+                yield StreamChunk(delta=delta, tool_calls=None, finished=False, has_tool_call_delta=bool(tool_call_entries))
+
+    parsed_tool_calls = _finalize_stream_tool_calls(tool_calls_accumulator)
+    yield StreamChunk(
+        delta="",
+        tool_calls=parsed_tool_calls,
+        finished=True,
+        has_tool_call_delta=saw_tool_call_delta,
+    )
+
+
+async def _iter_chunks_from_non_sse_response(response: httpx.Response) -> AsyncIterator[StreamChunk]:
+    try:
+        raw_bytes = await response.aread()
+        payload = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        text = raw_bytes.decode("utf-8", errors="replace")
+        raise ModelClientError(f"Invalid non-SSE stream response: {text[:240]}") from exc
+    try:
+        choice = payload["choices"][0]
+        message = choice["message"]
+    except (KeyError, TypeError, IndexError) as exc:
+        raise ModelClientError(f"Invalid non-SSE stream response structure: {exc}") from exc
+
+    content = _normalize_content(message.get("content"))
+    tool_calls = _parse_tool_calls(message.get("tool_calls"))
+    if content:
+        yield StreamChunk(delta=content, tool_calls=None, finished=False, has_tool_call_delta=False)
+    yield StreamChunk(delta="", tool_calls=tool_calls, finished=True, has_tool_call_delta=bool(tool_calls))
+
+
+def _parse_stream_payload(payload_text: str) -> tuple[str, list[dict[str, Any]], str | None]:
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise ModelClientError(f"Invalid stream payload JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ModelClientError("Invalid stream payload structure: root must be object.")
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ModelClientError("Invalid stream payload structure: choices missing.")
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise ModelClientError("Invalid stream payload structure: choice must be object.")
+
+    delta_block = choice.get("delta")
+    if not isinstance(delta_block, dict):
+        delta_block = {}
+
+    content_delta = _normalize_stream_content(delta_block.get("content"))
+    raw_tool_calls = delta_block.get("tool_calls")
+    tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+    finish_reason_raw = choice.get("finish_reason")
+    finish_reason = finish_reason_raw if isinstance(finish_reason_raw, str) else None
+    return content_delta, tool_calls, finish_reason
+
+
+def _merge_stream_tool_call_entries(
+    accumulator: dict[int, dict[str, Any]],
+    entries: list[dict[str, Any]],
+) -> None:
+    for raw_entry in entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        raw_index = raw_entry.get("index", 0)
+        if not isinstance(raw_index, int):
+            continue
+        current = accumulator.setdefault(
+            raw_index,
+            {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            },
+        )
+        raw_id = raw_entry.get("id")
+        if isinstance(raw_id, str) and raw_id:
+            current["id"] = raw_id
+        raw_type = raw_entry.get("type")
+        if isinstance(raw_type, str) and raw_type:
+            current["type"] = raw_type
+        raw_function = raw_entry.get("function")
+        if isinstance(raw_function, dict):
+            name_piece = raw_function.get("name")
+            if isinstance(name_piece, str):
+                current["function"]["name"] = f"{current['function']['name']}{name_piece}"
+            arguments_piece = raw_function.get("arguments")
+            if isinstance(arguments_piece, str):
+                current["function"]["arguments"] = f"{current['function']['arguments']}{arguments_piece}"
+
+
+def _finalize_stream_tool_calls(accumulator: dict[int, dict[str, Any]]) -> list[ToolCall]:
+    if not accumulator:
+        return []
+    raw_calls: list[dict[str, Any]] = []
+    for index in sorted(accumulator.keys()):
+        entry = accumulator[index]
+        function_block = entry.get("function")
+        if not isinstance(function_block, dict):
+            function_block = {"name": "", "arguments": "{}"}
+        if not function_block.get("arguments"):
+            function_block["arguments"] = "{}"
+        raw_calls.append(
+            {
+                "id": entry.get("id") or None,
+                "type": entry.get("type") or "function",
+                "function": {
+                    "name": function_block.get("name") or "",
+                    "arguments": function_block.get("arguments") or "{}",
+                },
+            }
+        )
+    return _parse_tool_calls(raw_calls)
+
+
 
 def _is_auto_tool_choice_error(error: httpx.HTTPStatusError) -> bool:
     response = error.response
@@ -180,6 +414,13 @@ def _is_auto_tool_choice_error(error: httpx.HTTPStatusError) -> bool:
     if not isinstance(message, str):
         return False
     lowered = message.lower()
+    return "tool choice" in lowered and "enable-auto-tool-choice" in lowered
+
+
+def _is_auto_tool_choice_error_detail(status_code: int, detail: str) -> bool:
+    if status_code != 400:
+        return False
+    lowered = detail.lower()
     return "tool choice" in lowered and "enable-auto-tool-choice" in lowered
 
 
@@ -218,6 +459,31 @@ def _extract_provider_error_detail(response: httpx.Response) -> str:
         payload = response.json()
     except json.JSONDecodeError:
         return response.text.strip()[:400]
+
+    if isinstance(payload, dict):
+        error_block = payload.get("error")
+        if isinstance(error_block, dict):
+            message = error_block.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        message = payload.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return json.dumps(payload, ensure_ascii=False)[:400]
+
+
+async def _read_stream_error_detail(response: httpx.Response) -> str:
+    try:
+        raw_bytes = await response.aread()
+    except httpx.HTTPError:
+        return f"HTTP {response.status_code}"
+    raw_text = raw_bytes.decode("utf-8", errors="replace").strip()
+    if not raw_text:
+        return f"HTTP {response.status_code}"
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return raw_text[:400]
 
     if isinstance(payload, dict):
         error_block = payload.get("error")
