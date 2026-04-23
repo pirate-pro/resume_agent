@@ -258,7 +258,10 @@ async def _iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamC
             if payload_text == "[DONE]":
                 break
 
-            delta, tool_call_entries, _ = _parse_stream_payload(payload_text)
+            parsed_payload = _parse_stream_payload(payload_text)
+            if parsed_payload is None:
+                continue
+            delta, tool_call_entries, _ = parsed_payload
             if tool_call_entries:
                 saw_tool_call_delta = True
                 _merge_stream_tool_call_entries(tool_calls_accumulator, tool_call_entries)
@@ -275,7 +278,12 @@ async def _iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamC
     if data_lines:
         payload_text = "\n".join(data_lines)
         if payload_text != "[DONE]":
-            delta, tool_call_entries, _ = _parse_stream_payload(payload_text)
+            parsed_payload = _parse_stream_payload(payload_text)
+            if parsed_payload is not None:
+                delta, tool_call_entries, _ = parsed_payload
+            else:
+                delta = ""
+                tool_call_entries = []
             if tool_call_entries:
                 saw_tool_call_delta = True
                 _merge_stream_tool_call_entries(tool_calls_accumulator, tool_call_entries)
@@ -313,7 +321,7 @@ async def _iter_chunks_from_non_sse_response(response: httpx.Response) -> AsyncI
     yield StreamChunk(delta="", tool_calls=tool_calls, finished=True, has_tool_call_delta=bool(tool_calls))
 
 
-def _parse_stream_payload(payload_text: str) -> tuple[str, list[dict[str, Any]], str | None]:
+def _parse_stream_payload(payload_text: str) -> tuple[str, list[dict[str, Any]], str | None] | None:
     try:
         payload = json.loads(payload_text)
     except json.JSONDecodeError as exc:
@@ -321,9 +329,17 @@ def _parse_stream_payload(payload_text: str) -> tuple[str, list[dict[str, Any]],
     if not isinstance(payload, dict):
         raise ModelClientError("Invalid stream payload structure: root must be object.")
 
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ModelClientError("Invalid stream payload structure: choices missing.")
+    provider_error = _extract_stream_chunk_error(payload)
+    if provider_error:
+        raise ModelClientError(f"Model stream failed: {provider_error}")
+
+    choices = _extract_stream_chunk_choices(payload)
+    if choices is None:
+        _logger.debug("跳过无 choices 的流式片段: keys=%s", list(payload.keys())[:8])
+        return None
+    if not choices:
+        # 部分网关会发送空 choices 的统计块（例如 usage），直接跳过。
+        return None
     choice = choices[0]
     if not isinstance(choice, dict):
         raise ModelClientError("Invalid stream payload structure: choice must be object.")
@@ -338,6 +354,38 @@ def _parse_stream_payload(payload_text: str) -> tuple[str, list[dict[str, Any]],
     finish_reason_raw = choice.get("finish_reason")
     finish_reason = finish_reason_raw if isinstance(finish_reason_raw, str) else None
     return content_delta, tool_calls, finish_reason
+
+
+def _extract_stream_chunk_choices(payload: dict[str, Any]) -> list[Any] | None:
+    direct = payload.get("choices")
+    if isinstance(direct, list):
+        return direct
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        nested_choices = nested.get("choices")
+        if isinstance(nested_choices, list):
+            return nested_choices
+    return None
+
+
+def _extract_stream_chunk_error(payload: dict[str, Any]) -> str | None:
+    candidates = [payload]
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        candidates.append(nested)
+    for item in candidates:
+        error_block = item.get("error")
+        if isinstance(error_block, dict):
+            message = error_block.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+            return json.dumps(error_block, ensure_ascii=False)[:400]
+        if isinstance(error_block, str) and error_block.strip():
+            return error_block.strip()
+        message = item.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return None
 
 
 def _merge_stream_tool_call_entries(
