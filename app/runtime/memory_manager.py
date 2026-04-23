@@ -10,7 +10,14 @@ from app.core.errors import ValidationError
 from app.domain.models import MemoryItem, RunContext
 from app.memory.contracts import MemoryFacade
 from app.memory.intake import build_candidate_request, infer_scope_hint_from_tags
-from app.memory.models import MemoryConsolidateRequest, MemoryReadBundle, MemoryReadRequest, MemoryScope
+from app.memory.models import (
+    ForgetResult,
+    MemoryConsolidateRequest,
+    MemoryForgetRequest,
+    MemoryReadBundle,
+    MemoryReadRequest,
+    MemoryScope,
+)
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 
 __all__ = ["MemoryManager"]
@@ -233,6 +240,52 @@ class MemoryManager:
         )
         return result
 
+    def forget_memory_ids(
+        self,
+        *,
+        context: RunContext,
+        memory_ids: list[str],
+        scopes: list[MemoryScope],
+        hard_delete: bool = False,
+        reason: str | None = None,
+    ) -> ForgetResult:
+        run_context = _normalize_context(context)
+        normalized_ids = _normalize_memory_ids(memory_ids)
+        normalized_scopes = _normalize_scopes(scopes)
+        if not isinstance(hard_delete, bool):
+            raise ValidationError("hard_delete must be bool.")
+        normalized_reason = reason.strip() if isinstance(reason, str) and reason.strip() else None
+
+        requester_capability = self._capability_registry.require(run_context.agent_id)
+        for scope in normalized_scopes:
+            if not requester_capability.can_write_scope(scope):
+                raise ValidationError(
+                    f"Memory forget scope not allowed for agent '{run_context.agent_id}': {scope.value}"
+                )
+
+        # 包含 shared_long 时需允许 owner_agent_id=None 的记录参与匹配。
+        request_agent_id = None if MemoryScope.SHARED_LONG in normalized_scopes else run_context.agent_id
+        request = MemoryForgetRequest(
+            agent_id=request_agent_id,
+            session_id=None,
+            scopes=normalized_scopes,
+            before=None,
+            memory_ids=normalized_ids,
+            hard_delete=hard_delete,
+            reason=normalized_reason,
+        )
+        result = self._memory_facade.forget(request)
+        _logger.debug(
+            "遗忘记忆完成(v2): agent_id=%s memory_ids=%s scopes=%s touched=%s deleted=%s archived=%s",
+            run_context.agent_id,
+            len(normalized_ids),
+            [item.value for item in normalized_scopes],
+            result.touched_records,
+            result.deleted_records,
+            result.archived_records,
+        )
+        return result
+
     # 统一读取入口：所有检索路径都走这一条，避免策略分叉。
     def _read_bundle(
         self,
@@ -283,6 +336,48 @@ def _normalize_agent_id(agent_id: str) -> str:
     if not isinstance(agent_id, str) or not agent_id.strip():
         raise ValidationError("agent_id must be a non-empty string.")
     return agent_id.strip()
+
+
+def _normalize_memory_ids(memory_ids: list[str]) -> list[str]:
+    if not isinstance(memory_ids, list) or not memory_ids:
+        raise ValidationError("memory_ids must be a non-empty list.")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in memory_ids:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValidationError("memory_ids entries must be non-empty strings.")
+        item = raw.strip()
+        if item in seen:
+            continue
+        normalized.append(item)
+        seen.add(item)
+    if not normalized:
+        raise ValidationError("memory_ids must contain at least one valid id.")
+    return normalized
+
+
+def _normalize_scopes(scopes: list[MemoryScope]) -> list[MemoryScope]:
+    if not isinstance(scopes, list) or not scopes:
+        raise ValidationError("scopes must be a non-empty list.")
+    output: list[MemoryScope] = []
+    seen: set[MemoryScope] = set()
+    for raw in scopes:
+        if isinstance(raw, MemoryScope):
+            scope = raw
+        elif isinstance(raw, str) and raw.strip():
+            try:
+                scope = MemoryScope(raw.strip())
+            except ValueError as exc:
+                raise ValidationError(f"Unsupported memory scope: {raw}") from exc
+        else:
+            raise ValidationError("scopes entries must be MemoryScope or non-empty string.")
+        if scope in seen:
+            continue
+        output.append(scope)
+        seen.add(scope)
+    if not output:
+        raise ValidationError("scopes cannot be empty after normalization.")
+    return output
 
 
 def _build_search_summary(

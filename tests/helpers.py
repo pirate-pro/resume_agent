@@ -21,7 +21,9 @@ from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.services.chat_service import ChatService
 from app.tools.builtins import (
+    MemoryForgetTool,
     MemorySearchTool,
+    MemoryUpdateTool,
     MemoryWriteTool,
     SessionListFilesTool,
     SessionPlanFileAccessTool,
@@ -88,6 +90,8 @@ def build_chat_service(data_dir: Path, model_client: ChatModelClient) -> tuple[C
     tool_registry = ToolRegistry(capability_registry=capability_registry)
     tool_registry.register(MemoryWriteTool(memory_manager=memory_manager))
     tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
+    tool_registry.register(MemoryForgetTool(memory_manager=memory_manager))
+    tool_registry.register(MemoryUpdateTool(memory_manager=memory_manager))
     tool_registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     tool_registry.register(WorkspaceReadFileTool(session_repository=session_repository))
     tool_registry.register(SessionListFilesTool(session_repository=session_repository))

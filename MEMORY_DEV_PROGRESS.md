@@ -307,3 +307,21 @@
 - 验证结果：
   - `uv run mypy app tests`：通过（`Success: no issues found in 61 source files`）
   - `uv run pytest -q`：通过（`51 passed`）
+
+23. [完成] 增加记忆编辑能力：`memory_forget` / `memory_update` 工具与记忆编辑 skill。
+- 说明：
+  - 新增记忆工具：
+    - `memory_forget(query, limit, hard_delete, reason?)`：先检索后遗忘，支持软删除/硬删除。
+    - `memory_update(query, new_content, new_tags, limit, hard_delete_old)`：按“先删旧，再写新”流程替换记忆。
+  - `MemoryManager` 增加 `forget_memory_ids(...)`，统一执行删除权限校验（按 scope 检查能力矩阵）并调用 memory lifecycle。
+  - `ToolRegistry` 侧接入两个新工具，保持工具权限矩阵统一生效。
+  - 新增 `app/skills/memory-editor/SKILL.md`，固化记忆新增/删除/更新的触发条件与执行顺序。
+  - 同步更新 `memory`、`tools` skill 文案，并在前端 skill 选项中加入 `memory-editor`（默认勾选）。
+  - `ChatService` 默认 skill 列表加入 `memory-editor`（当请求未显式传 skill_names 时生效）。
+  - 补充测试：
+    - `memory_forget` 可正确删除命中记忆；
+    - `memory_update` 单命中替换成功；
+    - `memory_update` 多命中返回歧义候选，不盲改。
+- 验证结果：
+  - `uv run mypy app tests`：通过（`Success: no issues found in 61 source files`）
+  - `uv run pytest -q`：通过（`54 passed`）

@@ -21,7 +21,9 @@ from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.services.chat_service import ChatService
 from app.tools.builtins import (
+    MemoryForgetTool,
     MemorySearchTool,
+    MemoryUpdateTool,
     MemoryWriteTool,
     SessionListFilesTool,
     SessionPlanFileAccessTool,
@@ -90,6 +92,8 @@ def get_tool_registry() -> ToolRegistry:
     registry = ToolRegistry(capability_registry=get_agent_capability_registry())
     registry.register(MemoryWriteTool(memory_manager=get_memory_manager()))
     registry.register(MemorySearchTool(memory_manager=get_memory_manager()))
+    registry.register(MemoryForgetTool(memory_manager=get_memory_manager()))
+    registry.register(MemoryUpdateTool(memory_manager=get_memory_manager()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
     registry.register(SessionListFilesTool(session_repository=get_session_repository()))

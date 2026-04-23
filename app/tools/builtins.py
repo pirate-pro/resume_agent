@@ -13,10 +13,14 @@ from uuid import uuid4
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
+from app.memory.intake import infer_scope_hint_from_tags
+from app.memory.models import MemoryScope
 from app.runtime.memory_manager import MemoryManager
 
 __all__ = [
+    "MemoryForgetTool",
     "MemorySearchTool",
+    "MemoryUpdateTool",
     "MemoryWriteTool",
     "SessionListFilesTool",
     "SessionPlanFileAccessTool",
@@ -148,6 +152,213 @@ class MemorySearchTool:
         ]
         return ToolExecutionResult(
             tool_name="memory_search",
+            success=True,
+            content=json.dumps(payload, ensure_ascii=False),
+        )
+
+
+class MemoryForgetTool:
+    """按查询结果删除/遗忘记忆。"""
+
+    def __init__(self, memory_manager: MemoryManager) -> None:
+        self._memory_manager = memory_manager
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="memory_forget",
+            description=(
+                "Forget memory records by query in current agent-visible scopes. "
+                "Use this when user explicitly asks to delete/forget previous memory."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
+                    "hard_delete": {"type": "boolean", "default": False},
+                    "reason": {"type": "string"},
+                },
+                "required": ["query"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        query = _require_non_empty_argument(arguments, "query")
+        raw_limit = arguments.get("limit", 5)
+        if not isinstance(raw_limit, int) or raw_limit <= 0:
+            raise ToolExecutionError("'limit' must be a positive integer.")
+        limit = min(raw_limit, 20)
+        hard_delete = arguments.get("hard_delete", False)
+        if not isinstance(hard_delete, bool):
+            raise ToolExecutionError("'hard_delete' must be boolean.")
+        raw_reason = arguments.get("reason")
+        reason = raw_reason.strip() if isinstance(raw_reason, str) and raw_reason.strip() else None
+
+        _, _, bundle = self._memory_manager.search_bundle(
+            query=query,
+            limit=limit,
+            context=run_context,
+        )
+        hits = bundle.items
+        if not hits:
+            return ToolExecutionResult(
+                tool_name="memory_forget",
+                success=True,
+                content=json.dumps(
+                    {
+                        "matched": 0,
+                        "forgotten": 0,
+                        "deleted": 0,
+                        "archived": 0,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+        memory_ids = [item.memory_id for item in hits]
+        scopes = _dedupe_scopes([item.scope for item in hits])
+        forget_result = self._memory_manager.forget_memory_ids(
+            context=run_context,
+            memory_ids=memory_ids,
+            scopes=scopes,
+            hard_delete=hard_delete,
+            reason=reason or f"memory_forget_tool:{query[:80]}",
+        )
+        payload = {
+            "matched": len(hits),
+            "memory_ids": memory_ids,
+            "scopes": [item.value for item in scopes],
+            "forgotten": forget_result.touched_records,
+            "deleted": forget_result.deleted_records,
+            "archived": forget_result.archived_records,
+        }
+        return ToolExecutionResult(
+            tool_name="memory_forget",
+            success=True,
+            content=json.dumps(payload, ensure_ascii=False),
+        )
+
+
+class MemoryUpdateTool:
+    """按“先删后写”的顺序替换记忆。"""
+
+    def __init__(self, memory_manager: MemoryManager) -> None:
+        self._memory_manager = memory_manager
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="memory_update",
+            description=(
+                "Replace one memory by query: locate target -> forget old -> write new. "
+                "If multiple targets match, return ambiguity candidates instead of blind update."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "new_content": {"type": "string"},
+                    "new_tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": [],
+                    },
+                    "limit": {"type": "integer", "default": 3, "minimum": 1, "maximum": 8},
+                    "hard_delete_old": {"type": "boolean", "default": False},
+                },
+                "required": ["query", "new_content"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        query = _require_non_empty_argument(arguments, "query")
+        new_content = _require_non_empty_argument(arguments, "new_content")
+        new_tags = _normalize_tags(arguments.get("new_tags", []))
+        raw_limit = arguments.get("limit", 3)
+        if not isinstance(raw_limit, int) or raw_limit <= 0:
+            raise ToolExecutionError("'limit' must be a positive integer.")
+        limit = min(raw_limit, 8)
+        hard_delete_old = arguments.get("hard_delete_old", False)
+        if not isinstance(hard_delete_old, bool):
+            raise ToolExecutionError("'hard_delete_old' must be boolean.")
+
+        _, _, bundle = self._memory_manager.search_bundle(
+            query=query,
+            limit=limit,
+            context=run_context,
+        )
+        hits = bundle.items
+        if not hits:
+            return ToolExecutionResult(
+                tool_name="memory_update",
+                success=True,
+                content=json.dumps(
+                    {
+                        "updated": False,
+                        "reason": "no_match",
+                        "query": query,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+        if len(hits) > 1:
+            # 多命中时强制返回候选，避免误改错误记忆。
+            candidates = [
+                {
+                    "memory_id": item.memory_id,
+                    "scope": item.scope.value,
+                    "content": item.content,
+                    "tags": item.tags,
+                    "confidence": item.confidence,
+                }
+                for item in hits
+            ]
+            return ToolExecutionResult(
+                tool_name="memory_update",
+                success=True,
+                content=json.dumps(
+                    {
+                        "updated": False,
+                        "reason": "ambiguous_match",
+                        "query": query,
+                        "candidates": candidates,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+        target = hits[0]
+        forget_result = self._memory_manager.forget_memory_ids(
+            context=run_context,
+            memory_ids=[target.memory_id],
+            scopes=[target.scope],
+            hard_delete=hard_delete_old,
+            reason=f"memory_update_replace:{query[:80]}",
+        )
+        resolved_tags = _resolve_update_tags(new_tags=new_tags, target_scope=target.scope, target_tags=target.tags)
+        written = self._memory_manager.write_memory(
+            content=new_content,
+            tags=resolved_tags,
+            context=run_context,
+            source_event_id=None,
+            source="memory_update_tool",
+        )
+        payload = {
+            "updated": True,
+            "old_memory_id": target.memory_id,
+            "new_memory_id": written.memory_id,
+            "new_tags": resolved_tags,
+            "old_scope": target.scope.value,
+            "forget_result": {
+                "touched": forget_result.touched_records,
+                "deleted": forget_result.deleted_records,
+                "archived": forget_result.archived_records,
+            },
+        }
+        return ToolExecutionResult(
+            tool_name="memory_update",
             success=True,
             content=json.dumps(payload, ensure_ascii=False),
         )
@@ -485,6 +696,39 @@ def _normalize_tags(raw_tags: Any) -> list[str]:
             raise ToolExecutionError("each tag must be a non-empty string.")
         normalized.append(tag.strip())
     return normalized
+
+
+def _dedupe_scopes(scopes: list[MemoryScope]) -> list[MemoryScope]:
+    output: list[MemoryScope] = []
+    seen: set[MemoryScope] = set()
+    for item in scopes:
+        if not isinstance(item, MemoryScope):
+            continue
+        if item in seen:
+            continue
+        output.append(item)
+        seen.add(item)
+    return output
+
+
+def _resolve_update_tags(
+    *,
+    new_tags: list[str],
+    target_scope: MemoryScope,
+    target_tags: list[str],
+) -> list[str]:
+    tags = list(new_tags) if new_tags else [tag.strip() for tag in target_tags if isinstance(tag, str) and tag.strip()]
+    if not tags:
+        tags = []
+
+    scope_hint = infer_scope_hint_from_tags(tags)
+    if target_scope == MemoryScope.SHARED_LONG and scope_hint != MemoryScope.SHARED_LONG:
+        if "shared" not in tags:
+            tags.append("shared")
+    if target_scope == MemoryScope.AGENT_LONG and scope_hint == MemoryScope.AGENT_SHORT:
+        if "long_term" not in tags:
+            tags.append("long_term")
+    return tags
 
 
 

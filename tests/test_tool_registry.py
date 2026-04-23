@@ -17,7 +17,9 @@ from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 from app.runtime.memory_manager import MemoryManager
 from app.tools.builtins import (
+    MemoryForgetTool,
     MemorySearchTool,
+    MemoryUpdateTool,
     MemoryWriteTool,
     SessionListFilesTool,
     SessionPlanFileAccessTool,
@@ -168,6 +170,130 @@ def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
     assert len(json.loads(main_search_result.content)) >= 1
     assert other_search_result.success is True
     assert json.loads(other_search_result.content) == []
+
+
+def test_memory_forget_tool_forgets_target_memory(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemorySearchTool(memory_manager=memory_manager))
+    registry.register(MemoryForgetTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户偏好：回答简洁", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_forget_1"),
+    )
+    forget_result = registry.execute(
+        ToolCall(
+            name="memory_forget",
+            arguments={"query": "回答简洁", "limit": 5},
+        ),
+        context=_context("sess_forget_1"),
+    )
+    search_after = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "回答简洁", "limit": 5}),
+        context=_context("sess_forget_2"),
+    )
+
+    forget_payload = json.loads(forget_result.content)
+    assert forget_result.success is True
+    assert forget_payload["matched"] >= 1
+    assert forget_payload["forgotten"] >= 1
+    assert json.loads(search_after.content) == []
+
+
+def test_memory_update_tool_replaces_single_match(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemorySearchTool(memory_manager=memory_manager))
+    registry.register(MemoryUpdateTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户称呼是李华", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_update_1"),
+    )
+    update_result = registry.execute(
+        ToolCall(
+            name="memory_update",
+            arguments={
+                "query": "用户称呼是李华",
+                "new_content": "用户称呼改为小李",
+                "new_tags": ["preference", "long_term"],
+                "limit": 3,
+            },
+        ),
+        context=_context("sess_update_1"),
+    )
+    new_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "小李", "limit": 5}),
+        context=_context("sess_update_2"),
+    )
+    old_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "李华", "limit": 5}),
+        context=_context("sess_update_2"),
+    )
+
+    update_payload = json.loads(update_result.content)
+    assert update_result.success is True
+    assert update_payload["updated"] is True
+    assert len(json.loads(new_search.content)) >= 1
+    old_payload = json.loads(old_search.content)
+    assert all(item.get("content") != "用户称呼是李华" for item in old_payload)
+
+
+def test_memory_update_tool_returns_ambiguous_when_multi_match(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemoryUpdateTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户喜欢奶茶", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_update_3"),
+    )
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户喜欢奶咖", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_update_3"),
+    )
+
+    update_result = registry.execute(
+        ToolCall(
+            name="memory_update",
+            arguments={
+                "query": "用户喜欢奶",
+                "new_content": "用户喜欢美式",
+                "limit": 5,
+            },
+        ),
+        context=_context("sess_update_3"),
+    )
+    payload = json.loads(update_result.content)
+    assert update_result.success is True
+    assert payload["updated"] is False
+    assert payload["reason"] == "ambiguous_match"
+    assert len(payload["candidates"]) >= 2
 
 
 
