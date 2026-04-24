@@ -1,2 +1,0 @@
-{"event_id": "evt_2ecc8ba57668", "session_id": "sess_4079d0053fdb", "type": "run_started", "payload": {"max_tool_rounds": 2}, "created_at": "2026-04-20T14:48:26.841562Z"}
-{"event_id": "evt_ae25eec4468c", "session_id": "sess_4079d0053fdb", "type": "user_message", "payload": {"content": "请记住我当前先不用数据库"}, "created_at": "2026-04-20T14:48:26.841969Z"}

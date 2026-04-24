@@ -1,2 +1,0 @@
-{"event_id": "evt_c07285d5752a", "session_id": "sess_ce92b3366fd6", "type": "run_started", "payload": {"max_tool_rounds": 0}, "created_at": "2026-04-20T14:49:16.118375Z"}
-{"event_id": "evt_a1813eaff5db", "session_id": "sess_ce92b3366fd6", "type": "user_message", "payload": {"content": "你好"}, "created_at": "2026-04-20T14:49:16.118563Z"}
