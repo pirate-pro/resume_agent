@@ -6,8 +6,9 @@ import asyncio
 from pathlib import Path
 
 from app.domain.models import AgentRunOutput
+from app.domain.protocols import ModelResponse
 from app.schemas.chat import ChatRequest
-from tests.helpers import StaticModelClient, build_chat_service
+from tests.helpers import SequenceModelClient, StaticModelClient, build_chat_service
 
 __all__ = []
 
@@ -48,6 +49,64 @@ def test_chat_service_returns_runtime_response(tmp_path: Path) -> None:
 
     assert response.session_id == "sess_explicit"
     assert response.answer == "result"
+
+
+def test_chat_service_generates_session_title_after_first_turn(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=SequenceModelClient(
+            responses=[
+                ModelResponse(content="这是首轮回答", tool_calls=[]),
+                ModelResponse(content="年度总结润色", tool_calls=[]),
+            ]
+        ),
+    )
+
+    response = asyncio.run(
+        service.chat(
+            ChatRequest(
+                session_id="sess_title_sync",
+                message="请帮我润色一份年终总结",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        )
+    )
+
+    assert response.answer == "这是首轮回答"
+    meta = service._session_repository.get_session("sess_title_sync")  # noqa: SLF001
+    assert meta is not None
+    assert meta.title == "年度总结润色"
+
+
+def test_chat_service_does_not_overwrite_existing_title(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=SequenceModelClient(
+            responses=[
+                ModelResponse(content="后续回答", tool_calls=[]),
+                ModelResponse(content="不应写入的新标题", tool_calls=[]),
+            ]
+        ),
+    )
+    service._session_repository.create_session("sess_keep_title")  # noqa: SLF001
+    service._session_repository.update_session_title("sess_keep_title", "已存在标题")  # noqa: SLF001
+
+    response = asyncio.run(
+        service.chat(
+            ChatRequest(
+                session_id="sess_keep_title",
+                message="继续讨论一下",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        )
+    )
+
+    assert response.answer == "后续回答"
+    meta = service._session_repository.get_session("sess_keep_title")  # noqa: SLF001
+    assert meta is not None
+    assert meta.title == "已存在标题"
 
 
 def test_chat_service_delete_session(tmp_path: Path) -> None:
@@ -146,3 +205,35 @@ def test_chat_stream_times_out_and_emits_error(tmp_path: Path) -> None:
     assert "error" in event_names
     error_payload = next(item.get("data", {}) for item in events if item.get("event") == "error")
     assert "timed out" in str(error_payload)
+
+
+def test_chat_stream_generates_session_title_after_first_turn(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=SequenceModelClient(
+            responses=[
+                ModelResponse(content="流式首轮回答", tool_calls=[]),
+                ModelResponse(content="文件总结整理", tool_calls=[]),
+            ]
+        ),
+    )
+
+    async def _collect_done() -> dict[str, object] | None:
+        done_payload: dict[str, object] | None = None
+        async for item in service.chat_stream(
+            ChatRequest(
+                session_id="sess_title_stream",
+                message="请帮我整理这份文件的重点",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        ):
+            if item.get("event") == "done":
+                done_payload = item.get("data")  # type: ignore[assignment]
+        return done_payload
+
+    done_payload = asyncio.run(_collect_done())
+    assert done_payload is not None
+    meta = service._session_repository.get_session("sess_title_stream")  # noqa: SLF001
+    assert meta is not None
+    assert meta.title == "文件总结整理"

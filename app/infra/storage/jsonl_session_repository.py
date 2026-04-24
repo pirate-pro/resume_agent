@@ -89,6 +89,26 @@ class JsonlSessionRepository:
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
             raise StorageError(f"Failed to read session metadata for '{session_id}': {exc}") from exc
 
+    def update_session_title(self, session_id: str, title: str) -> SessionMeta:
+        session_id = self._validate_session_id(session_id)
+        normalized_title = str(title).strip()
+        if not normalized_title:
+            raise ValidationError("title must be a non-empty string.")
+        meta = self.get_session(session_id)
+        if meta is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        updated = SessionMeta(
+            session_id=meta.session_id,
+            title=normalized_title,
+            created_at=meta.created_at,
+            updated_at=_utc_now(),
+            participants=meta.participants,
+            entry_agent_id=meta.entry_agent_id,
+        )
+        self._write_session_metadata(session_id, updated)
+        _logger.info("会话标题更新完成: session_id=%s title=%s", session_id, normalized_title)
+        return updated
+
     def list_sessions(self) -> list[SessionMeta]:
         """List all sessions sorted by updated_at descending."""
         sessions: list[SessionMeta] = []
@@ -398,24 +418,27 @@ class JsonlSessionRepository:
             participants=participants,
             entry_agent_id=resolved_entry_agent_id,
         )
-        metadata_path = self._session_dir(session_id) / "metadata.json"
-        payload = {
-            "session_id": updated.session_id,
-            "title": updated.title,
-            "created_at": _to_iso(updated.created_at),
-            "updated_at": _to_iso(updated.updated_at),
-            "participants": updated.participants,
-            "entry_agent_id": updated.entry_agent_id,
-        }
-        try:
-            metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError as exc:
-            raise StorageError(f"Failed to update metadata for '{session_id}': {exc}") from exc
+        self._write_session_metadata(session_id, updated)
 
     def _validate_session_id(self, session_id: str) -> str:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValidationError("session_id must be a non-empty string.")
         return session_id.strip()
+
+    def _write_session_metadata(self, session_id: str, meta: SessionMeta) -> None:
+        metadata_path = self._session_dir(session_id) / "metadata.json"
+        payload = {
+            "session_id": meta.session_id,
+            "title": meta.title,
+            "created_at": _to_iso(meta.created_at),
+            "updated_at": _to_iso(meta.updated_at),
+            "participants": meta.participants,
+            "entry_agent_id": meta.entry_agent_id,
+        }
+        try:
+            metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            raise StorageError(f"Failed to update metadata for '{session_id}': {exc}") from exc
 
 
 

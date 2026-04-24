@@ -171,3 +171,15 @@ def test_session_delete_removes_session_directory(tmp_path: Path) -> None:
     assert repository.get_session("sess_delete") is None
     with pytest.raises(SessionNotFoundError):
         repository.list_events("sess_delete")
+
+
+def test_session_title_can_be_updated(tmp_path: Path) -> None:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session("sess_title")
+
+    updated = repository.update_session_title("sess_title", "年度总结润色")
+
+    assert updated.title == "年度总结润色"
+    reloaded = repository.get_session("sess_title")
+    assert reloaded is not None
+    assert reloaded.title == "年度总结润色"

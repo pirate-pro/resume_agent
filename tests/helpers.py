@@ -21,6 +21,7 @@ from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.services.chat_service import ChatService
+from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
     MemoryForgetTool,
     MemorySearchTool,
@@ -154,6 +155,7 @@ def build_chat_service(
         memory_manager=memory_manager,
         capability_registry=capability_registry,
         session_lock_manager=SessionLockManager(),
+        session_title_service=SessionTitleService(model_client=model_client),
         stream_heartbeat_interval_seconds=stream_heartbeat_interval_seconds,
         stream_run_timeout_seconds=stream_run_timeout_seconds,
     )

@@ -20,6 +20,7 @@ from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.services.chat_service import ChatService
+from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
     MemoryForgetTool,
     MemorySearchTool,
@@ -47,6 +48,7 @@ __all__ = [
     "get_memory_store",
     "get_session_manager",
     "get_session_repository",
+    "get_session_title_service",
     "get_settings",
     "get_skill_repository",
     "get_tool_registry",
@@ -143,6 +145,11 @@ def get_model_client() -> OpenAICompatibleClient:
 
 
 @lru_cache(maxsize=1)
+def get_session_title_service() -> SessionTitleService:
+    return SessionTitleService(model_client=get_model_client())
+
+
+@lru_cache(maxsize=1)
 def get_agent_runtime() -> AgentRuntime:
     return AgentRuntime(
         session_manager=get_session_manager(),
@@ -168,6 +175,7 @@ def get_chat_service() -> ChatService:
         memory_manager=get_memory_manager(),
         capability_registry=get_agent_capability_registry(),
         session_lock_manager=get_lock_manager(),
+        session_title_service=get_session_title_service(),
         stream_heartbeat_interval_seconds=settings.chat_stream_heartbeat_interval_seconds,
         stream_run_timeout_seconds=settings.chat_stream_run_timeout_seconds,
     )

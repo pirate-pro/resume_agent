@@ -19,6 +19,7 @@ from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.event_channel import EventChannel
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
+from app.services.session_title_service import DEFAULT_SESSION_TITLES, SessionTitleService
 from app.schemas.chat import (
     ActiveFilesRequest,
     ChatRequest,
@@ -46,6 +47,7 @@ class ChatService:
         memory_manager: MemoryManager,
         capability_registry: AgentCapabilityRegistry,
         session_lock_manager: SessionLockManager,
+        session_title_service: SessionTitleService,
         stream_heartbeat_interval_seconds: float = 15.0,
         stream_run_timeout_seconds: float = 300.0,
     ) -> None:
@@ -55,6 +57,7 @@ class ChatService:
         self._memory_manager = memory_manager
         self._capability_registry = capability_registry
         self._session_lock_manager = session_lock_manager
+        self._session_title_service = session_title_service
         if stream_heartbeat_interval_seconds <= 0:
             raise ValidationError("stream_heartbeat_interval_seconds must be positive.")
         if stream_run_timeout_seconds <= 0:
@@ -71,10 +74,22 @@ class ChatService:
 
         lock = self._session_lock_manager.get_lock(session.session_id)
         _logger.debug("准备获取会话锁: session_id=%s", session.session_id)
+        should_generate_title = False
         # 同一个 session 的 run 串行执行，避免事件日志和文件写入交错。
         async with lock:
             _logger.debug("会话锁已获取: session_id=%s", session.session_id)
+            should_generate_title = await asyncio.to_thread(
+                self._should_generate_session_title,
+                session.session_id,
+            )
             run_output = await asyncio.to_thread(self._runtime.run, run_input)
+            if should_generate_title:
+                await asyncio.to_thread(
+                    self._generate_and_persist_session_title,
+                    session.session_id,
+                    request.message,
+                    run_output.answer,
+                )
 
         chat_response = self._to_chat_response(run_output)
         _logger.info(
@@ -105,10 +120,22 @@ class ChatService:
         async def _run_with_lock() -> AgentRunOutput:
             try:
                 async with lock:
-                    return await asyncio.wait_for(
+                    should_generate_title = await asyncio.to_thread(
+                        self._should_generate_session_title,
+                        session_id,
+                    )
+                    run_output = await asyncio.wait_for(
                         self._runtime.run_stream(run_input, channel),
                         timeout=self._stream_run_timeout_seconds,
                     )
+                    if should_generate_title:
+                        await asyncio.to_thread(
+                            self._generate_and_persist_session_title,
+                            session_id,
+                            request.message,
+                            run_output.answer,
+                        )
+                    return run_output
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(
                     f"chat_stream run timed out after {self._stream_run_timeout_seconds:.1f}s"
@@ -380,6 +407,34 @@ class ChatService:
             parsed_token_estimate=item.parsed_token_estimate,
             parsed_at=item.parsed_at,
         )
+
+    def _should_generate_session_title(self, session_id: str) -> bool:
+        meta = self._session_repository.get_session(session_id)
+        if meta is None:
+            return False
+        if meta.title not in DEFAULT_SESSION_TITLES:
+            return False
+        messages = self._session_repository.list_session_messages(session_id)
+        assistant_count = sum(1 for item in messages if str(item.get("role", "")) == "assistant")
+        return assistant_count == 0
+
+    def _generate_and_persist_session_title(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_answer: str,
+    ) -> None:
+        if not str(assistant_answer).strip():
+            return
+        latest = self._session_repository.get_session(session_id)
+        if latest is None or latest.title not in DEFAULT_SESSION_TITLES:
+            return
+        title = self._session_title_service.generate_title(
+            user_message=user_message,
+            assistant_answer=assistant_answer,
+        )
+        self._session_repository.update_session_title(session_id, title)
+        _logger.info("首轮对话标题生成完成: session_id=%s title=%s", session_id, title)
 
 
 def _sanitize_filename(raw: str) -> str:
