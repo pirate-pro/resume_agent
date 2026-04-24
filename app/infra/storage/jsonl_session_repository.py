@@ -89,6 +89,52 @@ class JsonlSessionRepository:
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
             raise StorageError(f"Failed to read session metadata for '{session_id}': {exc}") from exc
 
+    def list_sessions(self) -> list[SessionMeta]:
+        """List all sessions sorted by updated_at descending."""
+        sessions: list[SessionMeta] = []
+        if not self._sessions_dir.exists():
+            return sessions
+        for entry in sorted(self._sessions_dir.iterdir(), key=lambda p: p.name, reverse=True):
+            if not entry.is_dir():
+                continue
+            meta = self.get_session(entry.name)
+            if meta is not None:
+                sessions.append(meta)
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return sessions
+
+    def list_session_messages(self, session_id: str) -> list[dict[str, Any]]:
+        """Reconstruct chat messages from session events."""
+        session_id = self._validate_session_id(session_id)
+        events_path = self._session_dir(session_id) / "events.jsonl"
+        if not events_path.exists():
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        messages: list[dict[str, Any]] = []
+        try:
+            with events_path.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    stripped = raw_line.strip()
+                    if not stripped:
+                        continue
+                    event: dict[str, Any] = json.loads(stripped)
+                    etype = event.get("type", "")
+                    payload = event.get("payload", {})
+                    if etype == "user_message":
+                        messages.append({
+                            "role": "user",
+                            "content": payload.get("content", ""),
+                            "created_at": event.get("created_at"),
+                        })
+                    elif etype == "assistant_message":
+                        messages.append({
+                            "role": "assistant",
+                            "content": payload.get("content", ""),
+                            "created_at": event.get("created_at"),
+                        })
+        except (json.JSONDecodeError, OSError) as exc:
+            raise StorageError(f"Failed to read events for '{session_id}': {exc}") from exc
+        return messages
+
     def delete_session(self, session_id: str) -> None:
         session_id = self._validate_session_id(session_id)
         session_dir = self._session_dir(session_id)

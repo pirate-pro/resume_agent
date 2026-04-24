@@ -30,6 +30,8 @@ from app.schemas.chat import (
     SessionDeleteResponse,
     SessionFileView,
     SessionFilesResponse,
+    SessionListItem,
+    SessionMessage,
 )
 from app.services.chat_service import ChatService
 
@@ -37,6 +39,48 @@ __all__ = ["router"]
 
 router = APIRouter(prefix="/api", tags=["chat"])
 _logger = logging.getLogger(__name__)
+
+
+@router.get("/sessions", response_model=list[SessionListItem])
+async def list_sessions(
+    service: ChatService = Depends(get_chat_service),
+) -> list[SessionListItem]:
+    _logger.info("查询会话列表")
+    try:
+        sessions = service.list_sessions()
+        return [
+            SessionListItem(
+                session_id=s.session_id,
+                title=s.title,
+                created_at=s.created_at,
+                updated_at=s.updated_at,
+            )
+            for s in sessions
+        ]
+    except AppError as exc:
+        _logger.exception("查询会话列表失败: %s", exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[SessionMessage])
+async def get_session_messages(
+    session_id: str,
+    service: ChatService = Depends(get_chat_service),
+) -> list[SessionMessage]:
+    _logger.info("查询会话消息: session_id=%s", session_id)
+    try:
+        messages = service.list_session_messages(session_id)
+        return [
+            SessionMessage(
+                role=m["role"],
+                content=m["content"],
+                created_at=m.get("created_at"),
+            )
+            for m in messages
+        ]
+    except AppError as exc:
+        _logger.exception("查询会话消息失败: session_id=%s error=%s", session_id, exc)
+        raise _map_app_error(exc) from exc
 
 
 @router.post("/chat", response_model=ChatResponse)

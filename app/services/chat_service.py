@@ -165,6 +165,14 @@ class ChatService:
             await channel.close()
             yield {"event": "error", "data": {"detail": str(exc)}}
 
+    def list_sessions(self) -> list[SessionMeta]:
+        return self._session_repository.list_sessions()
+
+    def list_session_messages(self, session_id: str) -> list[dict[str, object]]:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValidationError("session_id must be a non-empty string.")
+        return self._session_repository.list_session_messages(session_id.strip())
+
     def list_session_events(self, session_id: str) -> list[EventRecord]:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValidationError("session_id must be a non-empty string.")
