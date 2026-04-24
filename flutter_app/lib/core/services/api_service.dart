@@ -33,7 +33,9 @@ class ApiService {
       "max_tool_rounds": maxToolRounds,
       "active_file_ids": activeFileIds ?? [],
     };
-    if (sessionId != null && sessionId.isNotEmpty) body["session_id"] = sessionId;
+    if (sessionId != null && sessionId.isNotEmpty) {
+      body["session_id"] = sessionId;
+    }
 
     final resp = await http.post(
       _uri(AppConfig.chatEndpoint),
@@ -117,7 +119,8 @@ class ApiService {
 
   Future<bool> checkHealth() async {
     try {
-      final resp = await http.get(_uri("/health")).timeout(const Duration(seconds: 3));
+      final resp =
+          await http.get(_uri("/health")).timeout(const Duration(seconds: 3));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body);
         return data["status"] == "ok";
@@ -133,11 +136,19 @@ class ApiService {
   Future<List<MemoryView>> listMemories({String? q, int limit = 20}) async {
     final params = <String, String>{"limit": limit.toString()};
     if (q != null && q.isNotEmpty) params["q"] = q;
-    final uri = _uri(AppConfig.memoriesEndpoint).replace(queryParameters: params);
+    final uri =
+        _uri(AppConfig.memoriesEndpoint).replace(queryParameters: params);
     final resp = await http.get(uri);
     if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
     final list = jsonDecode(resp.body) as List;
     return list.map((e) => MemoryView.fromJson(e)).toList();
+  }
+
+  Future<List<SkillOption>> listSkills() async {
+    final resp = await http.get(_uri("/api/skills"));
+    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
+    final list = jsonDecode(resp.body) as List;
+    return list.map((e) => SkillOption.fromJson(e)).toList();
   }
 
   // ── Session Files ─────────────────────────────────────────────────────
@@ -195,22 +206,27 @@ class ApiService {
     final resp = await http.get(_uri("/api/sessions"));
     if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
     final list = jsonDecode(resp.body) as List;
-    return list.map((e) => SessionMeta(
-      id: e["session_id"] ?? "",
-      title: e["title"] ?? "",
-      createdAt: DateTime.tryParse(e["created_at"] ?? "") ?? DateTime.now(),
-      messageCount: 0,
-    )).toList();
+    return list
+        .map((e) => SessionMeta(
+              id: e["session_id"] ?? "",
+              title: e["title"] ?? "",
+              createdAt:
+                  DateTime.tryParse(e["created_at"] ?? "") ?? DateTime.now(),
+              messageCount: 0,
+            ))
+        .toList();
   }
 
   Future<List<ChatMessage>> listSessionMessages(String sessionId) async {
     final resp = await http.get(_uri("/api/sessions/$sessionId/messages"));
     if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
     final list = jsonDecode(resp.body) as List;
-    return list.map((e) => ChatMessage(
-      role: e["role"] ?? "assistant",
-      content: e["content"] ?? "",
-    )).toList();
+    return list
+        .map((e) => ChatMessage(
+              role: e["role"] ?? "assistant",
+              content: e["content"] ?? "",
+            ))
+        .toList();
   }
 
   Future<void> deleteSession(String sessionId) async {

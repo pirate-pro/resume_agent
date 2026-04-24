@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../constants/app_config.dart';
 import '../models/api_models.dart';
 import '../services/api_service.dart';
 
@@ -23,10 +24,15 @@ class ChatProvider extends ChangeNotifier {
   final List<ChatMessage> _messages = [];
   bool _isStreaming = false;
   bool _isUploadingFile = false;
+  bool _isLoadingSkills = false;
   String _streamBuffer = "";
   String? _error;
+  String? _skillsError;
   final List<SessionMeta> _sessions = [];
   List<String> _activeFileIds = [];
+  List<SkillOption> _availableSkills = [];
+  List<String> _selectedSkillNames = [];
+  int _maxToolRounds = AppConfig.maxToolRounds;
   bool _serverReachable = false;
 
   // Debug / side panel data
@@ -40,10 +46,15 @@ class ChatProvider extends ChangeNotifier {
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   bool get isStreaming => _isStreaming;
   bool get isUploadingFile => _isUploadingFile;
+  bool get isLoadingSkills => _isLoadingSkills;
   String get streamBuffer => _streamBuffer;
   String? get error => _error;
+  String? get skillsError => _skillsError;
   List<SessionMeta> get sessions => List.unmodifiable(_sessions);
   List<String> get activeFileIds => List.unmodifiable(_activeFileIds);
+  List<SkillOption> get availableSkills => List.unmodifiable(_availableSkills);
+  List<String> get selectedSkillNames => List.unmodifiable(_selectedSkillNames);
+  int get maxToolRounds => _maxToolRounds;
   bool get serverReachable => _serverReachable;
   bool get hasActiveSession => _sessionId != null;
   List<ToolCallView> get lastToolCalls => List.unmodifiable(_lastToolCalls);
@@ -58,6 +69,7 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _init() async {
     await _loadSessions();
     _checkHealth();
+    unawaited(refreshSkills());
     // Also try loading sessions from the backend
     try {
       final remoteSessions = await _api.listSessions();
@@ -194,6 +206,60 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshSkills() async {
+    if (_isLoadingSkills) return;
+    _isLoadingSkills = true;
+    _skillsError = null;
+    notifyListeners();
+    try {
+      final skills = await _api.listSkills();
+      skills.sort((a, b) => a.name.compareTo(b.name));
+      _availableSkills = skills;
+    } on ApiException catch (e) {
+      _skillsError = e.message;
+    } catch (e) {
+      _skillsError = e.toString();
+    } finally {
+      _isLoadingSkills = false;
+      notifyListeners();
+    }
+  }
+
+  void toggleSkill(String skillName) {
+    final normalized = skillName.trim();
+    if (normalized.isEmpty) return;
+    final current = List<String>.from(_selectedSkillNames);
+    if (current.contains(normalized)) {
+      current.remove(normalized);
+    } else {
+      current.add(normalized);
+      current.sort();
+    }
+    _selectedSkillNames = current;
+    notifyListeners();
+  }
+
+  void clearSkill(String skillName) {
+    final normalized = skillName.trim();
+    if (normalized.isEmpty) return;
+    _selectedSkillNames =
+        _selectedSkillNames.where((item) => item != normalized).toList();
+    notifyListeners();
+  }
+
+  void setMaxToolRounds(int value) {
+    final clamped = value.clamp(0, 10);
+    if (_maxToolRounds == clamped) return;
+    _maxToolRounds = clamped;
+    notifyListeners();
+  }
+
+  void resetRuntimeOptions() {
+    _selectedSkillNames = [];
+    _maxToolRounds = AppConfig.maxToolRounds;
+    notifyListeners();
+  }
+
   Future<void> switchSession(String sessionId) async {
     _sessionId = sessionId;
     _messages.clear();
@@ -248,6 +314,8 @@ class ChatProvider extends ChangeNotifier {
         await for (final event in _api.chatStream(
           message: content.trim(),
           sessionId: _sessionId,
+          skillNames: _selectedSkillNames,
+          maxToolRounds: _maxToolRounds,
           activeFileIds: _activeFileIds.isEmpty ? null : _activeFileIds,
         )) {
           gotEvents = true;
@@ -264,6 +332,8 @@ class ChatProvider extends ChangeNotifier {
         final resp = await _api.chat(
           message: content.trim(),
           sessionId: _sessionId,
+          skillNames: _selectedSkillNames,
+          maxToolRounds: _maxToolRounds,
           activeFileIds: _activeFileIds.isEmpty ? null : _activeFileIds,
         );
         doneResponse = resp;
@@ -287,8 +357,8 @@ class ChatProvider extends ChangeNotifier {
 
       // Register session in local list
       if (_sessionId != null) {
-        final lastUserMsg =
-            _messages.lastWhere((m) => m.isUser, orElse: () => ChatMessage(role: "user", content: ""));
+        final lastUserMsg = _messages.lastWhere((m) => m.isUser,
+            orElse: () => ChatMessage(role: "user", content: ""));
         _registerSession(_sessionId!, lastUserMsg.content);
       }
 
@@ -340,7 +410,8 @@ class ChatProvider extends ChangeNotifier {
           eventVersion: 0,
           type: data["type"] ?? "",
           payload: Map<String, dynamic>.from(data["payload"] ?? {}),
-          createdAt: DateTime.tryParse(data["created_at"] ?? "") ?? DateTime.now(),
+          createdAt:
+              DateTime.tryParse(data["created_at"] ?? "") ?? DateTime.now(),
         );
         _streamEvents.add(eventRecord);
         if (_streamEvents.length > 200) {
@@ -397,8 +468,8 @@ class ChatProvider extends ChangeNotifier {
       current.remove(fileId);
     }
     try {
-      final resp =
-          await _api.setActiveFiles(sessionId: _sessionId!, fileIds: current.toList());
+      final resp = await _api.setActiveFiles(
+          sessionId: _sessionId!, fileIds: current.toList());
       _sessionFiles = resp.files;
       _activeFileIds = resp.activeFileIds;
     } catch (_) {}

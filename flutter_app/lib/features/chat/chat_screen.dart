@@ -57,7 +57,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: const BoxDecoration(
             color: AppTheme.surface,
-            border: Border(bottom: BorderSide(color: AppTheme.border, width: 0.5)),
+            border:
+                Border(bottom: BorderSide(color: AppTheme.border, width: 0.5)),
           ),
           child: Row(
             children: [
@@ -89,13 +90,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         InputBar(
           enabled: !provider.isStreaming,
           isUploading: provider.isUploadingFile,
+          isLoadingSkills: provider.isLoadingSkills,
           sessionFiles: provider.sessionFiles,
           activeFileIds: provider.activeFileIds,
+          availableSkills: provider.availableSkills,
+          selectedSkillNames: provider.selectedSkillNames,
+          maxToolRounds: provider.maxToolRounds,
+          skillsError: provider.skillsError,
           onSend: (text) => provider.sendMessage(text),
           onUpload: ({required filename, required bytes}) =>
               provider.uploadSessionFile(filename: filename, bytes: bytes),
           onToggleFileActive: (file, active) =>
               provider.toggleFileActive(file.fileId, active),
+          onRefreshSkills: provider.refreshSkills,
+          onToggleSkill: provider.toggleSkill,
+          onMaxToolRoundsChanged: provider.setMaxToolRounds,
+          onResetRuntimeOptions: provider.resetRuntimeOptions,
         ),
       ],
     );
@@ -122,8 +132,7 @@ class _HealthBadge extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(Icons.circle,
-              size: 7,
-              color: reachable ? AppTheme.accent : AppTheme.danger),
+              size: 7, color: reachable ? AppTheme.accent : AppTheme.danger),
           const SizedBox(width: 6),
           Text(reachable ? "在线" : "离线",
               style: AppTheme.ts(
@@ -181,8 +190,8 @@ class _WelcomeScreen extends ConsumerWidget {
                     letterSpacing: -0.5)),
             const SizedBox(height: 8),
             Text("智能对话 · 工具调用 · 记忆系统",
-                style: AppTheme.ts(
-                    fontSize: 14, color: AppTheme.textSecondary)),
+                style:
+                    AppTheme.ts(fontSize: 14, color: AppTheme.textSecondary)),
             const SizedBox(height: 40),
             Wrap(
               spacing: 10,
@@ -237,8 +246,8 @@ class _QuickPrompt extends StatelessWidget {
               Icon(icon, size: 16, color: AppTheme.accent),
               const SizedBox(width: 8),
               Text(text,
-                  style: AppTheme.ts(
-                      fontSize: 13, color: AppTheme.textSecondary)),
+                  style:
+                      AppTheme.ts(fontSize: 13, color: AppTheme.textSecondary)),
             ],
           ),
         ),
@@ -296,7 +305,8 @@ class _MessageListState extends State<_MessageList> {
 
   @override
   Widget build(BuildContext context) {
-    final extraItems = (widget.isStreaming ? 1 : 0) + (widget.error != null ? 1 : 0);
+    final extraItems =
+        (widget.isStreaming ? 1 : 0) + (widget.error != null ? 1 : 0);
     final itemCount = widget.messages.length + extraItems;
 
     return ListView.builder(
@@ -341,7 +351,9 @@ class _MessageListState extends State<_MessageList> {
           break;
         case "assistant_thinking":
           final content = (e.payload["content"] ?? "").toString();
-          final short = content.length > 120 ? "${content.substring(0, 120)}..." : content;
+          final short = content.length > 120
+              ? "${content.substring(0, 120)}..."
+              : content;
           lines.add("[$time] 模型思考: $short");
           break;
         case "tool_call":
