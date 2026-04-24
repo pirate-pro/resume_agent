@@ -39,11 +39,23 @@ class EventChannel:
 
     async def listen(self) -> AsyncIterator[dict[str, Any]]:
         while True:
-            item = await self._queue.get()
-            if item is _CLOSE_SENTINEL:
+            item = await self.receive()
+            if item is None:
                 break
-            if isinstance(item, dict):
-                yield item
+            yield item
+
+    async def receive(self, timeout_seconds: float | None = None) -> dict[str, Any] | None:
+        if timeout_seconds is None:
+            item = await self._queue.get()
+        else:
+            if timeout_seconds <= 0:
+                raise ValueError("timeout_seconds must be positive when provided.")
+            item = await asyncio.wait_for(self._queue.get(), timeout=timeout_seconds)
+        if item is _CLOSE_SENTINEL:
+            return None
+        if isinstance(item, dict):
+            return item
+        return None
 
 
 def serialize_event_record(event: EventRecord) -> dict[str, Any]:

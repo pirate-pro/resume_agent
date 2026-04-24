@@ -44,6 +44,14 @@ class Settings(BaseSettings):
         default=60.0,
         validation_alias=AliasChoices("LLM_TIMEOUT_SECONDS", "VL_MODEL_TIMEOUT_SECONDS"),
     )
+    chat_stream_heartbeat_interval_seconds: float = Field(
+        default=15.0,
+        validation_alias=AliasChoices("CHAT_STREAM_HEARTBEAT_INTERVAL_SECONDS"),
+    )
+    chat_stream_run_timeout_seconds: float = Field(
+        default=300.0,
+        validation_alias=AliasChoices("CHAT_STREAM_RUN_TIMEOUT_SECONDS"),
+    )
 
     @field_validator("app_name", "llm_base_url", "llm_api_key", "llm_model")
     @classmethod
@@ -78,6 +86,20 @@ class Settings(BaseSettings):
     def _validate_timeout(cls, value: float) -> float:
         if value <= 0:
             raise ValidationError("LLM timeout must be positive.")
+        return value
+
+    @field_validator("chat_stream_heartbeat_interval_seconds")
+    @classmethod
+    def _validate_chat_stream_heartbeat_interval(cls, value: float) -> float:
+        if value <= 0:
+            raise ValidationError("CHAT_STREAM_HEARTBEAT_INTERVAL_SECONDS must be positive.")
+        return value
+
+    @field_validator("chat_stream_run_timeout_seconds")
+    @classmethod
+    def _validate_chat_stream_run_timeout(cls, value: float) -> float:
+        if value <= 0:
+            raise ValidationError("CHAT_STREAM_RUN_TIMEOUT_SECONDS must be positive.")
         return value
 
     @classmethod

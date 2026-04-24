@@ -46,6 +46,8 @@ class ChatService:
         memory_manager: MemoryManager,
         capability_registry: AgentCapabilityRegistry,
         session_lock_manager: SessionLockManager,
+        stream_heartbeat_interval_seconds: float = 15.0,
+        stream_run_timeout_seconds: float = 300.0,
     ) -> None:
         self._runtime = runtime
         self._session_manager = session_manager
@@ -53,6 +55,12 @@ class ChatService:
         self._memory_manager = memory_manager
         self._capability_registry = capability_registry
         self._session_lock_manager = session_lock_manager
+        if stream_heartbeat_interval_seconds <= 0:
+            raise ValidationError("stream_heartbeat_interval_seconds must be positive.")
+        if stream_run_timeout_seconds <= 0:
+            raise ValidationError("stream_run_timeout_seconds must be positive.")
+        self._stream_heartbeat_interval_seconds = stream_heartbeat_interval_seconds
+        self._stream_run_timeout_seconds = stream_run_timeout_seconds
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         if not isinstance(request, ChatRequest):
@@ -97,7 +105,14 @@ class ChatService:
         async def _run_with_lock() -> AgentRunOutput:
             try:
                 async with lock:
-                    return await self._runtime.run_stream(run_input, channel)
+                    return await asyncio.wait_for(
+                        self._runtime.run_stream(run_input, channel),
+                        timeout=self._stream_run_timeout_seconds,
+                    )
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"chat_stream run timed out after {self._stream_run_timeout_seconds:.1f}s"
+                ) from exc
             finally:
                 await channel.close()
 
@@ -105,8 +120,31 @@ class ChatService:
         yield {"event": "session", "data": {"session_id": session_id}}
 
         try:
-            async for item in channel.listen():
+            while True:
+                try:
+                    item = await channel.receive(timeout_seconds=self._stream_heartbeat_interval_seconds)
+                except asyncio.TimeoutError:
+                    # 长时间无事件时推送心跳，避免前端误判为断流。
+                    yield {
+                        "event": "heartbeat",
+                        "data": {
+                            "session_id": session_id,
+                            "idle_seconds": self._stream_heartbeat_interval_seconds,
+                            "created_at": _utc_now().astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                        },
+                    }
+                    if run_task.done():
+                        _logger.warning(
+                            "run_task 已完成但 channel 未收到关闭信号，强制结束监听: session_id=%s",
+                            session_id,
+                        )
+                        break
+                    continue
+
+                if item is None:
+                    break
                 yield item
+
             run_output = await run_task
             chat_response = self._to_chat_response(run_output)
             yield {"event": "done", "data": chat_response.model_dump(mode="json")}

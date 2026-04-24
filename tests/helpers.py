@@ -107,7 +107,13 @@ class SequenceModelClient:
 
 
 
-def build_chat_service(data_dir: Path, model_client: ChatModelClient) -> tuple[ChatService, MemoryManager]:
+def build_chat_service(
+    data_dir: Path,
+    model_client: ChatModelClient,
+    *,
+    stream_heartbeat_interval_seconds: float = 15.0,
+    stream_run_timeout_seconds: float = 300.0,
+) -> tuple[ChatService, MemoryManager]:
     session_repository = JsonlSessionRepository(data_dir=data_dir)
     memory_store = JsonlFileMemoryStore(root_dir=data_dir / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
@@ -148,5 +154,7 @@ def build_chat_service(data_dir: Path, model_client: ChatModelClient) -> tuple[C
         memory_manager=memory_manager,
         capability_registry=capability_registry,
         session_lock_manager=SessionLockManager(),
+        stream_heartbeat_interval_seconds=stream_heartbeat_interval_seconds,
+        stream_run_timeout_seconds=stream_run_timeout_seconds,
     )
     return service, memory_manager

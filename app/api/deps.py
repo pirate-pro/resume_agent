@@ -160,6 +160,7 @@ def get_lock_manager() -> SessionLockManager:
 
 @lru_cache(maxsize=1)
 def get_chat_service() -> ChatService:
+    settings = get_settings()
     return ChatService(
         runtime=get_agent_runtime(),
         session_manager=get_session_manager(),
@@ -167,4 +168,6 @@ def get_chat_service() -> ChatService:
         memory_manager=get_memory_manager(),
         capability_registry=get_agent_capability_registry(),
         session_lock_manager=get_lock_manager(),
+        stream_heartbeat_interval_seconds=settings.chat_stream_heartbeat_interval_seconds,
+        stream_run_timeout_seconds=settings.chat_stream_run_timeout_seconds,
     )
