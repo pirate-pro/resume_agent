@@ -46,6 +46,8 @@ class JsonlSessionRepository:
             title="New Session",
             created_at=now,
             updated_at=now,
+            is_pinned=False,
+            pinned_at=None,
             participants=[],
             entry_agent_id=None,
         )
@@ -59,6 +61,8 @@ class JsonlSessionRepository:
                 "title": meta.title,
                 "created_at": _to_iso(meta.created_at),
                 "updated_at": _to_iso(meta.updated_at),
+                "is_pinned": meta.is_pinned,
+                "pinned_at": _to_iso(meta.pinned_at) if meta.pinned_at is not None else None,
                 "participants": meta.participants,
                 "entry_agent_id": meta.entry_agent_id,
             }
@@ -83,6 +87,8 @@ class JsonlSessionRepository:
                 title=str(data["title"]),
                 created_at=_from_iso(str(data["created_at"])),
                 updated_at=_from_iso(str(data["updated_at"])),
+                is_pinned=_read_bool_payload(data.get("is_pinned")),
+                pinned_at=_read_optional_datetime(data.get("pinned_at")),
                 participants=_read_participants_payload(data.get("participants")),
                 entry_agent_id=_read_optional_text(data.get("entry_agent_id")),
             )
@@ -94,19 +100,48 @@ class JsonlSessionRepository:
         normalized_title = str(title).strip()
         if not normalized_title:
             raise ValidationError("title must be a non-empty string.")
+        return self._update_session_metadata(session_id, title=normalized_title)
+
+    def update_session_pin(self, session_id: str, is_pinned: bool) -> SessionMeta:
+        if not isinstance(is_pinned, bool):
+            raise ValidationError("is_pinned must be bool.")
+        session_id = self._validate_session_id(session_id)
+        return self._update_session_metadata(session_id, is_pinned=is_pinned)
+
+    def _update_session_metadata(
+        self,
+        session_id: str,
+        *,
+        title: str | None = None,
+        is_pinned: bool | None = None,
+    ) -> SessionMeta:
         meta = self.get_session(session_id)
         if meta is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
+        normalized_title = meta.title if title is None else str(title).strip()
+        if not normalized_title:
+            raise ValidationError("title must be a non-empty string.")
+        resolved_is_pinned = meta.is_pinned if is_pinned is None else is_pinned
+        resolved_pinned_at = meta.pinned_at
+        if is_pinned is not None:
+            resolved_pinned_at = _utc_now() if is_pinned else None
         updated = SessionMeta(
             session_id=meta.session_id,
             title=normalized_title,
             created_at=meta.created_at,
             updated_at=_utc_now(),
+            is_pinned=resolved_is_pinned,
+            pinned_at=resolved_pinned_at,
             participants=meta.participants,
             entry_agent_id=meta.entry_agent_id,
         )
         self._write_session_metadata(session_id, updated)
-        _logger.info("会话标题更新完成: session_id=%s title=%s", session_id, normalized_title)
+        _logger.info(
+            "会话元数据更新完成: session_id=%s title=%s is_pinned=%s",
+            session_id,
+            normalized_title,
+            resolved_is_pinned,
+        )
         return updated
 
     def list_sessions(self) -> list[SessionMeta]:
@@ -120,7 +155,14 @@ class JsonlSessionRepository:
             meta = self.get_session(entry.name)
             if meta is not None:
                 sessions.append(meta)
-        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        sessions.sort(
+            key=lambda s: (
+                1 if s.is_pinned else 0,
+                s.pinned_at or s.updated_at,
+                s.updated_at,
+            ),
+            reverse=True,
+        )
         return sessions
 
     def list_session_messages(self, session_id: str) -> list[dict[str, Any]]:
@@ -415,6 +457,8 @@ class JsonlSessionRepository:
             title=meta.title,
             created_at=meta.created_at,
             updated_at=_utc_now(),
+            is_pinned=meta.is_pinned,
+            pinned_at=meta.pinned_at,
             participants=participants,
             entry_agent_id=resolved_entry_agent_id,
         )
@@ -432,6 +476,8 @@ class JsonlSessionRepository:
             "title": meta.title,
             "created_at": _to_iso(meta.created_at),
             "updated_at": _to_iso(meta.updated_at),
+            "is_pinned": meta.is_pinned,
+            "pinned_at": _to_iso(meta.pinned_at) if meta.pinned_at is not None else None,
             "participants": meta.participants,
             "entry_agent_id": meta.entry_agent_id,
         }
@@ -456,6 +502,21 @@ def _from_iso(value: str) -> datetime:
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     return datetime.fromisoformat(value).astimezone(UTC)
+
+
+def _read_optional_datetime(value: Any) -> datetime | None:
+    text = _read_optional_text(value)
+    if text is None:
+        return None
+    return _from_iso(text)
+
+
+def _read_bool_payload(value: Any) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise StorageError("Invalid session metadata: is_pinned must be bool.")
+    return value
 
 
 def _read_optional_text(value: Any) -> str | None:

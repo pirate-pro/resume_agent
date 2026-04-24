@@ -148,6 +148,41 @@ def test_delete_session_endpoint(tmp_path: Path) -> None:
         app.dependency_overrides.clear()
 
 
+def test_update_session_endpoint(tmp_path: Path) -> None:
+    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="rename-ok"))
+    app.dependency_overrides[get_chat_service] = lambda: service
+
+    try:
+        with TestClient(app) as client:
+            chat_resp = client.post(
+                "/api/chat",
+                json={
+                    "session_id": None,
+                    "message": "create for rename",
+                    "skill_names": ["base"],
+                    "max_tool_rounds": 1,
+                },
+            )
+            assert chat_resp.status_code == 200
+            session_id = chat_resp.json()["session_id"]
+
+            patch_resp = client.patch(
+                f"/api/sessions/{session_id}",
+                json={"title": "项目周报", "is_pinned": True},
+            )
+            assert patch_resp.status_code == 200
+            assert patch_resp.json()["title"] == "项目周报"
+            assert patch_resp.json()["is_pinned"] is True
+
+            sessions_resp = client.get("/api/sessions")
+            assert sessions_resp.status_code == 200
+            target = next(item for item in sessions_resp.json() if item["session_id"] == session_id)
+            assert target["title"] == "项目周报"
+            assert target["is_pinned"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
 def _parse_sse_events(raw: str) -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
     for block in raw.split("\n\n"):

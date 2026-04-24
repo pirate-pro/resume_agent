@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.core.errors import ValidationError
+from app.core.errors import SessionNotFoundError, ValidationError
 from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, RunContext, SessionFile, SessionMeta
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
@@ -28,6 +28,7 @@ from app.schemas.chat import (
     SessionFileView,
     SessionFilesResponse,
     ToolCallView,
+    SessionUpdateRequest,
 )
 
 __all__ = ["ChatService"]
@@ -194,6 +195,33 @@ class ChatService:
 
     def list_sessions(self) -> list[SessionMeta]:
         return self._session_repository.list_sessions()
+
+    async def update_session(self, session_id: str, request: SessionUpdateRequest) -> SessionMeta:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValidationError("session_id must be a non-empty string.")
+        if not isinstance(request, SessionUpdateRequest):
+            raise ValidationError("request must be SessionUpdateRequest.")
+        if request.title is None and request.is_pinned is None:
+            raise ValidationError("At least one of title/is_pinned must be provided.")
+
+        normalized = session_id.strip()
+        lock = self._session_lock_manager.get_lock(normalized)
+        async with lock:
+            current = self._session_repository.get_session(normalized)
+            if current is None:
+                raise SessionNotFoundError(f"Session not found: {normalized}")
+            updated = current
+            if request.title is not None and request.title != updated.title:
+                updated = self._session_repository.update_session_title(normalized, request.title)
+            if request.is_pinned is not None and request.is_pinned != updated.is_pinned:
+                updated = self._session_repository.update_session_pin(normalized, request.is_pinned)
+        _logger.info(
+            "会话元数据更新完成: session_id=%s title=%s is_pinned=%s",
+            updated.session_id,
+            updated.title,
+            updated.is_pinned,
+        )
+        return updated
 
     def list_session_messages(self, session_id: str) -> list[dict[str, object]]:
         if not isinstance(session_id, str) or not session_id.strip():

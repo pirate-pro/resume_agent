@@ -183,3 +183,17 @@ def test_session_title_can_be_updated(tmp_path: Path) -> None:
     reloaded = repository.get_session("sess_title")
     assert reloaded is not None
     assert reloaded.title == "年度总结润色"
+
+
+def test_session_pin_can_be_updated_and_sorted_first(tmp_path: Path) -> None:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session("sess_old")
+    repository.create_session("sess_new")
+
+    pinned = repository.update_session_pin("sess_old", True)
+    sessions = repository.list_sessions()
+
+    assert pinned.is_pinned is True
+    assert pinned.pinned_at is not None
+    assert sessions[0].session_id == "sess_old"
+    assert sessions[0].is_pinned is True

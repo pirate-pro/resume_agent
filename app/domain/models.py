@@ -65,6 +65,8 @@ class SessionMeta:
     title: str
     created_at: datetime
     updated_at: datetime
+    is_pinned: bool = False
+    pinned_at: datetime | None = None
     participants: list[str] = field(default_factory=list)
     entry_agent_id: str | None = None
 
@@ -73,6 +75,10 @@ class SessionMeta:
         self.title = _require_non_empty("title", self.title)
         if self.updated_at < self.created_at:
             raise ValidationError("updated_at cannot be earlier than created_at.")
+        if not isinstance(self.is_pinned, bool):
+            raise ValidationError("is_pinned must be bool.")
+        if self.pinned_at is not None and self.pinned_at < self.created_at:
+            raise ValidationError("pinned_at cannot be earlier than created_at.")
         if self.entry_agent_id is not None:
             self.entry_agent_id = _require_non_empty("entry_agent_id", self.entry_agent_id)
         if not isinstance(self.participants, list):

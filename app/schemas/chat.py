@@ -19,6 +19,7 @@ __all__ = [
     "SkillSummaryView",
     "SessionDeleteResponse",
     "SessionListItem",
+    "SessionUpdateRequest",
     "SessionMessage",
     "ToolCallView",
 ]
@@ -152,6 +153,23 @@ class SessionListItem(BaseModel):
     title: str
     created_at: datetime
     updated_at: datetime
+    is_pinned: bool = False
+    pinned_at: datetime | None = None
+
+
+class SessionUpdateRequest(BaseModel):
+    title: str | None = None
+    is_pinned: bool | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _validate_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("title cannot be empty.")
+        return normalized
 
 
 class SessionMessage(BaseModel):

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.domain.models import AgentRunOutput
 from app.domain.protocols import ModelResponse
-from app.schemas.chat import ChatRequest
+from app.schemas.chat import ChatRequest, SessionUpdateRequest
 from tests.helpers import SequenceModelClient, StaticModelClient, build_chat_service
 
 __all__ = []
@@ -125,6 +125,31 @@ def test_chat_service_delete_session(tmp_path: Path) -> None:
     asyncio.run(service.delete_session(created.session_id))
 
     assert service._session_repository.get_session(created.session_id) is None  # noqa: SLF001
+
+
+def test_chat_service_updates_session_title_and_pin(tmp_path: Path) -> None:
+    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    created = asyncio.run(
+        service.chat(
+            ChatRequest(
+                session_id="sess_update_meta",
+                message="create",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        )
+    )
+
+    updated = asyncio.run(
+        service.update_session(
+            created.session_id,
+            request=SessionUpdateRequest(title="手动命名", is_pinned=True),
+        )
+    )
+
+    assert updated.title == "手动命名"
+    assert updated.is_pinned is True
+    assert updated.pinned_at is not None
 
 
 def test_chat_stream_emits_heartbeat_when_idle(tmp_path: Path) -> None:

@@ -33,6 +33,7 @@ from app.schemas.chat import (
     SessionFilesResponse,
     SessionListItem,
     SessionMessage,
+    SessionUpdateRequest,
 )
 from app.services.chat_service import ChatService
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -56,6 +57,8 @@ async def list_sessions(
                 title=s.title,
                 created_at=s.created_at,
                 updated_at=s.updated_at,
+                is_pinned=s.is_pinned,
+                pinned_at=s.pinned_at,
             )
             for s in sessions
         ]
@@ -256,6 +259,34 @@ async def delete_session(
         return SessionDeleteResponse(session_id=normalized, deleted=True)
     except AppError as exc:
         _logger.exception("删除会话失败: session_id=%s error=%s", normalized, exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.patch("/sessions/{session_id}", response_model=SessionListItem)
+async def patch_session(
+    session_id: str,
+    request: SessionUpdateRequest,
+    service: ChatService = Depends(get_chat_service),
+) -> SessionListItem:
+    normalized = session_id.strip()
+    _logger.info(
+        "更新会话元数据请求: session_id=%s has_title=%s has_pin=%s",
+        normalized,
+        request.title is not None,
+        request.is_pinned is not None,
+    )
+    try:
+        updated = await service.update_session(normalized, request)
+        return SessionListItem(
+            session_id=updated.session_id,
+            title=updated.title,
+            created_at=updated.created_at,
+            updated_at=updated.updated_at,
+            is_pinned=updated.is_pinned,
+            pinned_at=updated.pinned_at,
+        )
+    except AppError as exc:
+        _logger.exception("更新会话元数据失败: session_id=%s error=%s", normalized, exc)
         raise _map_app_error(exc) from exc
 
 
