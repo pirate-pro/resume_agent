@@ -16,6 +16,7 @@ __all__ = [
     "SessionFileView",
     "SessionFilesResponse",
     "MemoryView",
+    "SkillSummaryView",
     "SessionDeleteResponse",
     "SessionListItem",
     "SessionMessage",
@@ -96,6 +97,11 @@ class MemoryView(BaseModel):
     memory_id: str
     content: str
     tags: list[str]
+
+
+class SkillSummaryView(BaseModel):
+    name: str
+    description: str
 
 
 class ChatResponse(BaseModel):

@@ -83,6 +83,11 @@ def test_skill_file_read_standard_layout(tmp_path: Path) -> None:
     assert "base" in loaded
     assert "content" in loaded["base"]
 
+    listed = repository.list_skills()
+    assert len(listed) == 1
+    assert listed[0].name == "base"
+    assert listed[0].description == "Base behavior skill"
+
 
 def test_skill_file_read_legacy_layout_is_rejected(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"

@@ -40,6 +40,10 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
     app.dependency_overrides[get_chat_service] = lambda: service
 
     with TestClient(app) as client:
+        skills_resp = client.get("/api/skills")
+        assert skills_resp.status_code == 200
+        assert any(item["name"] == "base" for item in skills_resp.json())
+
         chat_resp = client.post(
             "/api/chat",
             json={

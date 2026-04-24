@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_chat_service
+from app.api.deps import get_chat_service, get_skill_repository
 from app.core.errors import (
     AppError,
     ModelClientError,
@@ -27,6 +27,7 @@ from app.schemas.chat import (
     EventView,
     FileUploadRequest,
     MemoryView,
+    SkillSummaryView,
     SessionDeleteResponse,
     SessionFileView,
     SessionFilesResponse,
@@ -34,6 +35,7 @@ from app.schemas.chat import (
     SessionMessage,
 )
 from app.services.chat_service import ChatService
+from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 
 __all__ = ["router"]
 
@@ -59,6 +61,21 @@ async def list_sessions(
         ]
     except AppError as exc:
         _logger.exception("查询会话列表失败: %s", exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.get("/skills", response_model=list[SkillSummaryView])
+async def list_skills(
+    skill_repository: MarkdownSkillRepository = Depends(get_skill_repository),
+) -> list[SkillSummaryView]:
+    _logger.info("查询技能列表")
+    try:
+        return [
+            SkillSummaryView(name=item.name, description=item.description)
+            for item in skill_repository.list_skills()
+        ]
+    except AppError as exc:
+        _logger.exception("查询技能列表失败: %s", exc)
         raise _map_app_error(exc) from exc
 
 

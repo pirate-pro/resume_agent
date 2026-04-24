@@ -8,8 +8,14 @@ from pathlib import Path
 
 from app.core.errors import StorageError, ValidationError
 
-__all__ = ["MarkdownSkillRepository"]
+__all__ = ["MarkdownSkillRepository", "SkillSummary"]
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+@dataclass(slots=True)
+class SkillSummary:
+    name: str
+    description: str
 
 
 class MarkdownSkillRepository:
@@ -34,6 +40,13 @@ class MarkdownSkillRepository:
                 raise StorageError(f"Skill not found: {normalized}")
             loaded[normalized] = selected.instructions
         return loaded
+
+    def list_skills(self) -> list[SkillSummary]:
+        skill_index = self._build_skill_index()
+        return [
+            SkillSummary(name=entry.name, description=entry.description)
+            for entry in skill_index.values()
+        ]
 
     def _build_skill_index(self) -> dict[str, "_SkillEntry"]:
         if not self._skills_dir.exists():
