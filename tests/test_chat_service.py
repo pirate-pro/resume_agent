@@ -54,6 +54,7 @@ def test_chat_service_returns_runtime_response(tmp_path: Path) -> None:
     assert response.answer == "# 结果\n\n内容"
     assert response.answer_format == "markdown"
     assert response.render_hint == "markdown_document"
+    assert response.layout_hint == "paragraph"
     assert response.source_kind == "direct_answer"
 
 

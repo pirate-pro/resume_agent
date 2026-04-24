@@ -26,6 +26,8 @@ _FINAL_ANSWER_RECOVERY_PROMPT = (
     "如果前文要求生成内容用于展示，就把最终内容直接回复给用户，而不是只写入文件。"
     "如果最终内容应为 Markdown 文档，不要再额外包一层 ```markdown 外层代码块；"
     "只有在用户明确要求查看 Markdown 源码时，才使用 ```markdown 代码块。"
+    "如果只是普通回答，请使用自然段落，不要每句话都单独换行。"
+    "可以克制地使用 **重点词**、*次级术语* 和 `命令或文件名` 做行内强调，但不要整段加粗。"
 )
 
 
@@ -276,7 +278,7 @@ class AgentRuntime:
             resolved_tool_calls: list[ToolCall] = []
             saw_tool_call_delta = False
             emitted_answer_delta = False
-            emitted_answer_meta: tuple[str, str, str, str] | None = None
+            emitted_answer_meta: tuple[str, str, str, str, str] | None = None
 
             async for chunk in self._model_client.generate_stream(
                 system_prompt=context.system_prompt,
@@ -536,7 +538,7 @@ class AgentRuntime:
             },
         ]
         parts: list[str] = []
-        emitted_answer_meta: tuple[str, str, str, str] | None = None
+        emitted_answer_meta: tuple[str, str, str, str, str] | None = None
         async for chunk in self._model_client.generate_stream(
             system_prompt=system_prompt,
             messages=recovery_messages,
@@ -559,8 +561,8 @@ class AgentRuntime:
         channel: EventChannel,
         content: str,
         tool_calls: list[ToolCall],
-        previous_meta: tuple[str, str, str, str] | None,
-    ) -> tuple[str, str, str, str] | None:
+        previous_meta: tuple[str, str, str, str, str] | None,
+    ) -> tuple[str, str, str, str, str] | None:
         normalized = self._answer_normalizer.normalize_assistant_message(
             content,
             tool_calls=tool_calls,
@@ -571,6 +573,7 @@ class AgentRuntime:
         current_meta = (
             normalized.answer_format,
             normalized.render_hint,
+            normalized.layout_hint,
             normalized.source_kind,
             artifact_signature,
         )
@@ -581,6 +584,7 @@ class AgentRuntime:
             {
                 "answer_format": normalized.answer_format,
                 "render_hint": normalized.render_hint,
+                "layout_hint": normalized.layout_hint,
                 "source_kind": normalized.source_kind,
                 "artifacts": [
                     {

@@ -247,6 +247,7 @@ class ChatService:
                         "content": normalized.content,
                         "answer_format": normalized.answer_format,
                         "render_hint": normalized.render_hint,
+                        "layout_hint": normalized.layout_hint,
                         "source_kind": normalized.source_kind,
                         "artifacts": [self._artifact_to_payload(item) for item in normalized.artifacts],
                         "tool_calls": [],
@@ -281,6 +282,7 @@ class ChatService:
                         "content": normalized.content,
                         "answer_format": normalized.answer_format,
                         "render_hint": normalized.render_hint,
+                        "layout_hint": normalized.layout_hint,
                         "source_kind": normalized.source_kind,
                         "artifacts": [self._artifact_to_payload(item) for item in normalized.artifacts],
                         "tool_calls": pending_tool_calls,
@@ -484,6 +486,7 @@ class ChatService:
             truncated=truncated,
             answer_format=normalized.answer_format,
             render_hint=normalized.render_hint,
+            layout_hint=normalized.layout_hint,
         )
 
     async def delete_session(self, session_id: str) -> None:
@@ -530,6 +533,7 @@ class ChatService:
             answer=normalized.content,
             answer_format=normalized.answer_format,
             render_hint=normalized.render_hint,
+            layout_hint=normalized.layout_hint,
             source_kind=normalized.source_kind,
             artifacts=[self._artifact_to_view(item) for item in normalized.artifacts],
             tool_calls=[ToolCallView(name=call.name, arguments=call.arguments) for call in run_output.tool_calls],

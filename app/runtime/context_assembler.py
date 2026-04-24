@@ -18,7 +18,10 @@ _OUTPUT_FORMAT_RULES = """Answer output rules:
 3. For code answers, always use standard fenced code blocks and include language when you know it.
 4. For formulas, use LaTeX: inline $...$ and block $$...$$.
 5. If you created or read a file and the user wants to see the content, include the actual final content in the answer instead of only saying it was saved/read.
-6. If content is too long to fully display, provide a concise summary first and then clearly state the related file path if applicable."""
+6. For ordinary non-Markdown answers, keep natural paragraphs. Do not split every sentence into a separate line.
+7. Use inline emphasis sparingly: **key conclusions or risk words**, *secondary terms*, and `commands/files/variables`.
+8. Never bold an entire paragraph or overuse emphasis in every sentence.
+9. If content is too long to fully display, provide a concise summary first and then clearly state the related file path if applicable."""
 
 
 class ContextAssembler:

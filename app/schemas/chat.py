@@ -118,6 +118,7 @@ class ChatResponse(BaseModel):
     answer: str
     answer_format: Literal["plain_text", "markdown", "code", "markdown_source"] = "plain_text"
     render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
+    layout_hint: Literal["brief", "paragraph", "bullets", "steps"] = "paragraph"
     source_kind: Literal["direct_answer", "generated_document", "file_content", "summary"] = "direct_answer"
     artifacts: list[AnswerArtifactView] = Field(default_factory=list)
     tool_calls: list[ToolCallView]
@@ -189,6 +190,7 @@ class SessionMessage(BaseModel):
     content: str
     answer_format: Literal["plain_text", "markdown", "code", "markdown_source"] = "plain_text"
     render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
+    layout_hint: Literal["brief", "paragraph", "bullets", "steps"] = "paragraph"
     source_kind: Literal["direct_answer", "generated_document", "file_content", "summary"] = "direct_answer"
     artifacts: list[AnswerArtifactView] = Field(default_factory=list)
     tool_calls: list[ToolCallView] = Field(default_factory=list)
@@ -204,6 +206,7 @@ class WorkspaceFilePreviewResponse(BaseModel):
     truncated: bool
     answer_format: Literal["plain_text", "markdown", "code", "markdown_source"] = "plain_text"
     render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
+    layout_hint: Literal["brief", "paragraph", "bullets", "steps"] = "paragraph"
 
 
 class ActiveFilesRequest(BaseModel):

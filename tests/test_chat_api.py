@@ -58,6 +58,7 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
         session_id = chat_resp.json()["session_id"]
         assert chat_resp.json()["answer_format"] == "plain_text"
         assert chat_resp.json()["render_hint"] == "plain"
+        assert chat_resp.json()["layout_hint"] == "brief"
 
         events_resp = client.get(f"/api/sessions/{session_id}/events")
         assert events_resp.status_code == 200
@@ -68,6 +69,7 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
         assistant_message = next(item for item in messages_resp.json() if item["role"] == "assistant")
         assert assistant_message["answer_format"] == "plain_text"
         assert assistant_message["render_hint"] == "plain"
+        assert assistant_message["layout_hint"] == "brief"
 
         memories_resp = client.get("/api/memories", params={"limit": 20})
         assert memories_resp.status_code == 200
@@ -130,11 +132,13 @@ def test_chat_stream_endpoint(tmp_path: Path) -> None:
             answer_meta = next(payload for name, payload in events if name == "answer_meta")
             assert answer_meta["answer_format"] == "markdown"
             assert answer_meta["render_hint"] == "markdown_document"
+            assert answer_meta["layout_hint"] == "paragraph"
 
             done_payload = next(payload for name, payload in events if name == "done")
             assert done_payload["answer"] == "# 流式标题\n\n内容"
             assert done_payload["answer_format"] == "markdown"
             assert done_payload["render_hint"] == "markdown_document"
+            assert done_payload["layout_hint"] == "paragraph"
     finally:
         app.dependency_overrides.clear()
 
@@ -175,6 +179,7 @@ def test_chat_stream_answer_meta_contains_artifacts_after_tool_round(tmp_path: P
             events = _parse_sse_events(response.text)
             answer_meta = next(payload for name, payload in events if name == "answer_meta")
             assert answer_meta["render_hint"] == "markdown_document"
+            assert answer_meta["layout_hint"] == "paragraph"
             assert answer_meta["source_kind"] == "generated_document"
             assert answer_meta["artifacts"] == [
                 {
@@ -219,6 +224,7 @@ def test_workspace_file_preview_endpoint(tmp_path: Path) -> None:
             assert payload["path"] == "draft.md"
             assert payload["answer_format"] == "markdown"
             assert payload["render_hint"] == "markdown_document"
+            assert payload["layout_hint"] == "paragraph"
             assert payload["content"].startswith("# 预览文档")
     finally:
         app.dependency_overrides.clear()
@@ -246,6 +252,7 @@ def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> No
             assert chat_resp.json()["answer"] == "# 标题\n\n正文"
             assert chat_resp.json()["answer_format"] == "markdown"
             assert chat_resp.json()["render_hint"] == "markdown_document"
+            assert chat_resp.json()["layout_hint"] == "paragraph"
 
             messages_resp = client.get("/api/sessions/sess_render_protocol/messages")
             assert messages_resp.status_code == 200
@@ -253,6 +260,7 @@ def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> No
             assert assistant_message["content"] == "# 标题\n\n正文"
             assert assistant_message["answer_format"] == "markdown"
             assert assistant_message["render_hint"] == "markdown_document"
+            assert assistant_message["layout_hint"] == "paragraph"
     finally:
         app.dependency_overrides.clear()
 

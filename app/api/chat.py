@@ -99,6 +99,7 @@ async def get_session_messages(
                 content=m["content"],
                 answer_format=m.get("answer_format", "plain_text"),
                 render_hint=m.get("render_hint", "plain"),
+                layout_hint=m.get("layout_hint", "paragraph"),
                 source_kind=m.get("source_kind", "direct_answer"),
                 artifacts=[
                     AnswerArtifactView(

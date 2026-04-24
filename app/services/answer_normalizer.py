@@ -9,6 +9,7 @@ from app.domain.models import ToolCall
 
 AnswerFormat = Literal["plain_text", "markdown", "code", "markdown_source"]
 RenderHint = Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"]
+LayoutHint = Literal["brief", "paragraph", "bullets", "steps"]
 SourceKind = Literal["direct_answer", "generated_document", "file_content", "summary"]
 ArtifactRole = Literal["generated", "source", "reference"]
 
@@ -17,6 +18,7 @@ __all__ = [
     "AnswerFormat",
     "AnswerNormalizer",
     "ArtifactRole",
+    "LayoutHint",
     "NormalizedAnswer",
     "RenderHint",
     "SourceKind",
@@ -39,6 +41,7 @@ class NormalizedAnswer:
     content: str
     answer_format: AnswerFormat
     render_hint: RenderHint
+    layout_hint: LayoutHint
     source_kind: SourceKind
     artifacts: list[AnswerArtifact]
 
@@ -52,6 +55,7 @@ class AnswerNormalizer:
             content=normalized,
             answer_format="plain_text",
             render_hint="plain",
+            layout_hint=self._infer_layout_hint("plain_text", normalized),
             source_kind="direct_answer",
             artifacts=[],
         )
@@ -73,6 +77,7 @@ class AnswerNormalizer:
                 content="",
                 answer_format="plain_text",
                 render_hint="plain",
+                layout_hint="paragraph",
                 source_kind=self._infer_source_kind(
                     answer_format="plain_text",
                     render_hint="plain",
@@ -105,8 +110,8 @@ class AnswerNormalizer:
                 final_content = effective_content
             else:
                 answer_format = "plain_text"
-                render_hint = "large_document" if self._should_degrade_plain_text(effective_content) else "plain"
-                final_content = effective_content
+                final_content = self._normalize_plain_text_content(effective_content)
+                render_hint = "large_document" if self._should_degrade_plain_text(final_content) else "plain"
 
         source_kind = self._infer_source_kind(
             answer_format=answer_format,
@@ -118,6 +123,7 @@ class AnswerNormalizer:
             content=final_content,
             answer_format=answer_format,
             render_hint=render_hint,
+            layout_hint=self._infer_layout_hint(answer_format, final_content),
             source_kind=source_kind,
             artifacts=artifacts,
         )
@@ -187,15 +193,10 @@ class AnswerNormalizer:
             return True
         patterns = (
             r"^\s{0,3}#{1,6}\s+\S",
-            r"^\s*[-*+]\s+\S",
-            r"^\s*\d+\.\s+\S",
             r"^\s*>\s+\S",
             r"^\s*\|.+\|",
             r"^\s*-\s+\[[ xX]\]\s+",
             r"```",
-            r"`[^`\n]+`",
-            r"\*\*[^*\n]+\*\*",
-            r"(?<!\*)\*[^*\n]+\*(?!\*)",
             r"!\[[^\]]*\]\([^)]+\)",
             r"\[[^\]]+\]\([^)]+\)",
         )
@@ -266,6 +267,67 @@ class AnswerNormalizer:
         language = match.group(1).strip()
         code = match.group(2)
         return language, code
+
+    def _normalize_plain_text_content(self, content: str) -> str:
+        normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            return ""
+        paragraphs: list[str] = []
+        current_lines: list[str] = []
+        for raw_line in normalized.split("\n"):
+            line = raw_line.strip()
+            if not line:
+                if current_lines:
+                    paragraphs.append(self._collapse_plain_text_paragraph(current_lines))
+                    current_lines = []
+                continue
+            current_lines.append(line)
+        if current_lines:
+            paragraphs.append(self._collapse_plain_text_paragraph(current_lines))
+        return "\n\n".join(paragraphs)
+
+    def _infer_layout_hint(self, answer_format: AnswerFormat, content: str) -> LayoutHint:
+        if answer_format != "plain_text":
+            return "paragraph"
+        normalized = content.strip()
+        if not normalized:
+            return "paragraph"
+        lines = [line.strip() for line in normalized.split("\n") if line.strip()]
+        if not lines:
+            return "paragraph"
+        numbered_count = sum(1 for line in lines if self._looks_like_numbered_line(line))
+        bullet_count = sum(1 for line in lines if self._looks_like_bullet_line(line))
+        if numbered_count >= 2 and numbered_count >= max(2, len(lines) - 1):
+            return "steps"
+        if bullet_count >= 2 and bullet_count >= max(2, len(lines) - 1):
+            return "bullets"
+        if len(normalized) <= 120 and len(lines) <= 2 and "\n\n" not in normalized:
+            return "brief"
+        return "paragraph"
+
+    def _collapse_plain_text_paragraph(self, lines: list[str]) -> str:
+        if len(lines) <= 1:
+            return lines[0]
+        if any(self._looks_like_plain_list_line(line) for line in lines):
+            return "\n".join(lines)
+        return " ".join(lines)
+
+    def _looks_like_plain_list_line(self, line: str) -> bool:
+        return self._looks_like_bullet_line(line) or self._looks_like_numbered_line(line)
+
+    def _looks_like_bullet_line(self, line: str) -> bool:
+        import re
+
+        return re.search(r"^\s*[-*•]\s+\S", line) is not None
+
+    def _looks_like_numbered_line(self, line: str) -> bool:
+        import re
+
+        patterns = (
+            r"^\s*\d+[.)、]\s+\S",
+            r"^\s*[一二三四五六七八九十]+[、.]\s*\S",
+        )
+        return any(re.search(pattern, line) for pattern in patterns)
 
     def _count_lines(self, content: str) -> int:
         if not content:
