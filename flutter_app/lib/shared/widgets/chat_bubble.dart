@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
+import 'package:gpt_markdown/gpt_markdown.dart';
 
 import '../../core/models/api_models.dart';
 import '../theme/app_theme.dart';
@@ -75,9 +76,10 @@ class _ChatBubbleState extends State<ChatBubble> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (widget.message.content.isNotEmpty)
-                          _MarkdownBody(
+                          _MessageBody(
                             content: widget.message.content,
                             isUser: isUser,
+                            isStreaming: false,
                           ),
                         if (widget.isStreaming) const _Cursor(),
                         if (widget.message.toolCalls.isNotEmpty) ...[
@@ -154,7 +156,11 @@ class StreamingBubble extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _MarkdownBody(content: buffer, isUser: false),
+                        _MessageBody(
+                          content: buffer,
+                          isUser: false,
+                          isStreaming: true,
+                        ),
                         const _Cursor(),
                       ],
                     ),
@@ -165,7 +171,7 @@ class StreamingBubble extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: AppTheme.assistantBubbleDecoration,
-                  child: const _Cursor(),
+                  child: const _StreamingSkeleton(),
                 ),
             ],
           ),
@@ -301,53 +307,551 @@ class _CopyButton extends StatelessWidget {
   }
 }
 
-class _MarkdownBody extends StatelessWidget {
+class _MessageBody extends StatelessWidget {
   final String content;
   final bool isUser;
-  const _MarkdownBody({required this.content, required this.isUser});
+  final bool isStreaming;
+
+  const _MessageBody({
+    required this.content,
+    required this.isUser,
+    required this.isStreaming,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return MarkdownBody(
-      data: content,
-      selectable: true,
-      styleSheet: MarkdownStyleSheet(
-        p: AppTheme.ts(fontSize: 15, color: AppTheme.textPrimary, height: 1.65),
-        code: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 13,
-          color: AppTheme.accent,
-          backgroundColor: AppTheme.surfaceActive,
-        ),
-        codeblockDecoration: BoxDecoration(
-          color: const Color(0xFF111111),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.border),
-        ),
-        codeblockPadding: const EdgeInsets.all(14),
-        h1: AppTheme.ts(
-            fontSize: 22,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary),
-        h2: AppTheme.ts(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-            color: AppTheme.textPrimary),
-        h3: AppTheme.ts(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: AppTheme.textPrimary),
-        blockquoteDecoration: BoxDecoration(
-          border: Border(
-            left: BorderSide(
-                color: AppTheme.accent.withValues(alpha: 0.5), width: 3),
-          ),
-        ),
-        blockquotePadding: const EdgeInsets.only(left: 14, top: 4, bottom: 4),
-        listBullet: AppTheme.ts(fontSize: 15, color: AppTheme.textSecondary),
-        a: AppTheme.ts(fontSize: 15, color: AppTheme.accent),
+    if (isUser) {
+      return _PlainTextBody(content: content);
+    }
+    if (isStreaming) {
+      return _StreamingMarkdownBody(content: content);
+    }
+    return _AssistantMarkdownBody(content: content);
+  }
+}
+
+class _PlainTextBody extends StatelessWidget {
+  final String content;
+
+  const _PlainTextBody({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    return SelectableText(
+      content,
+      style: AppTheme.ts(
+        fontSize: 15,
+        color: AppTheme.textPrimary,
+        height: 1.65,
       ),
     );
+  }
+}
+
+class _AssistantMarkdownBody extends StatelessWidget {
+  final String content;
+
+  const _AssistantMarkdownBody({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    return SelectionArea(
+      child: GptMarkdown(
+        content,
+        style: AppTheme.ts(
+          fontSize: 15,
+          color: AppTheme.textPrimary,
+          height: 1.65,
+        ),
+        useDollarSignsForLatex: true,
+        onLinkTap: (url, title) => _copyLink(context, url),
+        codeBuilder: (context, name, code, closed) {
+          return _CodeBlockCard(
+            language: name,
+            code: code,
+            closed: closed,
+          );
+        },
+        latexBuilder: (context, tex, textStyle, inline) {
+          return _LatexBlock(
+            tex: tex,
+            inline: inline,
+            textStyle: textStyle,
+          );
+        },
+      ),
+    );
+  }
+
+  void _copyLink(BuildContext context, String url) {
+    Clipboard.setData(ClipboardData(text: url));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(url.isEmpty ? "链接为空" : "链接已复制"),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+}
+
+class _StreamingMarkdownBody extends StatelessWidget {
+  final String content;
+
+  const _StreamingMarkdownBody({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = _StreamingSegmentParser.parse(content);
+    if (segments.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final children = <Widget>[];
+    for (final segment in segments) {
+      children.add(
+        segment.isCode
+            ? _CodeBlockCard(
+                language: segment.language,
+                code: segment.content,
+                closed: segment.closed,
+              )
+            : _StreamingTextBlock(content: segment.content),
+      );
+      children.add(const SizedBox(height: 10));
+    }
+    if (children.isNotEmpty) {
+      children.removeLast();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+}
+
+class _StreamingTextBlock extends StatelessWidget {
+  final String content;
+
+  const _StreamingTextBlock({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = content.split('\n');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final line in lines) _buildLine(line),
+      ],
+    );
+  }
+
+  Widget _buildLine(String line) {
+    final trimmed = line.trimRight();
+    if (trimmed.isEmpty) {
+      return const SizedBox(height: 10);
+    }
+    if (trimmed.startsWith('### ')) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(
+          trimmed.substring(4),
+          style: AppTheme.ts(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.textPrimary,
+            height: 1.45,
+          ),
+        ),
+      );
+    }
+    if (trimmed.startsWith('## ')) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(
+          trimmed.substring(3),
+          style: AppTheme.ts(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.textPrimary,
+            height: 1.45,
+          ),
+        ),
+      );
+    }
+    if (trimmed.startsWith('# ')) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Text(
+          trimmed.substring(2),
+          style: AppTheme.ts(
+            fontSize: 22,
+            fontWeight: FontWeight.w800,
+            color: AppTheme.textPrimary,
+            height: 1.4,
+          ),
+        ),
+      );
+    }
+    if (trimmed.startsWith('>')) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.only(left: 12),
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(
+              color: AppTheme.accent.withValues(alpha: 0.45),
+              width: 3,
+            ),
+          ),
+        ),
+        child: SelectableText(
+          trimmed.replaceFirst(RegExp(r'^>\s?'), ''),
+          style: AppTheme.ts(
+            fontSize: 15,
+            color: AppTheme.textSecondary,
+            height: 1.65,
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: SelectableText(
+        trimmed,
+        style: AppTheme.ts(
+          fontSize: 15,
+          color: AppTheme.textPrimary,
+          height: 1.65,
+        ),
+      ),
+    );
+  }
+}
+
+class _StreamingSkeleton extends StatefulWidget {
+  const _StreamingSkeleton();
+
+  @override
+  State<_StreamingSkeleton> createState() => _StreamingSkeletonState();
+}
+
+class _StreamingSkeletonState extends State<_StreamingSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final alpha = 0.22 + (_controller.value * 0.18);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SkeletonLine(widthFactor: 0.92, alpha: alpha),
+            const SizedBox(height: 8),
+            _SkeletonLine(widthFactor: 0.78, alpha: alpha * 0.9),
+            const SizedBox(height: 8),
+            _SkeletonLine(widthFactor: 0.56, alpha: alpha * 0.8),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SkeletonLine extends StatelessWidget {
+  final double widthFactor;
+  final double alpha;
+
+  const _SkeletonLine({required this.widthFactor, required this.alpha});
+
+  @override
+  Widget build(BuildContext context) {
+    return FractionallySizedBox(
+      widthFactor: widthFactor,
+      child: Container(
+        height: 12,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: alpha),
+          borderRadius: BorderRadius.circular(999),
+        ),
+      ),
+    );
+  }
+}
+
+class _LatexBlock extends StatelessWidget {
+  final String tex;
+  final bool inline;
+  final TextStyle textStyle;
+
+  const _LatexBlock({
+    required this.tex,
+    required this.inline,
+    required this.textStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final widget = Math.tex(
+      tex,
+      mathStyle: inline ? MathStyle.text : MathStyle.display,
+      textStyle: textStyle.copyWith(color: AppTheme.textPrimary),
+      onErrorFallback: (error) {
+        return SelectableText(
+          tex,
+          style: textStyle.copyWith(
+            color: AppTheme.textSecondary,
+            fontFamily: 'monospace',
+          ),
+        );
+      },
+    );
+    if (inline) {
+      return widget;
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: widget,
+      ),
+    );
+  }
+}
+
+class _CodeBlockCard extends StatelessWidget {
+  final String language;
+  final String code;
+  final bool closed;
+
+  const _CodeBlockCard({
+    required this.language,
+    required this.code,
+    required this.closed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final codeText = code.trimRight();
+    final lines = (codeText.isEmpty ? const [''] : codeText.split('\n'));
+    final lineNumbers = List<String>.generate(
+      lines.length,
+      (index) => '${index + 1}',
+    ).join('\n');
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F141B),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(14),
+              ),
+              border: Border(bottom: BorderSide(color: AppTheme.border)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceActive,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    language.trim().isEmpty ? 'code' : language.trim(),
+                    style: AppTheme.ts(
+                      fontSize: 11,
+                      color: AppTheme.textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (!closed) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    '生成中',
+                    style: AppTheme.ts(
+                      fontSize: 11,
+                      color: AppTheme.accent,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                _CodeCopyButton(text: codeText),
+              ],
+            ),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(12, 12, 14, 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  lineNumbers,
+                  style: AppTheme.ts(
+                    fontSize: 13,
+                    color: AppTheme.textTertiary,
+                    height: 1.6,
+                  ).copyWith(fontFamily: 'monospace'),
+                ),
+                Container(
+                  width: 1,
+                  height:
+                      (lines.length * 22).toDouble().clamp(24, 1200).toDouble(),
+                  margin: const EdgeInsets.symmetric(horizontal: 12),
+                  color: AppTheme.border,
+                ),
+                SelectableText(
+                  codeText,
+                  style: AppTheme.ts(
+                    fontSize: 13,
+                    color: const Color(0xFFE6EDF3),
+                    height: 1.6,
+                  ).copyWith(fontFamily: 'monospace'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CodeCopyButton extends StatelessWidget {
+  final String text;
+
+  const _CodeCopyButton({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: () {
+        Clipboard.setData(ClipboardData(text: text));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('代码已复制'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      },
+      style: TextButton.styleFrom(
+        foregroundColor: AppTheme.textSecondary,
+        textStyle: AppTheme.ts(fontSize: 12, fontWeight: FontWeight.w600),
+      ),
+      icon: const Icon(Icons.content_copy_rounded, size: 14),
+      label: const Text('复制'),
+    );
+  }
+}
+
+class _StreamingSegment {
+  final String content;
+  final String language;
+  final bool closed;
+  final bool isCode;
+
+  const _StreamingSegment.text(this.content)
+      : language = '',
+        closed = true,
+        isCode = false;
+
+  const _StreamingSegment.code({
+    required this.content,
+    required this.language,
+    required this.closed,
+  }) : isCode = true;
+}
+
+class _StreamingSegmentParser {
+  static List<_StreamingSegment> parse(String raw) {
+    final normalized = raw.replaceAll('\r\n', '\n');
+    if (normalized.trim().isEmpty) {
+      return const [];
+    }
+    final segments = <_StreamingSegment>[];
+    final textBuffer = StringBuffer();
+    final codeBuffer = StringBuffer();
+    var inCode = false;
+    var language = '';
+
+    void flushText() {
+      final text = textBuffer.toString().trimRight();
+      if (text.isNotEmpty) {
+        segments.add(_StreamingSegment.text(text));
+      }
+      textBuffer.clear();
+    }
+
+    for (final line in normalized.split('\n')) {
+      final trimmedLeft = line.trimLeft();
+      if (trimmedLeft.startsWith('```')) {
+        if (inCode) {
+          segments.add(
+            _StreamingSegment.code(
+              content: codeBuffer.toString().trimRight(),
+              language: language,
+              closed: true,
+            ),
+          );
+          codeBuffer.clear();
+          inCode = false;
+          language = '';
+        } else {
+          flushText();
+          inCode = true;
+          language = trimmedLeft.substring(3).trim();
+        }
+        continue;
+      }
+      if (inCode) {
+        codeBuffer.writeln(line);
+      } else {
+        textBuffer.writeln(line);
+      }
+    }
+
+    if (inCode) {
+      segments.add(
+        _StreamingSegment.code(
+          content: codeBuffer.toString().trimRight(),
+          language: language,
+          closed: false,
+        ),
+      );
+    }
+    flushText();
+    return segments;
   }
 }
 

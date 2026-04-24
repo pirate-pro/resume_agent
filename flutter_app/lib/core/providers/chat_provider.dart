@@ -17,6 +17,7 @@ final chatProvider = ChangeNotifierProvider<ChatProvider>((ref) {
 
 class ChatProvider extends ChangeNotifier {
   static const _uuid = Uuid();
+  static const _streamFlushInterval = Duration(milliseconds: 48);
 
   final ApiService _api;
 
@@ -26,6 +27,8 @@ class ChatProvider extends ChangeNotifier {
   bool _isUploadingFile = false;
   bool _isLoadingSkills = false;
   String _streamBuffer = "";
+  String _pendingStreamDelta = "";
+  Timer? _streamFlushTimer;
   String? _error;
   String? _skillsError;
   final List<SessionMeta> _sessions = [];
@@ -66,6 +69,12 @@ class ChatProvider extends ChangeNotifier {
     _init();
   }
 
+  @override
+  void dispose() {
+    _streamFlushTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _init() async {
     await _loadSessions();
     _checkHealth();
@@ -93,8 +102,7 @@ class ChatProvider extends ChangeNotifier {
               id: item["id"],
               title: item["title"] ?? "新会话",
               createdAt: DateTime.parse(item["created_at"]),
-              updatedAt:
-                  DateTime.tryParse(item["updated_at"] ?? "") ??
+              updatedAt: DateTime.tryParse(item["updated_at"] ?? "") ??
                   DateTime.parse(item["created_at"]),
               isPinned: item["is_pinned"] == true,
               pinnedAt: DateTime.tryParse((item["pinned_at"] ?? "").toString()),
@@ -143,8 +151,7 @@ class ChatProvider extends ChangeNotifier {
         ),
       );
     } else {
-      final shouldReplaceTitle =
-          existing.messageCount == 0 ||
+      final shouldReplaceTitle = existing.messageCount == 0 ||
           existing.title == "新会话" ||
           existing.title.startsWith("文件:");
       final idx = _sessions.indexOf(existing);
@@ -254,7 +261,7 @@ class ChatProvider extends ChangeNotifier {
   void createNewSession() {
     _sessionId = null;
     _messages.clear();
-    _streamBuffer = "";
+    _resetStreamingBuffer(notify: false);
     _error = null;
     _activeFileIds = [];
     _lastToolCalls = [];
@@ -300,9 +307,8 @@ class ChatProvider extends ChangeNotifier {
   void clearSkill(String skillName) {
     final normalized = skillName.trim();
     if (normalized.isEmpty) return;
-    _selectedSkillNames = _selectedSkillNames
-        .where((item) => item != normalized)
-        .toList();
+    _selectedSkillNames =
+        _selectedSkillNames.where((item) => item != normalized).toList();
     notifyListeners();
   }
 
@@ -322,7 +328,7 @@ class ChatProvider extends ChangeNotifier {
   Future<void> switchSession(String sessionId) async {
     _sessionId = sessionId;
     _messages.clear();
-    _streamBuffer = "";
+    _resetStreamingBuffer(notify: false);
     _error = null;
     _streamEvents = [];
     notifyListeners();
@@ -419,7 +425,7 @@ class ChatProvider extends ChangeNotifier {
     _streamEvents = [];
     _messages.add(ChatMessage(role: "user", content: content.trim()));
     _isStreaming = true;
-    _streamBuffer = "";
+    _resetStreamingBuffer(notify: false);
     notifyListeners();
 
     try {
@@ -456,6 +462,8 @@ class ChatProvider extends ChangeNotifier {
         doneResponse = resp;
       }
 
+      _flushPendingStreamDelta(notify: false);
+
       // Apply done response
       if (doneResponse != null) {
         _sessionId = doneResponse.sessionId;
@@ -469,7 +477,7 @@ class ChatProvider extends ChangeNotifier {
       // Finalize: move stream buffer into a message
       if (_streamBuffer.isNotEmpty) {
         _messages.add(ChatMessage(role: "assistant", content: _streamBuffer));
-        _streamBuffer = "";
+        _resetStreamingBuffer(notify: false);
       }
 
       // Register session in local list
@@ -487,8 +495,10 @@ class ChatProvider extends ChangeNotifier {
         await refreshSessions();
       }
     } on ApiException catch (e) {
+      _flushPendingStreamDelta(notify: false);
       _error = e.message;
     } catch (e) {
+      _flushPendingStreamDelta(notify: false);
       _error = e.toString();
     } finally {
       _isStreaming = false;
@@ -511,13 +521,11 @@ class ChatProvider extends ChangeNotifier {
 
       case "answer_delta":
         final delta = data["delta"]?.toString() ?? "";
-        _streamBuffer += delta;
-        notifyListeners();
+        _queueStreamDelta(delta);
         return null;
 
       case "answer_reset":
-        _streamBuffer = "";
-        notifyListeners();
+        _resetStreamingBuffer(notify: true);
         return null;
 
       case "run_event":
@@ -546,6 +554,7 @@ class ChatProvider extends ChangeNotifier {
 
       case "done":
         // The done event contains the full ChatResponse
+        _flushPendingStreamDelta(notify: false);
         try {
           return ChatResponse.fromJson(data);
         } catch (_) {
@@ -553,6 +562,7 @@ class ChatProvider extends ChangeNotifier {
         }
 
       case "error":
+        _flushPendingStreamDelta(notify: false);
         _error = data["detail"]?.toString() ?? "Unknown stream error";
         notifyListeners();
         return null;
@@ -668,5 +678,36 @@ class ChatProvider extends ChangeNotifier {
   void clearError() {
     _error = null;
     notifyListeners();
+  }
+
+  void _queueStreamDelta(String delta) {
+    if (delta.isEmpty) return;
+    _pendingStreamDelta += delta;
+    if (_pendingStreamDelta.length > 512) {
+      _flushPendingStreamDelta();
+      return;
+    }
+    _streamFlushTimer ??= Timer(_streamFlushInterval, _flushPendingStreamDelta);
+  }
+
+  void _flushPendingStreamDelta({bool notify = true}) {
+    _streamFlushTimer?.cancel();
+    _streamFlushTimer = null;
+    if (_pendingStreamDelta.isEmpty) return;
+    _streamBuffer += _pendingStreamDelta;
+    _pendingStreamDelta = "";
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _resetStreamingBuffer({required bool notify}) {
+    _streamFlushTimer?.cancel();
+    _streamFlushTimer = null;
+    _pendingStreamDelta = "";
+    _streamBuffer = "";
+    if (notify) {
+      notifyListeners();
+    }
   }
 }
