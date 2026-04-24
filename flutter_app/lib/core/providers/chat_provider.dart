@@ -27,10 +27,16 @@ class ChatProvider extends ChangeNotifier {
   bool _isUploadingFile = false;
   bool _isLoadingSkills = false;
   String _streamBuffer = "";
+  String _streamAnswerFormat = "plain_text";
+  String _streamRenderHint = "plain";
+  String _streamSourceKind = "direct_answer";
+  List<AnswerArtifactView> _streamArtifacts = [];
   String _pendingStreamDelta = "";
   Timer? _streamFlushTimer;
+  Timer? _recentActivatedFileTimer;
   String? _error;
   String? _skillsError;
+  String? _recentActivatedFileId;
   final List<SessionMeta> _sessions = [];
   List<String> _activeFileIds = [];
   List<SkillOption> _availableSkills = [];
@@ -51,6 +57,11 @@ class ChatProvider extends ChangeNotifier {
   bool get isUploadingFile => _isUploadingFile;
   bool get isLoadingSkills => _isLoadingSkills;
   String get streamBuffer => _streamBuffer;
+  String get streamAnswerFormat => _streamAnswerFormat;
+  String get streamRenderHint => _streamRenderHint;
+  String get streamSourceKind => _streamSourceKind;
+  List<AnswerArtifactView> get streamArtifacts =>
+      List.unmodifiable(_streamArtifacts);
   String? get error => _error;
   String? get skillsError => _skillsError;
   List<SessionMeta> get sessions => List.unmodifiable(_sessions);
@@ -64,6 +75,7 @@ class ChatProvider extends ChangeNotifier {
   List<MemoryView> get lastMemoryHits => List.unmodifiable(_lastMemoryHits);
   List<EventView> get streamEvents => List.unmodifiable(_streamEvents);
   List<SessionFileView> get sessionFiles => List.unmodifiable(_sessionFiles);
+  String? get recentActivatedFileId => _recentActivatedFileId;
 
   ChatProvider(this._api) {
     _init();
@@ -72,6 +84,7 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _streamFlushTimer?.cancel();
+    _recentActivatedFileTimer?.cancel();
     super.dispose();
   }
 
@@ -262,6 +275,7 @@ class ChatProvider extends ChangeNotifier {
     _sessionId = null;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
+    _clearRecentActivatedFile(notify: false);
     _error = null;
     _activeFileIds = [];
     _lastToolCalls = [];
@@ -329,6 +343,7 @@ class ChatProvider extends ChangeNotifier {
     _sessionId = sessionId;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
+    _clearRecentActivatedFile(notify: false);
     _error = null;
     _streamEvents = [];
     notifyListeners();
@@ -476,7 +491,17 @@ class ChatProvider extends ChangeNotifier {
 
       // Finalize: move stream buffer into a message
       if (_streamBuffer.isNotEmpty) {
-        _messages.add(ChatMessage(role: "assistant", content: _streamBuffer));
+        _messages.add(
+          ChatMessage(
+            role: "assistant",
+            content: _streamBuffer,
+            answerFormat: doneResponse?.answerFormat ?? "plain_text",
+            renderHint: doneResponse?.renderHint ?? "plain",
+            sourceKind: doneResponse?.sourceKind ?? "direct_answer",
+            artifacts: doneResponse?.artifacts ?? const [],
+            toolCalls: doneResponse?.toolCalls ?? const [],
+          ),
+        );
         _resetStreamingBuffer(notify: false);
       }
 
@@ -522,6 +547,23 @@ class ChatProvider extends ChangeNotifier {
       case "answer_delta":
         final delta = data["delta"]?.toString() ?? "";
         _queueStreamDelta(delta);
+        return null;
+
+      case "answer_meta":
+        // 流式阶段优先吃后端协议，避免前端每次都重新猜测渲染模式。
+        _streamAnswerFormat = data["answer_format"]?.toString() ?? "plain_text";
+        _streamRenderHint = data["render_hint"]?.toString() ?? "plain";
+        _streamSourceKind = data["source_kind"]?.toString() ?? "direct_answer";
+        _streamArtifacts = (data["artifacts"] as List?)
+                ?.map((item) => AnswerArtifactView.fromJson(
+                    Map<String, dynamic>.from(item)))
+                .toList() ??
+            const [];
+        notifyListeners();
+        return null;
+
+      case "answer_meta_reset":
+        _resetStreamingMeta(notify: true);
         return null;
 
       case "answer_reset":
@@ -578,6 +620,7 @@ class ChatProvider extends ChangeNotifier {
     if (_sessionId == null) {
       _sessionFiles = [];
       _activeFileIds = [];
+      _clearRecentActivatedFile(notify: false);
       notifyListeners();
       return;
     }
@@ -604,8 +647,53 @@ class ChatProvider extends ChangeNotifier {
       );
       _sessionFiles = resp.files;
       _activeFileIds = resp.activeFileIds;
+      if (active && _activeFileIds.contains(fileId)) {
+        _markRecentActivatedFile(fileId, notify: false);
+      } else if (!active && _recentActivatedFileId == fileId) {
+        _clearRecentActivatedFile(notify: false);
+      }
     } catch (_) {}
     notifyListeners();
+  }
+
+  Future<bool> activateFileFromArtifact(String fileId) async {
+    if (_sessionId == null) return false;
+    final current = Set<String>.from(_activeFileIds)..add(fileId);
+    try {
+      final resp = await _api.setActiveFiles(
+        sessionId: _sessionId!,
+        fileIds: current.toList(),
+      );
+      _sessionFiles = resp.files;
+      _activeFileIds = resp.activeFileIds;
+      final activated = _activeFileIds.contains(fileId);
+      if (activated) {
+        _markRecentActivatedFile(fileId, notify: false);
+      }
+      notifyListeners();
+      return activated;
+    } on ApiException catch (error) {
+      _error = error.message;
+    } catch (error) {
+      _error = error.toString();
+    }
+    notifyListeners();
+    return false;
+  }
+
+  Future<WorkspaceFilePreview> previewWorkspaceFile(
+    String path, {
+    int maxChars = 12000,
+  }) async {
+    final sessionId = _sessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      throw StateError("当前没有可预览 workspace 文件的会话。");
+    }
+    return _api.previewWorkspaceFile(
+      sessionId: sessionId,
+      path: path,
+      maxChars: maxChars,
+    );
   }
 
   Future<void> uploadSessionFile({
@@ -706,6 +794,38 @@ class ChatProvider extends ChangeNotifier {
     _streamFlushTimer = null;
     _pendingStreamDelta = "";
     _streamBuffer = "";
+    _resetStreamingMeta(notify: false);
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _resetStreamingMeta({required bool notify}) {
+    _streamAnswerFormat = "plain_text";
+    _streamRenderHint = "plain";
+    _streamSourceKind = "direct_answer";
+    _streamArtifacts = [];
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _markRecentActivatedFile(String fileId, {required bool notify}) {
+    _recentActivatedFileTimer?.cancel();
+    _recentActivatedFileId = fileId;
+    _recentActivatedFileTimer = Timer(const Duration(seconds: 3), () {
+      _recentActivatedFileId = null;
+      notifyListeners();
+    });
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _clearRecentActivatedFile({required bool notify}) {
+    _recentActivatedFileTimer?.cancel();
+    _recentActivatedFileTimer = null;
+    _recentActivatedFileId = null;
     if (notify) {
       notifyListeners();
     }

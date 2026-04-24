@@ -10,7 +10,7 @@ class ApiService {
   String _baseUrl;
 
   ApiService({String? baseUrl})
-    : _baseUrl = baseUrl ?? AppConfig.defaultBaseUrl;
+      : _baseUrl = baseUrl ?? AppConfig.defaultBaseUrl;
 
   void updateBaseUrl(String url) {
     _baseUrl = url;
@@ -119,9 +119,8 @@ class ApiService {
 
   Future<bool> checkHealth() async {
     try {
-      final resp = await http
-          .get(_uri("/health"))
-          .timeout(const Duration(seconds: 3));
+      final resp =
+          await http.get(_uri("/health")).timeout(const Duration(seconds: 3));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body);
         return data["status"] == "ok";
@@ -193,6 +192,25 @@ class ApiService {
     return SessionFilesResponse.fromJson(jsonDecode(resp.body));
   }
 
+  Future<WorkspaceFilePreview> previewWorkspaceFile({
+    required String sessionId,
+    required String path,
+    int maxChars = 12000,
+  }) async {
+    final uri =
+        _uri("/api/sessions/$sessionId/workspace-files/preview").replace(
+      queryParameters: {
+        "path": path,
+        "max_chars": maxChars.toString(),
+      },
+    );
+    final resp = await http.get(uri);
+    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
+    return WorkspaceFilePreview.fromJson(
+      Map<String, dynamic>.from(jsonDecode(resp.body)),
+    );
+  }
+
   // ── Session Events ────────────────────────────────────────────────────
 
   Future<List<EventView>> listSessionEvents(String sessionId) async {
@@ -215,8 +233,7 @@ class ApiService {
             title: e["title"] ?? "",
             createdAt:
                 DateTime.tryParse(e["created_at"] ?? "") ?? DateTime.now(),
-            updatedAt:
-                DateTime.tryParse(e["updated_at"] ?? "") ??
+            updatedAt: DateTime.tryParse(e["updated_at"] ?? "") ??
                 DateTime.tryParse(e["created_at"] ?? "") ??
                 DateTime.now(),
             isPinned: e["is_pinned"] == true,
@@ -246,8 +263,7 @@ class ApiService {
       id: data["session_id"] ?? "",
       title: data["title"] ?? "",
       createdAt: DateTime.tryParse(data["created_at"] ?? "") ?? DateTime.now(),
-      updatedAt:
-          DateTime.tryParse(data["updated_at"] ?? "") ??
+      updatedAt: DateTime.tryParse(data["updated_at"] ?? "") ??
           DateTime.tryParse(data["created_at"] ?? "") ??
           DateTime.now(),
       isPinned: data["is_pinned"] == true,
@@ -265,6 +281,21 @@ class ApiService {
           (e) => ChatMessage(
             role: e["role"] ?? "assistant",
             content: e["content"] ?? "",
+            answerFormat: e["answer_format"] ?? "plain_text",
+            renderHint: e["render_hint"] ?? "plain",
+            sourceKind: e["source_kind"] ?? "direct_answer",
+            artifacts: (e["artifacts"] as List?)
+                    ?.map((item) => AnswerArtifactView.fromJson(
+                        Map<String, dynamic>.from(item)))
+                    .toList() ??
+                const [],
+            toolCalls: (e["tool_calls"] as List?)
+                    ?.map((item) =>
+                        ToolCallView.fromJson(Map<String, dynamic>.from(item)))
+                    .toList() ??
+                const [],
+            timestamp: DateTime.tryParse((e["created_at"] ?? "").toString()) ??
+                DateTime.now(),
           ),
         )
         .toList();

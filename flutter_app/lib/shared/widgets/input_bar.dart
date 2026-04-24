@@ -43,6 +43,7 @@ class InputBar extends StatefulWidget {
   final void Function() onResetRuntimeOptions;
   final List<SessionFileView> sessionFiles;
   final List<String> activeFileIds;
+  final String? highlightedFileId;
   final List<SkillOption> availableSkills;
   final List<String> selectedSkillNames;
   final int maxToolRounds;
@@ -63,6 +64,7 @@ class InputBar extends StatefulWidget {
     required this.onResetRuntimeOptions,
     required this.sessionFiles,
     required this.activeFileIds,
+    this.highlightedFileId,
     required this.availableSkills,
     required this.selectedSkillNames,
     required this.maxToolRounds,
@@ -470,6 +472,7 @@ class _InputBarState extends State<InputBar> {
                     if (activeFiles.isNotEmpty) ...[
                       _ActiveFilesTray(
                         files: activeFiles,
+                        highlightedFileId: widget.highlightedFileId,
                         iconForFile: _fileIcon,
                         onRemove: (file) {
                           widget.onToggleFileActive(file, false);
@@ -1396,11 +1399,13 @@ class _ConfigChip extends StatelessWidget {
 
 class _ActiveFilesTray extends StatelessWidget {
   final List<SessionFileView> files;
+  final String? highlightedFileId;
   final IconData Function(SessionFileView file) iconForFile;
   final void Function(SessionFileView file) onRemove;
 
   const _ActiveFilesTray({
     required this.files,
+    this.highlightedFileId,
     required this.iconForFile,
     required this.onRemove,
   });
@@ -1440,6 +1445,7 @@ class _ActiveFilesTray extends StatelessWidget {
                 .map(
                   (file) => _ActiveFileChip(
                     file: file,
+                    highlighted: highlightedFileId == file.fileId,
                     icon: iconForFile(file),
                     onRemove: () => onRemove(file),
                   ),
@@ -1454,11 +1460,13 @@ class _ActiveFilesTray extends StatelessWidget {
 
 class _ActiveFileChip extends StatelessWidget {
   final SessionFileView file;
+  final bool highlighted;
   final IconData icon;
   final VoidCallback onRemove;
 
   const _ActiveFileChip({
     required this.file,
+    this.highlighted = false,
     required this.icon,
     required this.onRemove,
   });
@@ -1469,9 +1477,24 @@ class _ActiveFileChip extends StatelessWidget {
       constraints: const BoxConstraints(maxWidth: 240),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: AppTheme.surface,
+        color: highlighted
+            ? AppTheme.accent.withValues(alpha: 0.14)
+            : AppTheme.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.border),
+        border: Border.all(
+          color: highlighted
+              ? AppTheme.accent.withValues(alpha: 0.42)
+              : AppTheme.border,
+        ),
+        boxShadow: highlighted
+            ? [
+                BoxShadow(
+                  color: AppTheme.accent.withValues(alpha: 0.18),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : null,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

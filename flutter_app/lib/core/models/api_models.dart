@@ -1,17 +1,45 @@
 class ChatMessage {
   final String role; // "user" | "assistant"
   final String content;
+  final String answerFormat;
+  final String renderHint;
+  final String sourceKind;
+  final List<AnswerArtifactView> artifacts;
   final List<ToolCallView> toolCalls;
   final DateTime timestamp;
 
   ChatMessage({
     required this.role,
     required this.content,
+    this.answerFormat = "plain_text",
+    this.renderHint = "plain",
+    this.sourceKind = "direct_answer",
+    this.artifacts = const [],
     this.toolCalls = const [],
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
   bool get isUser => role == "user";
+}
+
+class AnswerArtifactView {
+  final String type;
+  final String path;
+  final String role;
+
+  const AnswerArtifactView({
+    required this.type,
+    required this.path,
+    required this.role,
+  });
+
+  factory AnswerArtifactView.fromJson(Map<String, dynamic> json) {
+    return AnswerArtifactView(
+      type: json["type"] ?? "",
+      path: json["path"] ?? "",
+      role: json["role"] ?? "",
+    );
+  }
 }
 
 class ToolCallView {
@@ -65,12 +93,20 @@ class SkillOption {
 class ChatResponse {
   final String sessionId;
   final String answer;
+  final String answerFormat;
+  final String renderHint;
+  final String sourceKind;
+  final List<AnswerArtifactView> artifacts;
   final List<ToolCallView> toolCalls;
   final List<MemoryView> memoryHits;
 
   ChatResponse({
     required this.sessionId,
     required this.answer,
+    this.answerFormat = "plain_text",
+    this.renderHint = "plain",
+    this.sourceKind = "direct_answer",
+    this.artifacts = const [],
     required this.toolCalls,
     required this.memoryHits,
   });
@@ -79,13 +115,19 @@ class ChatResponse {
     return ChatResponse(
       sessionId: json["session_id"] ?? "",
       answer: json["answer"] ?? "",
-      toolCalls:
-          (json["tool_calls"] as List?)
+      answerFormat: json["answer_format"] ?? "plain_text",
+      renderHint: json["render_hint"] ?? "plain",
+      sourceKind: json["source_kind"] ?? "direct_answer",
+      artifacts: (json["artifacts"] as List?)
+              ?.map((e) =>
+                  AnswerArtifactView.fromJson(Map<String, dynamic>.from(e)))
+              .toList() ??
+          const [],
+      toolCalls: (json["tool_calls"] as List?)
               ?.map((e) => ToolCallView.fromJson(e))
               .toList() ??
           [],
-      memoryHits:
-          (json["memory_hits"] as List?)
+      memoryHits: (json["memory_hits"] as List?)
               ?.map((e) => MemoryView.fromJson(e))
               .toList() ??
           [],
@@ -156,11 +198,45 @@ class SessionFilesResponse {
     return SessionFilesResponse(
       sessionId: json["session_id"] ?? "",
       activeFileIds: List<String>.from(json["active_file_ids"] ?? []),
-      files:
-          (json["files"] as List?)
+      files: (json["files"] as List?)
               ?.map((e) => SessionFileView.fromJson(e))
               .toList() ??
           [],
+    );
+  }
+}
+
+class WorkspaceFilePreview {
+  final String sessionId;
+  final String path;
+  final String content;
+  final int sizeBytes;
+  final int totalChars;
+  final bool truncated;
+  final String answerFormat;
+  final String renderHint;
+
+  WorkspaceFilePreview({
+    required this.sessionId,
+    required this.path,
+    required this.content,
+    required this.sizeBytes,
+    required this.totalChars,
+    required this.truncated,
+    this.answerFormat = "plain_text",
+    this.renderHint = "plain",
+  });
+
+  factory WorkspaceFilePreview.fromJson(Map<String, dynamic> json) {
+    return WorkspaceFilePreview(
+      sessionId: json["session_id"] ?? "",
+      path: json["path"] ?? "",
+      content: json["content"] ?? "",
+      sizeBytes: json["size_bytes"] ?? 0,
+      totalChars: json["total_chars"] ?? 0,
+      truncated: json["truncated"] == true,
+      answerFormat: json["answer_format"] ?? "plain_text",
+      renderHint: json["render_hint"] ?? "plain",
     );
   }
 }

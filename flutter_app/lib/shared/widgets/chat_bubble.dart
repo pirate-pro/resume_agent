@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 
 import '../../core/models/api_models.dart';
+import '../../core/providers/chat_provider.dart';
 import '../theme/app_theme.dart';
 
 const double _bubbleMaxWidth = 780;
@@ -22,6 +26,7 @@ enum _MessageRenderMode {
   markdownRendered,
   markdownStructured,
   markdownSource,
+  codeBlock,
   largePreview,
 }
 
@@ -108,8 +113,14 @@ class _ChatBubbleState extends State<ChatBubble> {
                             content: widget.message.content,
                             isUser: isUser,
                             isStreaming: false,
+                            answerFormat: widget.message.answerFormat,
+                            renderHint: widget.message.renderHint,
                           ),
                         ),
+                      if (widget.message.artifacts.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        _ArtifactList(artifacts: widget.message.artifacts),
+                      ],
                       if (widget.isStreaming) const _Cursor(),
                       if (widget.message.toolCalls.isNotEmpty) ...[
                         const SizedBox(height: 8),
@@ -130,9 +141,17 @@ class _ChatBubbleState extends State<ChatBubble> {
 
 class StreamingBubble extends StatelessWidget {
   final String buffer;
+  final String? answerFormat;
+  final String? renderHint;
+  final List<AnswerArtifactView> artifacts;
   final List<String> thinkingLines;
   const StreamingBubble(
-      {super.key, required this.buffer, this.thinkingLines = const []});
+      {super.key,
+      required this.buffer,
+      this.answerFormat,
+      this.renderHint,
+      this.artifacts = const [],
+      this.thinkingLines = const []});
 
   @override
   Widget build(BuildContext context) {
@@ -188,8 +207,14 @@ class StreamingBubble extends StatelessWidget {
                           content: buffer,
                           isUser: false,
                           isStreaming: true,
+                          answerFormat: answerFormat,
+                          renderHint: renderHint,
                         ),
                       ),
+                      if (artifacts.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        _ArtifactList(artifacts: artifacts),
+                      ],
                       const _Cursor(),
                     ],
                   ),
@@ -340,11 +365,15 @@ class _MessageBody extends StatelessWidget {
   final String content;
   final bool isUser;
   final bool isStreaming;
+  final String? answerFormat;
+  final String? renderHint;
 
   const _MessageBody({
     required this.content,
     required this.isUser,
     required this.isStreaming,
+    this.answerFormat,
+    this.renderHint,
   });
 
   @override
@@ -355,6 +384,8 @@ class _MessageBody extends StatelessWidget {
     final resolved = _resolveMessageContent(
       content,
       isStreaming: isStreaming,
+      answerFormat: answerFormat,
+      renderHint: renderHint,
     );
     if (isStreaming) {
       switch (resolved.mode) {
@@ -364,6 +395,8 @@ class _MessageBody extends StatelessWidget {
           return _StructuredMarkdownBody(content: resolved.content);
         case _MessageRenderMode.markdownSource:
           return _StructuredSourceBody(content: resolved.content);
+        case _MessageRenderMode.codeBlock:
+          return _SingleCodeBlockBody(content: resolved.content);
         case _MessageRenderMode.largePreview:
           return _LargeStreamingPreview(content: resolved.content);
         case _MessageRenderMode.plainText:
@@ -377,6 +410,8 @@ class _MessageBody extends StatelessWidget {
         return _StructuredMarkdownBody(content: resolved.content);
       case _MessageRenderMode.markdownSource:
         return _StructuredSourceBody(content: resolved.content);
+      case _MessageRenderMode.codeBlock:
+        return _SingleCodeBlockBody(content: resolved.content);
       case _MessageRenderMode.largePreview:
         return _LargeMessagePreview(content: resolved.content);
       case _MessageRenderMode.plainText:
@@ -612,6 +647,25 @@ class _StructuredSourceBody extends StatelessWidget {
           closed: true,
         ),
       ],
+    );
+  }
+}
+
+class _SingleCodeBlockBody extends StatelessWidget {
+  final String content;
+
+  const _SingleCodeBlockBody({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    final parsed = _extractSingleFencedCodeBlock(content);
+    if (parsed == null) {
+      return _StructuredSourceBody(content: content);
+    }
+    return _CodeBlockCard(
+      language: parsed.$1,
+      code: parsed.$2,
+      closed: true,
     );
   }
 }
@@ -1161,12 +1215,25 @@ bool _looksLikeLatex(String content) {
 _ResolvedMessageContent _resolveMessageContent(
   String content, {
   required bool isStreaming,
+  String? answerFormat,
+  String? renderHint,
 }) {
   final normalized = content.trim();
   if (normalized.isEmpty) {
     return const _ResolvedMessageContent(
       content: '',
       mode: _MessageRenderMode.plainText,
+    );
+  }
+
+  final protocolMode = _messageRenderModeFromProtocol(
+    renderHint: renderHint,
+    answerFormat: answerFormat,
+  );
+  if (protocolMode != null) {
+    return _ResolvedMessageContent(
+      content: normalized,
+      mode: protocolMode,
     );
   }
 
@@ -1206,6 +1273,36 @@ _ResolvedMessageContent _resolveMessageContent(
     content: effectiveContent,
     mode: _MessageRenderMode.plainText,
   );
+}
+
+_MessageRenderMode? _messageRenderModeFromProtocol({
+  String? renderHint,
+  String? answerFormat,
+}) {
+  switch ((renderHint ?? '').trim()) {
+    case 'markdown_document':
+      return _MessageRenderMode.markdownRendered;
+    case 'markdown_source':
+      return _MessageRenderMode.markdownSource;
+    case 'code_block':
+      return _MessageRenderMode.codeBlock;
+    case 'large_document':
+      return _MessageRenderMode.largePreview;
+    case 'plain':
+      return _MessageRenderMode.plainText;
+  }
+
+  switch ((answerFormat ?? '').trim()) {
+    case 'markdown':
+      return _MessageRenderMode.markdownRendered;
+    case 'markdown_source':
+      return _MessageRenderMode.markdownSource;
+    case 'code':
+      return _MessageRenderMode.codeBlock;
+    case 'plain_text':
+      return _MessageRenderMode.plainText;
+  }
+  return null;
 }
 
 bool _looksLikeMarkdownSource(String content) {
@@ -1281,6 +1378,19 @@ String? _unwrapMarkdownDocumentWrapper(String content) {
     return null;
   }
   return parts.join('\n\n');
+}
+
+(String, String)? _extractSingleFencedCodeBlock(String content) {
+  final match = RegExp(
+    r'^\s*```([^\n`]*)\n([\s\S]*?)\n?```\s*$',
+    dotAll: true,
+  ).firstMatch(content);
+  if (match == null) {
+    return null;
+  }
+  final language = (match.group(1) ?? '').trim();
+  final code = match.group(2) ?? '';
+  return (language, code);
 }
 
 int _countLines(String content) {
@@ -1431,6 +1541,421 @@ class _ToolCallChip extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ArtifactList extends StatelessWidget {
+  final List<AnswerArtifactView> artifacts;
+
+  const _ArtifactList({required this.artifacts});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: artifacts
+          .map((artifact) => _ArtifactCard(artifact: artifact))
+          .toList(),
+    );
+  }
+}
+
+class _ArtifactCard extends ConsumerWidget {
+  final AnswerArtifactView artifact;
+
+  const _ArtifactCard({required this.artifact});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final provider = ref.watch(chatProvider);
+    final isGenerated = artifact.role == "generated";
+    final label = switch (artifact.role) {
+      "generated" => "已生成文件",
+      "source" => "来源文件",
+      "reference" => "参考文件",
+      _ => "文件",
+    };
+    final icon = switch (artifact.role) {
+      "generated" => Icons.description_rounded,
+      "source" => Icons.file_open_rounded,
+      "reference" => Icons.bookmark_outline_rounded,
+      _ => Icons.insert_drive_file_rounded,
+    };
+    final fileId = _artifactFileId(artifact);
+    SessionFileView? sessionFile;
+    if (fileId != null) {
+      for (final item in provider.sessionFiles) {
+        if (item.fileId == fileId) {
+          sessionFile = item;
+          break;
+        }
+      }
+    }
+    final displayPath = sessionFile == null
+        ? artifact.path
+        : "${sessionFile.filename} (${sessionFile.fileId})";
+    final isActiveFile =
+        fileId != null && provider.activeFileIds.contains(fileId);
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 320),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isGenerated
+            ? AppTheme.accent.withValues(alpha: 0.08)
+            : AppTheme.surfaceActive,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isGenerated
+              ? AppTheme.accent.withValues(alpha: 0.28)
+              : AppTheme.border,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            icon,
+            size: 16,
+            color: isGenerated ? AppTheme.accent : AppTheme.textSecondary,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: AppTheme.ts(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color:
+                        isGenerated ? AppTheme.accent : AppTheme.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                SelectableText(
+                  displayPath,
+                  style: AppTheme.ts(
+                    fontSize: 12,
+                    color: AppTheme.textPrimary,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [
+                    if (fileId != null)
+                      _ArtifactActionButton(
+                        label: isActiveFile ? "已激活" : "激活文件",
+                        icon: isActiveFile
+                            ? Icons.check_circle_outline_rounded
+                            : Icons.push_pin_outlined,
+                        enabled: !isActiveFile,
+                        onPressed: () async {
+                          final activated = await ref
+                              .read(chatProvider)
+                              .activateFileFromArtifact(fileId);
+                          if (!context.mounted) return;
+                          if (!activated) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text("激活文件失败"),
+                                duration: Duration(seconds: 1),
+                              ),
+                            );
+                            return;
+                          }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                sessionFile == null
+                                    ? "已激活文件 $fileId"
+                                    : "已激活文件 ${sessionFile.filename}",
+                              ),
+                              duration: const Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                      )
+                    else ...[
+                      _ArtifactActionButton(
+                        label: "查看内容",
+                        icon: Icons.visibility_outlined,
+                        onPressed: () => _previewWorkspaceArtifact(
+                            context, ref, artifact.path),
+                      ),
+                      _ArtifactActionButton(
+                        label: "复制路径",
+                        icon: Icons.content_copy_rounded,
+                        onPressed: () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: artifact.path),
+                          );
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("路径已复制"),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ArtifactActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool enabled;
+  final Future<void> Function() onPressed;
+
+  const _ArtifactActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: enabled ? () => unawaited(onPressed()) : null,
+      style: TextButton.styleFrom(
+        foregroundColor:
+            enabled ? AppTheme.textSecondary : AppTheme.textTertiary,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: AppTheme.ts(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      icon: Icon(icon, size: 14),
+      label: Text(label),
+    );
+  }
+}
+
+Future<void> _previewWorkspaceArtifact(
+  BuildContext context,
+  WidgetRef ref,
+  String path,
+) async {
+  WorkspaceFilePreview preview;
+  try {
+    preview = await ref.read(chatProvider).previewWorkspaceFile(path);
+  } catch (error) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("读取文件预览失败: $error"),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    return;
+  }
+  if (!context.mounted) return;
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) => _WorkspacePreviewSheet(preview: preview),
+  );
+}
+
+class _WorkspacePreviewSheet extends StatelessWidget {
+  final WorkspaceFilePreview preview;
+
+  const _WorkspacePreviewSheet({required this.preview});
+
+  @override
+  Widget build(BuildContext context) {
+    final contentHeight = MediaQuery.sizeOf(context).height * 0.82;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 960,
+            maxHeight: contentHeight,
+          ),
+          decoration: AppTheme.floatingPanelDecoration(
+            radius: 28,
+            alpha: 0.96,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 14, 12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceActive,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: const Icon(
+                        Icons.description_outlined,
+                        size: 18,
+                        color: AppTheme.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "文件预览",
+                            style: AppTheme.ts(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          SelectableText(
+                            preview.path,
+                            style: AppTheme.ts(
+                              fontSize: 12,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: "关闭",
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                      color: AppTheme.textSecondary,
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _PreviewMetaChip(
+                      icon: Icons.text_snippet_outlined,
+                      label: "${preview.totalChars} 字符",
+                    ),
+                    _PreviewMetaChip(
+                      icon: Icons.sd_storage_outlined,
+                      label: _formatBytes(preview.sizeBytes),
+                    ),
+                    if (preview.truncated)
+                      const _PreviewMetaChip(
+                        icon: Icons.content_cut_rounded,
+                        label: "当前为截断预览",
+                      ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surface.withValues(alpha: 0.82),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: AppTheme.border),
+                    ),
+                    child: _MessageBody(
+                      content: preview.content,
+                      isUser: false,
+                      isStreaming: false,
+                      answerFormat: preview.answerFormat,
+                      renderHint: preview.renderHint,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PreviewMetaChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _PreviewMetaChip({
+    required this.icon,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceActive,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: AppTheme.ts(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatBytes(int value) {
+  if (value < 1024) {
+    return "$value B";
+  }
+  if (value < 1024 * 1024) {
+    return "${(value / 1024).toStringAsFixed(1)} KB";
+  }
+  return "${(value / 1024 / 1024).toStringAsFixed(1)} MB";
+}
+
+String? _artifactFileId(AnswerArtifactView artifact) {
+  const prefix = "file_id:";
+  if (!artifact.path.startsWith(prefix)) {
+    return null;
+  }
+  final value = artifact.path.substring(prefix.length).trim();
+  return value.isEmpty ? null : value;
 }
 
 class _Cursor extends StatefulWidget {

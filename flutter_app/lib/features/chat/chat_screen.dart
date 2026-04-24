@@ -130,6 +130,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   scrollCtrl: _scrollCtrl,
                   isStreaming: provider.isStreaming,
                   streamBuffer: provider.streamBuffer,
+                  streamAnswerFormat: provider.streamAnswerFormat,
+                  streamRenderHint: provider.streamRenderHint,
+                  streamArtifacts: provider.streamArtifacts,
                   streamEvents: provider.streamEvents,
                   error: provider.error,
                   onClearError: provider.clearError,
@@ -143,6 +146,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           isLoadingSkills: provider.isLoadingSkills,
           sessionFiles: provider.sessionFiles,
           activeFileIds: provider.activeFileIds,
+          highlightedFileId: provider.recentActivatedFileId,
           availableSkills: provider.availableSkills,
           selectedSkillNames: provider.selectedSkillNames,
           maxToolRounds: provider.maxToolRounds,
@@ -356,6 +360,9 @@ class _MessageList extends StatefulWidget {
   final ScrollController scrollCtrl;
   final bool isStreaming;
   final String streamBuffer;
+  final String streamAnswerFormat;
+  final String streamRenderHint;
+  final List<AnswerArtifactView> streamArtifacts;
   final List<EventView> streamEvents;
   final String? error;
   final VoidCallback onClearError;
@@ -365,6 +372,9 @@ class _MessageList extends StatefulWidget {
     required this.scrollCtrl,
     required this.isStreaming,
     required this.streamBuffer,
+    required this.streamAnswerFormat,
+    required this.streamRenderHint,
+    required this.streamArtifacts,
     required this.streamEvents,
     required this.error,
     required this.onClearError,
@@ -421,6 +431,9 @@ class _MessageListState extends State<_MessageList> {
           if (widget.isStreaming && msgIdx == widget.messages.length) {
             child = StreamingBubble(
               buffer: widget.streamBuffer,
+              answerFormat: widget.streamAnswerFormat,
+              renderHint: widget.streamRenderHint,
+              artifacts: widget.streamArtifacts,
               thinkingLines: _buildThinkingLines(widget.streamEvents),
             );
           } else if (msgIdx < widget.messages.length) {
