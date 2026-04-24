@@ -48,6 +48,23 @@ class MemoryView {
   }
 }
 
+class SkillOption {
+  final String name;
+  final String description;
+
+  SkillOption({
+    required this.name,
+    required this.description,
+  });
+
+  factory SkillOption.fromJson(Map<String, dynamic> json) {
+    return SkillOption(
+      name: json["name"] ?? "",
+      description: json["description"] ?? "",
+    );
+  }
+}
+
 class ChatResponse {
   final String sessionId;
   final String answer;
@@ -107,7 +124,8 @@ class SessionFileView {
       mediaType: json["media_type"] ?? "",
       sizeBytes: json["size_bytes"] ?? 0,
       status: json["status"] ?? "",
-      uploadedAt: DateTime.parse(json["uploaded_at"] ?? DateTime.now().toIso8601String()),
+      uploadedAt: DateTime.parse(
+          json["uploaded_at"] ?? DateTime.now().toIso8601String()),
       error: json["error"],
       parsedCharCount: json["parsed_char_count"],
       parsedTokenEstimate: json["parsed_token_estimate"],
@@ -116,7 +134,9 @@ class SessionFileView {
 
   String get sizeDisplay {
     if (sizeBytes < 1024) return "$sizeBytes B";
-    if (sizeBytes < 1024 * 1024) return "${(sizeBytes / 1024).toStringAsFixed(1)} KB";
+    if (sizeBytes < 1024 * 1024) {
+      return "${(sizeBytes / 1024).toStringAsFixed(1)} KB";
+    }
     return "${(sizeBytes / 1024 / 1024).toStringAsFixed(1)} MB";
   }
 }
@@ -148,12 +168,14 @@ class SessionMeta {
   final String id;
   final String title;
   final DateTime createdAt;
+  final DateTime updatedAt;
   final int messageCount;
 
   SessionMeta({
     required this.id,
     required this.title,
     required this.createdAt,
+    required this.updatedAt,
     this.messageCount = 0,
   });
 }
@@ -191,7 +213,8 @@ class EventView {
       eventVersion: json["event_version"] ?? 0,
       type: json["type"] ?? "",
       payload: Map<String, dynamic>.from(json["payload"] ?? {}),
-      createdAt: DateTime.parse(json["created_at"] ?? DateTime.now().toIso8601String()),
+      createdAt: DateTime.parse(
+          json["created_at"] ?? DateTime.now().toIso8601String()),
     );
   }
 

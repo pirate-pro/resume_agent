@@ -5,10 +5,13 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import '../../core/models/api_models.dart';
 import '../theme/app_theme.dart';
 
+const double _bubbleMaxWidth = 780;
+
 class ChatBubble extends StatefulWidget {
   final ChatMessage message;
   final bool isStreaming;
-  const ChatBubble({super.key, required this.message, this.isStreaming = false});
+  const ChatBubble(
+      {super.key, required this.message, this.isStreaming = false});
 
   @override
   State<ChatBubble> createState() => _ChatBubbleState();
@@ -26,63 +29,68 @@ class _ChatBubbleState extends State<ChatBubble> {
         onEnter: (_) => setState(() => _hovering = true),
         onExit: (_) => setState(() => _hovering = false),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 780),
+          constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
           margin: EdgeInsets.only(
             left: isUser ? 60 : 0,
             right: isUser ? 0 : 60,
             top: 6,
             bottom: 6,
           ),
-          child: Column(
-            crossAxisAlignment:
-                isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6, left: 4, right: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _Avatar(isUser: isUser),
-                    const SizedBox(width: 8),
-                    Text(
-                      isUser ? "你" : "Assistant",
-                      style: AppTheme.ts(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.textSecondary),
-                    ),
-                    if (_hovering && !isUser) ...[
+          child: IntrinsicWidth(
+            child: Column(
+              crossAxisAlignment:
+                  isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6, left: 4, right: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _Avatar(isUser: isUser),
                       const SizedBox(width: 8),
-                      _CopyButton(text: widget.message.content),
-                    ],
-                  ],
-                ),
-              ),
-              Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: isUser
-                    ? AppTheme.userBubbleDecoration
-                    : AppTheme.assistantBubbleDecoration,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (widget.message.content.isNotEmpty)
-                      _MarkdownBody(
-                        content: widget.message.content,
-                        isUser: isUser,
+                      Text(
+                        isUser ? "你" : "Assistant",
+                        style: AppTheme.ts(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textSecondary),
                       ),
-                    if (widget.isStreaming) const _Cursor(),
-                    if (widget.message.toolCalls.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      ...widget.message.toolCalls
-                          .map((tc) => _ToolCallChip(toolCall: tc)),
+                      if (_hovering && !isUser) ...[
+                        const SizedBox(width: 8),
+                        _CopyButton(text: widget.message.content),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    decoration: isUser
+                        ? AppTheme.userBubbleDecoration
+                        : AppTheme.assistantBubbleDecoration,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (widget.message.content.isNotEmpty)
+                          _MarkdownBody(
+                            content: widget.message.content,
+                            isUser: isUser,
+                          ),
+                        if (widget.isStreaming) const _Cursor(),
+                        if (widget.message.toolCalls.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          ...widget.message.toolCalls
+                              .map((tc) => _ToolCallChip(toolCall: tc)),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -93,66 +101,74 @@ class _ChatBubbleState extends State<ChatBubble> {
 class StreamingBubble extends StatelessWidget {
   final String buffer;
   final List<String> thinkingLines;
-  const StreamingBubble({super.key, required this.buffer, this.thinkingLines = const []});
+  const StreamingBubble(
+      {super.key, required this.buffer, this.thinkingLines = const []});
 
   @override
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 780),
+        constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
         margin: const EdgeInsets.only(top: 6, bottom: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6, left: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const _Avatar(isUser: false),
-                  const SizedBox(width: 8),
-                  Text(
-                    "Assistant",
-                    style: AppTheme.ts(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textSecondary),
-                  ),
-                  if (buffer.isEmpty) ...[
-                    const SizedBox(width: 8),
-                    Text("输出中...",
-                        style: AppTheme.ts(
-                            fontSize: 11, color: AppTheme.textTertiary)),
-                  ],
-                ],
-              ),
-            ),
-            // Thinking section (collapsible)
-            if (thinkingLines.isNotEmpty)
-              _ThinkingBlock(lines: thinkingLines),
-            // Content
-            if (buffer.isNotEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: AppTheme.assistantBubbleDecoration,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        child: IntrinsicWidth(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6, left: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    _MarkdownBody(content: buffer, isUser: false),
-                    const _Cursor(),
+                    const _Avatar(isUser: false),
+                    const SizedBox(width: 8),
+                    Text(
+                      "Assistant",
+                      style: AppTheme.ts(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary),
+                    ),
+                    if (buffer.isEmpty) ...[
+                      const SizedBox(width: 8),
+                      Text("输出中...",
+                          style: AppTheme.ts(
+                              fontSize: 11, color: AppTheme.textTertiary)),
+                    ],
                   ],
                 ),
-              )
-            else
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: AppTheme.assistantBubbleDecoration,
-                child: const _Cursor(),
               ),
-          ],
+              // Thinking section (collapsible)
+              if (thinkingLines.isNotEmpty)
+                _ThinkingBlock(lines: thinkingLines),
+              // Content
+              if (buffer.isNotEmpty)
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 12),
+                    decoration: AppTheme.assistantBubbleDecoration,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _MarkdownBody(content: buffer, isUser: false),
+                        const _Cursor(),
+                      ],
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: AppTheme.assistantBubbleDecoration,
+                  child: const _Cursor(),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -310,21 +326,25 @@ class _MarkdownBody extends StatelessWidget {
         ),
         codeblockPadding: const EdgeInsets.all(14),
         h1: AppTheme.ts(
-            fontSize: 22, fontWeight: FontWeight.w700, color: AppTheme.textPrimary),
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.textPrimary),
         h2: AppTheme.ts(
-            fontSize: 18, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: AppTheme.textPrimary),
         h3: AppTheme.ts(
-            fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: AppTheme.textPrimary),
         blockquoteDecoration: BoxDecoration(
           border: Border(
             left: BorderSide(
                 color: AppTheme.accent.withValues(alpha: 0.5), width: 3),
           ),
         ),
-        blockquotePadding:
-            const EdgeInsets.only(left: 14, top: 4, bottom: 4),
-        listBullet:
-            AppTheme.ts(fontSize: 15, color: AppTheme.textSecondary),
+        blockquotePadding: const EdgeInsets.only(left: 14, top: 4, bottom: 4),
+        listBullet: AppTheme.ts(fontSize: 15, color: AppTheme.textSecondary),
         a: AppTheme.ts(fontSize: 15, color: AppTheme.accent),
       ),
     );
@@ -371,8 +391,7 @@ class _Cursor extends StatefulWidget {
   State<_Cursor> createState() => _CursorState();
 }
 
-class _CursorState extends State<_Cursor>
-    with SingleTickerProviderStateMixin {
+class _CursorState extends State<_Cursor> with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
 
   @override

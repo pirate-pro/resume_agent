@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
+import '../constants/app_config.dart';
 import '../models/api_models.dart';
 import '../services/api_service.dart';
 
@@ -15,15 +16,23 @@ final chatProvider = ChangeNotifierProvider<ChatProvider>((ref) {
 });
 
 class ChatProvider extends ChangeNotifier {
+  static const _uuid = Uuid();
+
   final ApiService _api;
 
   String? _sessionId;
   final List<ChatMessage> _messages = [];
   bool _isStreaming = false;
+  bool _isUploadingFile = false;
+  bool _isLoadingSkills = false;
   String _streamBuffer = "";
   String? _error;
+  String? _skillsError;
   final List<SessionMeta> _sessions = [];
   List<String> _activeFileIds = [];
+  List<SkillOption> _availableSkills = [];
+  List<String> _selectedSkillNames = [];
+  int _maxToolRounds = AppConfig.maxToolRounds;
   bool _serverReachable = false;
 
   // Debug / side panel data
@@ -36,10 +45,16 @@ class ChatProvider extends ChangeNotifier {
   String? get sessionId => _sessionId;
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   bool get isStreaming => _isStreaming;
+  bool get isUploadingFile => _isUploadingFile;
+  bool get isLoadingSkills => _isLoadingSkills;
   String get streamBuffer => _streamBuffer;
   String? get error => _error;
+  String? get skillsError => _skillsError;
   List<SessionMeta> get sessions => List.unmodifiable(_sessions);
   List<String> get activeFileIds => List.unmodifiable(_activeFileIds);
+  List<SkillOption> get availableSkills => List.unmodifiable(_availableSkills);
+  List<String> get selectedSkillNames => List.unmodifiable(_selectedSkillNames);
+  int get maxToolRounds => _maxToolRounds;
   bool get serverReachable => _serverReachable;
   bool get hasActiveSession => _sessionId != null;
   List<ToolCallView> get lastToolCalls => List.unmodifiable(_lastToolCalls);
@@ -54,21 +69,8 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _init() async {
     await _loadSessions();
     _checkHealth();
-    // Also try loading sessions from the backend
-    try {
-      final remoteSessions = await _api.listSessions();
-      if (remoteSessions.isNotEmpty) {
-        // Merge: keep local sessions, add remote ones that are missing
-        final localIds = _sessions.map((s) => s.id).toSet();
-        for (final rs in remoteSessions) {
-          if (!localIds.contains(rs.id)) {
-            _sessions.add(rs);
-          }
-        }
-        _sessions.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        notifyListeners();
-      }
-    } catch (_) {}
+    unawaited(refreshSkills());
+    await refreshSessions();
   }
 
   Future<void> _checkHealth() async {
@@ -90,6 +92,8 @@ class ChatProvider extends ChangeNotifier {
             id: item["id"],
             title: item["title"] ?? "新会话",
             createdAt: DateTime.parse(item["created_at"]),
+            updatedAt: DateTime.tryParse(item["updated_at"] ?? "") ??
+                DateTime.parse(item["created_at"]),
             messageCount: item["message_count"] ?? 0,
           ));
         }
@@ -105,6 +109,7 @@ class ChatProvider extends ChangeNotifier {
               "id": s.id,
               "title": s.title,
               "created_at": s.createdAt.toIso8601String(),
+              "updated_at": s.updatedAt.toIso8601String(),
               "message_count": s.messageCount,
             })
         .toList();
@@ -113,28 +118,98 @@ class ChatProvider extends ChangeNotifier {
 
   void _registerSession(String id, String firstMessage) {
     final existing = _sessions.where((s) => s.id == id).firstOrNull;
+    final nextTitle = _buildSessionTitle(firstMessage);
     if (existing == null) {
       _sessions.insert(
         0,
         SessionMeta(
           id: id,
-          title: firstMessage.length > 30
-              ? "${firstMessage.substring(0, 30)}..."
-              : firstMessage,
+          title: nextTitle,
           createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
           messageCount: 1,
         ),
       );
     } else {
+      final shouldReplaceTitle = existing.messageCount == 0 ||
+          existing.title == "新会话" ||
+          existing.title.startsWith("文件:");
       final idx = _sessions.indexOf(existing);
       _sessions[idx] = SessionMeta(
         id: existing.id,
-        title: existing.title,
+        title: shouldReplaceTitle ? nextTitle : existing.title,
         createdAt: existing.createdAt,
+        updatedAt: DateTime.now(),
         messageCount: existing.messageCount + 2,
       );
     }
     _saveSessions();
+  }
+
+  String _buildSessionTitle(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return "新会话";
+    return trimmed.length > 30 ? "${trimmed.substring(0, 30)}..." : trimmed;
+  }
+
+  String _generateSessionId() {
+    final raw = _uuid.v4().replaceAll("-", "");
+    return "sess_${raw.substring(0, 12)}";
+  }
+
+  Future<void> _ensureSessionPlaceholder(String sessionId, String title) async {
+    final existing = _sessions.where((s) => s.id == sessionId).firstOrNull;
+    if (existing != null) return;
+    _sessions.insert(
+      0,
+      SessionMeta(
+        id: sessionId,
+        title: title,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+        messageCount: 0,
+      ),
+    );
+    await _saveSessions();
+  }
+
+  Future<void> _discardPlaceholderSession(String sessionId) async {
+    _sessions.removeWhere((s) => s.id == sessionId);
+    if (_sessionId == sessionId) {
+      _sessionId = null;
+      _sessionFiles = [];
+      _activeFileIds = [];
+    }
+    await _saveSessions();
+  }
+
+  Future<void> refreshSessions() async {
+    try {
+      final remoteSessions = await _api.listSessions();
+      if (remoteSessions.isEmpty) {
+        return;
+      }
+      final merged = <String, SessionMeta>{};
+      for (final session in _sessions) {
+        merged[session.id] = session;
+      }
+      for (final session in remoteSessions) {
+        final existing = merged[session.id];
+        merged[session.id] = SessionMeta(
+          id: session.id,
+          title: session.title.isNotEmpty ? session.title : (existing?.title ?? "新会话"),
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messageCount: existing?.messageCount ?? session.messageCount,
+        );
+      }
+      _sessions
+        ..clear()
+        ..addAll(merged.values);
+      _sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      await _saveSessions();
+      notifyListeners();
+    } catch (_) {}
   }
 
   // ── Session management ──────────────────────────────────────────────
@@ -149,6 +224,60 @@ class ChatProvider extends ChangeNotifier {
     _lastMemoryHits = [];
     _streamEvents = [];
     _sessionFiles = [];
+    notifyListeners();
+  }
+
+  Future<void> refreshSkills() async {
+    if (_isLoadingSkills) return;
+    _isLoadingSkills = true;
+    _skillsError = null;
+    notifyListeners();
+    try {
+      final skills = await _api.listSkills();
+      skills.sort((a, b) => a.name.compareTo(b.name));
+      _availableSkills = skills;
+    } on ApiException catch (e) {
+      _skillsError = e.message;
+    } catch (e) {
+      _skillsError = e.toString();
+    } finally {
+      _isLoadingSkills = false;
+      notifyListeners();
+    }
+  }
+
+  void toggleSkill(String skillName) {
+    final normalized = skillName.trim();
+    if (normalized.isEmpty) return;
+    final current = List<String>.from(_selectedSkillNames);
+    if (current.contains(normalized)) {
+      current.remove(normalized);
+    } else {
+      current.add(normalized);
+      current.sort();
+    }
+    _selectedSkillNames = current;
+    notifyListeners();
+  }
+
+  void clearSkill(String skillName) {
+    final normalized = skillName.trim();
+    if (normalized.isEmpty) return;
+    _selectedSkillNames =
+        _selectedSkillNames.where((item) => item != normalized).toList();
+    notifyListeners();
+  }
+
+  void setMaxToolRounds(int value) {
+    final clamped = value.clamp(0, 10);
+    if (_maxToolRounds == clamped) return;
+    _maxToolRounds = clamped;
+    notifyListeners();
+  }
+
+  void resetRuntimeOptions() {
+    _selectedSkillNames = [];
+    _maxToolRounds = AppConfig.maxToolRounds;
     notifyListeners();
   }
 
@@ -206,6 +335,8 @@ class ChatProvider extends ChangeNotifier {
         await for (final event in _api.chatStream(
           message: content.trim(),
           sessionId: _sessionId,
+          skillNames: _selectedSkillNames,
+          maxToolRounds: _maxToolRounds,
           activeFileIds: _activeFileIds.isEmpty ? null : _activeFileIds,
         )) {
           gotEvents = true;
@@ -222,6 +353,8 @@ class ChatProvider extends ChangeNotifier {
         final resp = await _api.chat(
           message: content.trim(),
           sessionId: _sessionId,
+          skillNames: _selectedSkillNames,
+          maxToolRounds: _maxToolRounds,
           activeFileIds: _activeFileIds.isEmpty ? null : _activeFileIds,
         );
         doneResponse = resp;
@@ -245,14 +378,15 @@ class ChatProvider extends ChangeNotifier {
 
       // Register session in local list
       if (_sessionId != null) {
-        final lastUserMsg =
-            _messages.lastWhere((m) => m.isUser, orElse: () => ChatMessage(role: "user", content: ""));
+        final lastUserMsg = _messages.lastWhere((m) => m.isUser,
+            orElse: () => ChatMessage(role: "user", content: ""));
         _registerSession(_sessionId!, lastUserMsg.content);
       }
 
       // Refresh files after completion
       if (_sessionId != null) {
         await refreshSessionFiles();
+        await refreshSessions();
       }
     } on ApiException catch (e) {
       _error = e.message;
@@ -298,7 +432,8 @@ class ChatProvider extends ChangeNotifier {
           eventVersion: 0,
           type: data["type"] ?? "",
           payload: Map<String, dynamic>.from(data["payload"] ?? {}),
-          createdAt: DateTime.tryParse(data["created_at"] ?? "") ?? DateTime.now(),
+          createdAt:
+              DateTime.tryParse(data["created_at"] ?? "") ?? DateTime.now(),
         );
         _streamEvents.add(eventRecord);
         if (_streamEvents.length > 200) {
@@ -355,12 +490,59 @@ class ChatProvider extends ChangeNotifier {
       current.remove(fileId);
     }
     try {
-      final resp =
-          await _api.setActiveFiles(sessionId: _sessionId!, fileIds: current.toList());
+      final resp = await _api.setActiveFiles(
+          sessionId: _sessionId!, fileIds: current.toList());
       _sessionFiles = resp.files;
       _activeFileIds = resp.activeFileIds;
     } catch (_) {}
     notifyListeners();
+  }
+
+  Future<void> uploadSessionFile({
+    required String filename,
+    required Uint8List bytes,
+    bool autoActivate = true,
+  }) async {
+    final trimmed = filename.trim();
+    if (trimmed.isEmpty || bytes.isEmpty || _isUploadingFile) return;
+
+    final hadSession = _sessionId != null;
+    final sessionId = _sessionId ?? _generateSessionId();
+
+    if (!hadSession) {
+      _sessionId = sessionId;
+      await _ensureSessionPlaceholder(
+        sessionId,
+        _buildSessionTitle("文件: $trimmed"),
+      );
+    }
+
+    _error = null;
+    _isUploadingFile = true;
+    notifyListeners();
+
+    try {
+      await _api.uploadFile(
+        sessionId: sessionId,
+        filename: trimmed,
+        contentBase64: base64Encode(bytes),
+        autoActivate: autoActivate,
+      );
+      await refreshSessionFiles();
+    } on ApiException catch (e) {
+      _error = e.message;
+      if (!hadSession && _messages.isEmpty) {
+        await _discardPlaceholderSession(sessionId);
+      }
+    } catch (e) {
+      _error = e.toString();
+      if (!hadSession && _messages.isEmpty) {
+        await _discardPlaceholderSession(sessionId);
+      }
+    } finally {
+      _isUploadingFile = false;
+      notifyListeners();
+    }
   }
 
   // ── Memories ─────────────────────────────────────────────────────────
