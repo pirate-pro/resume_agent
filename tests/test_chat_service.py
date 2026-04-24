@@ -34,7 +34,10 @@ def test_chat_service_creates_session_when_missing(tmp_path: Path) -> None:
 
 
 def test_chat_service_returns_runtime_response(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="result"))
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=StaticModelClient(content="```markdown\n# 结果\n\n内容\n```"),
+    )
 
     response = asyncio.run(
         service.chat(
@@ -48,7 +51,10 @@ def test_chat_service_returns_runtime_response(tmp_path: Path) -> None:
     )
 
     assert response.session_id == "sess_explicit"
-    assert response.answer == "result"
+    assert response.answer == "# 结果\n\n内容"
+    assert response.answer_format == "markdown"
+    assert response.render_hint == "markdown_document"
+    assert response.source_kind == "direct_answer"
 
 
 def test_chat_service_generates_session_title_after_first_turn(tmp_path: Path) -> None:
@@ -150,6 +156,37 @@ def test_chat_service_updates_session_title_and_pin(tmp_path: Path) -> None:
     assert updated.title == "手动命名"
     assert updated.is_pinned is True
     assert updated.pinned_at is not None
+
+
+def test_chat_service_previews_workspace_file_with_render_protocol(tmp_path: Path) -> None:
+    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    created = asyncio.run(
+        service.chat(
+            ChatRequest(
+                session_id="sess_workspace_preview",
+                message="create",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        )
+    )
+    assert created.session_id == "sess_workspace_preview"
+
+    workspace = service._session_repository.get_workspace_path("sess_workspace_preview")  # noqa: SLF001
+    target = workspace / "report.md"
+    target.write_text("# 标题\n\n- 条目 1\n- 条目 2\n", encoding="utf-8")
+
+    preview = service.preview_workspace_file(
+        "sess_workspace_preview",
+        path="report.md",
+        max_chars=12000,
+    )
+
+    assert preview.path == "report.md"
+    assert preview.content == "# 标题\n\n- 条目 1\n- 条目 2"
+    assert preview.answer_format == "markdown"
+    assert preview.render_hint == "markdown_document"
+    assert preview.truncated is False
 
 
 def test_chat_stream_emits_heartbeat_when_idle(tmp_path: Path) -> None:

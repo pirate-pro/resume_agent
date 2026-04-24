@@ -15,6 +15,7 @@ from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.session_manager import SessionManager
+from app.services.answer_normalizer import AnswerNormalizer
 
 __all__ = ["AgentRuntime"]
 _logger = logging.getLogger(__name__)
@@ -23,6 +24,8 @@ _FINAL_ANSWER_RECOVERY_PROMPT = (
     "不要再调用任何工具。"
     "如果你已经创建、修改或读取了文件，要明确说明结果和相关文件路径。"
     "如果前文要求生成内容用于展示，就把最终内容直接回复给用户，而不是只写入文件。"
+    "如果最终内容应为 Markdown 文档，不要再额外包一层 ```markdown 外层代码块；"
+    "只有在用户明确要求查看 Markdown 源码时，才使用 ```markdown 代码块。"
 )
 
 
@@ -42,6 +45,7 @@ class AgentRuntime:
         self._context_assembler = context_assembler
         self._model_client = model_client
         self._tool_executor = tool_executor
+        self._answer_normalizer = AnswerNormalizer()
 
     def run(self, run_input: AgentRunInput) -> AgentRunOutput:
         if not isinstance(run_input, AgentRunInput):
@@ -272,6 +276,7 @@ class AgentRuntime:
             resolved_tool_calls: list[ToolCall] = []
             saw_tool_call_delta = False
             emitted_answer_delta = False
+            emitted_answer_meta: tuple[str, str, str, str] | None = None
 
             async for chunk in self._model_client.generate_stream(
                 system_prompt=context.system_prompt,
@@ -284,6 +289,13 @@ class AgentRuntime:
                 if chunk.delta:
                     round_content_parts.append(chunk.delta)
                     if not saw_tool_call_delta:
+                        # 流式阶段也尽量走协议驱动渲染；一旦推断结果变化，就增量下发最新元数据。
+                        emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
+                            channel=channel,
+                            content="".join(round_content_parts),
+                            tool_calls=used_tool_calls,
+                            previous_meta=emitted_answer_meta,
+                        )
                         await channel.emit("answer_delta", {"delta": chunk.delta})
                         emitted_answer_delta = True
 
@@ -306,6 +318,7 @@ class AgentRuntime:
                         system_prompt=context.system_prompt,
                         messages=messages,
                         original_user_message=run_input.user_message,
+                        previous_tool_calls=used_tool_calls,
                         channel=channel,
                     )
                 answer = answer or "(no answer)"
@@ -313,6 +326,8 @@ class AgentRuntime:
 
             # 若本轮先流出了部分正文，后续又出现 tool_call，需要回滚临时正文。
             if emitted_answer_delta:
+                # 前端需要同时清空正文与渲染元数据，否则会把上一轮的渲染模式误用于下一轮。
+                await channel.emit("answer_meta_reset", {})
                 await channel.emit("answer_reset", {})
 
             if round_index == run_input.max_tool_rounds:
@@ -509,6 +524,7 @@ class AgentRuntime:
         system_prompt: str,
         messages: list[dict[str, Any]],
         original_user_message: str,
+        previous_tool_calls: list[ToolCall],
         channel: EventChannel,
     ) -> str:
         _logger.warning("最终轮未返回正文，触发流式补答: user_message=%s", original_user_message[:120])
@@ -520,6 +536,7 @@ class AgentRuntime:
             },
         ]
         parts: list[str] = []
+        emitted_answer_meta: tuple[str, str, str, str] | None = None
         async for chunk in self._model_client.generate_stream(
             system_prompt=system_prompt,
             messages=recovery_messages,
@@ -527,8 +544,55 @@ class AgentRuntime:
         ):
             if chunk.delta:
                 parts.append(chunk.delta)
+                emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
+                    channel=channel,
+                    content="".join(parts),
+                    tool_calls=previous_tool_calls,
+                    previous_meta=emitted_answer_meta,
+                )
                 await channel.emit("answer_delta", {"delta": chunk.delta})
         return "".join(parts).strip()
+
+    async def _emit_stream_answer_meta_if_changed(
+        self,
+        *,
+        channel: EventChannel,
+        content: str,
+        tool_calls: list[ToolCall],
+        previous_meta: tuple[str, str, str, str] | None,
+    ) -> tuple[str, str, str, str] | None:
+        normalized = self._answer_normalizer.normalize_assistant_message(
+            content,
+            tool_calls=tool_calls,
+        )
+        artifact_signature = "|".join(
+            f"{item.type}:{item.path}:{item.role}" for item in normalized.artifacts
+        )
+        current_meta = (
+            normalized.answer_format,
+            normalized.render_hint,
+            normalized.source_kind,
+            artifact_signature,
+        )
+        if current_meta == previous_meta:
+            return previous_meta
+        await channel.emit(
+            "answer_meta",
+            {
+                "answer_format": normalized.answer_format,
+                "render_hint": normalized.render_hint,
+                "source_kind": normalized.source_kind,
+                "artifacts": [
+                    {
+                        "type": item.type,
+                        "path": item.path,
+                        "role": item.role,
+                    }
+                    for item in normalized.artifacts
+                ],
+            },
+        )
+        return current_meta
 
     def _resolve_run_context(self, session_id: str, run_input: AgentRunInput) -> RunContext:
         if run_input.context is None:

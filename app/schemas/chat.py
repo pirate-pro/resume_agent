@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 __all__ = [
     "ActiveFilesRequest",
+    "AnswerArtifactView",
     "ChatRequest",
     "ChatResponse",
     "EventView",
@@ -21,6 +22,7 @@ __all__ = [
     "SessionListItem",
     "SessionUpdateRequest",
     "SessionMessage",
+    "WorkspaceFilePreviewResponse",
     "ToolCallView",
 ]
 
@@ -105,9 +107,19 @@ class SkillSummaryView(BaseModel):
     description: str
 
 
+class AnswerArtifactView(BaseModel):
+    type: str
+    path: str
+    role: str
+
+
 class ChatResponse(BaseModel):
     session_id: str
     answer: str
+    answer_format: Literal["plain_text", "markdown", "code", "markdown_source"] = "plain_text"
+    render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
+    source_kind: Literal["direct_answer", "generated_document", "file_content", "summary"] = "direct_answer"
+    artifacts: list[AnswerArtifactView] = Field(default_factory=list)
     tool_calls: list[ToolCallView]
     memory_hits: list[MemoryView]
 
@@ -175,7 +187,23 @@ class SessionUpdateRequest(BaseModel):
 class SessionMessage(BaseModel):
     role: str
     content: str
+    answer_format: Literal["plain_text", "markdown", "code", "markdown_source"] = "plain_text"
+    render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
+    source_kind: Literal["direct_answer", "generated_document", "file_content", "summary"] = "direct_answer"
+    artifacts: list[AnswerArtifactView] = Field(default_factory=list)
+    tool_calls: list[ToolCallView] = Field(default_factory=list)
     created_at: datetime | None = None
+
+
+class WorkspaceFilePreviewResponse(BaseModel):
+    session_id: str
+    path: str
+    content: str
+    size_bytes: int
+    total_chars: int
+    truncated: bool
+    answer_format: Literal["plain_text", "markdown", "code", "markdown_source"] = "plain_text"
+    render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
 
 
 class ActiveFilesRequest(BaseModel):

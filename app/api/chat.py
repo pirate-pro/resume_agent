@@ -22,6 +22,7 @@ from app.core.errors import (
 )
 from app.schemas.chat import (
     ActiveFilesRequest,
+    AnswerArtifactView,
     ChatRequest,
     ChatResponse,
     EventView,
@@ -34,6 +35,8 @@ from app.schemas.chat import (
     SessionListItem,
     SessionMessage,
     SessionUpdateRequest,
+    WorkspaceFilePreviewResponse,
+    ToolCallView,
 )
 from app.services.chat_service import ChatService
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -94,6 +97,26 @@ async def get_session_messages(
             SessionMessage(
                 role=m["role"],
                 content=m["content"],
+                answer_format=m.get("answer_format", "plain_text"),
+                render_hint=m.get("render_hint", "plain"),
+                source_kind=m.get("source_kind", "direct_answer"),
+                artifacts=[
+                    AnswerArtifactView(
+                        type=str(item.get("type", "")),
+                        path=str(item.get("path", "")),
+                        role=str(item.get("role", "")),
+                    )
+                    for item in m.get("artifacts", [])
+                    if isinstance(item, dict)
+                ],
+                tool_calls=[
+                    ToolCallView(
+                        name=str(item.get("name", "")),
+                        arguments=item.get("arguments", {}) if isinstance(item.get("arguments"), dict) else {},
+                    )
+                    for item in m.get("tool_calls", [])
+                    if isinstance(item, dict)
+                ],
                 created_at=m.get("created_at"),
             )
             for m in messages
@@ -216,6 +239,31 @@ async def post_session_active_files(
         return service.set_active_files(session_id, request)
     except AppError as exc:
         _logger.exception("更新会话 active files 失败: session_id=%s error=%s", session_id, exc)
+        raise _map_app_error(exc) from exc
+
+
+@router.get("/sessions/{session_id}/workspace-files/preview", response_model=WorkspaceFilePreviewResponse)
+async def get_workspace_file_preview(
+    session_id: str,
+    path: str = Query(..., min_length=1),
+    max_chars: int = Query(default=12000, ge=200, le=24000),
+    service: ChatService = Depends(get_chat_service),
+) -> WorkspaceFilePreviewResponse:
+    _logger.info(
+        "预览会话 workspace 文件: session_id=%s path=%s max_chars=%s",
+        session_id,
+        path,
+        max_chars,
+    )
+    try:
+        return service.preview_workspace_file(session_id, path=path, max_chars=max_chars)
+    except AppError as exc:
+        _logger.exception(
+            "预览会话 workspace 文件失败: session_id=%s path=%s error=%s",
+            session_id,
+            path,
+            exc,
+        )
         raise _map_app_error(exc) from exc
 
 

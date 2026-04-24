@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import SessionNotFoundError, ValidationError
-from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, RunContext, SessionFile, SessionMeta
+from app.domain.models import AgentRunInput, AgentRunOutput, EventRecord, MemoryItem, RunContext, SessionFile, SessionMeta, ToolCall
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.runtime.agent_capability import AgentCapabilityRegistry
@@ -19,9 +19,11 @@ from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.event_channel import EventChannel
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
+from app.services.answer_normalizer import AnswerNormalizer
 from app.services.session_title_service import DEFAULT_SESSION_TITLES, SessionTitleService
 from app.schemas.chat import (
     ActiveFilesRequest,
+    AnswerArtifactView,
     ChatRequest,
     ChatResponse,
     MemoryView,
@@ -29,6 +31,7 @@ from app.schemas.chat import (
     SessionFilesResponse,
     ToolCallView,
     SessionUpdateRequest,
+    WorkspaceFilePreviewResponse,
 )
 
 __all__ = ["ChatService"]
@@ -49,6 +52,7 @@ class ChatService:
         capability_registry: AgentCapabilityRegistry,
         session_lock_manager: SessionLockManager,
         session_title_service: SessionTitleService,
+        answer_normalizer: AnswerNormalizer | None = None,
         stream_heartbeat_interval_seconds: float = 15.0,
         stream_run_timeout_seconds: float = 300.0,
     ) -> None:
@@ -59,6 +63,7 @@ class ChatService:
         self._capability_registry = capability_registry
         self._session_lock_manager = session_lock_manager
         self._session_title_service = session_title_service
+        self._answer_normalizer = answer_normalizer or AnswerNormalizer()
         if stream_heartbeat_interval_seconds <= 0:
             raise ValidationError("stream_heartbeat_interval_seconds must be positive.")
         if stream_run_timeout_seconds <= 0:
@@ -102,7 +107,7 @@ class ChatService:
         return chat_response
 
     async def chat_stream(self, request: ChatRequest) -> AsyncIterator[dict[str, Any]]:
-        """以流式方式执行对话：runtime 直接推送 run_event/answer_delta。"""
+        """以流式方式执行对话：runtime 直接推送 run_event/answer_meta/answer_delta。"""
         if not isinstance(request, ChatRequest):
             raise ValidationError("request must be ChatRequest.")
 
@@ -226,7 +231,65 @@ class ChatService:
     def list_session_messages(self, session_id: str) -> list[dict[str, object]]:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValidationError("session_id must be a non-empty string.")
-        return self._session_repository.list_session_messages(session_id.strip())
+        normalized_session_id = session_id.strip()
+        events = self._session_repository.list_events(normalized_session_id)
+        messages: list[dict[str, object]] = []
+        pending_tool_calls: list[dict[str, object]] = []
+
+        for event in events:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            if event.type == "user_message":
+                pending_tool_calls = []
+                normalized = self._answer_normalizer.normalize_user_message(str(payload.get("content", "")))
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": normalized.content,
+                        "answer_format": normalized.answer_format,
+                        "render_hint": normalized.render_hint,
+                        "source_kind": normalized.source_kind,
+                        "artifacts": [self._artifact_to_payload(item) for item in normalized.artifacts],
+                        "tool_calls": [],
+                        "created_at": event.created_at,
+                    }
+                )
+                continue
+
+            if event.type == "tool_call":
+                # 历史消息接口需要把与 assistant_message 同轮的 tool_call 也带回去，
+                # 这样才能稳定重建 artifacts/source_kind/render_hint。
+                tool_name = str(payload.get("name", "")).strip()
+                arguments = payload.get("arguments", {})
+                if tool_name and isinstance(arguments, dict):
+                    pending_tool_calls.append(
+                        {
+                            "name": tool_name,
+                            "arguments": arguments,
+                        }
+                    )
+                continue
+
+            if event.type == "assistant_message":
+                tool_calls = self._payload_tool_calls_to_domain(pending_tool_calls)
+                normalized = self._answer_normalizer.normalize_assistant_message(
+                    str(payload.get("content", "")),
+                    tool_calls=tool_calls,
+                )
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": normalized.content,
+                        "answer_format": normalized.answer_format,
+                        "render_hint": normalized.render_hint,
+                        "source_kind": normalized.source_kind,
+                        "artifacts": [self._artifact_to_payload(item) for item in normalized.artifacts],
+                        "tool_calls": pending_tool_calls,
+                        "created_at": event.created_at,
+                    }
+                )
+                pending_tool_calls = []
+
+        return messages
 
     def list_session_events(self, session_id: str) -> list[EventRecord]:
         if not isinstance(session_id, str) or not session_id.strip():
@@ -377,6 +440,52 @@ class ChatService:
             files=[self._to_file_view(item) for item in files],
         )
 
+    def preview_workspace_file(
+        self,
+        session_id: str,
+        *,
+        path: str,
+        max_chars: int = 12000,
+    ) -> WorkspaceFilePreviewResponse:
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValidationError("session_id must be a non-empty string.")
+        if not isinstance(path, str) or not path.strip():
+            raise ValidationError("path must be a non-empty string.")
+        if not isinstance(max_chars, int) or max_chars <= 0:
+            raise ValidationError("max_chars must be a positive integer.")
+
+        normalized_session_id = session_id.strip()
+        normalized_path = path.strip()
+        max_chars = min(max_chars, 24000)
+
+        workspace = self._session_repository.get_workspace_path(normalized_session_id).resolve()
+        target = _resolve_workspace_preview_path(workspace, normalized_path)
+        if not target.exists() or not target.is_file():
+            raise ValidationError(
+                f"Workspace file does not exist: session_id={normalized_session_id} path={normalized_path}"
+            )
+
+        try:
+            content = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = target.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise ValidationError(f"Failed to read workspace file: {exc}") from exc
+
+        truncated = len(content) > max_chars
+        snippet = content[:max_chars]
+        normalized = self._answer_normalizer.normalize_assistant_message(snippet, tool_calls=[])
+        return WorkspaceFilePreviewResponse(
+            session_id=normalized_session_id,
+            path=normalized_path,
+            content=normalized.content,
+            size_bytes=target.stat().st_size,
+            total_chars=len(content),
+            truncated=truncated,
+            answer_format=normalized.answer_format,
+            render_hint=normalized.render_hint,
+        )
+
     async def delete_session(self, session_id: str) -> None:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValidationError("session_id must be a non-empty string.")
@@ -412,15 +521,43 @@ class ChatService:
         return session, run_input
 
     def _to_chat_response(self, run_output: AgentRunOutput) -> ChatResponse:
+        normalized = self._answer_normalizer.normalize_assistant_message(
+            run_output.answer,
+            tool_calls=run_output.tool_calls,
+        )
         return ChatResponse(
             session_id=run_output.session_id,
-            answer=run_output.answer,
+            answer=normalized.content,
+            answer_format=normalized.answer_format,
+            render_hint=normalized.render_hint,
+            source_kind=normalized.source_kind,
+            artifacts=[self._artifact_to_view(item) for item in normalized.artifacts],
             tool_calls=[ToolCallView(name=call.name, arguments=call.arguments) for call in run_output.tool_calls],
             memory_hits=[
                 MemoryView(memory_id=item.memory_id, content=item.content, tags=item.tags)
                 for item in run_output.memory_hits
             ],
         )
+
+    def _artifact_to_view(self, item) -> AnswerArtifactView:
+        return AnswerArtifactView(type=item.type, path=item.path, role=item.role)
+
+    def _artifact_to_payload(self, item) -> dict[str, str]:
+        return {
+            "type": item.type,
+            "path": item.path,
+            "role": item.role,
+        }
+
+    def _payload_tool_calls_to_domain(self, payload: list[dict[str, object]]) -> list[ToolCall]:
+        tool_calls: list[ToolCall] = []
+        for item in payload:
+            name = str(item.get("name", "")).strip()
+            arguments = item.get("arguments", {})
+            if not name or not isinstance(arguments, dict):
+                continue
+            tool_calls.append(ToolCall(name=name, arguments=arguments))
+        return tool_calls
 
     def _to_file_view(self, item: SessionFile) -> SessionFileView:
         return SessionFileView(
@@ -470,6 +607,17 @@ def _sanitize_filename(raw: str) -> str:
     if not candidate:
         raise ValidationError("filename cannot be empty.")
     return candidate.replace("/", "_").replace("\\", "_")
+
+
+def _resolve_workspace_preview_path(workspace: Path, relative_path: str) -> Path:
+    candidate = Path(relative_path)
+    if candidate.is_absolute():
+        raise ValidationError("Absolute paths are not allowed.")
+    workspace_resolved = workspace.resolve()
+    target = (workspace_resolved / candidate).resolve()
+    if not target.is_relative_to(workspace_resolved):
+        raise ValidationError("Path traversal is not allowed.")
+    return target
 
 
 def _normalized_extension(filename: str) -> str:

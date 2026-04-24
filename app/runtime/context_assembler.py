@@ -12,6 +12,13 @@ from app.runtime.memory_manager import MemoryManager
 __all__ = ["ContextAssembler"]
 _logger = logging.getLogger(__name__)
 _ACTIVE_FILE_MAX_COUNT = 12
+_OUTPUT_FORMAT_RULES = """Answer output rules:
+1. If the user asks for a Markdown document to read/render, return direct Markdown body. Do not wrap the whole document in an outer ```markdown fenced block.
+2. Only use ```markdown fenced block when the user explicitly wants Markdown source code.
+3. For code answers, always use standard fenced code blocks and include language when you know it.
+4. For formulas, use LaTeX: inline $...$ and block $$...$$.
+5. If you created or read a file and the user wants to see the content, include the actual final content in the answer instead of only saying it was saved/read.
+6. If content is too long to fully display, provide a concise summary first and then clearly state the related file path if applicable."""
 
 
 class ContextAssembler:
@@ -113,6 +120,7 @@ class ContextAssembler:
         sections: list[str] = [
             "You are a pragmatic assistant. Use tools when needed and never fabricate tool results.",
             "If information is unknown, say you do not know.",
+            _OUTPUT_FORMAT_RULES,
         ]
         if skills:
             sections.append("Skills:\n" + "\n\n".join(f"[{name}]\n{text}" for name, text in skills.items()))
