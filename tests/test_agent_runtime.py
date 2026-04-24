@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
-from app.domain.models import AgentRunInput, RunContext, ToolCall
+from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall
 from app.domain.protocols import ChatModelClient, ModelResponse
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -143,6 +144,37 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
     assert len(memories) == 1
 
 
+def test_runtime_recovers_when_final_round_returns_empty_answer(tmp_path: Path) -> None:
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="memory_write",
+                        arguments={"content": "User prefers JSONL", "tags": ["preference"]},
+                    )
+                ],
+            ),
+            ModelResponse(content="", tool_calls=[]),
+            ModelResponse(content="已经为你整理好了最终答复。", tool_calls=[]),
+        ]
+    )
+    runtime, _, _ = _build_runtime(tmp_path, model)
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_recover_sync",
+            user_message="remember this",
+            skill_names=["base", "memory"],
+            max_tool_rounds=3,
+            context=_context("sess_recover_sync"),
+        )
+    )
+
+    assert output.answer == "已经为你整理好了最终答复。"
+
+
 
 def test_runtime_stops_when_tool_round_limit_exceeded(tmp_path: Path) -> None:
     model = SequenceModelClient(
@@ -215,3 +247,40 @@ def test_runtime_builds_valid_tool_message_flow(tmp_path: Path) -> None:
     assert output.answer == "done"
     assert assistant_tool_call_message["tool_calls"][0]["id"] == "call_test_1"
     assert tool_result_message["tool_call_id"] == "call_test_1"
+
+
+def test_runtime_stream_recovers_when_final_round_returns_empty_answer(tmp_path: Path) -> None:
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="memory_write",
+                        arguments={"content": "stream memory", "tags": ["preference"]},
+                    )
+                ],
+            ),
+            ModelResponse(content="", tool_calls=[]),
+            ModelResponse(content="这是补出来的流式最终答复。", tool_calls=[]),
+        ]
+    )
+    runtime, _, _ = _build_runtime(tmp_path, model)
+
+    async def _run() -> AgentRunOutput:
+        from app.runtime.event_channel import EventChannel
+
+        return await runtime.run_stream(
+            AgentRunInput(
+                session_id="sess_recover_stream",
+                user_message="stream recover",
+                skill_names=["base", "memory"],
+                max_tool_rounds=3,
+                context=_context("sess_recover_stream"),
+            ),
+            EventChannel(),
+        )
+
+    output = asyncio.run(_run())
+
+    assert output.answer == "这是补出来的流式最终答复。"

@@ -18,6 +18,12 @@ from app.runtime.session_manager import SessionManager
 
 __all__ = ["AgentRuntime"]
 _logger = logging.getLogger(__name__)
+_FINAL_ANSWER_RECOVERY_PROMPT = (
+    "你已经拿到了前面对话和工具结果。现在请直接给用户最终答复。"
+    "不要再调用任何工具。"
+    "如果你已经创建、修改或读取了文件，要明确说明结果和相关文件路径。"
+    "如果前文要求生成内容用于展示，就把最终内容直接回复给用户，而不是只写入文件。"
+)
 
 
 class AgentRuntime:
@@ -105,7 +111,14 @@ class AgentRuntime:
             resolved_tool_calls = self._ensure_tool_call_ids(model_response.tool_calls)
 
             if not resolved_tool_calls:
-                answer = (model_response.content or "").strip() or "(no answer)"
+                answer = (model_response.content or "").strip()
+                if not answer:
+                    answer = self._recover_final_answer(
+                        system_prompt=context.system_prompt,
+                        messages=messages,
+                        original_user_message=run_input.user_message,
+                    )
+                answer = answer or "(no answer)"
                 break
 
             if round_index == run_input.max_tool_rounds:
@@ -287,7 +300,15 @@ class AgentRuntime:
             )
 
             if not resolved_tool_calls:
-                answer = round_content or "(no answer)"
+                answer = round_content
+                if not answer:
+                    answer = await self._recover_final_answer_stream(
+                        system_prompt=context.system_prompt,
+                        messages=messages,
+                        original_user_message=run_input.user_message,
+                        channel=channel,
+                    )
+                answer = answer or "(no answer)"
                 break
 
             # 若本轮先流出了部分正文，后续又出现 tool_call，需要回滚临时正文。
@@ -457,6 +478,57 @@ class AgentRuntime:
                 for call in tool_calls
             ],
         }
+
+    def _recover_final_answer(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        original_user_message: str,
+    ) -> str:
+        _logger.warning("最终轮未返回正文，触发同步补答: user_message=%s", original_user_message[:120])
+        recovery_messages = [
+            *messages,
+            {
+                "role": "user",
+                "content": _FINAL_ANSWER_RECOVERY_PROMPT,
+            },
+        ]
+        model_response = self._model_client.generate(
+            system_prompt=system_prompt,
+            messages=recovery_messages,
+            tools=[],
+        )
+        if model_response.tool_calls:
+            _logger.warning("补答轮仍返回 tool_calls，已忽略: tool_call_count=%s", len(model_response.tool_calls))
+        return (model_response.content or "").strip()
+
+    async def _recover_final_answer_stream(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        original_user_message: str,
+        channel: EventChannel,
+    ) -> str:
+        _logger.warning("最终轮未返回正文，触发流式补答: user_message=%s", original_user_message[:120])
+        recovery_messages = [
+            *messages,
+            {
+                "role": "user",
+                "content": _FINAL_ANSWER_RECOVERY_PROMPT,
+            },
+        ]
+        parts: list[str] = []
+        async for chunk in self._model_client.generate_stream(
+            system_prompt=system_prompt,
+            messages=recovery_messages,
+            tools=[],
+        ):
+            if chunk.delta:
+                parts.append(chunk.delta)
+                await channel.emit("answer_delta", {"delta": chunk.delta})
+        return "".join(parts).strip()
 
     def _resolve_run_context(self, session_id: str, run_input: AgentRunInput) -> RunContext:
         if run_input.context is None:
