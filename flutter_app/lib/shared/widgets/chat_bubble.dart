@@ -20,6 +20,7 @@ const int _collapsedCodePreviewLines = 24;
 enum _MessageRenderMode {
   plainText,
   markdownRendered,
+  markdownStructured,
   markdownSource,
   largePreview,
 }
@@ -63,62 +64,63 @@ class _ChatBubbleState extends State<ChatBubble> {
             top: 6,
             bottom: 6,
           ),
-          child: IntrinsicWidth(
-            child: Column(
-              crossAxisAlignment:
-                  isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6, left: 4, right: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _Avatar(isUser: isUser),
+          child: Column(
+            crossAxisAlignment:
+                isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6, left: 4, right: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _Avatar(isUser: isUser),
+                    const SizedBox(width: 8),
+                    Text(
+                      isUser ? "你" : "Assistant",
+                      style: AppTheme.ts(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary),
+                    ),
+                    if (_hovering && !isUser) ...[
                       const SizedBox(width: 8),
-                      Text(
-                        isUser ? "你" : "Assistant",
-                        style: AppTheme.ts(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.textSecondary),
-                      ),
-                      if (_hovering && !isUser) ...[
-                        const SizedBox(width: 8),
-                        _CopyButton(text: widget.message.content),
-                      ],
+                      _CopyButton(text: widget.message.content),
                     ],
-                  ),
+                  ],
                 ),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
-                    decoration: isUser
-                        ? AppTheme.userBubbleDecoration
-                        : AppTheme.assistantBubbleDecoration,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (widget.message.content.isNotEmpty)
-                          _MessageBody(
+              ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+                child: Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: isUser
+                      ? AppTheme.userBubbleDecoration
+                      : AppTheme.assistantBubbleDecoration,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (widget.message.content.isNotEmpty)
+                        RepaintBoundary(
+                          child: _MessageBody(
                             content: widget.message.content,
                             isUser: isUser,
                             isStreaming: false,
                           ),
-                        if (widget.isStreaming) const _Cursor(),
-                        if (widget.message.toolCalls.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          ...widget.message.toolCalls
-                              .map((tc) => _ToolCallChip(toolCall: tc)),
-                        ],
+                        ),
+                      if (widget.isStreaming) const _Cursor(),
+                      if (widget.message.toolCalls.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        ...widget.message.toolCalls
+                            .map((tc) => _ToolCallChip(toolCall: tc)),
                       ],
-                    ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -139,68 +141,69 @@ class StreamingBubble extends StatelessWidget {
       child: Container(
         constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
         margin: const EdgeInsets.only(top: 6, bottom: 6),
-        child: IntrinsicWidth(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6, left: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const _Avatar(isUser: false),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6, left: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const _Avatar(isUser: false),
+                  const SizedBox(width: 8),
+                  Text(
+                    "Assistant",
+                    style: AppTheme.ts(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary),
+                  ),
+                  if (buffer.isEmpty) ...[
                     const SizedBox(width: 8),
-                    Text(
-                      "Assistant",
-                      style: AppTheme.ts(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.textSecondary),
-                    ),
-                    if (buffer.isEmpty) ...[
-                      const SizedBox(width: 8),
-                      Text("输出中...",
-                          style: AppTheme.ts(
-                              fontSize: 11, color: AppTheme.textTertiary)),
-                    ],
+                    Text("输出中...",
+                        style: AppTheme.ts(
+                            fontSize: 11, color: AppTheme.textTertiary)),
                   ],
-                ),
+                ],
               ),
-              // Thinking section (collapsible)
-              if (thinkingLines.isNotEmpty)
-                _ThinkingBlock(lines: thinkingLines),
-              // Content
-              if (buffer.isNotEmpty)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
-                    decoration: AppTheme.assistantBubbleDecoration,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _MessageBody(
+            ),
+            // Thinking section (collapsible)
+            if (thinkingLines.isNotEmpty) _ThinkingBlock(lines: thinkingLines),
+            // Content
+            if (buffer.isNotEmpty)
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+                child: Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: AppTheme.assistantBubbleDecoration,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      RepaintBoundary(
+                        child: _MessageBody(
                           content: buffer,
                           isUser: false,
                           isStreaming: true,
                         ),
-                        const _Cursor(),
-                      ],
-                    ),
+                      ),
+                      const _Cursor(),
+                    ],
                   ),
-                )
-              else
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: AppTheme.assistantBubbleDecoration,
-                  child: const _StreamingSkeleton(),
                 ),
-            ],
-          ),
+              )
+            else
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: AppTheme.assistantBubbleDecoration,
+                child: const _StreamingSkeleton(),
+              ),
+          ],
         ),
       ),
     );
@@ -357,6 +360,8 @@ class _MessageBody extends StatelessWidget {
       switch (resolved.mode) {
         case _MessageRenderMode.markdownRendered:
           return _StreamingMarkdownBody(content: resolved.content);
+        case _MessageRenderMode.markdownStructured:
+          return _StructuredMarkdownBody(content: resolved.content);
         case _MessageRenderMode.markdownSource:
           return _StructuredSourceBody(content: resolved.content);
         case _MessageRenderMode.largePreview:
@@ -368,6 +373,8 @@ class _MessageBody extends StatelessWidget {
     switch (resolved.mode) {
       case _MessageRenderMode.markdownRendered:
         return _AssistantMarkdownBody(content: resolved.content);
+      case _MessageRenderMode.markdownStructured:
+        return _StructuredMarkdownBody(content: resolved.content);
       case _MessageRenderMode.markdownSource:
         return _StructuredSourceBody(content: resolved.content);
       case _MessageRenderMode.largePreview:
@@ -404,31 +411,29 @@ class _AssistantMarkdownBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enableLatex = _looksLikeLatex(content);
-    return SelectionArea(
-      child: GptMarkdown(
-        content,
-        style: AppTheme.ts(
-          fontSize: 15,
-          color: AppTheme.textPrimary,
-          height: 1.65,
-        ),
-        useDollarSignsForLatex: enableLatex,
-        onLinkTap: (url, title) => _copyLink(context, url),
-        codeBuilder: (context, name, code, closed) {
-          return _CodeBlockCard(
-            language: name,
-            code: code,
-            closed: closed,
-          );
-        },
-        latexBuilder: (context, tex, textStyle, inline) {
-          return _LatexBlock(
-            tex: tex,
-            inline: inline,
-            textStyle: textStyle,
-          );
-        },
+    return GptMarkdown(
+      content,
+      style: AppTheme.ts(
+        fontSize: 15,
+        color: AppTheme.textPrimary,
+        height: 1.65,
       ),
+      useDollarSignsForLatex: enableLatex,
+      onLinkTap: (url, title) => _copyLink(context, url),
+      codeBuilder: (context, name, code, closed) {
+        return _CodeBlockCard(
+          language: name,
+          code: code,
+          closed: closed,
+        );
+      },
+      latexBuilder: (context, tex, textStyle, inline) {
+        return _LatexBlock(
+          tex: tex,
+          inline: inline,
+          textStyle: textStyle,
+        );
+      },
     );
   }
 
@@ -439,6 +444,40 @@ class _AssistantMarkdownBody extends StatelessWidget {
         content: Text(url.isEmpty ? "链接为空" : "链接已复制"),
         duration: const Duration(seconds: 1),
       ),
+    );
+  }
+}
+
+class _StructuredMarkdownBody extends StatelessWidget {
+  final String content;
+
+  const _StructuredMarkdownBody({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = _StreamingSegmentParser.parse(content);
+    if (segments.isEmpty) {
+      return _PlainTextBody(content: content);
+    }
+    final children = <Widget>[];
+    for (final segment in segments) {
+      children.add(
+        segment.isCode
+            ? _CodeBlockCard(
+                language: segment.language,
+                code: segment.content,
+                closed: segment.closed,
+              )
+            : _StreamingTextBlock(content: segment.content),
+      );
+      children.add(const SizedBox(height: 10));
+    }
+    if (children.isNotEmpty) {
+      children.removeLast();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
     );
   }
 }
@@ -1149,6 +1188,13 @@ _ResolvedMessageContent _resolveMessageContent(
     );
   }
 
+  if (_shouldUseStructuredMarkdown(effectiveContent)) {
+    return _ResolvedMessageContent(
+      content: effectiveContent,
+      mode: _MessageRenderMode.markdownStructured,
+    );
+  }
+
   if (_looksLikeRichMarkdown(effectiveContent)) {
     return _ResolvedMessageContent(
       content: effectiveContent,
@@ -1186,6 +1232,15 @@ bool _looksLikeRichMarkdown(String content) {
     return true;
   }
   return patterns.any((pattern) => pattern.hasMatch(content));
+}
+
+bool _shouldUseStructuredMarkdown(String content) {
+  return _looksLikeRichMarkdown(content) &&
+      (content.length > 900 ||
+          _countLines(content) > 48 ||
+          _countOccurrences(content, '```') > 2 ||
+          content.contains('|') ||
+          _looksLikeLatex(content));
 }
 
 String? _unwrapMarkdownDocumentWrapper(String content) {
