@@ -168,12 +168,14 @@ class SessionMeta {
   final String id;
   final String title;
   final DateTime createdAt;
+  final DateTime updatedAt;
   final int messageCount;
 
   SessionMeta({
     required this.id,
     required this.title,
     required this.createdAt,
+    required this.updatedAt,
     this.messageCount = 0,
   });
 }

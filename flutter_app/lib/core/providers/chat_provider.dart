@@ -70,21 +70,7 @@ class ChatProvider extends ChangeNotifier {
     await _loadSessions();
     _checkHealth();
     unawaited(refreshSkills());
-    // Also try loading sessions from the backend
-    try {
-      final remoteSessions = await _api.listSessions();
-      if (remoteSessions.isNotEmpty) {
-        // Merge: keep local sessions, add remote ones that are missing
-        final localIds = _sessions.map((s) => s.id).toSet();
-        for (final rs in remoteSessions) {
-          if (!localIds.contains(rs.id)) {
-            _sessions.add(rs);
-          }
-        }
-        _sessions.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        notifyListeners();
-      }
-    } catch (_) {}
+    await refreshSessions();
   }
 
   Future<void> _checkHealth() async {
@@ -106,6 +92,8 @@ class ChatProvider extends ChangeNotifier {
             id: item["id"],
             title: item["title"] ?? "新会话",
             createdAt: DateTime.parse(item["created_at"]),
+            updatedAt: DateTime.tryParse(item["updated_at"] ?? "") ??
+                DateTime.parse(item["created_at"]),
             messageCount: item["message_count"] ?? 0,
           ));
         }
@@ -121,6 +109,7 @@ class ChatProvider extends ChangeNotifier {
               "id": s.id,
               "title": s.title,
               "created_at": s.createdAt.toIso8601String(),
+              "updated_at": s.updatedAt.toIso8601String(),
               "message_count": s.messageCount,
             })
         .toList();
@@ -137,6 +126,7 @@ class ChatProvider extends ChangeNotifier {
           id: id,
           title: nextTitle,
           createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
           messageCount: 1,
         ),
       );
@@ -149,6 +139,7 @@ class ChatProvider extends ChangeNotifier {
         id: existing.id,
         title: shouldReplaceTitle ? nextTitle : existing.title,
         createdAt: existing.createdAt,
+        updatedAt: DateTime.now(),
         messageCount: existing.messageCount + 2,
       );
     }
@@ -175,6 +166,7 @@ class ChatProvider extends ChangeNotifier {
         id: sessionId,
         title: title,
         createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
         messageCount: 0,
       ),
     );
@@ -189,6 +181,35 @@ class ChatProvider extends ChangeNotifier {
       _activeFileIds = [];
     }
     await _saveSessions();
+  }
+
+  Future<void> refreshSessions() async {
+    try {
+      final remoteSessions = await _api.listSessions();
+      if (remoteSessions.isEmpty) {
+        return;
+      }
+      final merged = <String, SessionMeta>{};
+      for (final session in _sessions) {
+        merged[session.id] = session;
+      }
+      for (final session in remoteSessions) {
+        final existing = merged[session.id];
+        merged[session.id] = SessionMeta(
+          id: session.id,
+          title: session.title.isNotEmpty ? session.title : (existing?.title ?? "新会话"),
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messageCount: existing?.messageCount ?? session.messageCount,
+        );
+      }
+      _sessions
+        ..clear()
+        ..addAll(merged.values);
+      _sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      await _saveSessions();
+      notifyListeners();
+    } catch (_) {}
   }
 
   // ── Session management ──────────────────────────────────────────────
@@ -365,6 +386,7 @@ class ChatProvider extends ChangeNotifier {
       // Refresh files after completion
       if (_sessionId != null) {
         await refreshSessionFiles();
+        await refreshSessions();
       }
     } on ApiException catch (e) {
       _error = e.message;

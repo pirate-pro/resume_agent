@@ -212,6 +212,9 @@ class ApiService {
               title: e["title"] ?? "",
               createdAt:
                   DateTime.tryParse(e["created_at"] ?? "") ?? DateTime.now(),
+              updatedAt: DateTime.tryParse(e["updated_at"] ?? "") ??
+                  DateTime.tryParse(e["created_at"] ?? "") ??
+                  DateTime.now(),
               messageCount: 0,
             ))
         .toList();
