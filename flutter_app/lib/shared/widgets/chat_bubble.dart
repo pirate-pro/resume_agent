@@ -24,6 +24,16 @@ enum _MessageRenderMode {
   largePreview,
 }
 
+class _ResolvedMessageContent {
+  final String content;
+  final _MessageRenderMode mode;
+
+  const _ResolvedMessageContent({
+    required this.content,
+    required this.mode,
+  });
+}
+
 class ChatBubble extends StatefulWidget {
   final ChatMessage message;
   final bool isStreaming;
@@ -339,28 +349,31 @@ class _MessageBody extends StatelessWidget {
     if (isUser) {
       return _PlainTextBody(content: content);
     }
-    final renderMode = _resolveRenderMode(content);
+    final resolved = _resolveMessageContent(
+      content,
+      isStreaming: isStreaming,
+    );
     if (isStreaming) {
-      switch (renderMode) {
+      switch (resolved.mode) {
         case _MessageRenderMode.markdownRendered:
-          return _StreamingMarkdownBody(content: content);
+          return _StreamingMarkdownBody(content: resolved.content);
         case _MessageRenderMode.markdownSource:
-          return _StructuredSourceBody(content: content);
+          return _StructuredSourceBody(content: resolved.content);
         case _MessageRenderMode.largePreview:
-          return _LargeStreamingPreview(content: content);
+          return _LargeStreamingPreview(content: resolved.content);
         case _MessageRenderMode.plainText:
-          return _PlainTextBody(content: content);
+          return _PlainTextBody(content: resolved.content);
       }
     }
-    switch (renderMode) {
+    switch (resolved.mode) {
       case _MessageRenderMode.markdownRendered:
-        return _AssistantMarkdownBody(content: content);
+        return _AssistantMarkdownBody(content: resolved.content);
       case _MessageRenderMode.markdownSource:
-        return _StructuredSourceBody(content: content);
+        return _StructuredSourceBody(content: resolved.content);
       case _MessageRenderMode.largePreview:
-        return _LargeMessagePreview(content: content);
+        return _LargeMessagePreview(content: resolved.content);
       case _MessageRenderMode.plainText:
-        return _PlainTextBody(content: content);
+        return _PlainTextBody(content: resolved.content);
     }
   }
 }
@@ -542,49 +555,24 @@ class _StructuredSourceBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final segments = _StreamingSegmentParser.parse(content);
-    if (segments.isEmpty) {
-      return _PlainTextBody(content: content);
-    }
-    final children = <Widget>[];
-    for (final segment in segments) {
-      if (segment.isCode) {
-        children.add(
-          _CodeBlockCard(
-            language: segment.language,
-            code: segment.content,
-            closed: segment.closed,
-          ),
-        );
-      } else {
-        children.add(_SourceTextBlock(content: segment.content));
-      }
-      children.add(const SizedBox(height: 10));
-    }
-    if (children.isNotEmpty) {
-      children.removeLast();
-    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: children,
-    );
-  }
-}
-
-class _SourceTextBlock extends StatelessWidget {
-  final String content;
-
-  const _SourceTextBlock({required this.content});
-
-  @override
-  Widget build(BuildContext context) {
-    return SelectableText(
-      content,
-      style: AppTheme.ts(
-        fontSize: 15,
-        color: AppTheme.textPrimary,
-        height: 1.65,
-      ),
+      children: [
+        Text(
+          '按 Markdown 源码展示',
+          style: AppTheme.ts(
+            fontSize: 12,
+            color: AppTheme.textTertiary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 10),
+        _CodeBlockCard(
+          language: 'markdown',
+          code: content,
+          closed: true,
+        ),
+      ],
     );
   }
 }
@@ -1131,33 +1119,52 @@ bool _looksLikeLatex(String content) {
   return RegExp(r'(?<!\\)\$[^$\n]{1,120}(?<!\\)\$').hasMatch(content);
 }
 
-_MessageRenderMode _resolveRenderMode(String content) {
+_ResolvedMessageContent _resolveMessageContent(
+  String content, {
+  required bool isStreaming,
+}) {
   final normalized = content.trim();
   if (normalized.isEmpty) {
-    return _MessageRenderMode.plainText;
+    return const _ResolvedMessageContent(
+      content: '',
+      mode: _MessageRenderMode.plainText,
+    );
   }
-  if (_looksLikeMarkdownSource(normalized)) {
-    return _MessageRenderMode.markdownSource;
+
+  final unwrappedMarkdown =
+      isStreaming ? null : _unwrapMarkdownDocumentWrapper(normalized);
+  final effectiveContent = unwrappedMarkdown ?? normalized;
+
+  if (_looksLikeMarkdownSource(normalized) && unwrappedMarkdown == null) {
+    return _ResolvedMessageContent(
+      content: normalized,
+      mode: _MessageRenderMode.markdownSource,
+    );
   }
-  if (_shouldDegradeRichMarkdown(normalized)) {
-    return _MessageRenderMode.largePreview;
+
+  if (_shouldDegradeRichMarkdown(effectiveContent)) {
+    return _ResolvedMessageContent(
+      content: effectiveContent,
+      mode: _MessageRenderMode.largePreview,
+    );
   }
-  if (_looksLikeRichMarkdown(normalized)) {
-    return _MessageRenderMode.markdownRendered;
+
+  if (_looksLikeRichMarkdown(effectiveContent)) {
+    return _ResolvedMessageContent(
+      content: effectiveContent,
+      mode: _MessageRenderMode.markdownRendered,
+    );
   }
-  return _MessageRenderMode.plainText;
+
+  return _ResolvedMessageContent(
+    content: effectiveContent,
+    mode: _MessageRenderMode.plainText,
+  );
 }
 
 bool _looksLikeMarkdownSource(String content) {
-  if (RegExp(r'```(?:markdown|md)\b', caseSensitive: false).hasMatch(content)) {
-    return true;
-  }
-  if (_countOccurrences(content, '```') >= 2 &&
-      RegExp(r'^\s*```', multiLine: true).hasMatch(content) &&
-      RegExp(r'^\s{0,3}#{1,6}\s+\S', multiLine: true).hasMatch(content)) {
-    return true;
-  }
-  return false;
+  final normalized = content.trimLeft().toLowerCase();
+  return normalized.startsWith('```markdown') || normalized.startsWith('```md');
 }
 
 bool _looksLikeRichMarkdown(String content) {
@@ -1179,6 +1186,46 @@ bool _looksLikeRichMarkdown(String content) {
     return true;
   }
   return patterns.any((pattern) => pattern.hasMatch(content));
+}
+
+String? _unwrapMarkdownDocumentWrapper(String content) {
+  final lines = content.replaceAll('\r\n', '\n').split('\n');
+  final openPattern =
+      RegExp(r'^\s*```(?:markdown|md)\s*$', caseSensitive: false);
+  final closePattern = RegExp(r'^\s*```\s*$');
+
+  final openIndex = lines.indexWhere((line) => openPattern.hasMatch(line));
+  if (openIndex < 0) {
+    return null;
+  }
+
+  var closeIndex = -1;
+  for (var index = lines.length - 1; index > openIndex; index -= 1) {
+    if (closePattern.hasMatch(lines[index])) {
+      closeIndex = index;
+      break;
+    }
+  }
+  if (closeIndex <= openIndex + 1) {
+    return null;
+  }
+
+  final inner = lines.sublist(openIndex + 1, closeIndex).join('\n').trim();
+  if (inner.isEmpty || !_looksLikeRichMarkdown(inner)) {
+    return null;
+  }
+
+  final prefix = lines.sublist(0, openIndex).join('\n').trim();
+  final suffix = lines.sublist(closeIndex + 1).join('\n').trim();
+  final parts = <String>[
+    if (prefix.isNotEmpty) prefix,
+    inner,
+    if (suffix.isNotEmpty) suffix,
+  ];
+  if (parts.isEmpty) {
+    return null;
+  }
+  return parts.join('\n\n');
 }
 
 int _countLines(String content) {
