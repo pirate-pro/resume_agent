@@ -283,6 +283,7 @@ class ApiService {
             content: e["content"] ?? "",
             answerFormat: e["answer_format"] ?? "plain_text",
             renderHint: e["render_hint"] ?? "plain",
+            layoutHint: e["layout_hint"] ?? "paragraph",
             sourceKind: e["source_kind"] ?? "direct_answer",
             artifacts: (e["artifacts"] as List?)
                     ?.map((item) => AnswerArtifactView.fromJson(

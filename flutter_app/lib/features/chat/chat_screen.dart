@@ -132,6 +132,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   streamBuffer: provider.streamBuffer,
                   streamAnswerFormat: provider.streamAnswerFormat,
                   streamRenderHint: provider.streamRenderHint,
+                  streamLayoutHint: provider.streamLayoutHint,
                   streamArtifacts: provider.streamArtifacts,
                   streamEvents: provider.streamEvents,
                   error: provider.error,
@@ -362,6 +363,7 @@ class _MessageList extends StatefulWidget {
   final String streamBuffer;
   final String streamAnswerFormat;
   final String streamRenderHint;
+  final String streamLayoutHint;
   final List<AnswerArtifactView> streamArtifacts;
   final List<EventView> streamEvents;
   final String? error;
@@ -374,6 +376,7 @@ class _MessageList extends StatefulWidget {
     required this.streamBuffer,
     required this.streamAnswerFormat,
     required this.streamRenderHint,
+    required this.streamLayoutHint,
     required this.streamArtifacts,
     required this.streamEvents,
     required this.error,
@@ -433,6 +436,7 @@ class _MessageListState extends State<_MessageList> {
               buffer: widget.streamBuffer,
               answerFormat: widget.streamAnswerFormat,
               renderHint: widget.streamRenderHint,
+              layoutHint: widget.streamLayoutHint,
               artifacts: widget.streamArtifacts,
               thinkingLines: _buildThinkingLines(widget.streamEvents),
             );

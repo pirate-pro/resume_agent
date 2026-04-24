@@ -29,6 +29,7 @@ class ChatProvider extends ChangeNotifier {
   String _streamBuffer = "";
   String _streamAnswerFormat = "plain_text";
   String _streamRenderHint = "plain";
+  String _streamLayoutHint = "paragraph";
   String _streamSourceKind = "direct_answer";
   List<AnswerArtifactView> _streamArtifacts = [];
   String _pendingStreamDelta = "";
@@ -59,6 +60,7 @@ class ChatProvider extends ChangeNotifier {
   String get streamBuffer => _streamBuffer;
   String get streamAnswerFormat => _streamAnswerFormat;
   String get streamRenderHint => _streamRenderHint;
+  String get streamLayoutHint => _streamLayoutHint;
   String get streamSourceKind => _streamSourceKind;
   List<AnswerArtifactView> get streamArtifacts =>
       List.unmodifiable(_streamArtifacts);
@@ -497,6 +499,7 @@ class ChatProvider extends ChangeNotifier {
             content: _streamBuffer,
             answerFormat: doneResponse?.answerFormat ?? "plain_text",
             renderHint: doneResponse?.renderHint ?? "plain",
+            layoutHint: doneResponse?.layoutHint ?? "paragraph",
             sourceKind: doneResponse?.sourceKind ?? "direct_answer",
             artifacts: doneResponse?.artifacts ?? const [],
             toolCalls: doneResponse?.toolCalls ?? const [],
@@ -553,6 +556,7 @@ class ChatProvider extends ChangeNotifier {
         // 流式阶段优先吃后端协议，避免前端每次都重新猜测渲染模式。
         _streamAnswerFormat = data["answer_format"]?.toString() ?? "plain_text";
         _streamRenderHint = data["render_hint"]?.toString() ?? "plain";
+        _streamLayoutHint = data["layout_hint"]?.toString() ?? "paragraph";
         _streamSourceKind = data["source_kind"]?.toString() ?? "direct_answer";
         _streamArtifacts = (data["artifacts"] as List?)
                 ?.map((item) => AnswerArtifactView.fromJson(
@@ -803,6 +807,7 @@ class ChatProvider extends ChangeNotifier {
   void _resetStreamingMeta({required bool notify}) {
     _streamAnswerFormat = "plain_text";
     _streamRenderHint = "plain";
+    _streamLayoutHint = "paragraph";
     _streamSourceKind = "direct_answer";
     _streamArtifacts = [];
     if (notify) {

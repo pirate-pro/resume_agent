@@ -115,6 +115,7 @@ class _ChatBubbleState extends State<ChatBubble> {
                             isStreaming: false,
                             answerFormat: widget.message.answerFormat,
                             renderHint: widget.message.renderHint,
+                            layoutHint: widget.message.layoutHint,
                           ),
                         ),
                       if (widget.message.artifacts.isNotEmpty) ...[
@@ -143,6 +144,7 @@ class StreamingBubble extends StatelessWidget {
   final String buffer;
   final String? answerFormat;
   final String? renderHint;
+  final String? layoutHint;
   final List<AnswerArtifactView> artifacts;
   final List<String> thinkingLines;
   const StreamingBubble(
@@ -150,6 +152,7 @@ class StreamingBubble extends StatelessWidget {
       required this.buffer,
       this.answerFormat,
       this.renderHint,
+      this.layoutHint,
       this.artifacts = const [],
       this.thinkingLines = const []});
 
@@ -209,6 +212,7 @@ class StreamingBubble extends StatelessWidget {
                           isStreaming: true,
                           answerFormat: answerFormat,
                           renderHint: renderHint,
+                          layoutHint: layoutHint,
                         ),
                       ),
                       if (artifacts.isNotEmpty) ...[
@@ -367,6 +371,7 @@ class _MessageBody extends StatelessWidget {
   final bool isStreaming;
   final String? answerFormat;
   final String? renderHint;
+  final String? layoutHint;
 
   const _MessageBody({
     required this.content,
@@ -374,18 +379,23 @@ class _MessageBody extends StatelessWidget {
     required this.isStreaming,
     this.answerFormat,
     this.renderHint,
+    this.layoutHint,
   });
 
   @override
   Widget build(BuildContext context) {
     if (isUser) {
-      return _PlainTextBody(content: content);
+      return _PlainTextBody(
+        content: content,
+        enhanceFormatting: false,
+      );
     }
     final resolved = _resolveMessageContent(
       content,
       isStreaming: isStreaming,
       answerFormat: answerFormat,
       renderHint: renderHint,
+      layoutHint: layoutHint,
     );
     if (isStreaming) {
       switch (resolved.mode) {
@@ -400,7 +410,10 @@ class _MessageBody extends StatelessWidget {
         case _MessageRenderMode.largePreview:
           return _LargeStreamingPreview(content: resolved.content);
         case _MessageRenderMode.plainText:
-          return _PlainTextBody(content: resolved.content);
+          return _PlainTextBody(
+            content: resolved.content,
+            layoutHint: layoutHint ?? 'paragraph',
+          );
       }
     }
     switch (resolved.mode) {
@@ -415,25 +428,235 @@ class _MessageBody extends StatelessWidget {
       case _MessageRenderMode.largePreview:
         return _LargeMessagePreview(content: resolved.content);
       case _MessageRenderMode.plainText:
-        return _PlainTextBody(content: resolved.content);
+        return _PlainTextBody(
+          content: resolved.content,
+          layoutHint: layoutHint ?? 'paragraph',
+        );
     }
   }
 }
 
 class _PlainTextBody extends StatelessWidget {
   final String content;
+  final bool enhanceFormatting;
+  final String layoutHint;
 
-  const _PlainTextBody({required this.content});
+  const _PlainTextBody({
+    required this.content,
+    this.enhanceFormatting = true,
+    this.layoutHint = 'paragraph',
+  });
 
   @override
   Widget build(BuildContext context) {
-    return SelectableText(
-      content,
-      style: AppTheme.ts(
-        fontSize: 15,
-        color: AppTheme.textPrimary,
-        height: 1.65,
-      ),
+    final baseStyle = AppTheme.ts(
+      fontSize: 15,
+      color: AppTheme.textPrimary,
+      height: 1.65,
+    );
+    final normalizedContent =
+        enhanceFormatting ? _normalizePlainAnswerContent(content) : content;
+    final paragraphs = normalizedContent
+        .split(RegExp(r'\n\s*\n'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    if (!enhanceFormatting) {
+      return SelectableText(
+        normalizedContent,
+        style: baseStyle,
+      );
+    }
+    if (paragraphs.isEmpty) {
+      return SelectableText('', style: baseStyle);
+    }
+    if (layoutHint == 'brief') {
+      return SelectableText.rich(
+        TextSpan(
+          style: baseStyle.copyWith(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            height: 1.75,
+          ),
+          children: _buildPlainInlineSpans(
+            paragraphs.join('\n\n'),
+            baseStyle.copyWith(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              height: 1.75,
+            ),
+          ),
+        ),
+      );
+    }
+    if (layoutHint == 'bullets') {
+      return _PlainBulletList(
+        content: normalizedContent,
+        baseStyle: baseStyle,
+      );
+    }
+    if (layoutHint == 'steps') {
+      return _PlainStepList(
+        content: normalizedContent,
+        baseStyle: baseStyle,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var index = 0; index < paragraphs.length; index++) ...[
+          SelectableText.rich(
+            TextSpan(
+              style: baseStyle,
+              children: _buildPlainInlineSpans(
+                paragraphs[index],
+                baseStyle,
+              ),
+            ),
+          ),
+          if (index < paragraphs.length - 1) const SizedBox(height: 10),
+        ],
+      ],
+    );
+  }
+}
+
+class _PlainBulletList extends StatelessWidget {
+  final String content;
+  final TextStyle baseStyle;
+
+  const _PlainBulletList({
+    required this.content,
+    required this.baseStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _extractPlainListItems(content);
+    if (items.items.isEmpty) {
+      return _PlainTextBody(
+        content: content,
+        layoutHint: 'paragraph',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (items.leadText != null) ...[
+          SelectableText.rich(
+            TextSpan(
+              style: baseStyle,
+              children: _buildPlainInlineSpans(items.leadText!, baseStyle),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        for (var index = 0; index < items.items.length; index++) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: AppTheme.accent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SelectableText.rich(
+                  TextSpan(
+                    style: baseStyle,
+                    children:
+                        _buildPlainInlineSpans(items.items[index], baseStyle),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (index < items.items.length - 1) const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _PlainStepList extends StatelessWidget {
+  final String content;
+  final TextStyle baseStyle;
+
+  const _PlainStepList({
+    required this.content,
+    required this.baseStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _extractPlainListItems(content);
+    if (items.items.isEmpty) {
+      return _PlainTextBody(
+        content: content,
+        layoutHint: 'paragraph',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (items.leadText != null) ...[
+          SelectableText.rich(
+            TextSpan(
+              style: baseStyle,
+              children: _buildPlainInlineSpans(items.leadText!, baseStyle),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        for (var index = 0; index < items.items.length; index++) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: AppTheme.accent.withValues(alpha: 0.24),
+                  ),
+                ),
+                child: Text(
+                  '${index + 1}',
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.accent,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: SelectableText.rich(
+                    TextSpan(
+                      style: baseStyle,
+                      children:
+                          _buildPlainInlineSpans(items.items[index], baseStyle),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (index < items.items.length - 1) const SizedBox(height: 10),
+        ],
+      ],
     );
   }
 }
@@ -1212,11 +1435,196 @@ bool _looksLikeLatex(String content) {
   return RegExp(r'(?<!\\)\$[^$\n]{1,120}(?<!\\)\$').hasMatch(content);
 }
 
+String _normalizePlainAnswerContent(String content) {
+  final normalized =
+      content.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
+  if (normalized.isEmpty) {
+    return '';
+  }
+  final paragraphs = <String>[];
+  final currentLines = <String>[];
+  for (final rawLine in normalized.split('\n')) {
+    final line = rawLine.trim();
+    if (line.isEmpty) {
+      if (currentLines.isNotEmpty) {
+        paragraphs.add(_collapsePlainParagraph(currentLines));
+        currentLines.clear();
+      }
+      continue;
+    }
+    currentLines.add(line);
+  }
+  if (currentLines.isNotEmpty) {
+    paragraphs.add(_collapsePlainParagraph(currentLines));
+  }
+  return paragraphs.join('\n\n');
+}
+
+String _collapsePlainParagraph(List<String> lines) {
+  if (lines.length <= 1) {
+    return lines.first;
+  }
+  if (lines.any(_looksLikePlainListLine)) {
+    return lines.join('\n');
+  }
+  return lines.join(' ');
+}
+
+bool _looksLikePlainListLine(String line) {
+  final patterns = <RegExp>[
+    RegExp(r'^\s*[-*•]\s+\S'),
+    RegExp(r'^\s*\d+[.)、]\s+\S'),
+    RegExp(r'^\s*[一二三四五六七八九十]+[、.]\s*\S'),
+  ];
+  return patterns.any((pattern) => pattern.hasMatch(line));
+}
+
+class _PlainListParseResult {
+  final String? leadText;
+  final List<String> items;
+
+  const _PlainListParseResult({
+    required this.leadText,
+    required this.items,
+  });
+}
+
+_PlainListParseResult _extractPlainListItems(String content) {
+  final lines = content
+      .split('\n')
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList();
+  if (lines.isEmpty) {
+    return const _PlainListParseResult(leadText: null, items: []);
+  }
+
+  final items = <String>[];
+  final leadParts = <String>[];
+  var listStarted = false;
+  for (final line in lines) {
+    if (_looksLikePlainListLine(line)) {
+      listStarted = true;
+      items.add(_stripPlainListPrefix(line));
+      continue;
+    }
+    if (!listStarted) {
+      leadParts.add(line);
+      continue;
+    }
+    if (items.isNotEmpty) {
+      items[items.length - 1] = '${items.last} $line';
+    }
+  }
+  final leadText = leadParts.isEmpty ? null : leadParts.join(' ');
+  return _PlainListParseResult(
+    leadText: leadText,
+    items: items,
+  );
+}
+
+String _stripPlainListPrefix(String line) {
+  return line
+      .replaceFirst(RegExp(r'^\s*[-*•]\s+'), '')
+      .replaceFirst(RegExp(r'^\s*\d+[.)、]\s+'), '')
+      .replaceFirst(RegExp(r'^\s*[一二三四五六七八九十]+[、.]\s*'), '')
+      .trim();
+}
+
+List<InlineSpan> _buildPlainInlineSpans(String text, TextStyle baseStyle) {
+  final spans = <InlineSpan>[];
+  var index = 0;
+  while (index < text.length) {
+    if (text.startsWith('**', index)) {
+      final closing = text.indexOf('**', index + 2);
+      if (closing > index + 2) {
+        final value = text.substring(index + 2, closing);
+        if (!value.contains('\n')) {
+          spans.add(
+            TextSpan(
+              text: value,
+              style: baseStyle.copyWith(
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+          );
+          index = closing + 2;
+          continue;
+        }
+      }
+    }
+    if (text.startsWith('`', index)) {
+      final closing = text.indexOf('`', index + 1);
+      if (closing > index + 1) {
+        final value = text.substring(index + 1, closing);
+        if (!value.contains('\n')) {
+          spans.add(
+            TextSpan(
+              text: value,
+              style: baseStyle.copyWith(
+                fontFamily: 'monospace',
+                fontSize: 14,
+                color: AppTheme.accent,
+                backgroundColor: AppTheme.surfaceActive,
+              ),
+            ),
+          );
+          index = closing + 1;
+          continue;
+        }
+      }
+    }
+    if (text.startsWith('*', index) && !text.startsWith('**', index)) {
+      final closing = text.indexOf('*', index + 1);
+      if (closing > index + 1 && !text.startsWith('*', closing)) {
+        final value = text.substring(index + 1, closing);
+        if (!value.contains('\n')) {
+          spans.add(
+            TextSpan(
+              text: value,
+              style: baseStyle.copyWith(
+                fontStyle: FontStyle.italic,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+          );
+          index = closing + 1;
+          continue;
+        }
+      }
+    }
+
+    final nextSpecial = _findNextInlineSpecial(text, index);
+    if (nextSpecial == index) {
+      spans.add(TextSpan(text: text[index], style: baseStyle));
+      index += 1;
+      continue;
+    }
+    spans.add(
+        TextSpan(text: text.substring(index, nextSpecial), style: baseStyle));
+    index = nextSpecial;
+  }
+  return spans;
+}
+
+int _findNextInlineSpecial(String text, int start) {
+  var next = text.length;
+  for (final token in const ['**', '`', '*']) {
+    final found = text.indexOf(token, start);
+    if (found >= 0 && found < next) {
+      next = found;
+    }
+  }
+  return next;
+}
+
 _ResolvedMessageContent _resolveMessageContent(
   String content, {
   required bool isStreaming,
   String? answerFormat,
   String? renderHint,
+  String? layoutHint,
 }) {
   final normalized = content.trim();
   if (normalized.isEmpty) {
@@ -1890,6 +2298,7 @@ class _WorkspacePreviewSheet extends StatelessWidget {
                       isStreaming: false,
                       answerFormat: preview.answerFormat,
                       renderHint: preview.renderHint,
+                      layoutHint: preview.layoutHint,
                     ),
                   ),
                 ),

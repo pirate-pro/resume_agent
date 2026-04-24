@@ -3,6 +3,7 @@ class ChatMessage {
   final String content;
   final String answerFormat;
   final String renderHint;
+  final String layoutHint;
   final String sourceKind;
   final List<AnswerArtifactView> artifacts;
   final List<ToolCallView> toolCalls;
@@ -13,6 +14,7 @@ class ChatMessage {
     required this.content,
     this.answerFormat = "plain_text",
     this.renderHint = "plain",
+    this.layoutHint = "paragraph",
     this.sourceKind = "direct_answer",
     this.artifacts = const [],
     this.toolCalls = const [],
@@ -95,6 +97,7 @@ class ChatResponse {
   final String answer;
   final String answerFormat;
   final String renderHint;
+  final String layoutHint;
   final String sourceKind;
   final List<AnswerArtifactView> artifacts;
   final List<ToolCallView> toolCalls;
@@ -105,6 +108,7 @@ class ChatResponse {
     required this.answer,
     this.answerFormat = "plain_text",
     this.renderHint = "plain",
+    this.layoutHint = "paragraph",
     this.sourceKind = "direct_answer",
     this.artifacts = const [],
     required this.toolCalls,
@@ -117,6 +121,7 @@ class ChatResponse {
       answer: json["answer"] ?? "",
       answerFormat: json["answer_format"] ?? "plain_text",
       renderHint: json["render_hint"] ?? "plain",
+      layoutHint: json["layout_hint"] ?? "paragraph",
       sourceKind: json["source_kind"] ?? "direct_answer",
       artifacts: (json["artifacts"] as List?)
               ?.map((e) =>
@@ -215,6 +220,7 @@ class WorkspaceFilePreview {
   final bool truncated;
   final String answerFormat;
   final String renderHint;
+  final String layoutHint;
 
   WorkspaceFilePreview({
     required this.sessionId,
@@ -225,6 +231,7 @@ class WorkspaceFilePreview {
     required this.truncated,
     this.answerFormat = "plain_text",
     this.renderHint = "plain",
+    this.layoutHint = "paragraph",
   });
 
   factory WorkspaceFilePreview.fromJson(Map<String, dynamic> json) {
@@ -237,6 +244,7 @@ class WorkspaceFilePreview {
       truncated: json["truncated"] == true,
       answerFormat: json["answer_format"] ?? "plain_text",
       renderHint: json["render_hint"] ?? "plain",
+      layoutHint: json["layout_hint"] ?? "paragraph",
     );
   }
 }
