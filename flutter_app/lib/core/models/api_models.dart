@@ -52,10 +52,7 @@ class SkillOption {
   final String name;
   final String description;
 
-  SkillOption({
-    required this.name,
-    required this.description,
-  });
+  SkillOption({required this.name, required this.description});
 
   factory SkillOption.fromJson(Map<String, dynamic> json) {
     return SkillOption(
@@ -82,11 +79,13 @@ class ChatResponse {
     return ChatResponse(
       sessionId: json["session_id"] ?? "",
       answer: json["answer"] ?? "",
-      toolCalls: (json["tool_calls"] as List?)
+      toolCalls:
+          (json["tool_calls"] as List?)
               ?.map((e) => ToolCallView.fromJson(e))
               .toList() ??
           [],
-      memoryHits: (json["memory_hits"] as List?)
+      memoryHits:
+          (json["memory_hits"] as List?)
               ?.map((e) => MemoryView.fromJson(e))
               .toList() ??
           [],
@@ -125,7 +124,8 @@ class SessionFileView {
       sizeBytes: json["size_bytes"] ?? 0,
       status: json["status"] ?? "",
       uploadedAt: DateTime.parse(
-          json["uploaded_at"] ?? DateTime.now().toIso8601String()),
+        json["uploaded_at"] ?? DateTime.now().toIso8601String(),
+      ),
       error: json["error"],
       parsedCharCount: json["parsed_char_count"],
       parsedTokenEstimate: json["parsed_token_estimate"],
@@ -156,7 +156,8 @@ class SessionFilesResponse {
     return SessionFilesResponse(
       sessionId: json["session_id"] ?? "",
       activeFileIds: List<String>.from(json["active_file_ids"] ?? []),
-      files: (json["files"] as List?)
+      files:
+          (json["files"] as List?)
               ?.map((e) => SessionFileView.fromJson(e))
               .toList() ??
           [],
@@ -169,6 +170,8 @@ class SessionMeta {
   final String title;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final bool isPinned;
+  final DateTime? pinnedAt;
   final int messageCount;
 
   SessionMeta({
@@ -176,6 +179,8 @@ class SessionMeta {
     required this.title,
     required this.createdAt,
     required this.updatedAt,
+    this.isPinned = false,
+    this.pinnedAt,
     this.messageCount = 0,
   });
 }
@@ -214,7 +219,8 @@ class EventView {
       type: json["type"] ?? "",
       payload: Map<String, dynamic>.from(json["payload"] ?? {}),
       createdAt: DateTime.parse(
-          json["created_at"] ?? DateTime.now().toIso8601String()),
+        json["created_at"] ?? DateTime.now().toIso8601String(),
+      ),
     );
   }
 

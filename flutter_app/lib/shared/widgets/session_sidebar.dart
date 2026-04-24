@@ -9,6 +9,8 @@ class SessionSidebar extends StatelessWidget {
   final String? activeSessionId;
   final Function(String) onSessionTap;
   final Function(String) onSessionDelete;
+  final Future<bool> Function(String, String) onSessionRename;
+  final Future<bool> Function(String, bool) onSessionPinToggle;
   final VoidCallback onNewSession;
   final bool collapsed;
   final VoidCallback onToggleCollapse;
@@ -19,6 +21,8 @@ class SessionSidebar extends StatelessWidget {
     required this.activeSessionId,
     required this.onSessionTap,
     required this.onSessionDelete,
+    required this.onSessionRename,
+    required this.onSessionPinToggle,
     required this.onNewSession,
     this.collapsed = false,
     required this.onToggleCollapse,
@@ -87,8 +91,11 @@ class _ExpandedSidebar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: const Center(
-                  child:
-                      Icon(Icons.bolt_rounded, size: 20, color: Colors.white),
+                  child: Icon(
+                    Icons.bolt_rounded,
+                    size: 20,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -132,10 +139,7 @@ class _ExpandedSidebar extends StatelessWidget {
               icon: const Icon(Icons.add_rounded, size: 18),
               label: Text(
                 '新会话',
-                style: AppTheme.ts(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: AppTheme.ts(fontSize: 13, fontWeight: FontWeight.w600),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.surfaceActive,
@@ -181,10 +185,14 @@ class _ExpandedSidebar extends StatelessWidget {
                     session: parent.sessions[i],
                     isActive: parent.sessions[i].id == parent.activeSessionId,
                     onTap: () => parent.onSessionTap(parent.sessions[i].id),
-                    onDelete: () => parent._confirmDelete(
-                      context,
-                      parent.sessions[i],
+                    onRename: (title) =>
+                        parent.onSessionRename(parent.sessions[i].id, title),
+                    onPinToggle: (isPinned) => parent.onSessionPinToggle(
+                      parent.sessions[i].id,
+                      isPinned,
                     ),
+                    onDelete: () =>
+                        parent._confirmDelete(context, parent.sessions[i]),
                   ),
                 ),
         ),
@@ -265,10 +273,13 @@ class _CollapsedRail extends StatelessWidget {
                         ),
                       ),
                       child: Icon(
-                        Icons.chat_bubble_rounded,
+                        session.isPinned
+                            ? Icons.push_pin_rounded
+                            : Icons.chat_bubble_rounded,
                         size: 18,
-                        color:
-                            active ? AppTheme.accent : AppTheme.textSecondary,
+                        color: active
+                            ? AppTheme.accent
+                            : AppTheme.textSecondary,
                       ),
                     ),
                   ),
@@ -293,12 +304,16 @@ class _SessionTile extends StatefulWidget {
   final SessionMeta session;
   final bool isActive;
   final VoidCallback onTap;
+  final Future<bool> Function(String title) onRename;
+  final Future<bool> Function(bool isPinned) onPinToggle;
   final VoidCallback onDelete;
 
   const _SessionTile({
     required this.session,
     required this.isActive,
     required this.onTap,
+    required this.onRename,
+    required this.onPinToggle,
     required this.onDelete,
   });
 
@@ -308,6 +323,7 @@ class _SessionTile extends StatefulWidget {
 
 class _SessionTileState extends State<_SessionTile> {
   bool _hovering = false;
+  bool _busy = false;
 
   @override
   Widget build(BuildContext context) {
@@ -325,8 +341,8 @@ class _SessionTileState extends State<_SessionTile> {
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.12)
                 : _hovering
-                    ? AppTheme.surfaceHover.withValues(alpha: 0.9)
-                    : AppTheme.surface.withValues(alpha: 0.68),
+                ? AppTheme.surfaceHover.withValues(alpha: 0.9)
+                : AppTheme.surface.withValues(alpha: 0.68),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: active
@@ -357,19 +373,35 @@ class _SessionTileState extends State<_SessionTile> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      widget.session.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTheme.ts(
-                        fontSize: 13,
-                        fontWeight: active ? FontWeight.w600 : FontWeight.w500,
-                        color: AppTheme.textPrimary,
-                      ),
+                    Row(
+                      children: [
+                        if (widget.session.isPinned) ...[
+                          const Icon(
+                            Icons.push_pin_rounded,
+                            size: 12,
+                            color: AppTheme.accent,
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        Expanded(
+                          child: Text(
+                            widget.session.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTheme.ts(
+                              fontSize: 13,
+                              fontWeight: active
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _formatDate(widget.session.createdAt),
+                      _formatMeta(widget.session),
                       style: AppTheme.ts(
                         fontSize: 11,
                         color: AppTheme.textTertiary,
@@ -380,19 +412,31 @@ class _SessionTileState extends State<_SessionTile> {
               ),
               AnimatedOpacity(
                 duration: const Duration(milliseconds: 140),
-                opacity: _hovering ? 1 : 0,
-                child: SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: IconButton(
-                    padding: EdgeInsets.zero,
-                    iconSize: 16,
-                    icon: const Icon(
-                      Icons.delete_outline_rounded,
-                      color: AppTheme.textTertiary,
+                opacity: (_hovering || widget.session.isPinned) ? 1 : 0,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ActionIconButton(
+                      icon: Icons.edit_outlined,
+                      tooltip: '重命名',
+                      onPressed: _busy ? null : _renameSession,
                     ),
-                    onPressed: widget.onDelete,
-                  ),
+                    _ActionIconButton(
+                      icon: widget.session.isPinned
+                          ? Icons.push_pin_rounded
+                          : Icons.push_pin_outlined,
+                      tooltip: widget.session.isPinned ? '取消置顶' : '置顶会话',
+                      color: widget.session.isPinned
+                          ? AppTheme.accent
+                          : AppTheme.textTertiary,
+                      onPressed: _busy ? null : _togglePin,
+                    ),
+                    _ActionIconButton(
+                      icon: Icons.delete_outline_rounded,
+                      tooltip: '删除会话',
+                      onPressed: _busy ? null : widget.onDelete,
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -402,12 +446,111 @@ class _SessionTileState extends State<_SessionTile> {
     );
   }
 
+  Future<void> _renameSession() async {
+    final controller = TextEditingController(text: widget.session.title);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Text('重命名会话', style: AppTheme.ts(fontWeight: FontWeight.w600)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 40,
+          decoration: const InputDecoration(
+            hintText: '输入新的会话名称',
+            counterText: '',
+          ),
+          onSubmitted: (value) => Navigator.of(dialogContext).pop(value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || result == null) {
+      return;
+    }
+    final normalized = result.trim();
+    if (normalized.isEmpty || normalized == widget.session.title) {
+      return;
+    }
+    setState(() => _busy = true);
+    final ok = await widget.onRename(normalized);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!ok) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('会话重命名失败')));
+    }
+  }
+
+  Future<void> _togglePin() async {
+    setState(() => _busy = true);
+    final ok = await widget.onPinToggle(!widget.session.isPinned);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!ok) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('更新会话置顶状态失败')));
+    }
+  }
+
+  String _formatMeta(SessionMeta session) {
+    final time = _formatDate(session.updatedAt);
+    if (session.isPinned) {
+      return '已置顶 · $time';
+    }
+    return time;
+  }
+
   String _formatDate(DateTime dt) {
     final now = DateTime.now();
     if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
       return DateFormat('HH:mm').format(dt);
     }
     return DateFormat('MM/dd HH:mm').format(dt);
+  }
+}
+
+class _ActionIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onPressed;
+  final Color? color;
+
+  const _ActionIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 28,
+      height: 28,
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        iconSize: 16,
+        tooltip: tooltip,
+        icon: Icon(icon, color: color ?? AppTheme.textTertiary),
+        onPressed: onPressed,
+      ),
+    );
   }
 }
 

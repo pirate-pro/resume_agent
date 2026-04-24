@@ -88,15 +88,21 @@ class ChatProvider extends ChangeNotifier {
         final list = jsonDecode(raw) as List;
         _sessions.clear();
         for (final item in list) {
-          _sessions.add(SessionMeta(
-            id: item["id"],
-            title: item["title"] ?? "新会话",
-            createdAt: DateTime.parse(item["created_at"]),
-            updatedAt: DateTime.tryParse(item["updated_at"] ?? "") ??
-                DateTime.parse(item["created_at"]),
-            messageCount: item["message_count"] ?? 0,
-          ));
+          _sessions.add(
+            SessionMeta(
+              id: item["id"],
+              title: item["title"] ?? "新会话",
+              createdAt: DateTime.parse(item["created_at"]),
+              updatedAt:
+                  DateTime.tryParse(item["updated_at"] ?? "") ??
+                  DateTime.parse(item["created_at"]),
+              isPinned: item["is_pinned"] == true,
+              pinnedAt: DateTime.tryParse((item["pinned_at"] ?? "").toString()),
+              messageCount: item["message_count"] ?? 0,
+            ),
+          );
         }
+        _sortSessions();
         notifyListeners();
       } catch (_) {}
     }
@@ -105,13 +111,17 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _saveSessions() async {
     final prefs = await SharedPreferences.getInstance();
     final data = _sessions
-        .map((s) => {
-              "id": s.id,
-              "title": s.title,
-              "created_at": s.createdAt.toIso8601String(),
-              "updated_at": s.updatedAt.toIso8601String(),
-              "message_count": s.messageCount,
-            })
+        .map(
+          (s) => {
+            "id": s.id,
+            "title": s.title,
+            "created_at": s.createdAt.toIso8601String(),
+            "updated_at": s.updatedAt.toIso8601String(),
+            "is_pinned": s.isPinned,
+            "pinned_at": s.pinnedAt?.toIso8601String(),
+            "message_count": s.messageCount,
+          },
+        )
         .toList();
     await prefs.setString("sessions", jsonEncode(data));
   }
@@ -127,11 +137,14 @@ class ChatProvider extends ChangeNotifier {
           title: nextTitle,
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
+          isPinned: false,
+          pinnedAt: null,
           messageCount: 1,
         ),
       );
     } else {
-      final shouldReplaceTitle = existing.messageCount == 0 ||
+      final shouldReplaceTitle =
+          existing.messageCount == 0 ||
           existing.title == "新会话" ||
           existing.title.startsWith("文件:");
       final idx = _sessions.indexOf(existing);
@@ -140,9 +153,12 @@ class ChatProvider extends ChangeNotifier {
         title: shouldReplaceTitle ? nextTitle : existing.title,
         createdAt: existing.createdAt,
         updatedAt: DateTime.now(),
+        isPinned: existing.isPinned,
+        pinnedAt: existing.pinnedAt,
         messageCount: existing.messageCount + 2,
       );
     }
+    _sortSessions();
     _saveSessions();
   }
 
@@ -167,9 +183,12 @@ class ChatProvider extends ChangeNotifier {
         title: title,
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
+        isPinned: false,
+        pinnedAt: null,
         messageCount: 0,
       ),
     );
+    _sortSessions();
     await _saveSessions();
   }
 
@@ -197,19 +216,37 @@ class ChatProvider extends ChangeNotifier {
         final existing = merged[session.id];
         merged[session.id] = SessionMeta(
           id: session.id,
-          title: session.title.isNotEmpty ? session.title : (existing?.title ?? "新会话"),
+          title: session.title.isNotEmpty
+              ? session.title
+              : (existing?.title ?? "新会话"),
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
+          isPinned: session.isPinned,
+          pinnedAt: session.pinnedAt,
           messageCount: existing?.messageCount ?? session.messageCount,
         );
       }
       _sessions
         ..clear()
         ..addAll(merged.values);
-      _sessions.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _sortSessions();
       await _saveSessions();
       notifyListeners();
     } catch (_) {}
+  }
+
+  void _sortSessions() {
+    _sessions.sort((left, right) {
+      final pinCompare = (right.isPinned ? 1 : 0).compareTo(
+        left.isPinned ? 1 : 0,
+      );
+      if (pinCompare != 0) return pinCompare;
+      final leftPinTime = left.pinnedAt ?? left.updatedAt;
+      final rightPinTime = right.pinnedAt ?? right.updatedAt;
+      final pinnedTimeCompare = rightPinTime.compareTo(leftPinTime);
+      if (pinnedTimeCompare != 0) return pinnedTimeCompare;
+      return right.updatedAt.compareTo(left.updatedAt);
+    });
   }
 
   // ── Session management ──────────────────────────────────────────────
@@ -263,8 +300,9 @@ class ChatProvider extends ChangeNotifier {
   void clearSkill(String skillName) {
     final normalized = skillName.trim();
     if (normalized.isEmpty) return;
-    _selectedSkillNames =
-        _selectedSkillNames.where((item) => item != normalized).toList();
+    _selectedSkillNames = _selectedSkillNames
+        .where((item) => item != normalized)
+        .toList();
     notifyListeners();
   }
 
@@ -312,6 +350,64 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<bool> renameSession(String sessionId, String title) async {
+    final normalized = title.trim();
+    if (normalized.isEmpty) return false;
+    _error = null;
+    try {
+      final updated = await _api.updateSession(
+        sessionId: sessionId,
+        title: normalized,
+      );
+      _replaceSessionMeta(updated);
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+    } catch (e) {
+      _error = e.toString();
+    }
+    notifyListeners();
+    return false;
+  }
+
+  Future<bool> setSessionPinned(String sessionId, bool isPinned) async {
+    _error = null;
+    try {
+      final updated = await _api.updateSession(
+        sessionId: sessionId,
+        isPinned: isPinned,
+      );
+      _replaceSessionMeta(updated);
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+    } catch (e) {
+      _error = e.toString();
+    }
+    notifyListeners();
+    return false;
+  }
+
+  void _replaceSessionMeta(SessionMeta updated) {
+    final index = _sessions.indexWhere((item) => item.id == updated.id);
+    if (index >= 0) {
+      _sessions[index] = SessionMeta(
+        id: updated.id,
+        title: updated.title,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt,
+        isPinned: updated.isPinned,
+        pinnedAt: updated.pinnedAt,
+        messageCount: _sessions[index].messageCount,
+      );
+    } else {
+      _sessions.insert(0, updated);
+    }
+    _sortSessions();
+    unawaited(_saveSessions());
+    notifyListeners();
+  }
+
   // ── Chat (streaming) ────────────────────────────────────────────────
 
   Future<void> sendMessage(String content) async {
@@ -344,12 +440,12 @@ class ChatProvider extends ChangeNotifier {
         }
       } catch (streamErr) {
         // Streaming failed, will fall back below
-        print("[CHAT] streaming error, will fallback: $streamErr");
+        debugPrint("[CHAT] streaming error, will fallback: $streamErr");
       }
 
       // If streaming didn't produce events, fall back to non-streaming
       if (!gotEvents) {
-        print("[CHAT] no SSE events received, falling back to /api/chat");
+        debugPrint("[CHAT] no SSE events received, falling back to /api/chat");
         final resp = await _api.chat(
           message: content.trim(),
           sessionId: _sessionId,
@@ -378,8 +474,10 @@ class ChatProvider extends ChangeNotifier {
 
       // Register session in local list
       if (_sessionId != null) {
-        final lastUserMsg = _messages.lastWhere((m) => m.isUser,
-            orElse: () => ChatMessage(role: "user", content: ""));
+        final lastUserMsg = _messages.lastWhere(
+          (m) => m.isUser,
+          orElse: () => ChatMessage(role: "user", content: ""),
+        );
         _registerSession(_sessionId!, lastUserMsg.content);
       }
 
@@ -491,7 +589,9 @@ class ChatProvider extends ChangeNotifier {
     }
     try {
       final resp = await _api.setActiveFiles(
-          sessionId: _sessionId!, fileIds: current.toList());
+        sessionId: _sessionId!,
+        fileIds: current.toList(),
+      );
       _sessionFiles = resp.files;
       _activeFileIds = resp.activeFileIds;
     } catch (_) {}

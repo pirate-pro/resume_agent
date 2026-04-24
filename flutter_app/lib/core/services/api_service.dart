@@ -10,7 +10,7 @@ class ApiService {
   String _baseUrl;
 
   ApiService({String? baseUrl})
-      : _baseUrl = baseUrl ?? AppConfig.defaultBaseUrl;
+    : _baseUrl = baseUrl ?? AppConfig.defaultBaseUrl;
 
   void updateBaseUrl(String url) {
     _baseUrl = url;
@@ -119,8 +119,9 @@ class ApiService {
 
   Future<bool> checkHealth() async {
     try {
-      final resp =
-          await http.get(_uri("/health")).timeout(const Duration(seconds: 3));
+      final resp = await http
+          .get(_uri("/health"))
+          .timeout(const Duration(seconds: 3));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body);
         return data["status"] == "ok";
@@ -136,8 +137,9 @@ class ApiService {
   Future<List<MemoryView>> listMemories({String? q, int limit = 20}) async {
     final params = <String, String>{"limit": limit.toString()};
     if (q != null && q.isNotEmpty) params["q"] = q;
-    final uri =
-        _uri(AppConfig.memoriesEndpoint).replace(queryParameters: params);
+    final uri = _uri(
+      AppConfig.memoriesEndpoint,
+    ).replace(queryParameters: params);
     final resp = await http.get(uri);
     if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
     final list = jsonDecode(resp.body) as List;
@@ -207,17 +209,51 @@ class ApiService {
     if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
     final list = jsonDecode(resp.body) as List;
     return list
-        .map((e) => SessionMeta(
-              id: e["session_id"] ?? "",
-              title: e["title"] ?? "",
-              createdAt:
-                  DateTime.tryParse(e["created_at"] ?? "") ?? DateTime.now(),
-              updatedAt: DateTime.tryParse(e["updated_at"] ?? "") ??
-                  DateTime.tryParse(e["created_at"] ?? "") ??
-                  DateTime.now(),
-              messageCount: 0,
-            ))
+        .map(
+          (e) => SessionMeta(
+            id: e["session_id"] ?? "",
+            title: e["title"] ?? "",
+            createdAt:
+                DateTime.tryParse(e["created_at"] ?? "") ?? DateTime.now(),
+            updatedAt:
+                DateTime.tryParse(e["updated_at"] ?? "") ??
+                DateTime.tryParse(e["created_at"] ?? "") ??
+                DateTime.now(),
+            isPinned: e["is_pinned"] == true,
+            pinnedAt: DateTime.tryParse((e["pinned_at"] ?? "").toString()),
+            messageCount: 0,
+          ),
+        )
         .toList();
+  }
+
+  Future<SessionMeta> updateSession({
+    required String sessionId,
+    String? title,
+    bool? isPinned,
+  }) async {
+    final body = <String, dynamic>{};
+    if (title != null) body["title"] = title;
+    if (isPinned != null) body["is_pinned"] = isPinned;
+    final resp = await http.patch(
+      _uri("/api/sessions/$sessionId"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    return SessionMeta(
+      id: data["session_id"] ?? "",
+      title: data["title"] ?? "",
+      createdAt: DateTime.tryParse(data["created_at"] ?? "") ?? DateTime.now(),
+      updatedAt:
+          DateTime.tryParse(data["updated_at"] ?? "") ??
+          DateTime.tryParse(data["created_at"] ?? "") ??
+          DateTime.now(),
+      isPinned: data["is_pinned"] == true,
+      pinnedAt: DateTime.tryParse((data["pinned_at"] ?? "").toString()),
+      messageCount: 0,
+    );
   }
 
   Future<List<ChatMessage>> listSessionMessages(String sessionId) async {
@@ -225,10 +261,12 @@ class ApiService {
     if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
     final list = jsonDecode(resp.body) as List;
     return list
-        .map((e) => ChatMessage(
-              role: e["role"] ?? "assistant",
-              content: e["content"] ?? "",
-            ))
+        .map(
+          (e) => ChatMessage(
+            role: e["role"] ?? "assistant",
+            content: e["content"] ?? "",
+          ),
+        )
         .toList();
   }
 

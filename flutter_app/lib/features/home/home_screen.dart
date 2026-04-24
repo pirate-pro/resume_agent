@@ -48,6 +48,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 provider.switchSession(id);
               },
               onSessionDelete: provider.deleteSession,
+              onSessionRename: provider.renameSession,
+              onSessionPinToggle: provider.setSessionPinned,
             ),
           ),
         );
@@ -96,10 +98,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   final useCompactSidebar = width < 980;
                   final edgePadding = width < 900 ? 12.0 : 18.0;
                   final gap = width < 900 ? 12.0 : 18.0;
-                  final sidebarWidth =
-                      (width * 0.19).clamp(272.0, 308.0).toDouble();
-                  final debugWidth =
-                      (width * 0.22).clamp(296.0, 336.0).toDouble();
+                  final sidebarWidth = (width * 0.19)
+                      .clamp(272.0, 308.0)
+                      .toDouble();
+                  final debugWidth = (width * 0.22)
+                      .clamp(296.0, 336.0)
+                      .toDouble();
                   final showDesktopDebug = _debugPanelOpen && !isCompact;
 
                   return Padding(
@@ -121,6 +125,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               onNewSession: provider.createNewSession,
                               onSessionTap: provider.switchSession,
                               onSessionDelete: provider.deleteSession,
+                              onSessionRename: provider.renameSession,
+                              onSessionPinToggle: provider.setSessionPinned,
                             ),
                           ),
                           SizedBox(width: gap),
@@ -134,13 +140,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             showDebugToggle: true,
                             isDebugPanelOpen: showDesktopDebug,
                             onDebugToggle: isCompact
-                                ? () => _openCompactDebugPanel(
-                                      context,
-                                      provider,
-                                    )
+                                ? () =>
+                                      _openCompactDebugPanel(context, provider)
                                 : () => setState(
-                                      () => _debugPanelOpen = !_debugPanelOpen,
-                                    ),
+                                    () => _debugPanelOpen = !_debugPanelOpen,
+                                  ),
                           ),
                         ),
                         if (showDesktopDebug) ...[
@@ -149,9 +153,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             width: debugWidth,
                             child: _DebugPanel(
                               provider: provider,
-                              onClose: () => setState(
-                                () => _debugPanelOpen = false,
-                              ),
+                              onClose: () =>
+                                  setState(() => _debugPanelOpen = false),
                             ),
                           ),
                         ],
@@ -210,10 +213,7 @@ class _GlowBlob extends StatelessWidget {
   final double size;
   final Color color;
 
-  const _GlowBlob({
-    required this.size,
-    required this.color,
-  });
+  const _GlowBlob({required this.size, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -291,10 +291,7 @@ class _DebugPanel extends ConsumerWidget {
                   },
                 ),
                 const SizedBox(width: 6),
-                _PanelIconButton(
-                  icon: Icons.close_rounded,
-                  onTap: onClose,
-                ),
+                _PanelIconButton(icon: Icons.close_rounded, onTap: onClose),
               ],
             ),
           ),
@@ -438,10 +435,7 @@ class _PanelIconButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
 
-  const _PanelIconButton({
-    required this.icon,
-    required this.onTap,
-  });
+  const _PanelIconButton({required this.icon, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -458,11 +452,7 @@ class _PanelIconButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: AppTheme.border),
           ),
-          child: Icon(
-            icon,
-            size: 17,
-            color: AppTheme.textSecondary,
-          ),
+          child: Icon(icon, size: 17, color: AppTheme.textSecondary),
         ),
       ),
     );
