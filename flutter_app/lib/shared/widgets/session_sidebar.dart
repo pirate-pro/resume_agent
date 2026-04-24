@@ -26,135 +26,11 @@ class SessionSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (collapsed) {
-      return Container(
-        width: 52,
-        color: AppTheme.surface,
-        child: Column(
-          children: [
-            const SizedBox(height: 12),
-            _IconBtn(icon: Icons.menu_rounded, onTap: onToggleCollapse),
-            const SizedBox(height: 8),
-            _IconBtn(
-                icon: Icons.add_rounded, onTap: onNewSession, accent: true),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      width: 260,
-      decoration: const BoxDecoration(
-        color: AppTheme.surface,
-        border:
-            Border(right: BorderSide(color: AppTheme.border, width: 0.5)),
-      ),
-      child: Column(
-        children: [
-          // Header
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 30,
-                  height: 30,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [AppTheme.accent, Color(0xFF059669)],
-                    ),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Center(
-                    child: Icon(Icons.bolt_rounded,
-                        size: 17, color: Colors.white),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    "Agent Runtime",
-                    style: AppTheme.ts(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary),
-                  ),
-                ),
-                _IconBtn(
-                  icon: Icons.chevron_left_rounded,
-                  size: 20,
-                  onTap: onToggleCollapse,
-                ),
-              ],
-            ),
-          ),
-          // New session button
-          Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: onNewSession,
-                icon: const Icon(Icons.add_rounded, size: 16),
-                label: Text("新会话",
-                    style: AppTheme.ts(
-                        fontSize: 13, fontWeight: FontWeight.w500)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppTheme.textPrimary,
-                  side: const BorderSide(color: AppTheme.border),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          // Session list
-          Expanded(
-            child: sessions.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.chat_bubble_outline_rounded,
-                            size: 32, color: AppTheme.textTertiary),
-                        const SizedBox(height: 8),
-                        Text("暂无会话",
-                            style: AppTheme.ts(
-                                fontSize: 13, color: AppTheme.textTertiary)),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    itemCount: sessions.length,
-                    itemBuilder: (_, i) => _SessionTile(
-                      session: sessions[i],
-                      isActive: sessions[i].id == activeSessionId,
-                      onTap: () => onSessionTap(sessions[i].id),
-                      onDelete: () =>
-                          _confirmDelete(context, sessions[i]),
-                    ),
-                  ),
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const Icon(Icons.circle, size: 8, color: AppTheme.accent),
-                const SizedBox(width: 8),
-                Text("${sessions.length} 个会话",
-                    style: AppTheme.ts(
-                        fontSize: 11, color: AppTheme.textTertiary)),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      decoration: AppTheme.floatingPanelDecoration(radius: 30, alpha: 0.9),
+      clipBehavior: Clip.antiAlias,
+      child: collapsed ? _CollapsedRail(this) : _ExpandedSidebar(this),
     );
   }
 
@@ -163,30 +39,252 @@ class SessionSidebar extends StatelessWidget {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AppTheme.surface,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        title: Text("删除会话",
-            style: AppTheme.ts(fontWeight: FontWeight.w600)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: Text('删除会话', style: AppTheme.ts(fontWeight: FontWeight.w600)),
         content: Text(
-          "确定要删除「${session.title}」吗？此操作不可恢复。",
+          '确定要删除「${session.title}」吗？此操作不可恢复。',
           style: AppTheme.ts(color: AppTheme.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text("取消"),
+            child: const Text('取消'),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(context);
               onSessionDelete(session.id);
             },
-            style:
-                TextButton.styleFrom(foregroundColor: AppTheme.danger),
-            child: const Text("删除"),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            child: const Text('删除'),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ExpandedSidebar extends StatelessWidget {
+  final SessionSidebar parent;
+
+  const _ExpandedSidebar(this.parent);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 14, 12),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [AppTheme.accent, Color(0xFF059669)],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Center(
+                  child:
+                      Icon(Icons.bolt_rounded, size: 20, color: Colors.white),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Agent Runtime',
+                      style: AppTheme.ts(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '会话与上下文',
+                      style: AppTheme.ts(
+                        fontSize: 11,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _IconBtn(
+                icon: Icons.chevron_left_rounded,
+                size: 20,
+                onTap: parent.onToggleCollapse,
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: parent.onNewSession,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: Text(
+                '新会话',
+                style: AppTheme.ts(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.surfaceActive,
+                foregroundColor: AppTheme.textPrimary,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  side: BorderSide(
+                    color: AppTheme.borderLight.withValues(alpha: 0.8),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: parent.sessions.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 34,
+                        color: AppTheme.textTertiary,
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '暂无会话',
+                        style: AppTheme.ts(
+                          fontSize: 13,
+                          color: AppTheme.textTertiary,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(10, 4, 10, 14),
+                  itemCount: parent.sessions.length,
+                  itemBuilder: (_, i) => _SessionTile(
+                    session: parent.sessions[i],
+                    isActive: parent.sessions[i].id == parent.activeSessionId,
+                    onTap: () => parent.onSessionTap(parent.sessions[i].id),
+                    onDelete: () => parent._confirmDelete(
+                      context,
+                      parent.sessions[i],
+                    ),
+                  ),
+                ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppTheme.surface.withValues(alpha: 0.82),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.circle, size: 8, color: AppTheme.accent),
+                const SizedBox(width: 8),
+                Text(
+                  '${parent.sessions.length} 个会话',
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    color: AppTheme.textTertiary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CollapsedRail extends StatelessWidget {
+  final SessionSidebar parent;
+
+  const _CollapsedRail(this.parent);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        const SizedBox(height: 14),
+        _IconBtn(icon: Icons.menu_rounded, onTap: parent.onToggleCollapse),
+        const SizedBox(height: 10),
+        _IconBtn(
+          icon: Icons.add_rounded,
+          onTap: parent.onNewSession,
+          accent: true,
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            itemCount: parent.sessions.length,
+            itemBuilder: (_, i) {
+              final session = parent.sessions[i];
+              final active = session.id == parent.activeSessionId;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Tooltip(
+                  message: session.title,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () => parent.onSessionTap(session.id),
+                    child: Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: active
+                            ? AppTheme.accent.withValues(alpha: 0.16)
+                            : AppTheme.surface.withValues(alpha: 0.78),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: active
+                              ? AppTheme.accent.withValues(alpha: 0.4)
+                              : AppTheme.border,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.chat_bubble_rounded,
+                        size: 18,
+                        color:
+                            active ? AppTheme.accent : AppTheme.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Text(
+            '${parent.sessions.length}',
+            style: AppTheme.ts(fontSize: 11, color: AppTheme.textTertiary),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -220,61 +318,83 @@ class _SessionTileState extends State<_SessionTile> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          margin: const EdgeInsets.only(bottom: 2),
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          duration: const Duration(milliseconds: 140),
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
           decoration: BoxDecoration(
             color: active
-                ? AppTheme.surfaceActive
+                ? AppTheme.accent.withValues(alpha: 0.12)
                 : _hovering
-                    ? AppTheme.surfaceHover
-                    : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-            border: active
-                ? Border.all(color: AppTheme.borderLight, width: 0.5)
-                : null,
+                    ? AppTheme.surfaceHover.withValues(alpha: 0.9)
+                    : AppTheme.surface.withValues(alpha: 0.68),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: active
+                  ? AppTheme.accent.withValues(alpha: 0.35)
+                  : AppTheme.border.withValues(alpha: 0.9),
+            ),
           ),
           child: Row(
             children: [
-              Icon(Icons.chat_rounded,
-                  size: 15,
-                  color:
-                      active ? AppTheme.accent : AppTheme.textTertiary),
-              const SizedBox(width: 10),
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: active
+                      ? AppTheme.accent.withValues(alpha: 0.16)
+                      : AppTheme.surfaceActive,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Icon(
+                  Icons.chat_rounded,
+                  size: 16,
+                  color: active ? AppTheme.accent : AppTheme.textSecondary,
+                ),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(widget.session.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTheme.ts(
-                            fontSize: 13,
-                            fontWeight:
-                                active ? FontWeight.w500 : FontWeight.w400,
-                            color: active
-                                ? AppTheme.textPrimary
-                                : AppTheme.textSecondary)),
-                    const SizedBox(height: 2),
-                    Text(_formatDate(widget.session.createdAt),
-                        style: AppTheme.ts(
-                            fontSize: 11, color: AppTheme.textTertiary)),
+                    Text(
+                      widget.session.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 13,
+                        fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _formatDate(widget.session.createdAt),
+                      style: AppTheme.ts(
+                        fontSize: 11,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
                   ],
                 ),
               ),
-              if (_hovering)
-                SizedBox(
-                  width: 24,
-                  height: 24,
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 140),
+                opacity: _hovering ? 1 : 0,
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
                   child: IconButton(
                     padding: EdgeInsets.zero,
-                    iconSize: 14,
-                    icon: const Icon(Icons.delete_outline_rounded,
-                        color: AppTheme.textTertiary),
+                    iconSize: 16,
+                    icon: const Icon(
+                      Icons.delete_outline_rounded,
+                      color: AppTheme.textTertiary,
+                    ),
                     onPressed: widget.onDelete,
                   ),
                 ),
+              ),
             ],
           ),
         ),
@@ -284,12 +404,10 @@ class _SessionTileState extends State<_SessionTile> {
 
   String _formatDate(DateTime dt) {
     final now = DateTime.now();
-    if (dt.year == now.year &&
-        dt.month == now.month &&
-        dt.day == now.day) {
-      return DateFormat("HH:mm").format(dt);
+    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+      return DateFormat('HH:mm').format(dt);
     }
-    return DateFormat("MM/dd HH:mm").format(dt);
+    return DateFormat('MM/dd HH:mm').format(dt);
   }
 }
 
@@ -308,17 +426,30 @@ class _IconBtn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 32,
-      height: 32,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
-          child: Icon(icon,
-              size: size,
-              color: accent ? AppTheme.accent : AppTheme.textSecondary),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: accent
+                ? AppTheme.accent.withValues(alpha: 0.16)
+                : AppTheme.surface.withValues(alpha: 0.82),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: accent
+                  ? AppTheme.accent.withValues(alpha: 0.3)
+                  : AppTheme.border,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: size,
+            color: accent ? AppTheme.accent : AppTheme.textSecondary,
+          ),
         ),
       ),
     );

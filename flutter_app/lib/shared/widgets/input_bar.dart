@@ -25,7 +25,13 @@ class _DismissPlusPanelIntent extends Intent {
 }
 
 const double _composerMaxWidth = 820;
-const double _transientTrayMaxWidth = 640;
+const double _menuTrayMaxWidth = 468;
+const double _slashTrayMaxWidth = 500;
+const double _configTrayMaxWidth = 560;
+
+BoxDecoration _trayDecoration({double radius = 22, double alpha = 0.92}) {
+  return AppTheme.floatingPanelDecoration(radius: radius, alpha: alpha);
+}
 
 class InputBar extends StatefulWidget {
   final Future<void> Function(String) onSend;
@@ -331,8 +337,11 @@ class _InputBarState extends State<InputBar> {
   }
 
   void _dismissPlusPanel() {
-    if (_plusPanelMode == _PlusPanelMode.closed) return;
+    if (_plusPanelMode == _PlusPanelMode.closed && !_inSlashMode) return;
     _roundsFocus.unfocus();
+    if (_inSlashMode) {
+      _ctrl.clear();
+    }
     setState(() {
       _plusPanelMode = _PlusPanelMode.closed;
       _roundsError = null;
@@ -417,6 +426,12 @@ class _InputBarState extends State<InputBar> {
     final panelVisible =
         _plusPanelMode != _PlusPanelMode.closed || _inSlashMode;
     final plusPanelVisible = _plusPanelMode != _PlusPanelMode.closed;
+    final transientPanelVisible = plusPanelVisible || _inSlashMode;
+    final transientPanelMaxWidth = _inSlashMode
+        ? _slashTrayMaxWidth
+        : (_plusPanelMode == _PlusPanelMode.config
+            ? _configTrayMaxWidth
+            : _menuTrayMaxWidth);
     final borderColor =
         _focus.hasFocus || panelVisible ? AppTheme.accent : AppTheme.border;
     final borderWidth = _focus.hasFocus || panelVisible ? 1.5 : 1.0;
@@ -430,7 +445,7 @@ class _InputBarState extends State<InputBar> {
         actions: <Type, Action<Intent>>{
           _DismissPlusPanelIntent: CallbackAction<_DismissPlusPanelIntent>(
             onInvoke: (_) {
-              if (plusPanelVisible) {
+              if (transientPanelVisible) {
                 _dismissPlusPanel();
               }
               return null;
@@ -439,17 +454,12 @@ class _InputBarState extends State<InputBar> {
         },
         child: TapRegion(
           onTapOutside: (_) {
-            if (plusPanelVisible) {
+            if (transientPanelVisible) {
               _dismissPlusPanel();
             }
           },
-          child: Container(
+          child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            decoration: const BoxDecoration(
-              color: AppTheme.bg,
-              border:
-                  Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
-            ),
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: _composerMaxWidth),
@@ -471,8 +481,8 @@ class _InputBarState extends State<InputBar> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                            maxWidth: _transientTrayMaxWidth,
+                          constraints: BoxConstraints(
+                            maxWidth: transientPanelMaxWidth,
                           ),
                           child: AnimatedSwitcher(
                             duration: const Duration(milliseconds: 180),
@@ -483,9 +493,10 @@ class _InputBarState extends State<InputBar> {
                         ),
                       ),
                     Container(
-                      decoration: BoxDecoration(
-                        color: AppTheme.surface,
-                        borderRadius: BorderRadius.circular(14),
+                      decoration: AppTheme.floatingPanelDecoration(
+                        radius: 24,
+                        alpha: 0.94,
+                      ).copyWith(
                         border:
                             Border.all(color: borderColor, width: borderWidth),
                       ),
@@ -609,13 +620,13 @@ class _ComposerActionButton extends StatelessWidget {
       height: 36,
       decoration: BoxDecoration(
         color: backgroundColor,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: borderColor, width: accent ? 0 : 1),
       ),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(14),
           onTap: enabled ? onPressed : null,
           child: Center(
             child: busy
@@ -658,16 +669,16 @@ class _TrayHeader extends StatelessWidget {
           const SizedBox(width: 10),
         ],
         Container(
-          width: 34,
-          height: 34,
+          width: 30,
+          height: 30,
           decoration: BoxDecoration(
             color: AppTheme.surfaceActive,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppTheme.border),
           ),
-          child: Icon(icon, size: 18, color: AppTheme.accent),
+          child: Icon(icon, size: 16, color: AppTheme.accent),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -675,16 +686,16 @@ class _TrayHeader extends StatelessWidget {
               Text(
                 title,
                 style: AppTheme.ts(
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: FontWeight.w600,
                   color: AppTheme.textPrimary,
                 ),
               ),
-              const SizedBox(height: 3),
+              const SizedBox(height: 2),
               Text(
                 subtitle,
                 style: AppTheme.ts(
-                  fontSize: 12,
+                  fontSize: 11,
                   color: AppTheme.textSecondary,
                   height: 1.4,
                 ),
@@ -713,21 +724,17 @@ class _PlusMenuTray extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: BoxDecoration(
-        color: AppTheme.bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+      decoration: _trayDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _TrayHeader(
             icon: Icons.add_circle_outline_rounded,
             title: "添加内容",
-            subtitle: "文件、图片和测试配置都从这里进入。",
+            subtitle: "上传和测试配置入口。",
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _MenuTile(
             icon: Icons.insert_drive_file_outlined,
             title: "上传文件",
@@ -772,28 +779,28 @@ class _MenuTile extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
           decoration: BoxDecoration(
             color: AppTheme.surface,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(color: AppTheme.border),
           ),
           child: Row(
             children: [
               Container(
-                width: 34,
-                height: 34,
+                width: 30,
+                height: 30,
                 decoration: BoxDecoration(
                   color: AppTheme.surfaceActive,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: AppTheme.border),
                 ),
-                child: Icon(icon, size: 18, color: AppTheme.accent),
+                child: Icon(icon, size: 16, color: AppTheme.accent),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -802,7 +809,7 @@ class _MenuTile extends StatelessWidget {
                     Text(
                       title,
                       style: AppTheme.ts(
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: AppTheme.textPrimary,
                       ),
@@ -811,17 +818,17 @@ class _MenuTile extends StatelessWidget {
                     Text(
                       subtitle,
                       style: AppTheme.ts(
-                        fontSize: 11,
+                        fontSize: 10.5,
                         color: AppTheme.textSecondary,
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               const Icon(
                 Icons.chevron_right_rounded,
-                size: 18,
+                size: 16,
                 color: AppTheme.textTertiary,
               ),
             ],
@@ -871,189 +878,190 @@ class _RuntimeConfigTray extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: BoxDecoration(
-        color: AppTheme.bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _TrayHeader(
-            icon: Icons.tune_rounded,
-            title: "测试配置",
-            subtitle: "控制本次及后续发送消息的 skill 和最大工具轮数。",
-            leading: _MiniIconButton(
-              icon: Icons.arrow_back_rounded,
-              onTap: onBack,
-            ),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            "Skills",
-            style: AppTheme.ts(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          if (isLoadingSkills)
-            const _PanelHint(
-              icon: Icons.sync_rounded,
-              message: "正在加载技能列表...",
-            )
-          else if (skillsError != null)
-            _ErrorHint(
-              message: skillsError!,
-              onRetry: onRetry,
-            )
-          else if (skills.isEmpty)
-            const _PanelHint(
-              icon: Icons.info_outline_rounded,
-              message: "当前没有可选技能。",
-            )
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: skills
-                  .map(
-                    (skill) => Tooltip(
-                      message: skill.description,
-                      child: _SkillChip(
-                        name: skill.name,
-                        selected: selectedSkillNames.contains(skill.name),
-                        onTap: () => onToggleSkill(skill.name),
-                      ),
-                    ),
-                  )
-                  .toList(),
-            ),
-          const SizedBox(height: 16),
-          Text(
-            "最大工具轮数",
-            style: AppTheme.ts(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            "输入 0-10，默认 3。",
-            style: AppTheme.ts(
-              fontSize: 11,
-              color: AppTheme.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Row(
+      decoration: _trayDecoration(),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 320),
+        child: SingleChildScrollView(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SizedBox(
-                width: 92,
-                child: TextField(
-                  controller: roundsController,
-                  focusNode: roundsFocus,
-                  enabled: true,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(2),
-                  ],
-                  onChanged: onRoundsChanged,
-                  textAlign: TextAlign.center,
+              _TrayHeader(
+                icon: Icons.tune_rounded,
+                title: "测试配置",
+                subtitle: "控制 skill 和最大工具轮数。",
+                leading: _MiniIconButton(
+                  icon: Icons.arrow_back_rounded,
+                  onTap: onBack,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                "Skills",
+                style: AppTheme.ts(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (isLoadingSkills)
+                const _PanelHint(
+                  icon: Icons.sync_rounded,
+                  message: "正在加载技能列表...",
+                )
+              else if (skillsError != null)
+                _ErrorHint(
+                  message: skillsError!,
+                  onRetry: onRetry,
+                )
+              else if (skills.isEmpty)
+                const _PanelHint(
+                  icon: Icons.info_outline_rounded,
+                  message: "当前没有可选技能。",
+                )
+              else
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: skills
+                      .map(
+                        (skill) => Tooltip(
+                          message: skill.description,
+                          child: _SkillChip(
+                            name: skill.name,
+                            selected: selectedSkillNames.contains(skill.name),
+                            onTap: () => onToggleSkill(skill.name),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+              const SizedBox(height: 16),
+              Text(
+                "最大工具轮数",
+                style: AppTheme.ts(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                "输入 0-10，默认 3。",
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 92,
+                    child: TextField(
+                      controller: roundsController,
+                      focusNode: roundsFocus,
+                      enabled: true,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(2),
+                      ],
+                      onChanged: onRoundsChanged,
+                      textAlign: TextAlign.center,
+                      style: AppTheme.ts(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: AppTheme.surface,
+                        hintText: maxToolRounds.toString(),
+                        hintStyle: AppTheme.ts(
+                          fontSize: 14,
+                          color: AppTheme.textTertiary,
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: AppTheme.border),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(
+                            color: roundsError == null
+                                ? AppTheme.border
+                                : AppTheme.danger.withValues(alpha: 0.45),
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(
+                            color: roundsError == null
+                                ? AppTheme.accent
+                                : AppTheme.danger,
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surface,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: Text(
+                        "0 表示不进入工具轮次，数值越大允许模型进行更多轮工具调用。",
+                        style: AppTheme.ts(
+                          fontSize: 11,
+                          color: AppTheme.textSecondary,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (roundsError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  roundsError!,
                   style: AppTheme.ts(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textPrimary,
-                  ),
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: AppTheme.surface,
-                    hintText: maxToolRounds.toString(),
-                    hintStyle: AppTheme.ts(
-                      fontSize: 14,
-                      color: AppTheme.textTertiary,
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 12,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: AppTheme.border),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: roundsError == null
-                            ? AppTheme.border
-                            : AppTheme.danger.withValues(alpha: 0.45),
-                      ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(
-                        color: roundsError == null
-                            ? AppTheme.accent
-                            : AppTheme.danger,
-                        width: 1.5,
-                      ),
-                    ),
+                    fontSize: 11,
+                    color: AppTheme.danger,
                   ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 12,
+              ],
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: onReset,
+                    child: const Text("恢复默认"),
                   ),
-                  decoration: BoxDecoration(
-                    color: AppTheme.surface,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppTheme.border),
+                  const Spacer(),
+                  _TrayPrimaryButton(
+                    label: "完成",
+                    onTap: onDone,
                   ),
-                  child: Text(
-                    "0 表示不进入工具轮次，数值越大允许模型进行更多轮工具调用。",
-                    style: AppTheme.ts(
-                      fontSize: 11,
-                      color: AppTheme.textSecondary,
-                      height: 1.4,
-                    ),
-                  ),
-                ),
+                ],
               ),
             ],
           ),
-          if (roundsError != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              roundsError!,
-              style: AppTheme.ts(
-                fontSize: 11,
-                color: AppTheme.danger,
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              TextButton(
-                onPressed: onReset,
-                child: const Text("恢复默认"),
-              ),
-              const Spacer(),
-              _TrayPrimaryButton(
-                label: "完成",
-                onTap: onDone,
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1200,7 +1208,7 @@ class _PanelHint extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppTheme.border),
       ),
       child: Row(
@@ -1237,7 +1245,7 @@ class _ErrorHint extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: AppTheme.danger.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppTheme.danger.withValues(alpha: 0.25)),
       ),
       child: Row(
@@ -1287,11 +1295,7 @@ class _RuntimeSummaryTray extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: BoxDecoration(
-        color: AppTheme.bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
+      decoration: _trayDecoration(alpha: 0.9),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1406,11 +1410,7 @@ class _ActiveFilesTray extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
       margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: AppTheme.bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
+      decoration: _trayDecoration(alpha: 0.9),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1529,24 +1529,20 @@ class _SlashCommandTray extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: BoxDecoration(
-        color: AppTheme.bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
+      decoration: _trayDecoration(alpha: 0.9),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const _TrayHeader(
             icon: Icons.keyboard_command_key_rounded,
             title: "选择要激活的文件或图片",
-            subtitle: "输入 / 后可以从当前会话文件中快速挑选上下文。",
+            subtitle: "从当前会话里快速选择上下文。",
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
           if (!hasUploadedFiles)
             const _PanelHint(
               icon: Icons.info_outline_rounded,
-              message: "还没有可激活的内容，先点击左侧 + 上传文件或图片。",
+              message: "暂无可激活内容，先用 + 上传文件或图片。",
             )
           else if (files.isEmpty)
             const _PanelHint(
@@ -1555,7 +1551,7 @@ class _SlashCommandTray extends StatelessWidget {
             )
           else
             ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 240),
+              constraints: const BoxConstraints(maxHeight: 168),
               child: SingleChildScrollView(
                 child: Column(
                   children: files
@@ -1595,16 +1591,16 @@ class _SlashFileOption extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         onTap: onTap,
         child: Container(
           margin: const EdgeInsets.only(bottom: 6),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
           decoration: BoxDecoration(
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.08)
                 : AppTheme.surface,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: active
                   ? AppTheme.accent.withValues(alpha: 0.35)
@@ -1614,16 +1610,16 @@ class _SlashFileOption extends StatelessWidget {
           child: Row(
             children: [
               Container(
-                width: 34,
-                height: 34,
+                width: 30,
+                height: 30,
                 decoration: BoxDecoration(
                   color: AppTheme.surfaceActive,
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: AppTheme.border),
                 ),
-                child: Icon(icon, size: 18, color: AppTheme.accent),
+                child: Icon(icon, size: 16, color: AppTheme.accent),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1633,16 +1629,16 @@ class _SlashFileOption extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.w500,
                         color: AppTheme.textPrimary,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
                       "${file.sizeDisplay} · ${file.mediaType}",
                       style: AppTheme.ts(
-                        fontSize: 11,
+                        fontSize: 10.5,
                         color: AppTheme.textSecondary,
                       ),
                     ),

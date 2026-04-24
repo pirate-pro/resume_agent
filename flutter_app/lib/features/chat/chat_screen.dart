@@ -8,8 +8,23 @@ import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/chat_bubble.dart';
 import '../../shared/widgets/input_bar.dart';
 
+const double _messageRailMaxWidth = 1160;
+
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key});
+  final bool showSidebarToggle;
+  final VoidCallback? onSidebarToggle;
+  final bool showDebugToggle;
+  final bool isDebugPanelOpen;
+  final VoidCallback? onDebugToggle;
+
+  const ChatScreen({
+    super.key,
+    this.showSidebarToggle = false,
+    this.onSidebarToggle,
+    this.showDebugToggle = false,
+    this.isDebugPanelOpen = false,
+    this.onDebugToggle,
+  });
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -52,24 +67,59 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Column(
       children: [
-        // ── Header ──────────────────────────────────────────────────────
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: const BoxDecoration(
-            color: AppTheme.surface,
-            border:
-                Border(bottom: BorderSide(color: AppTheme.border, width: 0.5)),
-          ),
-          child: Row(
-            children: [
-              Text("Single Agent Runtime",
-                  style: AppTheme.ts(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.textPrimary)),
-              const Spacer(),
-              _HealthBadge(reachable: provider.serverReachable),
-            ],
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1180),
+              child: Row(
+                children: [
+                  if (widget.showSidebarToggle) ...[
+                    _HeaderButton(
+                      icon: Icons.menu_rounded,
+                      onTap: widget.onSidebarToggle,
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      decoration: AppTheme.floatingPanelDecoration(
+                        radius: 24,
+                        alpha: 0.72,
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            "Single Agent Runtime",
+                            style: AppTheme.ts(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const Spacer(),
+                          _HealthBadge(reachable: provider.serverReachable),
+                          if (widget.showDebugToggle) ...[
+                            const SizedBox(width: 10),
+                            _HeaderButton(
+                              icon: widget.isDebugPanelOpen
+                                  ? Icons.tune_rounded
+                                  : Icons.developer_board_rounded,
+                              active: widget.isDebugPanelOpen,
+                              onTap: widget.onDebugToggle,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
         // ── Messages area ──────────────────────────────────────────────
@@ -139,6 +189,49 @@ class _HealthBadge extends StatelessWidget {
                   fontSize: 11,
                   color: reachable ? AppTheme.accent : AppTheme.danger)),
         ],
+      ),
+    );
+  }
+}
+
+class _HeaderButton extends StatelessWidget {
+  final IconData icon;
+  final bool active;
+  final VoidCallback? onTap;
+
+  const _HeaderButton({
+    required this.icon,
+    required this.onTap,
+    this.active = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: active
+                ? AppTheme.accent.withValues(alpha: 0.16)
+                : AppTheme.surface.withValues(alpha: 0.78),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: active
+                  ? AppTheme.accent.withValues(alpha: 0.3)
+                  : AppTheme.border,
+            ),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: active ? AppTheme.accent : AppTheme.textSecondary,
+          ),
+        ),
       ),
     );
   }
@@ -311,32 +404,39 @@ class _MessageListState extends State<_MessageList> {
 
     return ListView.builder(
       controller: widget.scrollCtrl,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
       itemCount: itemCount,
       itemBuilder: (_, i) {
+        Widget child;
         // Error at top
         if (widget.error != null && i == 0) {
-          return _ErrorBanner(
+          child = _ErrorBanner(
             message: widget.error!,
             onDismiss: widget.onClearError,
           );
-        }
-        final msgIdx = widget.error != null ? i - 1 : i;
+        } else {
+          final msgIdx = widget.error != null ? i - 1 : i;
 
-        // Streaming bubble at the end
-        if (widget.isStreaming && msgIdx == widget.messages.length) {
-          return StreamingBubble(
-            buffer: widget.streamBuffer,
-            thinkingLines: _buildThinkingLines(widget.streamEvents),
-          );
+          // Streaming bubble at the end
+          if (widget.isStreaming && msgIdx == widget.messages.length) {
+            child = StreamingBubble(
+              buffer: widget.streamBuffer,
+              thinkingLines: _buildThinkingLines(widget.streamEvents),
+            );
+          } else if (msgIdx < widget.messages.length) {
+            // Regular messages
+            child = ChatBubble(message: widget.messages[msgIdx]);
+          } else {
+            child = const SizedBox.shrink();
+          }
         }
 
-        // Regular messages
-        if (msgIdx < widget.messages.length) {
-          return ChatBubble(message: widget.messages[msgIdx]);
-        }
-
-        return const SizedBox.shrink();
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _messageRailMaxWidth),
+            child: child,
+          ),
+        );
       },
     );
   }
