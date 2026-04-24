@@ -88,7 +88,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         // ── Input ──────────────────────────────────────────────────────
         InputBar(
           enabled: !provider.isStreaming,
+          isUploading: provider.isUploadingFile,
+          sessionFiles: provider.sessionFiles,
+          activeFileIds: provider.activeFileIds,
           onSend: (text) => provider.sendMessage(text),
+          onUpload: ({required filename, required bytes}) =>
+              provider.uploadSessionFile(filename: filename, bytes: bytes),
+          onToggleFileActive: (file, active) =>
+              provider.toggleFileActive(file.fileId, active),
         ),
       ],
     );

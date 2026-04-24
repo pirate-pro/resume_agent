@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/api_models.dart';
 import '../services/api_service.dart';
@@ -15,11 +15,14 @@ final chatProvider = ChangeNotifierProvider<ChatProvider>((ref) {
 });
 
 class ChatProvider extends ChangeNotifier {
+  static const _uuid = Uuid();
+
   final ApiService _api;
 
   String? _sessionId;
   final List<ChatMessage> _messages = [];
   bool _isStreaming = false;
+  bool _isUploadingFile = false;
   String _streamBuffer = "";
   String? _error;
   final List<SessionMeta> _sessions = [];
@@ -36,6 +39,7 @@ class ChatProvider extends ChangeNotifier {
   String? get sessionId => _sessionId;
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   bool get isStreaming => _isStreaming;
+  bool get isUploadingFile => _isUploadingFile;
   String get streamBuffer => _streamBuffer;
   String? get error => _error;
   List<SessionMeta> get sessions => List.unmodifiable(_sessions);
@@ -113,28 +117,66 @@ class ChatProvider extends ChangeNotifier {
 
   void _registerSession(String id, String firstMessage) {
     final existing = _sessions.where((s) => s.id == id).firstOrNull;
+    final nextTitle = _buildSessionTitle(firstMessage);
     if (existing == null) {
       _sessions.insert(
         0,
         SessionMeta(
           id: id,
-          title: firstMessage.length > 30
-              ? "${firstMessage.substring(0, 30)}..."
-              : firstMessage,
+          title: nextTitle,
           createdAt: DateTime.now(),
           messageCount: 1,
         ),
       );
     } else {
+      final shouldReplaceTitle = existing.messageCount == 0 ||
+          existing.title == "新会话" ||
+          existing.title.startsWith("文件:");
       final idx = _sessions.indexOf(existing);
       _sessions[idx] = SessionMeta(
         id: existing.id,
-        title: existing.title,
+        title: shouldReplaceTitle ? nextTitle : existing.title,
         createdAt: existing.createdAt,
         messageCount: existing.messageCount + 2,
       );
     }
     _saveSessions();
+  }
+
+  String _buildSessionTitle(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return "新会话";
+    return trimmed.length > 30 ? "${trimmed.substring(0, 30)}..." : trimmed;
+  }
+
+  String _generateSessionId() {
+    final raw = _uuid.v4().replaceAll("-", "");
+    return "sess_${raw.substring(0, 12)}";
+  }
+
+  Future<void> _ensureSessionPlaceholder(String sessionId, String title) async {
+    final existing = _sessions.where((s) => s.id == sessionId).firstOrNull;
+    if (existing != null) return;
+    _sessions.insert(
+      0,
+      SessionMeta(
+        id: sessionId,
+        title: title,
+        createdAt: DateTime.now(),
+        messageCount: 0,
+      ),
+    );
+    await _saveSessions();
+  }
+
+  Future<void> _discardPlaceholderSession(String sessionId) async {
+    _sessions.removeWhere((s) => s.id == sessionId);
+    if (_sessionId == sessionId) {
+      _sessionId = null;
+      _sessionFiles = [];
+      _activeFileIds = [];
+    }
+    await _saveSessions();
   }
 
   // ── Session management ──────────────────────────────────────────────
@@ -361,6 +403,53 @@ class ChatProvider extends ChangeNotifier {
       _activeFileIds = resp.activeFileIds;
     } catch (_) {}
     notifyListeners();
+  }
+
+  Future<void> uploadSessionFile({
+    required String filename,
+    required Uint8List bytes,
+    bool autoActivate = true,
+  }) async {
+    final trimmed = filename.trim();
+    if (trimmed.isEmpty || bytes.isEmpty || _isUploadingFile) return;
+
+    final hadSession = _sessionId != null;
+    final sessionId = _sessionId ?? _generateSessionId();
+
+    if (!hadSession) {
+      _sessionId = sessionId;
+      await _ensureSessionPlaceholder(
+        sessionId,
+        _buildSessionTitle("文件: $trimmed"),
+      );
+    }
+
+    _error = null;
+    _isUploadingFile = true;
+    notifyListeners();
+
+    try {
+      await _api.uploadFile(
+        sessionId: sessionId,
+        filename: trimmed,
+        contentBase64: base64Encode(bytes),
+        autoActivate: autoActivate,
+      );
+      await refreshSessionFiles();
+    } on ApiException catch (e) {
+      _error = e.message;
+      if (!hadSession && _messages.isEmpty) {
+        await _discardPlaceholderSession(sessionId);
+      }
+    } catch (e) {
+      _error = e.toString();
+      if (!hadSession && _messages.isEmpty) {
+        await _discardPlaceholderSession(sessionId);
+      }
+    } finally {
+      _isUploadingFile = false;
+      notifyListeners();
+    }
   }
 
   // ── Memories ─────────────────────────────────────────────────────────
