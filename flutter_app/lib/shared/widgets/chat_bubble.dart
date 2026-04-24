@@ -7,6 +7,11 @@ import '../../core/models/api_models.dart';
 import '../theme/app_theme.dart';
 
 const double _bubbleMaxWidth = 780;
+const int _richMarkdownMaxChars = 6000;
+const int _richMarkdownMaxLines = 160;
+const int _streamStructuredMaxChars = 3200;
+const int _streamStructuredMaxLines = 90;
+const int _richMarkdownMaxCodeFences = 4;
 
 class ChatBubble extends StatefulWidget {
   final ChatMessage message;
@@ -348,22 +353,37 @@ class _PlainTextBody extends StatelessWidget {
   }
 }
 
-class _AssistantMarkdownBody extends StatelessWidget {
+class _AssistantMarkdownBody extends StatefulWidget {
   final String content;
 
   const _AssistantMarkdownBody({required this.content});
 
   @override
+  State<_AssistantMarkdownBody> createState() => _AssistantMarkdownBodyState();
+}
+
+class _AssistantMarkdownBodyState extends State<_AssistantMarkdownBody> {
+  bool _forceRich = false;
+
+  @override
   Widget build(BuildContext context) {
+    final tooLarge = _shouldDegradeRichMarkdown(widget.content);
+    if (tooLarge && !_forceRich) {
+      return _LargeMessagePreview(
+        content: widget.content,
+        onEnableRich: () => setState(() => _forceRich = true),
+      );
+    }
+    final enableLatex = _looksLikeLatex(widget.content);
     return SelectionArea(
       child: GptMarkdown(
-        content,
+        widget.content,
         style: AppTheme.ts(
           fontSize: 15,
           color: AppTheme.textPrimary,
           height: 1.65,
         ),
-        useDollarSignsForLatex: true,
+        useDollarSignsForLatex: enableLatex,
         onLinkTap: (url, title) => _copyLink(context, url),
         codeBuilder: (context, name, code, closed) {
           return _CodeBlockCard(
@@ -401,6 +421,9 @@ class _StreamingMarkdownBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (_shouldDegradeStreamingMarkdown(content)) {
+      return _LargeStreamingPreview(content: content);
+    }
     final segments = _StreamingSegmentParser.parse(content);
     if (segments.isEmpty) {
       return const SizedBox.shrink();
@@ -424,6 +447,124 @@ class _StreamingMarkdownBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: children,
+    );
+  }
+}
+
+class _LargeMessagePreview extends StatelessWidget {
+  final String content;
+  final VoidCallback onEnableRich;
+
+  const _LargeMessagePreview({
+    required this.content,
+    required this.onEnableRich,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lineCount = _countLines(content);
+    final preview = _previewText(content);
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.text_snippet_outlined,
+                size: 16,
+                color: AppTheme.accent,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '长内容已切换为轻量渲染',
+                  style: AppTheme.ts(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+              Text(
+                '${content.length} 字 / $lineCount 行',
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  color: AppTheme.textTertiary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SelectableText(
+            preview,
+            style: AppTheme.ts(
+              fontSize: 15,
+              color: AppTheme.textPrimary,
+              height: 1.65,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: onEnableRich,
+                icon: const Icon(Icons.auto_awesome_rounded, size: 15),
+                label: const Text('尝试富文本渲染'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.textPrimary,
+                  side: BorderSide(color: AppTheme.borderLight),
+                  textStyle: AppTheme.ts(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                ),
+              ),
+              _CodeCopyButton(text: content, label: '复制全文'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LargeStreamingPreview extends StatelessWidget {
+  final String content;
+
+  const _LargeStreamingPreview({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: SelectableText(
+        content,
+        style: AppTheme.ts(
+          fontSize: 15,
+          color: AppTheme.textPrimary,
+          height: 1.65,
+        ),
+      ),
     );
   }
 }
@@ -750,8 +891,12 @@ class _CodeBlockCard extends StatelessWidget {
 
 class _CodeCopyButton extends StatelessWidget {
   final String text;
+  final String label;
 
-  const _CodeCopyButton({required this.text});
+  const _CodeCopyButton({
+    required this.text,
+    this.label = '复制',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -770,9 +915,52 @@ class _CodeCopyButton extends StatelessWidget {
         textStyle: AppTheme.ts(fontSize: 12, fontWeight: FontWeight.w600),
       ),
       icon: const Icon(Icons.content_copy_rounded, size: 14),
-      label: const Text('复制'),
+      label: Text(label),
     );
   }
+}
+
+bool _shouldDegradeRichMarkdown(String content) {
+  return content.length > _richMarkdownMaxChars ||
+      _countLines(content) > _richMarkdownMaxLines ||
+      _countOccurrences(content, '```') > _richMarkdownMaxCodeFences;
+}
+
+bool _shouldDegradeStreamingMarkdown(String content) {
+  return content.length > _streamStructuredMaxChars ||
+      _countLines(content) > _streamStructuredMaxLines;
+}
+
+bool _looksLikeLatex(String content) {
+  if (content.contains(r'\(') || content.contains(r'\[')) {
+    return true;
+  }
+  if (content.contains(r'$$')) {
+    return true;
+  }
+  return RegExp(r'(?<!\\)\$[^$\n]{1,120}(?<!\\)\$').hasMatch(content);
+}
+
+int _countLines(String content) {
+  if (content.isEmpty) {
+    return 0;
+  }
+  return '\n'.allMatches(content).length + 1;
+}
+
+int _countOccurrences(String source, String pattern) {
+  if (pattern.isEmpty) {
+    return 0;
+  }
+  return pattern.allMatches(source).length;
+}
+
+String _previewText(String content) {
+  final normalized = content.trim();
+  if (normalized.length <= 2400) {
+    return normalized;
+  }
+  return '${normalized.substring(0, 2400)}\n\n……内容较长，已省略后续部分';
 }
 
 class _StreamingSegment {
