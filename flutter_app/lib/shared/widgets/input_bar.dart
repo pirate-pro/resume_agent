@@ -20,6 +20,10 @@ enum _UploadAction { file, image }
 
 enum _PlusPanelMode { closed, menu, config }
 
+class _DismissPlusPanelIntent extends Intent {
+  const _DismissPlusPanelIntent();
+}
+
 const double _composerMaxWidth = 820;
 const double _transientTrayMaxWidth = 640;
 
@@ -326,6 +330,15 @@ class _InputBarState extends State<InputBar> {
     });
   }
 
+  void _dismissPlusPanel() {
+    if (_plusPanelMode == _PlusPanelMode.closed) return;
+    _roundsFocus.unfocus();
+    setState(() {
+      _plusPanelMode = _PlusPanelMode.closed;
+      _roundsError = null;
+    });
+  }
+
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
@@ -403,122 +416,151 @@ class _InputBarState extends State<InputBar> {
     final canSend = _hasText && widget.enabled && !_inSlashMode;
     final panelVisible =
         _plusPanelMode != _PlusPanelMode.closed || _inSlashMode;
+    final plusPanelVisible = _plusPanelMode != _PlusPanelMode.closed;
     final borderColor =
         _focus.hasFocus || panelVisible ? AppTheme.accent : AppTheme.border;
     final borderWidth = _focus.hasFocus || panelVisible ? 1.5 : 1.0;
     final activeFiles = _activeFiles;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-      decoration: const BoxDecoration(
-        color: AppTheme.bg,
-        border: Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
-      ),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: _composerMaxWidth),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (activeFiles.isNotEmpty) ...[
-                _ActiveFilesTray(
-                  files: activeFiles,
-                  iconForFile: _fileIcon,
-                  onRemove: (file) {
-                    widget.onToggleFileActive(file, false);
-                  },
-                ),
-                const SizedBox(height: 10),
-              ],
-              if (panelVisible)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: ConstrainedBox(
-                    constraints:
-                        const BoxConstraints(maxWidth: _transientTrayMaxWidth),
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 180),
-                      switchInCurve: Curves.easeOut,
-                      switchOutCurve: Curves.easeIn,
-                      child: _buildPanel(),
-                    ),
-                  ),
-                ),
-              Container(
-                decoration: BoxDecoration(
-                  color: AppTheme.surface,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: borderColor, width: borderWidth),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.escape): _DismissPlusPanelIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _DismissPlusPanelIntent: CallbackAction<_DismissPlusPanelIntent>(
+            onInvoke: (_) {
+              if (plusPanelVisible) {
+                _dismissPlusPanel();
+              }
+              return null;
+            },
+          ),
+        },
+        child: TapRegion(
+          onTapOutside: (_) {
+            if (plusPanelVisible) {
+              _dismissPlusPanel();
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            decoration: const BoxDecoration(
+              color: AppTheme.bg,
+              border:
+                  Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
+            ),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _composerMaxWidth),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(left: 8, bottom: 8),
-                      child: _ComposerActionButton(
-                        icon: Icons.add_rounded,
-                        enabled: widget.enabled && !widget.isUploading,
-                        busy: widget.isUploading,
-                        highlighted: _plusPanelMode != _PlusPanelMode.closed,
-                        onPressed: _togglePlusPanel,
+                    if (activeFiles.isNotEmpty) ...[
+                      _ActiveFilesTray(
+                        files: activeFiles,
+                        iconForFile: _fileIcon,
+                        onRemove: (file) {
+                          widget.onToggleFileActive(file, false);
+                        },
                       ),
-                    ),
-                    Expanded(
-                      child: Focus(
-                        focusNode: _focus,
-                        onKeyEvent: _handleKey,
-                        child: TextField(
-                          controller: _ctrl,
-                          enabled: widget.enabled,
-                          maxLines: 6,
-                          minLines: 1,
-                          textInputAction: TextInputAction.newline,
-                          keyboardType: TextInputType.multiline,
-                          style: AppTheme.ts(
-                            fontSize: 15,
-                            color: AppTheme.textPrimary,
-                            height: 1.5,
+                      const SizedBox(height: 10),
+                    ],
+                    if (panelVisible)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: _transientTrayMaxWidth,
                           ),
-                          decoration: InputDecoration(
-                            hintText: widget.hintText ?? "输入消息，或键入 / 激活文件和图片",
-                            hintStyle: AppTheme.ts(
-                              color: AppTheme.textTertiary,
-                              fontSize: 14,
-                            ),
-                            border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 14,
-                            ),
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            switchInCurve: Curves.easeOut,
+                            switchOutCurve: Curves.easeIn,
+                            child: _buildPanel(),
                           ),
                         ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8, right: 8),
-                      child: _ComposerActionButton(
-                        icon: Icons.arrow_upward_rounded,
-                        enabled: canSend,
-                        accent: true,
-                        onPressed: _send,
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppTheme.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        border:
+                            Border.all(color: borderColor, width: borderWidth),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(left: 8, bottom: 8),
+                            child: _ComposerActionButton(
+                              icon: Icons.add_rounded,
+                              enabled: widget.enabled && !widget.isUploading,
+                              busy: widget.isUploading,
+                              highlighted: plusPanelVisible,
+                              onPressed: _togglePlusPanel,
+                            ),
+                          ),
+                          Expanded(
+                            child: Focus(
+                              focusNode: _focus,
+                              onKeyEvent: _handleKey,
+                              child: TextField(
+                                controller: _ctrl,
+                                enabled: widget.enabled,
+                                maxLines: 6,
+                                minLines: 1,
+                                textInputAction: TextInputAction.newline,
+                                keyboardType: TextInputType.multiline,
+                                style: AppTheme.ts(
+                                  fontSize: 15,
+                                  color: AppTheme.textPrimary,
+                                  height: 1.5,
+                                ),
+                                decoration: InputDecoration(
+                                  hintText:
+                                      widget.hintText ?? "输入消息，或键入 / 激活文件和图片",
+                                  hintStyle: AppTheme.ts(
+                                    color: AppTheme.textTertiary,
+                                    fontSize: 14,
+                                  ),
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 14,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8, right: 8),
+                            child: _ComposerActionButton(
+                              icon: Icons.arrow_upward_rounded,
+                              enabled: canSend,
+                              accent: true,
+                              onPressed: _send,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                    if (_hasRuntimeOverrides) ...[
+                      const SizedBox(height: 10),
+                      _RuntimeSummaryTray(
+                        selectedSkillNames: widget.selectedSkillNames,
+                        maxToolRounds: widget.maxToolRounds,
+                        onClearSkill: widget.onToggleSkill,
+                        onClearRounds: _resetMaxToolRoundsOnly,
+                      ),
+                    ],
                   ],
                 ),
               ),
-              if (_hasRuntimeOverrides) ...[
-                const SizedBox(height: 10),
-                _RuntimeSummaryTray(
-                  selectedSkillNames: widget.selectedSkillNames,
-                  maxToolRounds: widget.maxToolRounds,
-                  onClearSkill: widget.onToggleSkill,
-                  onClearRounds: _resetMaxToolRoundsOnly,
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),
