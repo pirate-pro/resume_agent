@@ -12,6 +12,10 @@ const int _richMarkdownMaxLines = 160;
 const int _streamStructuredMaxChars = 3200;
 const int _streamStructuredMaxLines = 90;
 const int _richMarkdownMaxCodeFences = 4;
+const int _largeMessageChunkChars = 1600;
+const int _streamingTailPreviewChars = 2200;
+const int _autoCollapseCodeLines = 40;
+const int _collapsedCodePreviewLines = 24;
 
 class ChatBubble extends StatefulWidget {
   final ChatMessage message;
@@ -463,7 +467,6 @@ class _LargeMessagePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final lineCount = _countLines(content);
-    final preview = _previewText(content);
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -503,13 +506,10 @@ class _LargeMessagePreview extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          SelectableText(
-            preview,
-            style: AppTheme.ts(
-              fontSize: 15,
-              color: AppTheme.textPrimary,
-              height: 1.65,
-            ),
+          _ChunkedPlainTextView(
+            content: content,
+            chunkChars: _largeMessageChunkChars,
+            summaryText: '内容较长，已改为分段渲染，按需继续展开。',
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -549,6 +549,8 @@ class _LargeStreamingPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final preview = _streamingTailText(content);
+    final truncated = preview != content;
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -556,15 +558,101 @@ class _LargeStreamingPreview extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppTheme.border),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: SelectableText(
-        content,
-        style: AppTheme.ts(
-          fontSize: 15,
-          color: AppTheme.textPrimary,
-          height: 1.65,
-        ),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (truncated) ...[
+            Text(
+              '生成中内容较长，当前仅显示最近一段输出。',
+              style: AppTheme.ts(
+                fontSize: 12,
+                color: AppTheme.textTertiary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          SelectableText(
+            preview,
+            style: AppTheme.ts(
+              fontSize: 15,
+              color: AppTheme.textPrimary,
+              height: 1.65,
+            ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+class _ChunkedPlainTextView extends StatefulWidget {
+  final String content;
+  final int chunkChars;
+  final String summaryText;
+
+  const _ChunkedPlainTextView({
+    required this.content,
+    required this.chunkChars,
+    required this.summaryText,
+  });
+
+  @override
+  State<_ChunkedPlainTextView> createState() => _ChunkedPlainTextViewState();
+}
+
+class _ChunkedPlainTextViewState extends State<_ChunkedPlainTextView> {
+  int _visibleChunks = 1;
+
+  @override
+  Widget build(BuildContext context) {
+    final chunks = _splitIntoChunks(widget.content, widget.chunkChars);
+    final visibleCount = _visibleChunks.clamp(1, chunks.length);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          widget.summaryText,
+          style: AppTheme.ts(
+            fontSize: 12,
+            color: AppTheme.textTertiary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 10),
+        for (var index = 0; index < visibleCount; index++) ...[
+          SelectableText(
+            chunks[index],
+            style: AppTheme.ts(
+              fontSize: 15,
+              color: AppTheme.textPrimary,
+              height: 1.65,
+            ),
+          ),
+          if (index != visibleCount - 1) const SizedBox(height: 12),
+        ],
+        if (visibleCount < chunks.length) ...[
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => setState(() => _visibleChunks += 1),
+            icon: const Icon(Icons.expand_more_rounded, size: 16),
+            label: Text('继续展开 ($visibleCount/${chunks.length})'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppTheme.textPrimary,
+              side: BorderSide(color: AppTheme.borderLight),
+              textStyle: AppTheme.ts(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -776,7 +864,7 @@ class _LatexBlock extends StatelessWidget {
   }
 }
 
-class _CodeBlockCard extends StatelessWidget {
+class _CodeBlockCard extends StatefulWidget {
   final String language;
   final String code;
   final bool closed;
@@ -788,13 +876,26 @@ class _CodeBlockCard extends StatelessWidget {
   });
 
   @override
+  State<_CodeBlockCard> createState() => _CodeBlockCardState();
+}
+
+class _CodeBlockCardState extends State<_CodeBlockCard> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
-    final codeText = code.trimRight();
+    final codeText = widget.code.trimRight();
     final lines = (codeText.isEmpty ? const [''] : codeText.split('\n'));
+    final shouldCollapse =
+        widget.closed && lines.length > _autoCollapseCodeLines;
+    final visibleLines = shouldCollapse && !_expanded
+        ? lines.take(_collapsedCodePreviewLines).toList()
+        : lines;
     final lineNumbers = List<String>.generate(
-      lines.length,
+      visibleLines.length,
       (index) => '${index + 1}',
     ).join('\n');
+    final visibleCodeText = visibleLines.join('\n');
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -827,7 +928,9 @@ class _CodeBlockCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
-                    language.trim().isEmpty ? 'code' : language.trim(),
+                    widget.language.trim().isEmpty
+                        ? 'code'
+                        : widget.language.trim(),
                     style: AppTheme.ts(
                       fontSize: 11,
                       color: AppTheme.textSecondary,
@@ -835,13 +938,26 @@ class _CodeBlockCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (!closed) ...[
+                if (!widget.closed) ...[
                   const SizedBox(width: 8),
                   Text(
                     '生成中',
                     style: AppTheme.ts(
                       fontSize: 11,
                       color: AppTheme.accent,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+                if (shouldCollapse) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    _expanded
+                        ? '已展开 ${lines.length} 行'
+                        : '预览 ${visibleLines.length}/${lines.length} 行',
+                    style: AppTheme.ts(
+                      fontSize: 11,
+                      color: AppTheme.textTertiary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -867,13 +983,15 @@ class _CodeBlockCard extends StatelessWidget {
                 ),
                 Container(
                   width: 1,
-                  height:
-                      (lines.length * 22).toDouble().clamp(24, 1200).toDouble(),
+                  height: (visibleLines.length * 22)
+                      .toDouble()
+                      .clamp(24, 1200)
+                      .toDouble(),
                   margin: const EdgeInsets.symmetric(horizontal: 12),
                   color: AppTheme.border,
                 ),
                 SelectableText(
-                  codeText,
+                  visibleCodeText,
                   style: AppTheme.ts(
                     fontSize: 13,
                     color: const Color(0xFFE6EDF3),
@@ -883,6 +1001,31 @@ class _CodeBlockCard extends StatelessWidget {
               ],
             ),
           ),
+          if (shouldCollapse)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => setState(() => _expanded = !_expanded),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppTheme.textPrimary,
+                    textStyle: AppTheme.ts(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  icon: Icon(
+                    _expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 16,
+                  ),
+                  label: Text(_expanded ? '收起代码' : '展开完整代码'),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -955,12 +1098,26 @@ int _countOccurrences(String source, String pattern) {
   return pattern.allMatches(source).length;
 }
 
-String _previewText(String content) {
+List<String> _splitIntoChunks(String content, int chunkChars) {
   final normalized = content.trim();
-  if (normalized.length <= 2400) {
-    return normalized;
+  if (normalized.isEmpty) {
+    return const [''];
   }
-  return '${normalized.substring(0, 2400)}\n\n……内容较长，已省略后续部分';
+  final chunks = <String>[];
+  var index = 0;
+  while (index < normalized.length) {
+    final end = (index + chunkChars).clamp(0, normalized.length);
+    chunks.add(normalized.substring(index, end));
+    index = end;
+  }
+  return chunks;
+}
+
+String _streamingTailText(String content) {
+  if (content.length <= _streamingTailPreviewChars) {
+    return content;
+  }
+  return '……前文已省略，仅展示最近输出\n\n${content.substring(content.length - _streamingTailPreviewChars)}';
 }
 
 class _StreamingSegment {
