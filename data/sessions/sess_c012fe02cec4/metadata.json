@@ -1,0 +1,10 @@
+{
+  "session_id": "sess_c012fe02cec4",
+  "title": "New Session",
+  "created_at": "2026-04-24T05:04:05.579676Z",
+  "updated_at": "2026-04-24T05:04:06.652359Z",
+  "participants": [
+    "agent_main"
+  ],
+  "entry_agent_id": "agent_main"
+}
