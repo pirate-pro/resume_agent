@@ -464,10 +464,10 @@ class ChatProvider extends ChangeNotifier {
 
       _flushPendingStreamDelta(notify: false);
 
-      // Apply done response
+      // done 事件里的 answer 才是最终真值，必须覆盖流式阶段的临时 buffer。
       if (doneResponse != null) {
         _sessionId = doneResponse.sessionId;
-        if (_streamBuffer.isEmpty && doneResponse.answer.isNotEmpty) {
+        if (doneResponse.answer.isNotEmpty) {
           _streamBuffer = doneResponse.answer;
         }
         _lastToolCalls = doneResponse.toolCalls;

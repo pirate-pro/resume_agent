@@ -17,6 +17,13 @@ const int _streamingTailPreviewChars = 2200;
 const int _autoCollapseCodeLines = 40;
 const int _collapsedCodePreviewLines = 24;
 
+enum _MessageRenderMode {
+  plainText,
+  markdownRendered,
+  markdownSource,
+  largePreview,
+}
+
 class ChatBubble extends StatefulWidget {
   final ChatMessage message;
   final bool isStreaming;
@@ -332,10 +339,29 @@ class _MessageBody extends StatelessWidget {
     if (isUser) {
       return _PlainTextBody(content: content);
     }
+    final renderMode = _resolveRenderMode(content);
     if (isStreaming) {
-      return _StreamingMarkdownBody(content: content);
+      switch (renderMode) {
+        case _MessageRenderMode.markdownRendered:
+          return _StreamingMarkdownBody(content: content);
+        case _MessageRenderMode.markdownSource:
+          return _StructuredSourceBody(content: content);
+        case _MessageRenderMode.largePreview:
+          return _LargeStreamingPreview(content: content);
+        case _MessageRenderMode.plainText:
+          return _PlainTextBody(content: content);
+      }
     }
-    return _AssistantMarkdownBody(content: content);
+    switch (renderMode) {
+      case _MessageRenderMode.markdownRendered:
+        return _AssistantMarkdownBody(content: content);
+      case _MessageRenderMode.markdownSource:
+        return _StructuredSourceBody(content: content);
+      case _MessageRenderMode.largePreview:
+        return _LargeMessagePreview(content: content);
+      case _MessageRenderMode.plainText:
+        return _PlainTextBody(content: content);
+    }
   }
 }
 
@@ -357,31 +383,17 @@ class _PlainTextBody extends StatelessWidget {
   }
 }
 
-class _AssistantMarkdownBody extends StatefulWidget {
+class _AssistantMarkdownBody extends StatelessWidget {
   final String content;
 
   const _AssistantMarkdownBody({required this.content});
 
   @override
-  State<_AssistantMarkdownBody> createState() => _AssistantMarkdownBodyState();
-}
-
-class _AssistantMarkdownBodyState extends State<_AssistantMarkdownBody> {
-  bool _forceRich = false;
-
-  @override
   Widget build(BuildContext context) {
-    final tooLarge = _shouldDegradeRichMarkdown(widget.content);
-    if (tooLarge && !_forceRich) {
-      return _LargeMessagePreview(
-        content: widget.content,
-        onEnableRich: () => setState(() => _forceRich = true),
-      );
-    }
-    final enableLatex = _looksLikeLatex(widget.content);
+    final enableLatex = _looksLikeLatex(content);
     return SelectionArea(
       child: GptMarkdown(
-        widget.content,
+        content,
         style: AppTheme.ts(
           fontSize: 15,
           color: AppTheme.textPrimary,
@@ -457,11 +469,9 @@ class _StreamingMarkdownBody extends StatelessWidget {
 
 class _LargeMessagePreview extends StatelessWidget {
   final String content;
-  final VoidCallback onEnableRich;
 
   const _LargeMessagePreview({
     required this.content,
-    required this.onEnableRich,
   });
 
   @override
@@ -516,27 +526,64 @@ class _LargeMessagePreview extends StatelessWidget {
             spacing: 10,
             runSpacing: 8,
             children: [
-              OutlinedButton.icon(
-                onPressed: onEnableRich,
-                icon: const Icon(Icons.auto_awesome_rounded, size: 15),
-                label: const Text('尝试富文本渲染'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppTheme.textPrimary,
-                  side: BorderSide(color: AppTheme.borderLight),
-                  textStyle: AppTheme.ts(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                ),
-              ),
               _CodeCopyButton(text: content, label: '复制全文'),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _StructuredSourceBody extends StatelessWidget {
+  final String content;
+
+  const _StructuredSourceBody({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = _StreamingSegmentParser.parse(content);
+    if (segments.isEmpty) {
+      return _PlainTextBody(content: content);
+    }
+    final children = <Widget>[];
+    for (final segment in segments) {
+      if (segment.isCode) {
+        children.add(
+          _CodeBlockCard(
+            language: segment.language,
+            code: segment.content,
+            closed: segment.closed,
+          ),
+        );
+      } else {
+        children.add(_SourceTextBlock(content: segment.content));
+      }
+      children.add(const SizedBox(height: 10));
+    }
+    if (children.isNotEmpty) {
+      children.removeLast();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: children,
+    );
+  }
+}
+
+class _SourceTextBlock extends StatelessWidget {
+  final String content;
+
+  const _SourceTextBlock({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    return SelectableText(
+      content,
+      style: AppTheme.ts(
+        fontSize: 15,
+        color: AppTheme.textPrimary,
+        height: 1.65,
       ),
     );
   }
@@ -1082,6 +1129,56 @@ bool _looksLikeLatex(String content) {
     return true;
   }
   return RegExp(r'(?<!\\)\$[^$\n]{1,120}(?<!\\)\$').hasMatch(content);
+}
+
+_MessageRenderMode _resolveRenderMode(String content) {
+  final normalized = content.trim();
+  if (normalized.isEmpty) {
+    return _MessageRenderMode.plainText;
+  }
+  if (_looksLikeMarkdownSource(normalized)) {
+    return _MessageRenderMode.markdownSource;
+  }
+  if (_shouldDegradeRichMarkdown(normalized)) {
+    return _MessageRenderMode.largePreview;
+  }
+  if (_looksLikeRichMarkdown(normalized)) {
+    return _MessageRenderMode.markdownRendered;
+  }
+  return _MessageRenderMode.plainText;
+}
+
+bool _looksLikeMarkdownSource(String content) {
+  if (RegExp(r'```(?:markdown|md)\b', caseSensitive: false).hasMatch(content)) {
+    return true;
+  }
+  if (_countOccurrences(content, '```') >= 2 &&
+      RegExp(r'^\s*```', multiLine: true).hasMatch(content) &&
+      RegExp(r'^\s{0,3}#{1,6}\s+\S', multiLine: true).hasMatch(content)) {
+    return true;
+  }
+  return false;
+}
+
+bool _looksLikeRichMarkdown(String content) {
+  final patterns = <RegExp>[
+    RegExp(r'^\s{0,3}#{1,6}\s+\S', multiLine: true),
+    RegExp(r'^\s*[-*+]\s+\S', multiLine: true),
+    RegExp(r'^\s*\d+\.\s+\S', multiLine: true),
+    RegExp(r'^\s*>\s+\S', multiLine: true),
+    RegExp(r'^\s*\|.+\|', multiLine: true),
+    RegExp(r'^\s*-\s+\[[ xX]\]\s+', multiLine: true),
+    RegExp(r'```'),
+    RegExp(r'`[^`\n]+`'),
+    RegExp(r'\*\*[^*\n]+\*\*'),
+    RegExp(r'(?<!\*)\*[^*\n]+\*(?!\*)'),
+    RegExp(r'!\[[^\]]*\]\([^)]+\)'),
+    RegExp(r'\[[^\]]+\]\([^)]+\)'),
+  ];
+  if (_looksLikeLatex(content)) {
+    return true;
+  }
+  return patterns.any((pattern) => pattern.hasMatch(content));
 }
 
 int _countLines(String content) {
