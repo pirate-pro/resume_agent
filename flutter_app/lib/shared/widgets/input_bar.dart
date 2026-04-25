@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -84,10 +86,12 @@ class _InputBarState extends State<InputBar> {
   final _focus = FocusNode();
   late final TextEditingController _roundsCtrl;
   late final FocusNode _roundsFocus;
+  Timer? _runtimeStatusTimer;
 
   bool _hasText = false;
   String? _slashQuery;
   String? _roundsError;
+  String? _runtimeStatusMessage;
   _PlusPanelMode _plusPanelMode = _PlusPanelMode.closed;
 
   @override
@@ -112,10 +116,17 @@ class _InputBarState extends State<InputBar> {
         _plusPanelMode = _PlusPanelMode.closed;
       });
     }
+    final runtimeConfigChanged =
+        !_sameStringList(oldWidget.selectedSkillNames, widget.selectedSkillNames) ||
+        oldWidget.maxToolRounds != widget.maxToolRounds;
+    if (runtimeConfigChanged) {
+      _showRuntimeStatusMessage(_buildRuntimeStatusMessage());
+    }
   }
 
   @override
   void dispose() {
+    _runtimeStatusTimer?.cancel();
     _ctrl
       ..removeListener(_handleComposerChange)
       ..dispose();
@@ -170,11 +181,6 @@ class _InputBarState extends State<InputBar> {
 
   bool _isImage(SessionFileView file) {
     return file.mediaType.toLowerCase().startsWith("image/");
-  }
-
-  bool get _hasRuntimeOverrides {
-    return widget.selectedSkillNames.isNotEmpty ||
-        widget.maxToolRounds != AppConfig.maxToolRounds;
   }
 
   IconData _fileIcon(SessionFileView file) {
@@ -330,14 +336,6 @@ class _InputBarState extends State<InputBar> {
     });
   }
 
-  void _resetMaxToolRoundsOnly() {
-    widget.onMaxToolRoundsChanged(AppConfig.maxToolRounds);
-    _roundsCtrl.text = AppConfig.maxToolRounds.toString();
-    setState(() {
-      _roundsError = null;
-    });
-  }
-
   void _dismissPlusPanel() {
     if (_plusPanelMode == _PlusPanelMode.closed && !_inSlashMode) return;
     _roundsFocus.unfocus();
@@ -354,6 +352,43 @@ class _InputBarState extends State<InputBar> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  String _buildRuntimeStatusMessage() {
+    final skillCount = widget.selectedSkillNames.length;
+    final hasRoundOverride = widget.maxToolRounds != AppConfig.maxToolRounds;
+    if (skillCount == 0 && !hasRoundOverride) {
+      return "已恢复默认测试配置";
+    }
+    final parts = <String>[];
+    if (skillCount > 0) {
+      parts.add("已应用 $skillCount 个技能");
+    }
+    if (hasRoundOverride) {
+      parts.add("轮数 ${widget.maxToolRounds}");
+    }
+    return parts.join(" · ");
+  }
+
+  void _showRuntimeStatusMessage(String message) {
+    _runtimeStatusTimer?.cancel();
+    if (message.trim().isEmpty) {
+      if (_runtimeStatusMessage != null) {
+        setState(() {
+          _runtimeStatusMessage = null;
+        });
+      }
+      return;
+    }
+    setState(() {
+      _runtimeStatusMessage = message;
+    });
+    _runtimeStatusTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      setState(() {
+        _runtimeStatusMessage = null;
+      });
+    });
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
@@ -495,6 +530,20 @@ class _InputBarState extends State<InputBar> {
                           ),
                         ),
                       ),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      child: _runtimeStatusMessage == null
+                          ? const SizedBox.shrink()
+                          : Padding(
+                              key: ValueKey(_runtimeStatusMessage),
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: _RuntimeStatusBanner(
+                                message: _runtimeStatusMessage!,
+                              ),
+                            ),
+                    ),
                     Container(
                       decoration: AppTheme.floatingPanelDecoration(
                         radius: 24,
@@ -562,15 +611,6 @@ class _InputBarState extends State<InputBar> {
                         ],
                       ),
                     ),
-                    if (_hasRuntimeOverrides) ...[
-                      const SizedBox(height: 10),
-                      _RuntimeSummaryTray(
-                        selectedSkillNames: widget.selectedSkillNames,
-                        maxToolRounds: widget.maxToolRounds,
-                        onClearSkill: widget.onToggleSkill,
-                        onClearRounds: _resetMaxToolRoundsOnly,
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -1281,113 +1321,38 @@ class _ErrorHint extends StatelessWidget {
   }
 }
 
-class _RuntimeSummaryTray extends StatelessWidget {
-  final List<String> selectedSkillNames;
-  final int maxToolRounds;
-  final void Function(String skillName) onClearSkill;
-  final VoidCallback onClearRounds;
+class _RuntimeStatusBanner extends StatelessWidget {
+  final String message;
 
-  const _RuntimeSummaryTray({
-    required this.selectedSkillNames,
-    required this.maxToolRounds,
-    required this.onClearSkill,
-    required this.onClearRounds,
+  const _RuntimeStatusBanner({
+    required this.message,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: _trayDecoration(alpha: 0.9),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.tune_rounded,
-                size: 15,
-                color: AppTheme.accent,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                "测试配置已生效",
-                style: AppTheme.ts(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.textPrimary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ...selectedSkillNames.map(
-                (name) => _ConfigChip(
-                  icon: Icons.auto_awesome_outlined,
-                  label: "skill: $name",
-                  onRemove: () => onClearSkill(name),
-                ),
-              ),
-              if (maxToolRounds != AppConfig.maxToolRounds)
-                _ConfigChip(
-                  icon: Icons.rotate_right_rounded,
-                  label: "轮数: $maxToolRounds",
-                  onRemove: onClearRounds,
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ConfigChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onRemove;
-
-  const _ConfigChip({
-    required this.icon,
-    required this.label,
-    required this.onRemove,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(12),
+        color: AppTheme.surface.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppTheme.border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: AppTheme.accent),
-          const SizedBox(width: 8),
-          Text(
-            label,
-            style: AppTheme.ts(
-              fontSize: 12,
-              color: AppTheme.textPrimary,
-            ),
+          Icon(
+            Icons.tune_rounded,
+            size: 14,
+            color: AppTheme.accent,
           ),
           const SizedBox(width: 8),
-          InkWell(
-            borderRadius: BorderRadius.circular(999),
-            onTap: onRemove,
-            child: Padding(
-              padding: EdgeInsets.all(2),
-              child: Icon(
-                Icons.close_rounded,
-                size: 14,
-                color: AppTheme.textSecondary,
+          Flexible(
+            child: Text(
+              message,
+              style: AppTheme.ts(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textPrimary,
               ),
             ),
           ),
@@ -1413,44 +1378,52 @@ class _ActiveFilesTray extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: _trayDecoration(alpha: 0.9),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          Row(
-            children: [
-              Icon(
-                Icons.layers_outlined,
-                size: 15,
-                color: AppTheme.accent,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                "已激活上下文",
-                style: AppTheme.ts(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.textPrimary,
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceActive.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.layers_outlined,
+                  size: 13,
+                  color: AppTheme.accent,
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: files
-                .map(
-                  (file) => _ActiveFileChip(
-                    file: file,
-                    highlighted: highlightedFileId == file.fileId,
-                    icon: iconForFile(file),
-                    onRemove: () => onRemove(file),
+                const SizedBox(width: 6),
+                Text(
+                  "已激活上下文",
+                  style: AppTheme.ts(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
                   ),
-                )
-                .toList(),
+                ),
+              ],
+            ),
+          ),
+          ...files.map(
+            (file) => _ActiveFileChip(
+              file: file,
+              highlighted: highlightedFileId == file.fileId,
+              icon: iconForFile(file),
+              onRemove: () => onRemove(file),
+            ),
           ),
         ],
       ),
@@ -1475,12 +1448,12 @@ class _ActiveFileChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       constraints: const BoxConstraints(maxWidth: 240),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: highlighted
             ? AppTheme.accent.withValues(alpha: 0.14)
             : AppTheme.surface,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(999),
         border: Border.all(
           color: highlighted
               ? AppTheme.accent.withValues(alpha: 0.42)
@@ -1499,20 +1472,20 @@ class _ActiveFileChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 15, color: AppTheme.accent),
-          const SizedBox(width: 8),
+          Icon(icon, size: 14, color: AppTheme.accent),
+          const SizedBox(width: 6),
           Expanded(
             child: Text(
               file.filename,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: AppTheme.ts(
-                fontSize: 12,
+                fontSize: 11.5,
                 color: AppTheme.textPrimary,
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           InkWell(
             borderRadius: BorderRadius.circular(999),
             onTap: onRemove,
@@ -1703,4 +1676,19 @@ class _SlashFileOption extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _sameStringList(List<String> left, List<String> right) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
 }
