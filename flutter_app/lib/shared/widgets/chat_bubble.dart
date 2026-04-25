@@ -20,6 +20,7 @@ const int _largeMessageChunkChars = 1600;
 const int _streamingTailPreviewChars = 2200;
 const int _autoCollapseCodeLines = 40;
 const int _collapsedCodePreviewLines = 24;
+const double _streamingSkeletonWidth = 280;
 
 enum _MessageRenderMode {
   plainText,
@@ -97,7 +98,6 @@ class _ChatBubbleState extends State<ChatBubble> {
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
                 child: Container(
-                  width: double.infinity,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: isUser
@@ -192,7 +192,6 @@ class StreamingBubble extends StatelessWidget {
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
                 child: Container(
-                  width: double.infinity,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: AppTheme.assistantBubbleDecoration,
@@ -221,7 +220,7 @@ class StreamingBubble extends StatelessWidget {
               )
             else
               Container(
-                width: double.infinity,
+                width: _streamingSkeletonWidth,
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: AppTheme.assistantBubbleDecoration,
