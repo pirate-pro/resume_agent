@@ -10,8 +10,8 @@ import '../../shared/widgets/chat_bubble.dart';
 import '../../shared/widgets/input_bar.dart';
 
 const double _messageRailMaxWidth = 1160;
-const double _messageListTopPadding = 106;
-const double _messageListBottomPadding = 280;
+const double _messageListTopPadding = 114;
+const double _messageListBottomPadding = 292;
 const double _headerDockFadeHeight = 92;
 const double _composerDockFadeHeight = 132;
 const double _jumpToBottomButtonBottom = 108;
@@ -184,7 +184,7 @@ class _ChatHeaderLayer extends ConsumerWidget {
 
     return _HeaderDock(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1180),
@@ -204,39 +204,75 @@ class _ChatHeaderLayer extends ConsumerWidget {
                       vertical: 10,
                     ),
                     decoration: AppTheme.floatingPanelDecoration(
-                      radius: 22,
-                      alpha: AppTheme.isDark ? 0.66 : 0.56,
+                      radius: 24,
+                      alpha: AppTheme.isDark ? 0.68 : 0.58,
                     ),
                     child: Row(
                       children: [
-                        Text(
-                          "Single Agent Runtime",
-                          style: AppTheme.ts(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.textPrimary,
-                          ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              "Single Agent Runtime",
+                              style: AppTheme.ts(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              "对话 · 工具 · 记忆",
+                              style: AppTheme.ts(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                                color: AppTheme.textTertiary,
+                              ),
+                            ),
+                          ],
                         ),
                         const Spacer(),
-                        _HealthBadge(reachable: reachable),
-                        if (showDebugToggle) ...[
-                          const SizedBox(width: 8),
-                          _HeaderButton(
-                            icon: isDebugPanelOpen
-                                ? Icons.tune_rounded
-                                : Icons.developer_board_rounded,
-                            active: isDebugPanelOpen,
-                            onTap: onDebugToggle,
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 5,
                           ),
-                        ],
-                        const SizedBox(width: 8),
-                        _HeaderButton(
-                          icon: isDarkMode
-                              ? Icons.light_mode_rounded
-                              : Icons.dark_mode_rounded,
-                          tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
-                          onTap: () =>
-                              ref.read(themeModeProvider.notifier).toggle(),
+                          decoration: BoxDecoration(
+                            color: AppTheme.surface.withValues(
+                              alpha: AppTheme.isDark ? 0.72 : 0.8,
+                            ),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: AppTheme.border.withValues(alpha: 0.88),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _HealthBadge(reachable: reachable),
+                              if (showDebugToggle) ...[
+                                _HeaderDivider(),
+                                _HeaderButton(
+                                  icon: isDebugPanelOpen
+                                      ? Icons.tune_rounded
+                                      : Icons.developer_board_rounded,
+                                  active: isDebugPanelOpen,
+                                  onTap: onDebugToggle,
+                                ),
+                              ],
+                              _HeaderDivider(),
+                              _HeaderButton(
+                                icon: isDarkMode
+                                    ? Icons.light_mode_rounded
+                                    : Icons.dark_mode_rounded,
+                                tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
+                                onTap: () => ref
+                                    .read(themeModeProvider.notifier)
+                                    .toggle(),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -298,8 +334,8 @@ class _ChatComposerLayer extends ConsumerWidget {
         maxToolRounds: viewModel.maxToolRounds,
         skillsError: viewModel.skillsError,
         onSend: (text) => provider.sendMessage(text),
-        onUpload: ({required filename, required bytes}) => provider
-            .uploadSessionFile(filename: filename, bytes: bytes),
+        onUpload: ({required filename, required bytes}) =>
+            provider.uploadSessionFile(filename: filename, bytes: bytes),
         onToggleFileActive: (file, active) =>
             provider.toggleFileActive(file.fileId, active),
         onRefreshSkills: provider.refreshSkills,
@@ -324,26 +360,29 @@ class _JumpToBottomButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         onTap: onTap,
         child: Container(
-          width: 42,
-          height: 42,
+          width: 40,
+          height: 40,
           decoration: BoxDecoration(
-            color: AppTheme.surface.withValues(alpha: 0.94),
+            color: AppTheme.surface.withValues(alpha: 0.9),
             shape: BoxShape.circle,
-            border:
-                Border.all(color: AppTheme.borderLight.withValues(alpha: 0.8)),
+            border: Border.all(
+              color: AppTheme.accent.withValues(
+                alpha: AppTheme.isDark ? 0.18 : 0.14,
+              ),
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black
-                    .withValues(alpha: AppTheme.isDark ? 0.14 : 0.08),
-                blurRadius: 18,
+                    .withValues(alpha: AppTheme.isDark ? 0.12 : 0.06),
+                blurRadius: 16,
                 offset: const Offset(0, 8),
               ),
             ],
           ),
           child: Icon(
             Icons.keyboard_double_arrow_down_rounded,
-            size: 20,
-            color: AppTheme.textSecondary,
+            size: 19,
+            color: AppTheme.accent,
           ),
         ),
       ),
@@ -373,8 +412,10 @@ class _HeaderDock extends StatelessWidget {
                   colors: [
                     AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.9 : 0.8),
                     AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.74 : 0.6),
-                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.42 : 0.28),
-                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.14 : 0.08),
+                    AppTheme.bg
+                        .withValues(alpha: AppTheme.isDark ? 0.42 : 0.28),
+                    AppTheme.bg
+                        .withValues(alpha: AppTheme.isDark ? 0.14 : 0.08),
                     AppTheme.bg.withValues(alpha: 0),
                   ],
                   stops: const [0, 0.18, 0.42, 0.74, 1],
@@ -467,12 +508,16 @@ class _HealthBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: reachable
             ? AppTheme.accent.withValues(alpha: 0.15)
             : AppTheme.danger.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: (reachable ? AppTheme.accent : AppTheme.danger)
+              .withValues(alpha: 0.2),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -482,10 +527,23 @@ class _HealthBadge extends StatelessWidget {
           const SizedBox(width: 5),
           Text(reachable ? "在线" : "离线",
               style: AppTheme.ts(
-                  fontSize: 10.5,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
                   color: reachable ? AppTheme.accent : AppTheme.danger)),
         ],
       ),
+    );
+  }
+}
+
+class _HeaderDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 20,
+      margin: const EdgeInsets.symmetric(horizontal: 4),
+      color: AppTheme.border.withValues(alpha: 0.9),
     );
   }
 }
@@ -511,22 +569,22 @@ class _HeaderButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         onTap: onTap,
         child: Container(
-          width: 42,
-          height: 42,
+          width: 38,
+          height: 38,
           decoration: BoxDecoration(
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.16)
-                : AppTheme.surface.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(16),
+                : AppTheme.surface.withValues(alpha: 0.52),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: active
                   ? AppTheme.accent.withValues(alpha: 0.3)
-                  : AppTheme.border,
+                  : AppTheme.border.withValues(alpha: 0.9),
             ),
           ),
           child: Icon(
             icon,
-            size: 18,
+            size: 17,
             color: active ? AppTheme.accent : AppTheme.textSecondary,
           ),
         ),
@@ -554,8 +612,8 @@ class _WelcomeScreen extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 64,
-              height: 64,
+              width: 62,
+              height: 62,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [AppTheme.accent, Color(0xFF059669)],
@@ -587,7 +645,29 @@ class _WelcomeScreen extends ConsumerWidget {
             Text("智能对话 · 工具调用 · 记忆系统",
                 style:
                     AppTheme.ts(fontSize: 14, color: AppTheme.textSecondary)),
-            const SizedBox(height: 40),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppTheme.surface.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Column(
+                children: [
+                  _WelcomeFeature(
+                    icon: Icons.auto_awesome_rounded,
+                    text: "适合直接问问题、整理方案、生成初稿",
+                  ),
+                  const SizedBox(height: 10),
+                  _WelcomeFeature(
+                    icon: Icons.build_circle_outlined,
+                    text: "支持工具调用、文件上下文和记忆能力",
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 28),
             Wrap(
               spacing: 10,
               runSpacing: 10,
@@ -614,6 +694,44 @@ class _WelcomeScreen extends ConsumerWidget {
   }
 }
 
+class _WelcomeFeature extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _WelcomeFeature({
+    required this.icon,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: AppTheme.accent.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 15, color: AppTheme.accent),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: AppTheme.ts(
+              fontSize: 12.5,
+              color: AppTheme.textSecondary,
+              height: 1.45,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _QuickPrompt extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -630,19 +748,39 @@ class _QuickPrompt extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         onTap: () => onSend(text),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: AppTheme.cardDecoration,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          decoration: BoxDecoration(
+            color: AppTheme.surface.withValues(alpha: 0.82),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppTheme.border),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: AppTheme.accent),
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, size: 14, color: AppTheme.accent),
+              ),
               const SizedBox(width: 8),
               Text(text,
-                  style:
-                      AppTheme.ts(fontSize: 13, color: AppTheme.textSecondary)),
+                  style: AppTheme.ts(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: AppTheme.textSecondary)),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.arrow_upward_rounded,
+                size: 14,
+                color: AppTheme.textTertiary,
+              ),
             ],
           ),
         ),

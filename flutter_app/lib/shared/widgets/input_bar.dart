@@ -116,8 +116,8 @@ class _InputBarState extends State<InputBar> {
         _plusPanelMode = _PlusPanelMode.closed;
       });
     }
-    final runtimeConfigChanged =
-        !_sameStringList(oldWidget.selectedSkillNames, widget.selectedSkillNames) ||
+    final runtimeConfigChanged = !_sameStringList(
+            oldWidget.selectedSkillNames, widget.selectedSkillNames) ||
         oldWidget.maxToolRounds != widget.maxToolRounds;
     if (runtimeConfigChanged) {
       _showRuntimeStatusMessage(_buildRuntimeStatusMessage());
@@ -469,9 +469,9 @@ class _InputBarState extends State<InputBar> {
         : (_plusPanelMode == _PlusPanelMode.config
             ? _configTrayMaxWidth
             : _menuTrayMaxWidth);
-    final borderColor =
-        _focus.hasFocus || panelVisible ? AppTheme.accent : AppTheme.border;
-    final borderWidth = _focus.hasFocus || panelVisible ? 1.5 : 1.0;
+    final hasInteractiveFocus = _focus.hasFocus || panelVisible;
+    final borderColor = hasInteractiveFocus ? AppTheme.accent : AppTheme.border;
+    final borderWidth = hasInteractiveFocus ? 1.5 : 1.0;
     final activeFiles = _activeFiles;
 
     return Shortcuts(
@@ -551,6 +551,19 @@ class _InputBarState extends State<InputBar> {
                       ).copyWith(
                         border:
                             Border.all(color: borderColor, width: borderWidth),
+                        boxShadow: [
+                          BoxShadow(
+                            color: hasInteractiveFocus
+                                ? AppTheme.accent.withValues(
+                                    alpha: AppTheme.isDark ? 0.14 : 0.1,
+                                  )
+                                : Colors.black.withValues(
+                                    alpha: AppTheme.isDark ? 0.12 : 0.04,
+                                  ),
+                            blurRadius: hasInteractiveFocus ? 26 : 18,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
@@ -622,7 +635,7 @@ class _InputBarState extends State<InputBar> {
   }
 }
 
-class _ComposerActionButton extends StatelessWidget {
+class _ComposerActionButton extends StatefulWidget {
   final IconData icon;
   final bool enabled;
   final bool accent;
@@ -640,48 +653,63 @@ class _ComposerActionButton extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final backgroundColor = accent
-        ? (enabled ? AppTheme.accent : AppTheme.surfaceActive)
-        : highlighted
-            ? AppTheme.surfaceHover
-            : (enabled ? AppTheme.surface : AppTheme.surfaceActive);
-    final borderColor = accent
-        ? Colors.transparent
-        : highlighted
-            ? AppTheme.accent.withValues(alpha: 0.45)
-            : (enabled ? AppTheme.borderLight : AppTheme.border);
-    final iconColor = accent
-        ? (enabled ? Colors.white : AppTheme.textTertiary)
-        : highlighted
-            ? AppTheme.accent
-            : (enabled ? AppTheme.textSecondary : AppTheme.textTertiary);
+  State<_ComposerActionButton> createState() => _ComposerActionButtonState();
+}
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 150),
-      width: 36,
-      height: 36,
-      decoration: BoxDecoration(
-        color: backgroundColor,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: borderColor, width: accent ? 0 : 1),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
+class _ComposerActionButtonState extends State<_ComposerActionButton> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final backgroundColor = widget.accent
+        ? (widget.enabled
+            ? (_hovering ? AppTheme.accentHover : AppTheme.accent)
+            : AppTheme.surfaceActive)
+        : widget.highlighted
+            ? AppTheme.surfaceHover
+            : (_hovering && widget.enabled
+                ? AppTheme.surfaceHover
+                : (widget.enabled ? AppTheme.surface : AppTheme.surfaceActive));
+    final borderColor = widget.accent
+        ? Colors.transparent
+        : widget.highlighted
+            ? AppTheme.accent.withValues(alpha: 0.45)
+            : (widget.enabled ? AppTheme.borderLight : AppTheme.border);
+    final iconColor = widget.accent
+        ? (widget.enabled ? Colors.white : AppTheme.textTertiary)
+        : widget.highlighted
+            ? AppTheme.accent
+            : (widget.enabled ? AppTheme.textSecondary : AppTheme.textTertiary);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: backgroundColor,
           borderRadius: BorderRadius.circular(14),
-          onTap: enabled ? onPressed : null,
-          child: Center(
-            child: busy
-                ? SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.8,
-                      color: AppTheme.textSecondary,
-                    ),
-                  )
-                : Icon(icon, size: 20, color: iconColor),
+          border: Border.all(color: borderColor, width: widget.accent ? 0 : 1),
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: widget.enabled ? widget.onPressed : null,
+            child: Center(
+              child: widget.busy
+                  ? SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: AppTheme.textSecondary,
+                      ),
+                    )
+                  : Icon(widget.icon, size: 20, color: iconColor),
+            ),
           ),
         ),
       ),
@@ -1331,11 +1359,11 @@ class _RuntimeStatusBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.78),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.border),
+        color: AppTheme.surface.withValues(alpha: 0.66),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.78)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1350,9 +1378,9 @@ class _RuntimeStatusBanner extends StatelessWidget {
             child: Text(
               message,
               style: AppTheme.ts(
-                fontSize: 12,
+                fontSize: 11.5,
                 fontWeight: FontWeight.w600,
-                color: AppTheme.textPrimary,
+                color: AppTheme.textSecondary,
               ),
             ),
           ),
@@ -1378,24 +1406,26 @@ class _ActiveFilesTray extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppTheme.border),
+        color: AppTheme.surface.withValues(alpha: 0.56),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.72)),
       ),
       child: Wrap(
         spacing: 8,
-        runSpacing: 8,
+        runSpacing: 6,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: AppTheme.surfaceActive.withValues(alpha: 0.9),
+              color: AppTheme.accent.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: AppTheme.border),
+              border: Border.all(
+                color: AppTheme.accent.withValues(alpha: 0.16),
+              ),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1409,9 +1439,9 @@ class _ActiveFilesTray extends StatelessWidget {
                 Text(
                   "已激活上下文",
                   style: AppTheme.ts(
-                    fontSize: 11.5,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    color: AppTheme.textPrimary,
+                    color: AppTheme.textSecondary,
                   ),
                 ),
               ],
@@ -1448,7 +1478,7 @@ class _ActiveFileChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       constraints: const BoxConstraints(maxWidth: 240),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: highlighted
             ? AppTheme.accent.withValues(alpha: 0.14)

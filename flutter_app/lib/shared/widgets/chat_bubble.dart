@@ -2,9 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_highlight/themes/atom-one-dark.dart';
+import 'package:flutter_highlight/themes/atom-one-light.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:highlight/highlight.dart' as hl;
+import 'package:highlight/highlight.dart' show Node;
 
 import '../../core/models/api_models.dart';
 import '../../core/providers/chat_provider.dart';
@@ -21,6 +25,7 @@ const int _streamingTailPreviewChars = 2200;
 const int _autoCollapseCodeLines = 40;
 const int _collapsedCodePreviewLines = 24;
 const double _streamingSkeletonWidth = 280;
+const int _leadParagraphMaxChars = 110;
 
 enum _MessageRenderMode {
   plainText,
@@ -67,15 +72,15 @@ class _ChatBubbleState extends State<ChatBubble> {
           margin: EdgeInsets.only(
             left: isUser ? 60 : 0,
             right: isUser ? 0 : 60,
-            top: 6,
-            bottom: 6,
+            top: 8,
+            bottom: 10,
           ),
           child: Column(
             crossAxisAlignment:
                 isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.only(bottom: 6, left: 4, right: 4),
+                padding: const EdgeInsets.only(bottom: 8, left: 6, right: 6),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -84,7 +89,7 @@ class _ChatBubbleState extends State<ChatBubble> {
                     Text(
                       isUser ? "你" : "Assistant",
                       style: AppTheme.ts(
-                          fontSize: 12,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.w600,
                           color: AppTheme.textSecondary),
                     ),
@@ -99,7 +104,7 @@ class _ChatBubbleState extends State<ChatBubble> {
                 constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
                 child: Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                   decoration: isUser
                       ? AppTheme.userBubbleDecoration
                       : AppTheme.assistantBubbleDecoration,
@@ -163,7 +168,7 @@ class StreamingBubble extends StatelessWidget {
           children: [
             // Header
             Padding(
-              padding: const EdgeInsets.only(bottom: 6, left: 4),
+              padding: const EdgeInsets.only(bottom: 8, left: 6),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -172,7 +177,7 @@ class StreamingBubble extends StatelessWidget {
                   Text(
                     "Assistant",
                     style: AppTheme.ts(
-                        fontSize: 12,
+                        fontSize: 12.5,
                         fontWeight: FontWeight.w600,
                         color: AppTheme.textSecondary),
                   ),
@@ -193,7 +198,7 @@ class StreamingBubble extends StatelessWidget {
                 constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
                 child: Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
                   decoration: AppTheme.assistantBubbleDecoration,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -249,39 +254,58 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: AppTheme.surfaceActive.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.border),
+        color: AppTheme.surface.withValues(alpha: 0.54),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.84)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           InkWell(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(14),
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
               child: Row(
                 children: [
-                  Icon(
-                    _expanded
-                        ? Icons.expand_more_rounded
-                        : Icons.chevron_right_rounded,
-                    size: 16,
-                    color: AppTheme.textTertiary,
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: AppTheme.accent.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Icon(
+                      _expanded
+                          ? Icons.expand_more_rounded
+                          : Icons.chevron_right_rounded,
+                      size: 15,
+                      color: AppTheme.accent,
+                    ),
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 8),
                   Text("执行过程",
                       style: AppTheme.ts(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: AppTheme.textTertiary)),
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textSecondary)),
                   const Spacer(),
-                  Text("${widget.lines.length} 条",
-                      style: AppTheme.ts(
-                          fontSize: 11, color: AppTheme.textTertiary)),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceActive.withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: AppTheme.border),
+                    ),
+                    child: Text("${widget.lines.length} 条",
+                        style: AppTheme.ts(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textTertiary)),
+                  ),
                 ],
               ),
             ),
@@ -289,17 +313,17 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
           if (_expanded)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: widget.lines
                     .map((l) => Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
+                          padding: const EdgeInsets.only(bottom: 4),
                           child: Text(l,
                               style: AppTheme.ts(
-                                  fontSize: 11,
+                                  fontSize: 11.5,
                                   color: AppTheme.textSecondary,
-                                  height: 1.4)),
+                                  height: 1.45)),
                         ))
                     .toList(),
               ),
@@ -321,7 +345,7 @@ class _Avatar extends StatelessWidget {
       height: 26,
       decoration: BoxDecoration(
         color: isUser ? const Color(0xFF6366F1) : AppTheme.accent,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(9),
       ),
       child: Center(
         child: Icon(
@@ -340,20 +364,31 @@ class _CopyButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 24,
-      height: 24,
-      child: IconButton(
-        padding: EdgeInsets.zero,
-        iconSize: 14,
-        icon: Icon(Icons.copy_rounded, color: AppTheme.textTertiary),
-        onPressed: () {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () {
           Clipboard.setData(ClipboardData(text: text));
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
                 content: Text("已复制"), duration: Duration(seconds: 1)),
           );
         },
+        child: Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: AppTheme.surface.withValues(alpha: 0.8),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppTheme.border.withValues(alpha: 0.82)),
+          ),
+          child: Icon(
+            Icons.copy_rounded,
+            size: 12.5,
+            color: AppTheme.textTertiary,
+          ),
+        ),
       ),
     );
   }
@@ -508,14 +543,30 @@ class _PlainTextBody extends StatelessWidget {
         for (var index = 0; index < paragraphs.length; index++) ...[
           SelectableText.rich(
             TextSpan(
-              style: baseStyle,
+              style: index == 0 && _shouldUseLeadParagraph(paragraphs)
+                  ? baseStyle.copyWith(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      height: 1.72,
+                    )
+                  : baseStyle,
               children: _buildPlainInlineSpans(
                 paragraphs[index],
-                baseStyle,
+                index == 0 && _shouldUseLeadParagraph(paragraphs)
+                    ? baseStyle.copyWith(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        height: 1.72,
+                      )
+                    : baseStyle,
               ),
             ),
           ),
-          if (index < paragraphs.length - 1) const SizedBox(height: 10),
+          if (index < paragraphs.length - 1)
+            SizedBox(
+                height: index == 0 && _shouldUseLeadParagraph(paragraphs)
+                    ? 14
+                    : 10),
         ],
       ],
     );
@@ -575,14 +626,36 @@ class _StructuredPlainAnswerBody extends StatelessWidget {
         for (var index = 0; index < parsed.introParagraphs.length; index++) ...[
           SelectableText.rich(
             TextSpan(
-              style: baseStyle,
+              style: index == 0 &&
+                      parsed.introParagraphs.length == 1 &&
+                      _isShortLeadText(parsed.introParagraphs[index])
+                  ? baseStyle.copyWith(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      height: 1.72,
+                    )
+                  : baseStyle,
               children: _buildPlainInlineSpans(
                 parsed.introParagraphs[index],
-                baseStyle,
+                index == 0 &&
+                        parsed.introParagraphs.length == 1 &&
+                        _isShortLeadText(parsed.introParagraphs[index])
+                    ? baseStyle.copyWith(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        height: 1.72,
+                      )
+                    : baseStyle,
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(
+            height: index == 0 &&
+                    parsed.introParagraphs.length == 1 &&
+                    _isShortLeadText(parsed.introParagraphs[index])
+                ? 16
+                : 12,
+          ),
         ],
         for (var index = 0; index < parsed.sections.length; index++) ...[
           _StructuredPlainSectionCard(
@@ -615,11 +688,19 @@ class _StructuredPlainSectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      padding: const EdgeInsets.fromLTRB(15, 15, 15, 15),
       decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.56),
+        color: AppTheme.surface.withValues(alpha: 0.62),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.border),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.92)),
+        boxShadow: [
+          BoxShadow(
+            color:
+                Colors.black.withValues(alpha: AppTheme.isDark ? 0.06 : 0.025),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -627,14 +708,14 @@ class _StructuredPlainSectionCard extends StatelessWidget {
           SelectableText.rich(
             TextSpan(
               style: baseStyle.copyWith(
-                fontSize: 16,
+                fontSize: 16.5,
                 fontWeight: FontWeight.w700,
                 height: 1.5,
               ),
               children: _buildPlainInlineSpans(
                 section.title,
                 baseStyle.copyWith(
-                  fontSize: 16,
+                  fontSize: 16.5,
                   fontWeight: FontWeight.w700,
                   height: 1.5,
                 ),
@@ -732,16 +813,18 @@ class _StructuredPlainFieldRow extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
           decoration: BoxDecoration(
-            color: AppTheme.surfaceActive,
+            color: AppTheme.accent.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppTheme.border),
+            border: Border.all(
+              color: AppTheme.accent.withValues(alpha: 0.14),
+            ),
           ),
           child: Text(
             field.label,
             style: AppTheme.ts(
               fontSize: 11,
               fontWeight: FontWeight.w700,
-              color: AppTheme.textSecondary,
+              color: AppTheme.accent,
             ),
           ),
         ),
@@ -972,6 +1055,12 @@ class _AssistantMarkdownBody extends StatelessWidget {
           closed: closed,
         );
       },
+      tableBuilder: (context, tableRows, textStyle, config) {
+        return _MarkdownTableCard(
+          tableRows: tableRows,
+          textStyle: textStyle,
+        );
+      },
       latexBuilder: (context, tex, textStyle, inline) {
         return _LatexBlock(
           tex: tex,
@@ -1176,6 +1265,174 @@ class _SingleCodeBlockBody extends StatelessWidget {
       language: parsed.$1,
       code: parsed.$2,
       closed: true,
+    );
+  }
+}
+
+class _MarkdownTableCard extends StatelessWidget {
+  final List<CustomTableRow> tableRows;
+  final TextStyle textStyle;
+
+  const _MarkdownTableCard({
+    required this.tableRows,
+    required this.textStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final normalizedRows = _normalizeTableRows(tableRows);
+    if (normalizedRows.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final schemaRow = normalizedRows.firstWhere(
+      (row) => row.fields.isNotEmpty,
+      orElse: () => normalizedRows.first,
+    );
+    final columnCount = schemaRow.fields.length;
+    if (columnCount == 0) {
+      return const SizedBox.shrink();
+    }
+    final displayRows = normalizedRows
+        .map(
+          (row) => CustomTableRow(
+            isHeader: row.isHeader,
+            fields: row.fields.take(columnCount).toList(),
+          ),
+        )
+        .toList();
+    final numericColumns = List<bool>.generate(
+      columnCount,
+      (columnIndex) => _looksLikeNumericTableColumn(displayRows, columnIndex),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.zero,
+        child: UnconstrainedBox(
+          alignment: Alignment.centerLeft,
+          constrainedAxis: Axis.vertical,
+          child: IntrinsicWidth(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: AppTheme.surface.withValues(alpha: 0.58),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppTheme.border),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.isDark
+                        ? Colors.black.withValues(alpha: 0.10)
+                        : Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Table(
+                  defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                  defaultColumnWidth: const IntrinsicColumnWidth(),
+                  children: [
+                    for (var rowIndex = 0;
+                        rowIndex < displayRows.length;
+                        rowIndex += 1)
+                      TableRow(
+                        decoration: BoxDecoration(
+                          color: displayRows[rowIndex].isHeader
+                              ? AppTheme.accent.withValues(
+                                  alpha: AppTheme.isDark ? 0.18 : 0.12,
+                                )
+                              : rowIndex.isEven
+                                  ? AppTheme.surface.withValues(alpha: 0.96)
+                                  : AppTheme.surfaceActive.withValues(
+                                      alpha: AppTheme.isDark ? 0.34 : 0.72,
+                                    ),
+                        ),
+                        children: [
+                          for (var columnIndex = 0;
+                              columnIndex < columnCount;
+                              columnIndex += 1)
+                            _MarkdownTableCell(
+                              text: columnIndex <
+                                      displayRows[rowIndex].fields.length
+                                  ? displayRows[rowIndex]
+                                      .fields[columnIndex]
+                                      .data
+                                  : '',
+                              textStyle: textStyle,
+                              isHeader: displayRows[rowIndex].isHeader,
+                              alignRight: columnIndex <
+                                      displayRows[rowIndex].fields.length
+                                  ? displayRows[rowIndex]
+                                              .fields[columnIndex]
+                                              .alignment ==
+                                          TextAlign.right ||
+                                      numericColumns[columnIndex]
+                                  : numericColumns[columnIndex],
+                              showRightBorder: columnIndex < columnCount - 1,
+                              showBottomBorder:
+                                  rowIndex < displayRows.length - 1,
+                            ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MarkdownTableCell extends StatelessWidget {
+  final String text;
+  final TextStyle textStyle;
+  final bool isHeader;
+  final bool alignRight;
+  final bool showRightBorder;
+  final bool showBottomBorder;
+
+  const _MarkdownTableCell({
+    required this.text,
+    required this.textStyle,
+    required this.isHeader,
+    required this.alignRight,
+    required this.showRightBorder,
+    required this.showBottomBorder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cellStyle = textStyle.copyWith(
+      fontSize: isHeader ? 13.5 : 14,
+      fontWeight: isHeader ? FontWeight.w700 : FontWeight.w500,
+      height: 1.55,
+      color: isHeader ? AppTheme.textPrimary : AppTheme.textSecondary,
+    );
+    return Container(
+      alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        border: Border(
+          right: showRightBorder
+              ? BorderSide(color: AppTheme.border)
+              : BorderSide.none,
+          bottom: showBottomBorder
+              ? BorderSide(color: AppTheme.border)
+              : BorderSide.none,
+        ),
+      ),
+      child: SelectableText.rich(
+        TextSpan(
+          style: cellStyle,
+          children: _buildPlainInlineSpans(text, cellStyle),
+        ),
+        textAlign: alignRight ? TextAlign.right : TextAlign.left,
+      ),
     );
   }
 }
@@ -1554,11 +1811,18 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
       (index) => '${index + 1}',
     ).join('\n');
     final visibleCodeText = visibleLines.join('\n');
+    final codeTheme = _codeHighlightTheme();
+    final rootStyle = (codeTheme['root'] ?? const TextStyle()).merge(
+      AppTheme.ts(
+        fontSize: 13,
+        height: 1.6,
+      ).copyWith(fontFamily: 'monospace'),
+    );
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF0F141B),
+        color: _codeSurfaceColor(),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppTheme.border),
       ),
@@ -1568,7 +1832,7 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
           Container(
             padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.04),
+              color: _codeHeaderColor(),
               borderRadius: const BorderRadius.vertical(
                 top: Radius.circular(14),
               ),
@@ -1591,7 +1855,9 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                         : widget.language.trim(),
                     style: AppTheme.ts(
                       fontSize: 11,
-                      color: AppTheme.textSecondary,
+                      color: AppTheme.isDark
+                          ? const Color(0xFFC5D1DD)
+                          : const Color(0xFF445468),
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1635,7 +1901,9 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                   lineNumbers,
                   style: AppTheme.ts(
                     fontSize: 13,
-                    color: AppTheme.textTertiary,
+                    color: AppTheme.isDark
+                        ? const Color(0xFF6D7A88)
+                        : const Color(0xFF8A96A3),
                     height: 1.6,
                   ).copyWith(fontFamily: 'monospace'),
                 ),
@@ -1648,13 +1916,16 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                   margin: const EdgeInsets.symmetric(horizontal: 12),
                   color: AppTheme.border,
                 ),
-                SelectableText(
-                  visibleCodeText,
-                  style: AppTheme.ts(
-                    fontSize: 13,
-                    color: const Color(0xFFE6EDF3),
-                    height: 1.6,
-                  ).copyWith(fontFamily: 'monospace'),
+                SelectableText.rich(
+                  TextSpan(
+                    style: rootStyle,
+                    children: _buildHighlightedCodeSpans(
+                      visibleCodeText,
+                      widget.language,
+                      codeTheme,
+                      rootStyle,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -1721,6 +1992,236 @@ class _CodeCopyButton extends StatelessWidget {
   }
 }
 
+Map<String, TextStyle> _codeHighlightTheme() {
+  return AppTheme.isDark ? atomOneDarkTheme : atomOneLightTheme;
+}
+
+Color _codeSurfaceColor() {
+  return AppTheme.isDark ? const Color(0xFF171C22) : const Color(0xFFF5F8FC);
+}
+
+Color _codeHeaderColor() {
+  return AppTheme.isDark
+      ? Colors.white.withValues(alpha: 0.04)
+      : const Color(0xFFEFF3F8);
+}
+
+List<InlineSpan> _buildHighlightedCodeSpans(
+  String source,
+  String language,
+  Map<String, TextStyle> theme,
+  TextStyle rootStyle,
+) {
+  final normalizedLanguage = _normalizeHighlightLanguage(language);
+  final result = _safeParseHighlightedCode(source, normalizedLanguage);
+  final nodes = result.nodes;
+  if (nodes == null || nodes.isEmpty) {
+    return [TextSpan(text: source, style: rootStyle)];
+  }
+  return _convertHighlightNodes(nodes, theme, rootStyle);
+}
+
+hl.Result _safeParseHighlightedCode(String source, String? language) {
+  try {
+    return hl.highlight.parse(
+      source,
+      language: language,
+      autoDetection: language == null,
+    );
+  } catch (_) {
+    return hl.highlight.parse(
+      source,
+      autoDetection: true,
+    );
+  }
+}
+
+List<InlineSpan> _convertHighlightNodes(
+  List<Node> nodes,
+  Map<String, TextStyle> theme,
+  TextStyle rootStyle,
+) {
+  List<InlineSpan> traverse(List<Node> input, TextStyle inheritedStyle) {
+    final spans = <InlineSpan>[];
+    for (final node in input) {
+      final nodeStyle = node.className == null
+          ? inheritedStyle
+          : inheritedStyle.merge(theme[node.className!]);
+      if (node.value != null) {
+        spans.add(
+          TextSpan(
+            text: node.value,
+            style: nodeStyle,
+          ),
+        );
+        continue;
+      }
+      final children = node.children;
+      if (children == null || children.isEmpty) {
+        continue;
+      }
+      spans.add(
+        TextSpan(
+          style: nodeStyle,
+          children: traverse(children, nodeStyle),
+        ),
+      );
+    }
+    return spans;
+  }
+
+  return traverse(nodes, rootStyle);
+}
+
+String? _normalizeHighlightLanguage(String language) {
+  final normalized = language.trim().toLowerCase();
+  if (normalized.isEmpty || normalized == 'text' || normalized == 'plaintext') {
+    return null;
+  }
+  const aliases = <String, String>{
+    'py': 'python',
+    'js': 'javascript',
+    'ts': 'typescript',
+    'shell': 'bash',
+    'sh': 'bash',
+    'zsh': 'bash',
+    'md': 'markdown',
+    'yml': 'yaml',
+    'rb': 'ruby',
+    'rs': 'rust',
+    'kt': 'kotlin',
+    'c++': 'cpp',
+    'c#': 'csharp',
+    'objc': 'objectivec',
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+bool _looksLikeNumericTableColumn(List<CustomTableRow> rows, int columnIndex) {
+  final values = <String>[];
+  for (final row in rows) {
+    if (row.isHeader || columnIndex >= row.fields.length) {
+      continue;
+    }
+    final value = row.fields[columnIndex].data.trim();
+    if (value.isNotEmpty) {
+      values.add(value);
+    }
+  }
+  if (values.isEmpty) {
+    return false;
+  }
+  final numericLikeCount = values.where(_looksLikeNumericTableCell).length;
+  return numericLikeCount >= ((values.length + 1) ~/ 2);
+}
+
+List<CustomTableRow> _trimEmptyTableColumns(List<CustomTableRow> rows) {
+  if (rows.isEmpty) {
+    return const [];
+  }
+  final maxColumns = rows.fold<int>(
+    0,
+    (maxCount, row) =>
+        row.fields.length > maxCount ? row.fields.length : maxCount,
+  );
+  if (maxColumns == 0) {
+    return const [];
+  }
+
+  var start = 0;
+  var end = maxColumns - 1;
+
+  while (start <= end && _isTableColumnEmpty(rows, start)) {
+    start += 1;
+  }
+  while (end >= start && _isTableColumnEmpty(rows, end)) {
+    end -= 1;
+  }
+
+  if (start > end) {
+    return const [];
+  }
+
+  return rows
+      .map(
+        (row) => CustomTableRow(
+          isHeader: row.isHeader,
+          fields: row.fields.sublist(
+            start.clamp(0, row.fields.length),
+            end + 1 > row.fields.length ? row.fields.length : end + 1,
+          ),
+        ),
+      )
+      .toList();
+}
+
+List<CustomTableRow> _normalizeTableRows(List<CustomTableRow> rows) {
+  final trimmedRows = rows
+      .map((row) {
+        final normalizedFields = row.fields
+            .map(
+              (field) => CustomTableField(
+                data: field.data.trim(),
+                alignment: field.alignment,
+              ),
+            )
+            .toList();
+        var end = normalizedFields.length;
+        while (end > 0 &&
+            _normalizedTableCellValue(normalizedFields[end - 1].data).isEmpty) {
+          end -= 1;
+        }
+        var start = 0;
+        while (start < end &&
+            _normalizedTableCellValue(normalizedFields[start].data).isEmpty) {
+          start += 1;
+        }
+        return CustomTableRow(
+          isHeader: row.isHeader,
+          fields: normalizedFields.sublist(start, end),
+        );
+      })
+      .where((row) => row.fields.isNotEmpty)
+      .toList();
+  return _trimEmptyTableColumns(trimmedRows);
+}
+
+bool _isTableColumnEmpty(List<CustomTableRow> rows, int columnIndex) {
+  for (final row in rows) {
+    if (columnIndex >= row.fields.length) {
+      continue;
+    }
+    if (_normalizedTableCellValue(row.fields[columnIndex].data).isNotEmpty) {
+      return false;
+    }
+  }
+  return true;
+}
+
+String _normalizedTableCellValue(String value) {
+  return value
+      .replaceAll(RegExp(r'[\u00A0\u200B-\u200D\uFEFF]'), '')
+      .replaceAll('&nbsp;', '')
+      .replaceAll(RegExp(r'[\s\r\n\t]+'), '')
+      .replaceAll(RegExp(r'^[:\-|]+$'), '')
+      .trim();
+}
+
+bool _looksLikeNumericTableCell(String value) {
+  final normalized = value.replaceAll(',', '').replaceAll('，', '').trim();
+  if (normalized.isEmpty) {
+    return false;
+  }
+  final patterns = <RegExp>[
+    RegExp(r'^[¥￥$]?\d+(\.\d+)?([万千百十亿])?([/%])?$'),
+    RegExp(
+        r'^约?[¥￥$]?\d+(\.\d+)?\s*[-~～]\s*[¥￥$]?\d+(\.\d+)?([万千百十亿])?([/%])?$'),
+    RegExp(r'^\d+\s*[-~～]\s*\d+([/%])?$'),
+    RegExp(r'^\d+(\.\d+)?\s*(元|万元|天|晚|小时|km|公里|人|项)$'),
+  ];
+  return patterns.any((pattern) => pattern.hasMatch(normalized));
+}
+
 bool _shouldDegradeRichMarkdown(String content) {
   return content.length > _richMarkdownMaxChars ||
       _countLines(content) > _richMarkdownMaxLines ||
@@ -1765,6 +2266,27 @@ String _normalizePlainAnswerContent(String content) {
     paragraphs.add(_collapsePlainParagraph(currentLines));
   }
   return paragraphs.join('\n\n');
+}
+
+bool _shouldUseLeadParagraph(List<String> paragraphs) {
+  if (paragraphs.length < 2) {
+    return false;
+  }
+  return _isShortLeadText(paragraphs.first);
+}
+
+bool _isShortLeadText(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty || trimmed.length > _leadParagraphMaxChars) {
+    return false;
+  }
+  if (trimmed.contains('\n')) {
+    return false;
+  }
+  if (RegExp(r'^[-*•\d]').hasMatch(trimmed)) {
+    return false;
+  }
+  return true;
 }
 
 _StructuredPlainAnswer? _parseStructuredPlainAnswer(String content) {

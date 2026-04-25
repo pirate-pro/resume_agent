@@ -240,8 +240,8 @@ class AppTheme {
         boxShadow: [
           BoxShadow(
             color: _activePalette.panelShadow,
-            blurRadius: isDark ? 40 : 28,
-            offset: const Offset(0, 20),
+            blurRadius: isDark ? 34 : 22,
+            offset: const Offset(0, 14),
           ),
         ],
       );
@@ -249,12 +249,26 @@ class AppTheme {
   static BoxDecoration get userBubbleDecoration => BoxDecoration(
         color: userBubble,
         borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: isDark
+              ? border.withValues(alpha: 0.36)
+              : border.withValues(alpha: 0.54),
+          width: 0.6,
+        ),
       );
 
   static BoxDecoration get assistantBubbleDecoration => BoxDecoration(
         color: assistantBubble,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: border, width: 0.5),
+        boxShadow: [
+          BoxShadow(
+            color: _activePalette.panelShadow
+                .withValues(alpha: isDark ? 0.22 : 0.42),
+            blurRadius: isDark ? 18 : 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
       );
 }
 
