@@ -10,6 +10,10 @@ import '../../shared/widgets/chat_bubble.dart';
 import '../../shared/widgets/input_bar.dart';
 
 const double _messageRailMaxWidth = 1160;
+const double _messageListBottomPadding = 280;
+const double _composerDockFadeHeight = 132;
+const double _jumpToBottomButtonBottom = 108;
+const double _jumpToBottomThreshold = 140;
 
 class ChatScreen extends ConsumerStatefulWidget {
   final bool showSidebarToggle;
@@ -33,11 +37,33 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scrollCtrl = ScrollController();
+  bool _showJumpToBottom = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollCtrl.addListener(_handleScroll);
+  }
 
   @override
   void dispose() {
+    _scrollCtrl.removeListener(_handleScroll);
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _handleScroll() {
+    if (!_scrollCtrl.hasClients) {
+      return;
+    }
+    final distanceToBottom =
+        _scrollCtrl.position.maxScrollExtent - _scrollCtrl.position.pixels;
+    final nextShow = distanceToBottom > _jumpToBottomThreshold;
+    if (nextShow != _showJumpToBottom && mounted) {
+      setState(() {
+        _showJumpToBottom = nextShow;
+      });
+    }
   }
 
   void _scrollToBottom() {
@@ -136,45 +162,127 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
         // ── Messages area ──────────────────────────────────────────────
         Expanded(
-          child: hasMessages
-              ? _MessageList(
-                  messages: msgs,
-                  scrollCtrl: _scrollCtrl,
-                  isStreaming: provider.isStreaming,
-                  streamBuffer: provider.streamBuffer,
-                  streamAnswerFormat: provider.streamAnswerFormat,
-                  streamRenderHint: provider.streamRenderHint,
-                  streamLayoutHint: provider.streamLayoutHint,
-                  streamArtifacts: provider.streamArtifacts,
-                  streamEvents: provider.streamEvents,
-                  error: provider.error,
-                  onClearError: provider.clearError,
-                )
-              : const _WelcomeScreen(),
-        ),
-        // ── Input ──────────────────────────────────────────────────────
-        InputBar(
-          enabled: !provider.isStreaming,
-          isUploading: provider.isUploadingFile,
-          isLoadingSkills: provider.isLoadingSkills,
-          sessionFiles: provider.sessionFiles,
-          activeFileIds: provider.activeFileIds,
-          highlightedFileId: provider.recentActivatedFileId,
-          availableSkills: provider.availableSkills,
-          selectedSkillNames: provider.selectedSkillNames,
-          maxToolRounds: provider.maxToolRounds,
-          skillsError: provider.skillsError,
-          onSend: (text) => provider.sendMessage(text),
-          onUpload: ({required filename, required bytes}) =>
-              provider.uploadSessionFile(filename: filename, bytes: bytes),
-          onToggleFileActive: (file, active) =>
-              provider.toggleFileActive(file.fileId, active),
-          onRefreshSkills: provider.refreshSkills,
-          onToggleSkill: provider.toggleSkill,
-          onMaxToolRoundsChanged: provider.setMaxToolRounds,
-          onResetRuntimeOptions: provider.resetRuntimeOptions,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: hasMessages
+                    ? _MessageList(
+                        messages: msgs,
+                        scrollCtrl: _scrollCtrl,
+                        isStreaming: provider.isStreaming,
+                        streamBuffer: provider.streamBuffer,
+                        streamAnswerFormat: provider.streamAnswerFormat,
+                        streamRenderHint: provider.streamRenderHint,
+                        streamLayoutHint: provider.streamLayoutHint,
+                        streamArtifacts: provider.streamArtifacts,
+                        streamEvents: provider.streamEvents,
+                        error: provider.error,
+                        onClearError: provider.clearError,
+                      )
+                    : const _WelcomeScreen(),
+              ),
+              if (hasMessages)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: _jumpToBottomButtonBottom,
+                  child: IgnorePointer(
+                    ignoring: !_showJumpToBottom,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 180),
+                      opacity: _showJumpToBottom ? 1 : 0,
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                              maxWidth: _messageRailMaxWidth),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(right: 28),
+                                child: _JumpToBottomButton(
+                                  onTap: _scrollToBottom,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _ComposerDock(
+                  child: InputBar(
+                    enabled: !provider.isStreaming,
+                    isUploading: provider.isUploadingFile,
+                    isLoadingSkills: provider.isLoadingSkills,
+                    sessionFiles: provider.sessionFiles,
+                    activeFileIds: provider.activeFileIds,
+                    highlightedFileId: provider.recentActivatedFileId,
+                    availableSkills: provider.availableSkills,
+                    selectedSkillNames: provider.selectedSkillNames,
+                    maxToolRounds: provider.maxToolRounds,
+                    skillsError: provider.skillsError,
+                    onSend: (text) => provider.sendMessage(text),
+                    onUpload: ({required filename, required bytes}) => provider
+                        .uploadSessionFile(filename: filename, bytes: bytes),
+                    onToggleFileActive: (file, active) =>
+                        provider.toggleFileActive(file.fileId, active),
+                    onRefreshSkills: provider.refreshSkills,
+                    onToggleSkill: provider.toggleSkill,
+                    onMaxToolRoundsChanged: provider.setMaxToolRounds,
+                    onResetRuntimeOptions: provider.resetRuntimeOptions,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ],
+    );
+  }
+}
+
+class _JumpToBottomButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _JumpToBottomButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: AppTheme.surface.withValues(alpha: 0.94),
+            shape: BoxShape.circle,
+            border:
+                Border.all(color: AppTheme.borderLight.withValues(alpha: 0.8)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black
+                    .withValues(alpha: AppTheme.isDark ? 0.14 : 0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Icon(
+            Icons.keyboard_double_arrow_down_rounded,
+            size: 20,
+            color: AppTheme.textSecondary,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -435,7 +543,12 @@ class _MessageListState extends State<_MessageList> {
 
     return ListView.builder(
       controller: widget.scrollCtrl,
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
+      padding: const EdgeInsets.fromLTRB(
+        18,
+        12,
+        18,
+        _messageListBottomPadding,
+      ),
       itemCount: itemCount,
       itemBuilder: (_, i) {
         Widget child;
@@ -506,6 +619,61 @@ class _MessageListState extends State<_MessageList> {
       }
     }
     return lines;
+  }
+}
+
+class _ComposerDock extends StatelessWidget {
+  final Widget child;
+
+  const _ComposerDock({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IgnorePointer(
+          child: SizedBox(
+            height: _composerDockFadeHeight,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    AppTheme.bg.withValues(alpha: 0),
+                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.2 : 0.12),
+                    AppTheme.bg
+                        .withValues(alpha: AppTheme.isDark ? 0.78 : 0.64),
+                    AppTheme.bg
+                        .withValues(alpha: AppTheme.isDark ? 0.96 : 0.92),
+                  ],
+                  stops: const [0, 0.32, 0.72, 1],
+                ),
+              ),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  width: 280,
+                  height: 1,
+                  margin: const EdgeInsets.only(bottom: 74),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        AppTheme.border.withValues(alpha: 0),
+                        AppTheme.borderLight.withValues(alpha: 0.55),
+                        AppTheme.border.withValues(alpha: 0),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        child,
+      ],
+    );
   }
 }
 

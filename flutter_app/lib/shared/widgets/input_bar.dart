@@ -461,7 +461,7 @@ class _InputBarState extends State<InputBar> {
             }
           },
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: _composerMaxWidth),
@@ -498,7 +498,7 @@ class _InputBarState extends State<InputBar> {
                     Container(
                       decoration: AppTheme.floatingPanelDecoration(
                         radius: 24,
-                        alpha: 0.94,
+                        alpha: AppTheme.isDark ? 0.94 : 0.9,
                       ).copyWith(
                         border:
                             Border.all(color: borderColor, width: borderWidth),
