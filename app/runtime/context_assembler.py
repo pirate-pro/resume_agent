@@ -23,7 +23,10 @@ _OUTPUT_FORMAT_RULES = """Answer output rules:
 8. Never bold an entire paragraph or overuse emphasis in every sentence.
 9. If you are giving multiple alternatives, plans, or routes, separate them into clearly named sections and keep each section concise.
 10. For comparison-style answers, prefer short field labels such as 亮点 / 建议 / 贴士 instead of one large paragraph.
-11. If content is too long to fully display, provide a concise summary first and then clearly state the related file path if applicable."""
+11. When data is best compared by rows and columns, use a compact Markdown table with short headers and concise cell text.
+12. After any table, add one brief takeaway sentence so the user does not have to infer the conclusion alone.
+13. When writing code, always separate explanation and code block; never mix code into prose lines.
+14. If content is too long to fully display, provide a concise summary first and then clearly state the related file path if applicable."""
 
 
 class ContextAssembler:
