@@ -21,7 +21,9 @@ _OUTPUT_FORMAT_RULES = """Answer output rules:
 6. For ordinary non-Markdown answers, keep natural paragraphs. Do not split every sentence into a separate line.
 7. Use inline emphasis sparingly: **key conclusions or risk words**, *secondary terms*, and `commands/files/variables`.
 8. Never bold an entire paragraph or overuse emphasis in every sentence.
-9. If content is too long to fully display, provide a concise summary first and then clearly state the related file path if applicable."""
+9. If you are giving multiple alternatives, plans, or routes, separate them into clearly named sections and keep each section concise.
+10. For comparison-style answers, prefer short field labels such as 亮点 / 建议 / 贴士 instead of one large paragraph.
+11. If content is too long to fully display, provide a concise summary first and then clearly state the related file path if applicable."""
 
 
 class ContextAssembler:
