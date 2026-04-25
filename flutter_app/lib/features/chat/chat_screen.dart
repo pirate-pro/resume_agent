@@ -82,109 +82,40 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final provider = ref.watch(chatProvider);
-    final themeMode = ref.watch(themeModeProvider);
-    final isDarkMode = themeMode == ThemeMode.dark;
-    final msgs = provider.messages;
-    final hasMessages = msgs.isNotEmpty || provider.isStreaming;
+    final hasMessages = ref.watch(
+      chatProvider.select((provider) {
+        return provider.isStreaming || provider.messages.isNotEmpty;
+      }),
+    );
 
-    ref.listen(chatProvider, (prev, next) {
-      if (prev?.messages.length != next.messages.length ||
-          prev?.streamBuffer != next.streamBuffer ||
-          prev?.streamEvents.length != next.streamEvents.length) {
-        _scrollToBottom();
-      }
-    });
+    ref.listen<(int, int)>(
+      chatProvider.select((provider) {
+        return (provider.messages.length, provider.streamBuffer.length);
+      }),
+      (previous, next) {
+        if (previous != next) {
+          _scrollToBottom();
+        }
+      },
+    );
 
     return Stack(
       children: [
         Positioned.fill(
           child: hasMessages
-              ? _MessageList(
-                  messages: msgs,
-                  scrollCtrl: _scrollCtrl,
-                  isStreaming: provider.isStreaming,
-                  streamBuffer: provider.streamBuffer,
-                  streamAnswerFormat: provider.streamAnswerFormat,
-                  streamRenderHint: provider.streamRenderHint,
-                  streamLayoutHint: provider.streamLayoutHint,
-                  streamArtifacts: provider.streamArtifacts,
-                  streamEvents: provider.streamEvents,
-                  error: provider.error,
-                  onClearError: provider.clearError,
-                )
+              ? _ChatMessageLayer(scrollCtrl: _scrollCtrl)
               : const _WelcomeScreen(),
         ),
         Positioned(
           left: 0,
           right: 0,
           top: 0,
-          child: _HeaderDock(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1180),
-                  child: Row(
-                    children: [
-                      if (widget.showSidebarToggle) ...[
-                        _HeaderButton(
-                          icon: Icons.menu_rounded,
-                          onTap: widget.onSidebarToggle,
-                        ),
-                        const SizedBox(width: 10),
-                      ],
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
-                          decoration: AppTheme.floatingPanelDecoration(
-                            radius: 22,
-                            alpha: AppTheme.isDark ? 0.66 : 0.56,
-                          ),
-                          child: Row(
-                            children: [
-                              Text(
-                                "Single Agent Runtime",
-                                style: AppTheme.ts(
-                                  fontSize: 13.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppTheme.textPrimary,
-                                ),
-                              ),
-                              const Spacer(),
-                              _HealthBadge(reachable: provider.serverReachable),
-                              if (widget.showDebugToggle) ...[
-                                const SizedBox(width: 8),
-                                _HeaderButton(
-                                  icon: widget.isDebugPanelOpen
-                                      ? Icons.tune_rounded
-                                      : Icons.developer_board_rounded,
-                                  active: widget.isDebugPanelOpen,
-                                  onTap: widget.onDebugToggle,
-                                ),
-                              ],
-                              const SizedBox(width: 8),
-                              _HeaderButton(
-                                icon: isDarkMode
-                                    ? Icons.light_mode_rounded
-                                    : Icons.dark_mode_rounded,
-                                tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
-                                onTap: () => ref
-                                    .read(themeModeProvider.notifier)
-                                    .toggle(),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          child: _ChatHeaderLayer(
+            showSidebarToggle: widget.showSidebarToggle,
+            onSidebarToggle: widget.onSidebarToggle,
+            showDebugToggle: widget.showDebugToggle,
+            isDebugPanelOpen: widget.isDebugPanelOpen,
+            onDebugToggle: widget.onDebugToggle,
           ),
         ),
         if (hasMessages)
@@ -221,31 +152,161 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           left: 0,
           right: 0,
           bottom: 0,
-          child: _ComposerDock(
-            child: InputBar(
-              enabled: !provider.isStreaming,
-              isUploading: provider.isUploadingFile,
-              isLoadingSkills: provider.isLoadingSkills,
-              sessionFiles: provider.sessionFiles,
-              activeFileIds: provider.activeFileIds,
-              highlightedFileId: provider.recentActivatedFileId,
-              availableSkills: provider.availableSkills,
-              selectedSkillNames: provider.selectedSkillNames,
-              maxToolRounds: provider.maxToolRounds,
-              skillsError: provider.skillsError,
-              onSend: (text) => provider.sendMessage(text),
-              onUpload: ({required filename, required bytes}) => provider
-                  .uploadSessionFile(filename: filename, bytes: bytes),
-              onToggleFileActive: (file, active) =>
-                  provider.toggleFileActive(file.fileId, active),
-              onRefreshSkills: provider.refreshSkills,
-              onToggleSkill: provider.toggleSkill,
-              onMaxToolRoundsChanged: provider.setMaxToolRounds,
-              onResetRuntimeOptions: provider.resetRuntimeOptions,
+          child: const _ChatComposerLayer(),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChatHeaderLayer extends ConsumerWidget {
+  final bool showSidebarToggle;
+  final VoidCallback? onSidebarToggle;
+  final bool showDebugToggle;
+  final bool isDebugPanelOpen;
+  final VoidCallback? onDebugToggle;
+
+  const _ChatHeaderLayer({
+    required this.showSidebarToggle,
+    required this.onSidebarToggle,
+    required this.showDebugToggle,
+    required this.isDebugPanelOpen,
+    required this.onDebugToggle,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reachable = ref.watch(
+      chatProvider.select((provider) => provider.serverReachable),
+    );
+    final themeMode = ref.watch(themeModeProvider);
+    final isDarkMode = themeMode == ThemeMode.dark;
+
+    return _HeaderDock(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1180),
+            child: Row(
+              children: [
+                if (showSidebarToggle) ...[
+                  _HeaderButton(
+                    icon: Icons.menu_rounded,
+                    onTap: onSidebarToggle,
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    decoration: AppTheme.floatingPanelDecoration(
+                      radius: 22,
+                      alpha: AppTheme.isDark ? 0.66 : 0.56,
+                    ),
+                    child: Row(
+                      children: [
+                        Text(
+                          "Single Agent Runtime",
+                          style: AppTheme.ts(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary,
+                          ),
+                        ),
+                        const Spacer(),
+                        _HealthBadge(reachable: reachable),
+                        if (showDebugToggle) ...[
+                          const SizedBox(width: 8),
+                          _HeaderButton(
+                            icon: isDebugPanelOpen
+                                ? Icons.tune_rounded
+                                : Icons.developer_board_rounded,
+                            active: isDebugPanelOpen,
+                            onTap: onDebugToggle,
+                          ),
+                        ],
+                        const SizedBox(width: 8),
+                        _HeaderButton(
+                          icon: isDarkMode
+                              ? Icons.light_mode_rounded
+                              : Icons.dark_mode_rounded,
+                          tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
+                          onTap: () =>
+                              ref.read(themeModeProvider.notifier).toggle(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
-      ],
+      ),
+    );
+  }
+}
+
+class _ChatMessageLayer extends ConsumerWidget {
+  final ScrollController scrollCtrl;
+
+  const _ChatMessageLayer({required this.scrollCtrl});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final provider = ref.watch(chatProvider);
+    return _MessageList(
+      messages: provider.messages,
+      scrollCtrl: scrollCtrl,
+      isStreaming: provider.isStreaming,
+      streamBuffer: provider.streamBuffer,
+      streamAnswerFormat: provider.streamAnswerFormat,
+      streamRenderHint: provider.streamRenderHint,
+      streamLayoutHint: provider.streamLayoutHint,
+      streamArtifacts: provider.streamArtifacts,
+      streamEvents: provider.streamEvents,
+      error: provider.error,
+      onClearError: provider.clearError,
+    );
+  }
+}
+
+class _ChatComposerLayer extends ConsumerWidget {
+  const _ChatComposerLayer();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final viewModel = ref.watch(
+      chatProvider.select(_ComposerViewModel.fromProvider),
+    );
+    final provider = ref.read(chatProvider);
+
+    return _ComposerDock(
+      child: InputBar(
+        enabled: viewModel.enabled,
+        isUploading: viewModel.isUploading,
+        isLoadingSkills: viewModel.isLoadingSkills,
+        sessionFiles: viewModel.sessionFiles,
+        activeFileIds: viewModel.activeFileIds,
+        highlightedFileId: viewModel.highlightedFileId,
+        availableSkills: viewModel.availableSkills,
+        selectedSkillNames: viewModel.selectedSkillNames,
+        maxToolRounds: viewModel.maxToolRounds,
+        skillsError: viewModel.skillsError,
+        onSend: (text) => provider.sendMessage(text),
+        onUpload: ({required filename, required bytes}) => provider
+            .uploadSessionFile(filename: filename, bytes: bytes),
+        onToggleFileActive: (file, active) =>
+            provider.toggleFileActive(file.fileId, active),
+        onRefreshSkills: provider.refreshSkills,
+        onToggleSkill: provider.toggleSkill,
+        onMaxToolRoundsChanged: provider.setMaxToolRounds,
+        onResetRuntimeOptions: provider.resetRuntimeOptions,
+      ),
     );
   }
 }
@@ -325,6 +386,76 @@ class _HeaderDock extends StatelessWidget {
       ],
     );
   }
+}
+
+class _ComposerViewModel {
+  final bool enabled;
+  final bool isUploading;
+  final bool isLoadingSkills;
+  final List<SessionFileView> sessionFiles;
+  final List<String> activeFileIds;
+  final String? highlightedFileId;
+  final List<SkillOption> availableSkills;
+  final List<String> selectedSkillNames;
+  final int maxToolRounds;
+  final String? skillsError;
+
+  const _ComposerViewModel({
+    required this.enabled,
+    required this.isUploading,
+    required this.isLoadingSkills,
+    required this.sessionFiles,
+    required this.activeFileIds,
+    required this.highlightedFileId,
+    required this.availableSkills,
+    required this.selectedSkillNames,
+    required this.maxToolRounds,
+    required this.skillsError,
+  });
+
+  factory _ComposerViewModel.fromProvider(ChatProvider provider) {
+    return _ComposerViewModel(
+      enabled: !provider.isStreaming,
+      isUploading: provider.isUploadingFile,
+      isLoadingSkills: provider.isLoadingSkills,
+      sessionFiles: provider.sessionFiles,
+      activeFileIds: provider.activeFileIds,
+      highlightedFileId: provider.recentActivatedFileId,
+      availableSkills: provider.availableSkills,
+      selectedSkillNames: provider.selectedSkillNames,
+      maxToolRounds: provider.maxToolRounds,
+      skillsError: provider.skillsError,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is _ComposerViewModel &&
+        other.enabled == enabled &&
+        other.isUploading == isUploading &&
+        other.isLoadingSkills == isLoadingSkills &&
+        other.highlightedFileId == highlightedFileId &&
+        other.maxToolRounds == maxToolRounds &&
+        other.skillsError == skillsError &&
+        _stringListEquals(other.activeFileIds, activeFileIds) &&
+        _sessionFileListEquals(other.sessionFiles, sessionFiles) &&
+        _skillOptionListEquals(other.availableSkills, availableSkills) &&
+        _stringListEquals(other.selectedSkillNames, selectedSkillNames);
+  }
+
+  @override
+  int get hashCode => Object.hash(
+        enabled,
+        isUploading,
+        isLoadingSkills,
+        highlightedFileId,
+        maxToolRounds,
+        skillsError,
+        activeFileIds.length,
+        sessionFiles.length,
+        availableSkills.length,
+        selectedSkillNames.length,
+      );
 }
 
 // ── Health badge ─────────────────────────────────────────────────────────
@@ -555,27 +686,6 @@ class _MessageList extends StatefulWidget {
 
 class _MessageListState extends State<_MessageList> {
   @override
-  void didUpdateWidget(covariant _MessageList oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.messages.length != oldWidget.messages.length ||
-        widget.streamBuffer != oldWidget.streamBuffer) {
-      _scroll();
-    }
-  }
-
-  void _scroll() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (widget.scrollCtrl.hasClients) {
-        widget.scrollCtrl.animateTo(
-          widget.scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
     final extraItems =
         (widget.isStreaming ? 1 : 0) + (widget.error != null ? 1 : 0);
@@ -660,6 +770,65 @@ class _MessageListState extends State<_MessageList> {
     }
     return lines;
   }
+}
+
+bool _stringListEquals(List<String> left, List<String> right) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _skillOptionListEquals(List<SkillOption> left, List<SkillOption> right) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index++) {
+    if (left[index].name != right[index].name ||
+        left[index].description != right[index].description) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _sessionFileListEquals(
+  List<SessionFileView> left,
+  List<SessionFileView> right,
+) {
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left.length != right.length) {
+    return false;
+  }
+  for (var index = 0; index < left.length; index++) {
+    final leftItem = left[index];
+    final rightItem = right[index];
+    if (leftItem.fileId != rightItem.fileId ||
+        leftItem.filename != rightItem.filename ||
+        leftItem.mediaType != rightItem.mediaType ||
+        leftItem.sizeBytes != rightItem.sizeBytes ||
+        leftItem.status != rightItem.status ||
+        leftItem.error != rightItem.error ||
+        leftItem.parsedCharCount != rightItem.parsedCharCount ||
+        leftItem.parsedTokenEstimate != rightItem.parsedTokenEstimate ||
+        leftItem.uploadedAt != rightItem.uploadedAt) {
+      return false;
+    }
+  }
+  return true;
 }
 
 class _ComposerDock extends StatelessWidget {

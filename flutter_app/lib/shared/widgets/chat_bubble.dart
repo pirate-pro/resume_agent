@@ -1425,15 +1425,35 @@ class _StreamingSkeletonState extends State<_StreamingSkeleton>
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
-        final alpha = 0.22 + (_controller.value * 0.18);
+        final darkAlpha = 0.22 + (_controller.value * 0.18);
+        final lightColor = Color.lerp(
+          AppTheme.surfaceActive,
+          AppTheme.borderLight.withValues(alpha: 0.92),
+          _controller.value,
+        )!;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _SkeletonLine(widthFactor: 0.92, alpha: alpha),
+            _SkeletonLine(
+              widthFactor: 0.92,
+              color: AppTheme.isDark
+                  ? Colors.white.withValues(alpha: darkAlpha)
+                  : lightColor,
+            ),
             const SizedBox(height: 8),
-            _SkeletonLine(widthFactor: 0.78, alpha: alpha * 0.9),
+            _SkeletonLine(
+              widthFactor: 0.78,
+              color: AppTheme.isDark
+                  ? Colors.white.withValues(alpha: darkAlpha * 0.9)
+                  : Color.lerp(lightColor, AppTheme.surfaceActive, 0.18)!,
+            ),
             const SizedBox(height: 8),
-            _SkeletonLine(widthFactor: 0.56, alpha: alpha * 0.8),
+            _SkeletonLine(
+              widthFactor: 0.56,
+              color: AppTheme.isDark
+                  ? Colors.white.withValues(alpha: darkAlpha * 0.8)
+                  : Color.lerp(lightColor, AppTheme.surfaceActive, 0.3)!,
+            ),
           ],
         );
       },
@@ -1443,9 +1463,9 @@ class _StreamingSkeletonState extends State<_StreamingSkeleton>
 
 class _SkeletonLine extends StatelessWidget {
   final double widthFactor;
-  final double alpha;
+  final Color color;
 
-  const _SkeletonLine({required this.widthFactor, required this.alpha});
+  const _SkeletonLine({required this.widthFactor, required this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -1454,7 +1474,7 @@ class _SkeletonLine extends StatelessWidget {
       child: Container(
         height: 12,
         decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: alpha),
+          color: color,
           borderRadius: BorderRadius.circular(999),
         ),
       ),
