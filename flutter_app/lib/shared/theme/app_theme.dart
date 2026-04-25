@@ -45,7 +45,7 @@ class AppTheme {
     panelShadow: Color(0x16000000),
   );
 
-  static _AppPalette _activePalette = _darkPalette;
+  static _AppPalette _activePalette = _lightPalette;
 
   static void applyMode(ThemeMode mode) {
     _activePalette = mode == ThemeMode.light ? _lightPalette : _darkPalette;
