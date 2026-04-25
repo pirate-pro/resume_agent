@@ -10,7 +10,9 @@ import '../../shared/widgets/chat_bubble.dart';
 import '../../shared/widgets/input_bar.dart';
 
 const double _messageRailMaxWidth = 1160;
+const double _messageListTopPadding = 106;
 const double _messageListBottomPadding = 280;
+const double _headerDockFadeHeight = 92;
 const double _composerDockFadeHeight = 132;
 const double _jumpToBottomButtonBottom = 108;
 const double _jumpToBottomThreshold = 140;
@@ -94,152 +96,153 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
 
-    return Column(
+    return Stack(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1180),
-              child: Row(
-                children: [
-                  if (widget.showSidebarToggle) ...[
-                    _HeaderButton(
-                      icon: Icons.menu_rounded,
-                      onTap: widget.onSidebarToggle,
-                    ),
-                    const SizedBox(width: 10),
-                  ],
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 14,
-                      ),
-                      decoration: AppTheme.floatingPanelDecoration(
-                        radius: 24,
-                        alpha: 0.72,
-                      ),
-                      child: Row(
-                        children: [
-                          Text(
-                            "Single Agent Runtime",
-                            style: AppTheme.ts(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textPrimary,
-                            ),
-                          ),
-                          const Spacer(),
-                          _HealthBadge(reachable: provider.serverReachable),
-                          if (widget.showDebugToggle) ...[
-                            const SizedBox(width: 10),
-                            _HeaderButton(
-                              icon: widget.isDebugPanelOpen
-                                  ? Icons.tune_rounded
-                                  : Icons.developer_board_rounded,
-                              active: widget.isDebugPanelOpen,
-                              onTap: widget.onDebugToggle,
-                            ),
-                          ],
-                          const SizedBox(width: 10),
-                          _HeaderButton(
-                            icon: isDarkMode
-                                ? Icons.light_mode_rounded
-                                : Icons.dark_mode_rounded,
-                            tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
-                            onTap: () =>
-                                ref.read(themeModeProvider.notifier).toggle(),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        Positioned.fill(
+          child: hasMessages
+              ? _MessageList(
+                  messages: msgs,
+                  scrollCtrl: _scrollCtrl,
+                  isStreaming: provider.isStreaming,
+                  streamBuffer: provider.streamBuffer,
+                  streamAnswerFormat: provider.streamAnswerFormat,
+                  streamRenderHint: provider.streamRenderHint,
+                  streamLayoutHint: provider.streamLayoutHint,
+                  streamArtifacts: provider.streamArtifacts,
+                  streamEvents: provider.streamEvents,
+                  error: provider.error,
+                  onClearError: provider.clearError,
+                )
+              : const _WelcomeScreen(),
         ),
-        // ── Messages area ──────────────────────────────────────────────
-        Expanded(
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: hasMessages
-                    ? _MessageList(
-                        messages: msgs,
-                        scrollCtrl: _scrollCtrl,
-                        isStreaming: provider.isStreaming,
-                        streamBuffer: provider.streamBuffer,
-                        streamAnswerFormat: provider.streamAnswerFormat,
-                        streamRenderHint: provider.streamRenderHint,
-                        streamLayoutHint: provider.streamLayoutHint,
-                        streamArtifacts: provider.streamArtifacts,
-                        streamEvents: provider.streamEvents,
-                        error: provider.error,
-                        onClearError: provider.clearError,
-                      )
-                    : const _WelcomeScreen(),
-              ),
-              if (hasMessages)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: _jumpToBottomButtonBottom,
-                  child: IgnorePointer(
-                    ignoring: !_showJumpToBottom,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 180),
-                      opacity: _showJumpToBottom ? 1 : 0,
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                              maxWidth: _messageRailMaxWidth),
+        Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          child: _HeaderDock(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1180),
+                  child: Row(
+                    children: [
+                      if (widget.showSidebarToggle) ...[
+                        _HeaderButton(
+                          icon: Icons.menu_rounded,
+                          onTap: widget.onSidebarToggle,
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                          decoration: AppTheme.floatingPanelDecoration(
+                            radius: 22,
+                            alpha: AppTheme.isDark ? 0.66 : 0.56,
+                          ),
                           child: Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              Padding(
-                                padding: const EdgeInsets.only(right: 28),
-                                child: _JumpToBottomButton(
-                                  onTap: _scrollToBottom,
+                              Text(
+                                "Single Agent Runtime",
+                                style: AppTheme.ts(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
                                 ),
+                              ),
+                              const Spacer(),
+                              _HealthBadge(reachable: provider.serverReachable),
+                              if (widget.showDebugToggle) ...[
+                                const SizedBox(width: 8),
+                                _HeaderButton(
+                                  icon: widget.isDebugPanelOpen
+                                      ? Icons.tune_rounded
+                                      : Icons.developer_board_rounded,
+                                  active: widget.isDebugPanelOpen,
+                                  onTap: widget.onDebugToggle,
+                                ),
+                              ],
+                              const SizedBox(width: 8),
+                              _HeaderButton(
+                                icon: isDarkMode
+                                    ? Icons.light_mode_rounded
+                                    : Icons.dark_mode_rounded,
+                                tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
+                                onTap: () => ref
+                                    .read(themeModeProvider.notifier)
+                                    .toggle(),
                               ),
                             ],
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: _ComposerDock(
-                  child: InputBar(
-                    enabled: !provider.isStreaming,
-                    isUploading: provider.isUploadingFile,
-                    isLoadingSkills: provider.isLoadingSkills,
-                    sessionFiles: provider.sessionFiles,
-                    activeFileIds: provider.activeFileIds,
-                    highlightedFileId: provider.recentActivatedFileId,
-                    availableSkills: provider.availableSkills,
-                    selectedSkillNames: provider.selectedSkillNames,
-                    maxToolRounds: provider.maxToolRounds,
-                    skillsError: provider.skillsError,
-                    onSend: (text) => provider.sendMessage(text),
-                    onUpload: ({required filename, required bytes}) => provider
-                        .uploadSessionFile(filename: filename, bytes: bytes),
-                    onToggleFileActive: (file, active) =>
-                        provider.toggleFileActive(file.fileId, active),
-                    onRefreshSkills: provider.refreshSkills,
-                    onToggleSkill: provider.toggleSkill,
-                    onMaxToolRoundsChanged: provider.setMaxToolRounds,
-                    onResetRuntimeOptions: provider.resetRuntimeOptions,
+                    ],
                   ),
                 ),
               ),
-            ],
+            ),
+          ),
+        ),
+        if (hasMessages)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: _jumpToBottomButtonBottom,
+            child: IgnorePointer(
+              ignoring: !_showJumpToBottom,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 180),
+                opacity: _showJumpToBottom ? 1 : 0,
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints:
+                        const BoxConstraints(maxWidth: _messageRailMaxWidth),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 28),
+                          child: _JumpToBottomButton(
+                            onTap: _scrollToBottom,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: _ComposerDock(
+            child: InputBar(
+              enabled: !provider.isStreaming,
+              isUploading: provider.isUploadingFile,
+              isLoadingSkills: provider.isLoadingSkills,
+              sessionFiles: provider.sessionFiles,
+              activeFileIds: provider.activeFileIds,
+              highlightedFileId: provider.recentActivatedFileId,
+              availableSkills: provider.availableSkills,
+              selectedSkillNames: provider.selectedSkillNames,
+              maxToolRounds: provider.maxToolRounds,
+              skillsError: provider.skillsError,
+              onSend: (text) => provider.sendMessage(text),
+              onUpload: ({required filename, required bytes}) => provider
+                  .uploadSessionFile(filename: filename, bytes: bytes),
+              onToggleFileActive: (file, active) =>
+                  provider.toggleFileActive(file.fileId, active),
+              onRefreshSkills: provider.refreshSkills,
+              onToggleSkill: provider.toggleSkill,
+              onMaxToolRoundsChanged: provider.setMaxToolRounds,
+              onResetRuntimeOptions: provider.resetRuntimeOptions,
+            ),
           ),
         ),
       ],
@@ -287,6 +290,43 @@ class _JumpToBottomButton extends StatelessWidget {
   }
 }
 
+class _HeaderDock extends StatelessWidget {
+  final Widget child;
+
+  const _HeaderDock({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        child,
+        IgnorePointer(
+          child: SizedBox(
+            height: _headerDockFadeHeight,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.9 : 0.8),
+                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.74 : 0.6),
+                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.42 : 0.28),
+                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.14 : 0.08),
+                    AppTheme.bg.withValues(alpha: 0),
+                  ],
+                  stops: const [0, 0.18, 0.42, 0.74, 1],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Health badge ─────────────────────────────────────────────────────────
 
 class _HealthBadge extends StatelessWidget {
@@ -308,10 +348,10 @@ class _HealthBadge extends StatelessWidget {
         children: [
           Icon(Icons.circle,
               size: 7, color: reachable ? AppTheme.accent : AppTheme.danger),
-          const SizedBox(width: 6),
+          const SizedBox(width: 5),
           Text(reachable ? "在线" : "离线",
               style: AppTheme.ts(
-                  fontSize: 11,
+                  fontSize: 10.5,
                   color: reachable ? AppTheme.accent : AppTheme.danger)),
         ],
       ),
@@ -340,13 +380,13 @@ class _HeaderButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         onTap: onTap,
         child: Container(
-          width: 46,
-          height: 46,
+          width: 42,
+          height: 42,
           decoration: BoxDecoration(
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.16)
-                : AppTheme.surface.withValues(alpha: 0.78),
-            borderRadius: BorderRadius.circular(18),
+                : AppTheme.surface.withValues(alpha: 0.72),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: active
                   ? AppTheme.accent.withValues(alpha: 0.3)
@@ -355,7 +395,7 @@ class _HeaderButton extends StatelessWidget {
           ),
           child: Icon(
             icon,
-            size: 20,
+            size: 18,
             color: active ? AppTheme.accent : AppTheme.textSecondary,
           ),
         ),
@@ -545,7 +585,7 @@ class _MessageListState extends State<_MessageList> {
       controller: widget.scrollCtrl,
       padding: const EdgeInsets.fromLTRB(
         18,
-        12,
+        _messageListTopPadding,
         18,
         _messageListBottomPadding,
       ),
