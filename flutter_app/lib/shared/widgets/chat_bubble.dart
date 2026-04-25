@@ -123,11 +123,6 @@ class _ChatBubbleState extends State<ChatBubble> {
                         _ArtifactList(artifacts: widget.message.artifacts),
                       ],
                       if (widget.isStreaming) const _Cursor(),
-                      if (widget.message.toolCalls.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        ...widget.message.toolCalls
-                            .map((tc) => _ToolCallChip(toolCall: tc)),
-                      ],
                     ],
                   ),
                 ),
@@ -501,6 +496,13 @@ class _PlainTextBody extends StatelessWidget {
         baseStyle: baseStyle,
       );
     }
+    final structured = _parseStructuredPlainAnswer(normalizedContent);
+    if (structured != null) {
+      return _StructuredPlainAnswerBody(
+        parsed: structured,
+        baseStyle: baseStyle,
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -517,6 +519,292 @@ class _PlainTextBody extends StatelessWidget {
           if (index < paragraphs.length - 1) const SizedBox(height: 10),
         ],
       ],
+    );
+  }
+}
+
+class _StructuredPlainAnswer {
+  final List<String> introParagraphs;
+  final List<_StructuredPlainSection> sections;
+  final String? callToAction;
+
+  const _StructuredPlainAnswer({
+    required this.introParagraphs,
+    required this.sections,
+    required this.callToAction,
+  });
+}
+
+class _StructuredPlainSection {
+  final String title;
+  final List<_StructuredPlainField> fields;
+  final List<String> listItems;
+  final String? bodyText;
+
+  const _StructuredPlainSection({
+    required this.title,
+    this.fields = const [],
+    this.listItems = const [],
+    this.bodyText,
+  });
+}
+
+class _StructuredPlainField {
+  final String label;
+  final String content;
+
+  const _StructuredPlainField({
+    required this.label,
+    required this.content,
+  });
+}
+
+class _StructuredPlainAnswerBody extends StatelessWidget {
+  final _StructuredPlainAnswer parsed;
+  final TextStyle baseStyle;
+
+  const _StructuredPlainAnswerBody({
+    required this.parsed,
+    required this.baseStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var index = 0; index < parsed.introParagraphs.length; index++) ...[
+          SelectableText.rich(
+            TextSpan(
+              style: baseStyle,
+              children: _buildPlainInlineSpans(
+                parsed.introParagraphs[index],
+                baseStyle,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+        for (var index = 0; index < parsed.sections.length; index++) ...[
+          _StructuredPlainSectionCard(
+            section: parsed.sections[index],
+            baseStyle: baseStyle,
+          ),
+          if (index < parsed.sections.length - 1 || parsed.callToAction != null)
+            const SizedBox(height: 12),
+        ],
+        if (parsed.callToAction != null)
+          _PlainCallToActionCard(
+            content: parsed.callToAction!,
+            baseStyle: baseStyle,
+          ),
+      ],
+    );
+  }
+}
+
+class _StructuredPlainSectionCard extends StatelessWidget {
+  final _StructuredPlainSection section;
+  final TextStyle baseStyle;
+
+  const _StructuredPlainSectionCard({
+    required this.section,
+    required this.baseStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.56),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SelectableText.rich(
+            TextSpan(
+              style: baseStyle.copyWith(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                height: 1.5,
+              ),
+              children: _buildPlainInlineSpans(
+                section.title,
+                baseStyle.copyWith(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ),
+          if (section.fields.isNotEmpty ||
+              section.listItems.isNotEmpty ||
+              (section.bodyText?.isNotEmpty ?? false))
+            const SizedBox(height: 12),
+          if (section.fields.isNotEmpty) ...[
+            for (var index = 0; index < section.fields.length; index++) ...[
+              _StructuredPlainFieldRow(
+                field: section.fields[index],
+                baseStyle: baseStyle,
+              ),
+              if (index < section.fields.length - 1) const SizedBox(height: 10),
+            ],
+          ],
+          if (section.fields.isNotEmpty &&
+              (section.listItems.isNotEmpty ||
+                  (section.bodyText?.isNotEmpty ?? false)))
+            const SizedBox(height: 12),
+          if (section.listItems.isNotEmpty) ...[
+            for (var index = 0; index < section.listItems.length; index++) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: AppTheme.accent.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      '${index + 1}',
+                      style: AppTheme.ts(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.accent,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: SelectableText.rich(
+                      TextSpan(
+                        style: baseStyle,
+                        children: _buildPlainInlineSpans(
+                          section.listItems[index],
+                          baseStyle,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (index < section.listItems.length - 1)
+                const SizedBox(height: 10),
+            ],
+          ],
+          if (section.listItems.isNotEmpty &&
+              (section.bodyText?.isNotEmpty ?? false))
+            const SizedBox(height: 12),
+          if (section.bodyText?.isNotEmpty ?? false)
+            SelectableText.rich(
+              TextSpan(
+                style: baseStyle,
+                children:
+                    _buildPlainInlineSpans(section.bodyText ?? '', baseStyle),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StructuredPlainFieldRow extends StatelessWidget {
+  final _StructuredPlainField field;
+  final TextStyle baseStyle;
+
+  const _StructuredPlainFieldRow({
+    required this.field,
+    required this.baseStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceActive,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Text(
+            field.label,
+            style: AppTheme.ts(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: SelectableText.rich(
+            TextSpan(
+              style: baseStyle,
+              children: _buildPlainInlineSpans(field.content, baseStyle),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PlainCallToActionCard extends StatelessWidget {
+  final String content;
+  final TextStyle baseStyle;
+
+  const _PlainCallToActionCard({
+    required this.content,
+    required this.baseStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final emphasisStyle = baseStyle.copyWith(
+      fontWeight: FontWeight.w600,
+      height: 1.7,
+    );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Icon(
+              Icons.arrow_forward_rounded,
+              size: 16,
+              color: AppTheme.accent,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: SelectableText.rich(
+              TextSpan(
+                style: emphasisStyle,
+                children: _buildPlainInlineSpans(content, emphasisStyle),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1460,6 +1748,177 @@ String _normalizePlainAnswerContent(String content) {
   return paragraphs.join('\n\n');
 }
 
+_StructuredPlainAnswer? _parseStructuredPlainAnswer(String content) {
+  final paragraphs = content
+      .split(RegExp(r'\n\s*\n'))
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList();
+  if (paragraphs.length < 3) {
+    return null;
+  }
+
+  final introParagraphs = <String>[];
+  final sections = <_StructuredPlainSection>[];
+  String? callToAction;
+
+  for (var index = 0; index < paragraphs.length; index++) {
+    final paragraph = paragraphs[index];
+    final isLast = index == paragraphs.length - 1;
+
+    if (isLast && _looksLikeCallToActionParagraph(paragraph)) {
+      callToAction = paragraph;
+      continue;
+    }
+
+    if (_looksLikeSectionTitle(paragraph)) {
+      final parsedSection = _parseStructuredSection(paragraph);
+      if (parsedSection != null) {
+        sections.add(parsedSection);
+        continue;
+      }
+    }
+
+    if (sections.isEmpty) {
+      introParagraphs.add(paragraph);
+      continue;
+    }
+
+    final lastSection = sections.removeLast();
+    final mergedBody = [
+      if (lastSection.bodyText?.isNotEmpty ?? false) lastSection.bodyText!,
+      paragraph,
+    ].join('\n\n');
+    sections.add(
+      _StructuredPlainSection(
+        title: lastSection.title,
+        fields: lastSection.fields,
+        listItems: lastSection.listItems,
+        bodyText: mergedBody,
+      ),
+    );
+  }
+
+  final hasEnoughStructure = sections.length >= 2 ||
+      sections.any((section) =>
+          section.fields.length >= 2 ||
+          section.listItems.length >= 3 ||
+          section.title.startsWith('方案'));
+  if (!hasEnoughStructure) {
+    return null;
+  }
+
+  return _StructuredPlainAnswer(
+    introParagraphs: introParagraphs,
+    sections: sections,
+    callToAction: callToAction,
+  );
+}
+
+bool _looksLikeSectionTitle(String paragraph) {
+  final firstLine = paragraph
+      .split('\n')
+      .map((item) => item.trim())
+      .firstWhere((item) => item.isNotEmpty, orElse: () => '');
+  if (firstLine.isEmpty) {
+    return false;
+  }
+
+  final patterns = <RegExp>[
+    RegExp(r'^方案[一二三四五六七八九十0-9]+\s*[：:].+$'),
+    RegExp(r'^(推荐|路线|选项)[一二三四五六七八九十0-9]*\s*[：:].+$'),
+    RegExp(r'^(通用建议|补充建议|注意事项|结论|总结|下一步)\s*[：:]?$'),
+  ];
+  if (patterns.any((pattern) => pattern.hasMatch(firstLine))) {
+    return true;
+  }
+
+  return firstLine.length <= 24 &&
+      firstLine.endsWith('：') &&
+      !RegExp(r'^\d+[.)、]').hasMatch(firstLine);
+}
+
+_StructuredPlainSection? _parseStructuredSection(String paragraph) {
+  final lines = paragraph
+      .split('\n')
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList();
+  if (lines.isEmpty) {
+    return null;
+  }
+
+  final fields = <_StructuredPlainField>[];
+  final listItems = <String>[];
+  final bodyParts = <String>[];
+
+  for (final line in lines.skip(1)) {
+    final field = _parseStructuredField(line);
+    if (field != null) {
+      fields.add(field);
+      continue;
+    }
+    if (_looksLikePlainListLine(line)) {
+      listItems.add(_stripPlainListPrefix(line));
+      continue;
+    }
+    if (fields.isNotEmpty) {
+      final last = fields.removeLast();
+      fields.add(
+        _StructuredPlainField(
+          label: last.label,
+          content: '${last.content} $line'.trim(),
+        ),
+      );
+      continue;
+    }
+    if (listItems.isNotEmpty) {
+      listItems[listItems.length - 1] = '${listItems.last} $line'.trim();
+      continue;
+    }
+    bodyParts.add(line);
+  }
+
+  return _StructuredPlainSection(
+    title: lines.first,
+    fields: fields,
+    listItems: listItems,
+    bodyText: bodyParts.isEmpty ? null : bodyParts.join('\n'),
+  );
+}
+
+_StructuredPlainField? _parseStructuredField(String line) {
+  final match =
+      RegExp(r'^\s*[-•]?\s*([^：:]{1,12})[：:]\s*(.+)$').firstMatch(line);
+  if (match == null) {
+    return null;
+  }
+
+  final label = (match.group(1) ?? '').trim();
+  final content = (match.group(2) ?? '').trim();
+  if (label.isEmpty || content.isEmpty || _looksLikeSectionTitle(label)) {
+    return null;
+  }
+  return _StructuredPlainField(
+    label: label,
+    content: content,
+  );
+}
+
+bool _looksLikeCallToActionParagraph(String paragraph) {
+  final normalized = paragraph.trim();
+  if (normalized.isEmpty || normalized.length > 140) {
+    return false;
+  }
+  if (!(normalized.contains('？') || normalized.contains('?'))) {
+    return false;
+  }
+  return normalized.startsWith('你') ||
+      normalized.startsWith('如果你') ||
+      normalized.startsWith('要不要') ||
+      normalized.startsWith('是否');
+}
+
 String _collapsePlainParagraph(List<String> lines) {
   if (lines.length <= 1) {
     return lines.first;
@@ -1914,40 +2373,6 @@ class _StreamingSegmentParser {
     }
     flushText();
     return segments;
-  }
-}
-
-class _ToolCallChip extends StatelessWidget {
-  final ToolCallView toolCall;
-  const _ToolCallChip({required this.toolCall});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceActive,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.build_rounded, size: 13, color: AppTheme.accent),
-          const SizedBox(width: 6),
-          Text(
-            toolCall.name,
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              color: AppTheme.accent,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 
