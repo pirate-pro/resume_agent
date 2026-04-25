@@ -347,7 +347,7 @@ class _CopyButton extends StatelessWidget {
       child: IconButton(
         padding: EdgeInsets.zero,
         iconSize: 14,
-        icon: const Icon(Icons.copy_rounded, color: AppTheme.textTertiary),
+        icon: Icon(Icons.copy_rounded, color: AppTheme.textTertiary),
         onPressed: () {
           Clipboard.setData(ClipboardData(text: text));
           ScaffoldMessenger.of(context).showSnackBar(
@@ -786,7 +786,7 @@ class _PlainCallToActionCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(top: 2),
             child: Icon(
               Icons.arrow_forward_rounded,
@@ -848,7 +848,7 @@ class _PlainBulletList extends StatelessWidget {
                 child: Container(
                   width: 6,
                   height: 6,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     color: AppTheme.accent,
                     shape: BoxShape.circle,
                   ),
@@ -1088,7 +1088,7 @@ class _LargeMessagePreview extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.text_snippet_outlined,
                 size: 16,
                 color: AppTheme.accent,
@@ -2645,7 +2645,7 @@ class _WorkspacePreviewSheet extends StatelessWidget {
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(color: AppTheme.border),
                       ),
-                      child: const Icon(
+                      child: Icon(
                         Icons.description_outlined,
                         size: 18,
                         color: AppTheme.accent,

@@ -633,7 +633,7 @@ class _ComposerActionButton extends StatelessWidget {
           onTap: enabled ? onPressed : null,
           child: Center(
             child: busy
-                ? const SizedBox(
+                ? SizedBox(
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
@@ -829,7 +829,7 @@ class _MenuTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              const Icon(
+              Icon(
                 Icons.chevron_right_rounded,
                 size: 16,
                 color: AppTheme.textTertiary,
@@ -992,7 +992,7 @@ class _RuntimeConfigTray extends StatelessWidget {
                         ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: AppTheme.border),
+                          borderSide: BorderSide(color: AppTheme.border),
                         ),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -1253,7 +1253,7 @@ class _ErrorHint extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(
+          Icon(
             Icons.error_outline_rounded,
             size: 16,
             color: AppTheme.danger,
@@ -1304,7 +1304,7 @@ class _RuntimeSummaryTray extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.tune_rounded,
                 size: 15,
                 color: AppTheme.accent,
@@ -1382,7 +1382,7 @@ class _ConfigChip extends StatelessWidget {
           InkWell(
             borderRadius: BorderRadius.circular(999),
             onTap: onRemove,
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.all(2),
               child: Icon(
                 Icons.close_rounded,
@@ -1421,7 +1421,7 @@ class _ActiveFilesTray extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.layers_outlined,
                 size: 15,
                 color: AppTheme.accent,
@@ -1516,7 +1516,7 @@ class _ActiveFileChip extends StatelessWidget {
           InkWell(
             borderRadius: BorderRadius.circular(999),
             onTap: onRemove,
-            child: const Padding(
+            child: Padding(
               padding: EdgeInsets.all(2),
               child: Icon(
                 Icons.close_rounded,

@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/models/api_models.dart';
 import '../../core/providers/chat_provider.dart';
+import '../../core/providers/theme_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/chat_bubble.dart';
 import '../../shared/widgets/input_bar.dart';
@@ -54,6 +55,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final provider = ref.watch(chatProvider);
+    final themeMode = ref.watch(themeModeProvider);
+    final isDarkMode = themeMode == ThemeMode.dark;
     final msgs = provider.messages;
     final hasMessages = msgs.isNotEmpty || provider.isStreaming;
 
@@ -113,6 +116,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               onTap: widget.onDebugToggle,
                             ),
                           ],
+                          const SizedBox(width: 10),
+                          _HeaderButton(
+                            icon: isDarkMode
+                                ? Icons.light_mode_rounded
+                                : Icons.dark_mode_rounded,
+                            tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
+                            onTap: () =>
+                                ref.read(themeModeProvider.notifier).toggle(),
+                          ),
                         ],
                       ),
                     ),
@@ -203,16 +215,18 @@ class _HeaderButton extends StatelessWidget {
   final IconData icon;
   final bool active;
   final VoidCallback? onTap;
+  final String? tooltip;
 
   const _HeaderButton({
     required this.icon,
     required this.onTap,
     this.active = false,
+    this.tooltip,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Material(
+    final button = Material(
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
@@ -239,6 +253,10 @@ class _HeaderButton extends StatelessWidget {
         ),
       ),
     );
+    if (tooltip == null || tooltip!.isEmpty) {
+      return button;
+    }
+    return Tooltip(message: tooltip!, child: button);
   }
 }
 
@@ -260,7 +278,7 @@ class _WelcomeScreen extends ConsumerWidget {
               width: 64,
               height: 64,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                   colors: [AppTheme.accent, Color(0xFF059669)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -510,8 +528,7 @@ class _ErrorBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.error_outline_rounded,
-              size: 16, color: AppTheme.danger),
+          Icon(Icons.error_outline_rounded, size: 16, color: AppTheme.danger),
           const SizedBox(width: 10),
           Expanded(
             child: Text(message,
@@ -523,7 +540,7 @@ class _ErrorBanner extends StatelessWidget {
             child: IconButton(
               padding: EdgeInsets.zero,
               iconSize: 14,
-              icon: const Icon(Icons.close_rounded, color: AppTheme.danger),
+              icon: Icon(Icons.close_rounded, color: AppTheme.danger),
               onPressed: onDismiss,
             ),
           ),

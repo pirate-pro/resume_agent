@@ -98,12 +98,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   final useCompactSidebar = width < 980;
                   final edgePadding = width < 900 ? 12.0 : 18.0;
                   final gap = width < 900 ? 12.0 : 18.0;
-                  final sidebarWidth = (width * 0.19)
-                      .clamp(272.0, 308.0)
-                      .toDouble();
-                  final debugWidth = (width * 0.22)
-                      .clamp(296.0, 336.0)
-                      .toDouble();
+                  final sidebarWidth =
+                      (width * 0.19).clamp(272.0, 308.0).toDouble();
+                  final debugWidth =
+                      (width * 0.22).clamp(296.0, 336.0).toDouble();
                   final showDesktopDebug = _debugPanelOpen && !isCompact;
 
                   return Padding(
@@ -141,10 +139,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             isDebugPanelOpen: showDesktopDebug,
                             onDebugToggle: isCompact
                                 ? () =>
-                                      _openCompactDebugPanel(context, provider)
+                                    _openCompactDebugPanel(context, provider)
                                 : () => setState(
-                                    () => _debugPanelOpen = !_debugPanelOpen,
-                                  ),
+                                      () => _debugPanelOpen = !_debugPanelOpen,
+                                    ),
                           ),
                         ),
                         if (showDesktopDebug) ...[
@@ -267,7 +265,7 @@ class _DebugPanel extends ConsumerWidget {
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: AppTheme.border),
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.developer_board_rounded,
                     size: 18,
                     color: AppTheme.accent,

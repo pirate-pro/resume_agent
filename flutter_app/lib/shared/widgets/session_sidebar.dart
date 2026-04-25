@@ -85,7 +85,7 @@ class _ExpandedSidebar extends StatelessWidget {
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
+                  gradient: LinearGradient(
                     colors: [AppTheme.accent, Color(0xFF059669)],
                   ),
                   borderRadius: BorderRadius.circular(16),
@@ -162,7 +162,7 @@ class _ExpandedSidebar extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.chat_bubble_outline_rounded,
                         size: 34,
                         color: AppTheme.textTertiary,
@@ -208,7 +208,7 @@ class _ExpandedSidebar extends StatelessWidget {
             ),
             child: Row(
               children: [
-                const Icon(Icons.circle, size: 8, color: AppTheme.accent),
+                Icon(Icons.circle, size: 8, color: AppTheme.accent),
                 const SizedBox(width: 8),
                 Text(
                   '${parent.sessions.length} 个会话',
@@ -277,9 +277,8 @@ class _CollapsedRail extends StatelessWidget {
                             ? Icons.push_pin_rounded
                             : Icons.chat_bubble_rounded,
                         size: 18,
-                        color: active
-                            ? AppTheme.accent
-                            : AppTheme.textSecondary,
+                        color:
+                            active ? AppTheme.accent : AppTheme.textSecondary,
                       ),
                     ),
                   ),
@@ -341,8 +340,8 @@ class _SessionTileState extends State<_SessionTile> {
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.12)
                 : _hovering
-                ? AppTheme.surfaceHover.withValues(alpha: 0.9)
-                : AppTheme.surface.withValues(alpha: 0.68),
+                    ? AppTheme.surfaceHover.withValues(alpha: 0.9)
+                    : AppTheme.surface.withValues(alpha: 0.68),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: active
@@ -376,7 +375,7 @@ class _SessionTileState extends State<_SessionTile> {
                     Row(
                       children: [
                         if (widget.session.isPinned) ...[
-                          const Icon(
+                          Icon(
                             Icons.push_pin_rounded,
                             size: 12,
                             color: AppTheme.accent,
@@ -390,9 +389,8 @@ class _SessionTileState extends State<_SessionTile> {
                             overflow: TextOverflow.ellipsis,
                             style: AppTheme.ts(
                               fontSize: 13,
-                              fontWeight: active
-                                  ? FontWeight.w600
-                                  : FontWeight.w500,
+                              fontWeight:
+                                  active ? FontWeight.w600 : FontWeight.w500,
                               color: AppTheme.textPrimary,
                             ),
                           ),
