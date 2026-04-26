@@ -278,31 +278,17 @@ class AgentRuntime:
         for round_index in range(run_input.max_tool_rounds + 1):
             _logger.debug("流式模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
             round_content_parts: list[str] = []
+            round_content_deltas: list[str] = []
             resolved_tool_calls: list[ToolCall] = []
-            saw_tool_call_delta = False
-            emitted_answer_delta = False
-            emitted_answer_meta: tuple[str, str, str, str, str] | None = None
 
             async for chunk in self._model_client.generate_stream(
                 system_prompt=context.system_prompt,
                 messages=messages,
                 tools=tools_payload,
             ):
-                if chunk.has_tool_call_delta:
-                    saw_tool_call_delta = True
-
                 if chunk.delta:
                     round_content_parts.append(chunk.delta)
-                    if not saw_tool_call_delta:
-                        # 流式阶段也尽量走协议驱动渲染；一旦推断结果变化，就增量下发最新元数据。
-                        emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
-                            channel=channel,
-                            content="".join(round_content_parts),
-                            tool_calls=used_tool_calls,
-                            previous_meta=emitted_answer_meta,
-                        )
-                        await channel.emit("answer_delta", {"delta": chunk.delta})
-                        emitted_answer_delta = True
+                    round_content_deltas.append(chunk.delta)
 
                 if chunk.finished:
                     resolved_tool_calls = self._ensure_tool_call_ids(chunk.tool_calls or [])
@@ -318,6 +304,18 @@ class AgentRuntime:
 
             if not resolved_tool_calls:
                 answer = round_content
+                if round_content_deltas:
+                    emitted_answer_meta: tuple[str, str, str, str, str] | None = None
+                    cumulative_parts: list[str] = []
+                    for delta in round_content_deltas:
+                        cumulative_parts.append(delta)
+                        emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
+                            channel=channel,
+                            content="".join(cumulative_parts),
+                            tool_calls=used_tool_calls,
+                            previous_meta=emitted_answer_meta,
+                        )
+                        await channel.emit("answer_delta", {"delta": delta})
                 if not answer:
                     answer = await self._recover_final_answer_stream(
                         system_prompt=context.system_prompt,
@@ -328,12 +326,6 @@ class AgentRuntime:
                     )
                 answer = answer or "(no answer)"
                 break
-
-            # 若本轮先流出了部分正文，后续又出现 tool_call，需要回滚临时正文。
-            if emitted_answer_delta:
-                # 前端需要同时清空正文与渲染元数据，否则会把上一轮的渲染模式误用于下一轮。
-                await channel.emit("answer_meta_reset", {})
-                await channel.emit("answer_reset", {})
 
             if round_index == run_input.max_tool_rounds:
                 _logger.warning("达到工具调用上限(流式): session_id=%s round=%s", session_id, round_index)

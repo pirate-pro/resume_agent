@@ -8,6 +8,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.core.errors import SessionNotFoundError, StorageError, ValidationError
 from app.domain.models import EventRecord, SessionFile, SessionMeta
@@ -55,7 +56,11 @@ class JsonlSessionRepository:
             session_dir.mkdir(parents=True, exist_ok=True)
             workspace_path.mkdir(parents=True, exist_ok=True)
             events_path.touch(exist_ok=True)
-            files_path.write_text(json.dumps({"files": [], "active_file_ids": []}, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._write_json_atomically(
+                files_path,
+                {"files": [], "active_file_ids": []},
+                error_prefix=f"Failed to initialize files manifest for '{session_id}'",
+            )
             metadata_payload = {
                 "session_id": meta.session_id,
                 "title": meta.title,
@@ -66,9 +71,10 @@ class JsonlSessionRepository:
                 "participants": meta.participants,
                 "entry_agent_id": meta.entry_agent_id,
             }
-            metadata_path.write_text(
-                json.dumps(metadata_payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            self._write_json_atomically(
+                metadata_path,
+                metadata_payload,
+                error_prefix=f"Failed to initialize metadata for '{session_id}'",
             )
         except OSError as exc:
             raise StorageError(f"Failed to create session '{session_id}': {exc}") from exc
@@ -429,10 +435,11 @@ class JsonlSessionRepository:
 
     def _write_files_state(self, session_id: str, payload: dict[str, Any]) -> None:
         path = self._files_manifest_path(session_id)
-        try:
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError as exc:
-            raise StorageError(f"Failed to write files manifest for '{session_id}': {exc}") from exc
+        self._write_json_atomically(
+            path,
+            payload,
+            error_prefix=f"Failed to write files manifest for '{session_id}'",
+        )
 
     def _touch_updated_at(
         self,
@@ -481,10 +488,24 @@ class JsonlSessionRepository:
             "participants": meta.participants,
             "entry_agent_id": meta.entry_agent_id,
         }
+        self._write_json_atomically(
+            metadata_path,
+            payload,
+            error_prefix=f"Failed to update metadata for '{session_id}'",
+        )
+
+    def _write_json_atomically(self, path: Path, payload: dict[str, Any], *, error_prefix: str) -> None:
+        temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
         try:
-            metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_path.replace(path)
         except OSError as exc:
-            raise StorageError(f"Failed to update metadata for '{session_id}': {exc}") from exc
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+            except OSError:
+                pass
+            raise StorageError(f"{error_prefix}: {exc}") from exc
 
 
 

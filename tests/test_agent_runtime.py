@@ -17,6 +17,7 @@ from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
@@ -284,3 +285,53 @@ def test_runtime_stream_recovers_when_final_round_returns_empty_answer(tmp_path:
     output = asyncio.run(_run())
 
     assert output.answer == "这是补出来的流式最终答复。"
+
+
+def test_runtime_stream_does_not_emit_and_reset_partial_answer_before_tool_call(tmp_path: Path) -> None:
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(
+                content="我先帮你看一下",
+                tool_calls=[
+                    ToolCall(
+                        name="memory_write",
+                        arguments={"content": "stream memory", "tags": ["preference"]},
+                    )
+                ],
+            ),
+            ModelResponse(content="已经处理完毕。", tool_calls=[]),
+        ]
+    )
+    runtime, _, _ = _build_runtime(tmp_path, model)
+
+    class RecordingEventChannel(EventChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event: str, data: dict[str, Any]) -> None:
+            self.events.append((event, data))
+
+    async def _run() -> tuple[AgentRunOutput, list[tuple[str, dict[str, Any]]]]:
+        channel = RecordingEventChannel()
+        output = await runtime.run_stream(
+            AgentRunInput(
+                session_id="sess_stream_tool_buffer",
+                user_message="stream tool buffer",
+                skill_names=["base", "memory"],
+                max_tool_rounds=3,
+                context=_context("sess_stream_tool_buffer"),
+            ),
+            channel,
+        )
+        return output, channel.events
+
+    output, events = asyncio.run(_run())
+
+    answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
+    event_names = [event for event, _ in events]
+
+    assert output.answer == "已经处理完毕。"
+    assert answer_deltas == ["已经处理完毕。"]
+    assert "answer_reset" not in event_names
+    assert "answer_meta_reset" not in event_names
