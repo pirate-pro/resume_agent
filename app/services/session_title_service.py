@@ -38,6 +38,9 @@ class SessionTitleService:
             return candidate
         return fallback
 
+    def fallback_title(self, *, user_message: str) -> str:
+        return _build_fallback_title(user_message)
+
 
 _TITLE_SYSTEM_PROMPT = """你是会话标题生成器。
 请根据用户首轮对话生成一个简短、自然、准确的中文会话标题。

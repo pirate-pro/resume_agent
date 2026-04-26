@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 from app.domain.models import AgentRunOutput
@@ -69,8 +70,8 @@ def test_chat_service_generates_session_title_after_first_turn(tmp_path: Path) -
         ),
     )
 
-    response = asyncio.run(
-        service.chat(
+    async def _exercise() -> object:
+        response = await service.chat(
             ChatRequest(
                 session_id="sess_title_sync",
                 message="请帮我润色一份年终总结",
@@ -78,9 +79,13 @@ def test_chat_service_generates_session_title_after_first_turn(tmp_path: Path) -
                 max_tool_rounds=1,
             )
         )
-    )
+        await service.wait_for_background_tasks()
+        return response
+
+    response = asyncio.run(_exercise())
 
     assert response.answer == "这是首轮回答"
+    assert response.title_pending is True
     meta = service._session_repository.get_session("sess_title_sync")  # noqa: SLF001
     assert meta is not None
     assert meta.title == "年度总结润色"
@@ -293,10 +298,74 @@ def test_chat_stream_generates_session_title_after_first_turn(tmp_path: Path) ->
         ):
             if item.get("event") == "done":
                 done_payload = item.get("data")  # type: ignore[assignment]
+        await service.wait_for_background_tasks()
         return done_payload
 
     done_payload = asyncio.run(_collect_done())
     assert done_payload is not None
+    assert done_payload["title_pending"] is True
     meta = service._session_repository.get_session("sess_title_stream")  # noqa: SLF001
     assert meta is not None
     assert meta.title == "文件总结整理"
+
+
+def test_chat_service_does_not_block_on_session_title_generation(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=StaticModelClient(content="即时回答"),
+    )
+
+    async def _slow_title_generation(*, session_id: str, user_message: str, assistant_answer: str) -> None:  # noqa: ARG001
+        await asyncio.sleep(0.08)
+
+    service._generate_and_persist_session_title_async = _slow_title_generation  # type: ignore[method-assign]  # noqa: SLF001
+
+    async def _exercise() -> tuple[str, float]:
+        started = time.perf_counter()
+        response = await service.chat(
+            ChatRequest(
+                session_id="sess_title_non_blocking",
+                message="介绍一下你的能力",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        )
+        elapsed = time.perf_counter() - started
+        return response.answer, elapsed
+
+    answer, elapsed = asyncio.run(_exercise())
+    assert answer == "即时回答"
+    assert elapsed < 0.08
+
+
+def test_chat_stream_done_does_not_wait_for_session_title_generation(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=StaticModelClient(content="流式即时回答"),
+    )
+
+    async def _slow_title_generation(*, session_id: str, user_message: str, assistant_answer: str) -> None:  # noqa: ARG001
+        await asyncio.sleep(0.08)
+
+    service._generate_and_persist_session_title_async = _slow_title_generation  # type: ignore[method-assign]  # noqa: SLF001
+
+    async def _exercise() -> tuple[dict[str, object] | None, float]:
+        started = time.perf_counter()
+        done_payload: dict[str, object] | None = None
+        async for item in service.chat_stream(
+            ChatRequest(
+                session_id="sess_title_stream_non_blocking",
+                message="介绍一下你的能力",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        ):
+            if item.get("event") == "done":
+                done_payload = item.get("data")  # type: ignore[assignment]
+        elapsed = time.perf_counter() - started
+        return done_payload, elapsed
+
+    done_payload, elapsed = asyncio.run(_exercise())
+    assert done_payload is not None
+    assert done_payload["title_pending"] is True
+    assert elapsed < 0.08

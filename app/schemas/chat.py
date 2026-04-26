@@ -116,6 +116,7 @@ class AnswerArtifactView(BaseModel):
 class ChatResponse(BaseModel):
     session_id: str
     answer: str
+    title_pending: bool = False
     answer_format: Literal["plain_text", "markdown", "code", "markdown_source"] = "plain_text"
     render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
     layout_hint: Literal["brief", "paragraph", "bullets", "steps"] = "paragraph"

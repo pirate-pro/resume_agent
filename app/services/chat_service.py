@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
+from collections.abc import Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,7 @@ class ChatService:
         answer_normalizer: AnswerNormalizer | None = None,
         stream_heartbeat_interval_seconds: float = 15.0,
         stream_run_timeout_seconds: float = 300.0,
+        session_title_timeout_seconds: float = 8.0,
     ) -> None:
         self._runtime = runtime
         self._session_manager = session_manager
@@ -68,8 +70,12 @@ class ChatService:
             raise ValidationError("stream_heartbeat_interval_seconds must be positive.")
         if stream_run_timeout_seconds <= 0:
             raise ValidationError("stream_run_timeout_seconds must be positive.")
+        if session_title_timeout_seconds <= 0:
+            raise ValidationError("session_title_timeout_seconds must be positive.")
         self._stream_heartbeat_interval_seconds = stream_heartbeat_interval_seconds
         self._stream_run_timeout_seconds = stream_run_timeout_seconds
+        self._session_title_timeout_seconds = session_title_timeout_seconds
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         if not isinstance(request, ChatRequest):
@@ -89,15 +95,16 @@ class ChatService:
                 session.session_id,
             )
             run_output = await asyncio.to_thread(self._runtime.run, run_input)
-            if should_generate_title:
-                await asyncio.to_thread(
-                    self._generate_and_persist_session_title,
-                    session.session_id,
-                    request.message,
-                    run_output.answer,
-                )
 
-        chat_response = self._to_chat_response(run_output)
+        title_pending = False
+        if should_generate_title:
+            title_pending = self._schedule_session_title_generation(
+                session.session_id,
+                request.message,
+                run_output.answer,
+            )
+
+        chat_response = self._to_chat_response(run_output, title_pending=title_pending)
         _logger.info(
             "chat 用例执行完成: session_id=%s answer_len=%s tool_calls=%s",
             chat_response.session_id,
@@ -123,7 +130,7 @@ class ChatService:
         lock = self._session_lock_manager.get_lock(session_id)
         channel = EventChannel(maxsize=512)
 
-        async def _run_with_lock() -> AgentRunOutput:
+        async def _run_with_lock() -> tuple[AgentRunOutput, bool]:
             try:
                 async with lock:
                     should_generate_title = await asyncio.to_thread(
@@ -134,14 +141,7 @@ class ChatService:
                         self._runtime.run_stream(run_input, channel),
                         timeout=self._stream_run_timeout_seconds,
                     )
-                    if should_generate_title:
-                        await asyncio.to_thread(
-                            self._generate_and_persist_session_title,
-                            session_id,
-                            request.message,
-                            run_output.answer,
-                        )
-                    return run_output
+                    return run_output, should_generate_title
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(
                     f"chat_stream run timed out after {self._stream_run_timeout_seconds:.1f}s"
@@ -178,8 +178,15 @@ class ChatService:
                     break
                 yield item
 
-            run_output = await run_task
-            chat_response = self._to_chat_response(run_output)
+            run_output, should_generate_title = await run_task
+            title_pending = False
+            if should_generate_title:
+                title_pending = self._schedule_session_title_generation(
+                    session_id,
+                    request.message,
+                    run_output.answer,
+                )
+            chat_response = self._to_chat_response(run_output, title_pending=title_pending)
             yield {"event": "done", "data": chat_response.model_dump(mode="json")}
             _logger.info(
                 "chat_stream 完成: session_id=%s answer_len=%s tool_calls=%s",
@@ -200,6 +207,11 @@ class ChatService:
 
     def list_sessions(self) -> list[SessionMeta]:
         return self._session_repository.list_sessions()
+
+    async def wait_for_background_tasks(self) -> None:
+        if not self._background_tasks:
+            return
+        await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
 
     async def update_session(self, session_id: str, request: SessionUpdateRequest) -> SessionMeta:
         if not isinstance(session_id, str) or not session_id.strip():
@@ -523,7 +535,7 @@ class ChatService:
         )
         return session, run_input
 
-    def _to_chat_response(self, run_output: AgentRunOutput) -> ChatResponse:
+    def _to_chat_response(self, run_output: AgentRunOutput, *, title_pending: bool = False) -> ChatResponse:
         normalized = self._answer_normalizer.normalize_assistant_message(
             run_output.answer,
             tool_calls=run_output.tool_calls,
@@ -531,6 +543,7 @@ class ChatService:
         return ChatResponse(
             session_id=run_output.session_id,
             answer=normalized.content,
+            title_pending=title_pending,
             answer_format=normalized.answer_format,
             render_hint=normalized.render_hint,
             layout_hint=normalized.layout_hint,
@@ -604,6 +617,91 @@ class ChatService:
         )
         self._session_repository.update_session_title(session_id, title)
         _logger.info("首轮对话标题生成完成: session_id=%s title=%s", session_id, title)
+
+    def _schedule_session_title_generation(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_answer: str,
+    ) -> bool:
+        if not str(assistant_answer).strip():
+            return False
+        self._spawn_background_task(
+            self._generate_and_persist_session_title_async(
+                session_id=session_id,
+                user_message=user_message,
+                assistant_answer=assistant_answer,
+            ),
+            name=f"session-title:{session_id}",
+        )
+        return True
+
+    def _spawn_background_task(
+        self,
+        coroutine: Coroutine[Any, Any, None],
+        *,
+        name: str,
+    ) -> None:
+        task = asyncio.create_task(coroutine, name=name)
+        self._background_tasks.add(task)
+
+        def _on_done(completed: asyncio.Task[None]) -> None:
+            self._background_tasks.discard(completed)
+            try:
+                exc = completed.exception()
+            except asyncio.CancelledError:
+                return
+            if exc is not None:
+                _logger.error("后台任务执行失败: task=%s error=%s", name, exc, exc_info=exc)
+
+        task.add_done_callback(_on_done)
+
+    async def _generate_and_persist_session_title_async(
+        self,
+        *,
+        session_id: str,
+        user_message: str,
+        assistant_answer: str,
+    ) -> None:
+        lock = self._session_lock_manager.get_lock(session_id)
+        async with lock:
+            latest = await asyncio.to_thread(self._session_repository.get_session, session_id)
+            if latest is None or latest.title not in DEFAULT_SESSION_TITLES:
+                return
+            title = await self._generate_session_title_with_timeout(
+                user_message=user_message,
+                assistant_answer=assistant_answer,
+            )
+            latest = await asyncio.to_thread(self._session_repository.get_session, session_id)
+            if latest is None or latest.title not in DEFAULT_SESSION_TITLES:
+                return
+            await asyncio.to_thread(self._session_repository.update_session_title, session_id, title)
+            _logger.info("首轮对话标题生成完成: session_id=%s title=%s", session_id, title)
+
+    async def _generate_session_title_with_timeout(
+        self,
+        *,
+        user_message: str,
+        assistant_answer: str,
+    ) -> str:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._session_title_service.generate_title,
+                    user_message=user_message,
+                    assistant_answer=assistant_answer,
+                ),
+                timeout=self._session_title_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            _logger.warning(
+                "会话标题生成超时，使用兜底标题: timeout_seconds=%s",
+                self._session_title_timeout_seconds,
+            )
+            return self._session_title_service.fallback_title(user_message=user_message)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("会话标题后台生成失败，使用兜底标题: error=%s", exc)
+            return self._session_title_service.fallback_title(user_message=user_message)
 
 
 def _sanitize_filename(raw: str) -> str:

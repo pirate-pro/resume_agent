@@ -35,6 +35,7 @@ class ChatProvider extends ChangeNotifier {
   String _pendingStreamDelta = "";
   Timer? _streamFlushTimer;
   Timer? _recentActivatedFileTimer;
+  final Map<String, Future<void>> _pendingTitleRefreshes = {};
   String? _error;
   String? _skillsError;
   String? _recentActivatedFileId;
@@ -431,6 +432,53 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _refreshSessionTitleUntilSettled(
+    String sessionId, {
+    required String provisionalTitle,
+  }) async {
+    final current = _pendingTitleRefreshes[sessionId];
+    if (current != null) {
+      await current;
+      return;
+    }
+
+    final task = _doRefreshSessionTitleUntilSettled(
+      sessionId,
+      provisionalTitle: provisionalTitle,
+    );
+    _pendingTitleRefreshes[sessionId] = task;
+    try {
+      await task;
+    } finally {
+      _pendingTitleRefreshes.remove(sessionId);
+    }
+  }
+
+  Future<void> _doRefreshSessionTitleUntilSettled(
+    String sessionId, {
+    required String provisionalTitle,
+  }) async {
+    const delays = <Duration>[
+      Duration(milliseconds: 350),
+      Duration(milliseconds: 900),
+      Duration(milliseconds: 1800),
+    ];
+
+    for (final delay in delays) {
+      await Future<void>.delayed(delay);
+      await refreshSessions();
+      final session = _sessions.where((item) => item.id == sessionId).firstOrNull;
+      if (session == null) {
+        return;
+      }
+      if (session.title != provisionalTitle &&
+          session.title != "新会话" &&
+          session.title != "New Session") {
+        return;
+      }
+    }
+  }
+
   // ── Chat (streaming) ────────────────────────────────────────────────
 
   Future<void> sendMessage(String content) async {
@@ -515,6 +563,14 @@ class ChatProvider extends ChangeNotifier {
           orElse: () => ChatMessage(role: "user", content: ""),
         );
         _registerSession(_sessionId!, lastUserMsg.content);
+        if (doneResponse?.titlePending == true) {
+          unawaited(
+            _refreshSessionTitleUntilSettled(
+              _sessionId!,
+              provisionalTitle: _buildSessionTitle(lastUserMsg.content),
+            ),
+          );
+        }
       }
 
       // Refresh files after completion

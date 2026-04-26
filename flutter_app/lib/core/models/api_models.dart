@@ -95,6 +95,7 @@ class SkillOption {
 class ChatResponse {
   final String sessionId;
   final String answer;
+  final bool titlePending;
   final String answerFormat;
   final String renderHint;
   final String layoutHint;
@@ -106,6 +107,7 @@ class ChatResponse {
   ChatResponse({
     required this.sessionId,
     required this.answer,
+    this.titlePending = false,
     this.answerFormat = "plain_text",
     this.renderHint = "plain",
     this.layoutHint = "paragraph",
@@ -119,6 +121,7 @@ class ChatResponse {
     return ChatResponse(
       sessionId: json["session_id"] ?? "",
       answer: json["answer"] ?? "",
+      titlePending: json["title_pending"] == true,
       answerFormat: json["answer_format"] ?? "plain_text",
       renderHint: json["render_hint"] ?? "plain",
       layoutHint: json["layout_hint"] ?? "paragraph",
