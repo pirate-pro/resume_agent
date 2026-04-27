@@ -325,3 +325,359 @@
 - 验证结果：
   - `uv run mypy app tests`：通过（`Success: no issues found in 61 source files`）
   - `uv run pytest -q`：通过（`54 passed`）
+
+### 2026-04-27
+
+24. [完成] 固化 memory 重构设计文档，并按多 Agent 方向收紧边界定义。
+- 说明：
+  - 新增根目录文档 `MEMORY_REARCHITECTURE_DESIGN_2026-04-27.md`。
+  - 明确四层边界：
+    - `AGENT.md`：静态行为宪法层。
+    - `SOUL.md`：静态或缓变的人格身份层。
+    - `state`：运行态工作区，默认按 agent 隔离。
+    - `memory`：长期互动经验层，要求可强化、可衰减、可被覆盖。
+  - 根据多 agent 协作预期修正文档口径：
+    - `state` 默认拆为 `state_agent_session` 与 `state_shared_session`。
+    - 长期记忆命名改为 `memory_agent_long` / `memory_shared_long`，避免误导为“天然按 user 全局共享”。
+    - 在 memory schema 中引入 `owner_agent_id` 与 `visibility`，把归属与共享性显式建模。
+- 影响范围：
+  - 当前仅变更设计文档，不改变运行时代码行为。
+  - 为后续 `state` 拆分、memory 收窄和多 agent 协作提供统一术语与边界。
+- 验证结果：
+  - 文档已落盘并完成本轮评审修订。
+
+25. [完成] 落地 Phase 1：独立 `state` 子系统基础骨架。
+- 说明：
+  - 新增 `app/state/` 子系统：
+    - `models.py`：定义 `StateScope`、`StateStatus`、`StateRecord`。
+    - `contracts.py`：定义 `StateStore` 契约。
+    - `stores/jsonl_file_store.py`：实现文件化 JSONL state 存储。
+    - `manager.py`：实现 `StateManager`，提供 `set/list/clear/publish/revoke` 能力。
+  - `state` scope 设计落地为：
+    - `agent_session`：当前 agent 在当前 session 下的私有工作状态。
+    - `shared_session`：当前 session 内显式发布的共享协作状态。
+  - 存储布局按多 agent 方向预留：
+    - `state/agents/<agent_id>/sessions/<session_id>.jsonl`
+    - `state/shared/sessions/<session_id>.jsonl`
+  - `publish_agent_state(...)` 采用“从私有态显式发布到共享态”的模式，不默认跨 agent 泄漏私有 state。
+  - 新增测试 `tests/test_state_manager.py`，覆盖：
+    - 同 key upsert。
+    - agent 私有 state 隔离。
+    - 共享 state 发布。
+    - 清理私有 state 不影响共享副本。
+    - 共享 state 撤销。
+    - 发布不存在 key 时抛错。
+- 影响范围：
+  - 当前为新增基础设施，尚未接入 `ChatService` / `AgentRuntime` / `ContextAssembler` 主链路。
+  - 为后续从 `agent_short` 中拆出 `state_agent_session` / `state_shared_session` 提供直接落点。
+- 验证结果：
+  - `uv run pytest -q tests/test_state_manager.py`：通过（`6 passed`）
+  - `uv run mypy app/state tests/test_state_manager.py`：通过（`Success: no issues found in 7 source files`）
+  - `uv run pytest -q`：通过（`89 passed in 0.61s`）
+  - 备注：`uv run mypy app tests` 当前基线存在 25 个历史遗留错误，主要位于 `app/api/chat.py`、`app/services/chat_service.py` 及既有测试文件；本次未新增或放大这些问题，因此未在本阶段顺手改动。
+
+26. [完成] 将 `state` 正式接入工具层与上下文组装链路。
+- 说明：
+  - 新增内建工具：
+    - `state_set(key, value)`：写入/更新当前 agent 的私有 session state。
+    - `state_publish(keys)`：把选定私有 state 发布到 session shared state。
+    - `state_list(scope)`：查看当前 session 的私有/共享 state。
+  - 依赖装配接入：
+    - `app/api/deps.py` 新增 `get_state_store()`、`get_state_manager()`。
+    - `ToolRegistry` 默认注册 `state_*` 工具。
+    - `tests/helpers.py` 与 `tests/test_agent_runtime.py` 等测试装配同步接入 `StateManager`。
+  - `ContextAssembler` 接入 state 注入：
+    - system prompt 中新增 `Current agent state` 段落。
+    - system prompt 中新增 `Shared session state` 段落。
+    - 与 `Relevant memories` 分离，避免把运行态 working state 混进长期 memory 表达。
+  - 同步更新 skill 文案：
+    - `app/skills/tools/SKILL.md` 增加 `state_*` 用法。
+    - `app/skills/memory/SKILL.md` 明确“当前任务目标/下一步/working notes 优先写 state，不写 memory”。
+- 影响范围：
+  - runtime 已经具备独立的 state 读写与 prompt 注入路径，agent 可以开始把会话内 working state 与长期 memory 分开处理。
+  - 当前尚未把旧的 `agent_short` 自动迁移到 `state_agent_session`；这部分仍属于后续 Phase 1/2 的继续拆分项。
+- 验证结果：
+  - `uv run pytest tests/test_state_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py`：通过（`37 passed in 0.18s`）
+  - `uv run mypy app/state app/runtime/context_assembler.py app/tools/builtins.py app/api/deps.py tests/test_state_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 14 source files`）
+  - `uv run pytest -q`：通过（`92 passed in 0.57s`）
+
+27. [完成] 收紧自动 memory 召回边界：`ContextAssembler` 不再把 `agent_short` 注入为 `Relevant memories`。
+- 说明：
+  - `MemoryManager` 新增面向运行时上下文的长期检索入口 `search_context_memories(...)`。
+  - `ContextAssembler` 改为调用长期检索入口，而不是通用 `search_with_summary(...)`。
+  - 当前策略调整为：
+    - 自动 prompt 注入的 `Relevant memories` 仅来自 `agent_long` / `shared_long`。
+    - `agent_short` 继续保留给 consolidation、显式 `memory_search`、以及过渡期兼容使用。
+    - 会话内 working state 优先通过 `Current agent state` / `Shared session state` 两个新段落承接。
+  - 同步更新 `memory-editor` skill，明确“当前任务目标/下一步/working notes 用 `state_set`，不是 `memory_write`”。
+  - 补充测试覆盖：
+    - `search_context_memories(...)` 不扫描 `agent_short`。
+    - `ContextAssembler` 不再把 `agent_short` 组装进 `Relevant memories`。
+- 影响范围：
+  - runtime 自动上下文的 memory 语义进一步收窄，更接近“长期互动经验”。
+  - `memory_search` 工具仍可显式查到 `agent_short`，因此当前不会破坏调试和遗忘/更新工作流。
+  - `agent_short` 尚未迁移出 memory 存储层；这一步只是先从“自动召回语义”上剥离。
+- 验证结果：
+  - `uv run pytest tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py`：通过（`39 passed in 0.18s`）
+  - `uv run mypy app/runtime/memory_manager.py app/runtime/context_assembler.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 7 source files`）
+  - `uv run pytest -q`：通过（`94 passed in 0.60s`）
+
+28. [完成] 落地 Memory Admission V1：对 `memory_write` 增加运行时准入拦截。
+- 说明：
+  - 新增 `app/memory/admission.py`，引入显式 `MemoryAdmissionDecision / MemoryAdmissionResult / evaluate_memory_admission(...)`。
+  - `MemoryManager.write_memory(...)` 现在在写 candidate 前先跑 admission。
+  - 第一版准入策略采用“保守硬拦截”：
+    - 明显属于 session working state 的内容：拒绝写 memory，并提示改用 `state_set`
+    - 明显属于原始文件/工具输出的内容：拒绝写 memory，并提示先提炼稳定经验
+  - `MemoryWriteTool` 增加用户可读的错误透传，避免 admission 被包装成模糊异常。
+  - 同步更新：
+    - `app/tools/builtins.py` 中 `memory_write` 工具描述
+    - `app/skills/tools/SKILL.md`
+    - `app/skills/memory/SKILL.md`
+    - `app/skills/memory-editor/SKILL.md`
+  - 新增测试：
+    - `tests/test_memory_admission.py`
+    - `tests/test_memory_manager.py` 中 admission 拒绝 working state / raw JSON blob
+    - `tests/test_tool_registry.py` 中 `memory_write` 拒绝 working state 并指向 `state_set`
+- 影响范围：
+  - `memory` 与 `state` 的边界首次在运行时被硬编码，不再只靠 skill 提示约束。
+  - `memory_search`、`memory_forget`、`memory_update` 仍沿用现有显式检索链路；本阶段未改它们的读取模型。
+  - admission 当前仍是规则式 V1，尚未引入更细的 canonicalization 或 confirmation 流程。
+- 验证结果：
+  - `uv run pytest tests/test_memory_admission.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py tests/test_agent_runtime.py`：通过（`45 passed`）
+  - `uv run mypy app/memory/admission.py app/runtime/memory_manager.py app/tools/builtins.py app/memory/__init__.py tests/test_memory_admission.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 10 source files`）
+  - `uv run pytest -q`：通过（`100 passed in 0.64s`）
+
+29. [完成] 落地 Classification / Canonicalization Metadata V1：为可接受 memory 增加结构化归类元信息。
+- 说明：
+  - 新增 `app/memory/classification.py`，提供 `MemoryClassification` 与 `classify_memory(...)`。
+  - `app/memory/intake.py` 在 `build_candidate_request(...)` 阶段加入结构化归类，并把结果写入 metadata：
+    - `kind`
+    - `source_kind`
+    - `canonical_key`
+    - `normalized_value`
+    - `subject_kind`
+    - `classification_version`
+  - 当前第一版先覆盖几类高价值 key：
+    - `preferred_name`
+    - `preferred_language`
+    - `response_style`
+    - `preferred_format`
+    - `disliked_format`
+    - `long_term_goal`
+    - `primary_stack`
+    - `interaction_style`
+  - 设计上采取“metadata 先行”：
+    - 暂不修改 `MemoryRecord` 顶层 schema
+    - 先让 consolidation / 检索 / 迁移链路可以消费结构化 metadata
+    - 后续再决定何时把这些字段提升为正式 schema 字段
+  - 新增测试：
+    - `tests/test_memory_classification.py`
+    - `tests/test_memory_manager.py` 校验结构化 metadata 已写入 record
+- 影响范围：
+  - 可接受的 memory 写入后，不再只是“content + tags”，而是开始具备结构化归类信号。
+  - 这为后续基于 `canonical_key` 的 upsert / conflict / reinforce 打下基础。
+  - 当前读取接口仍主要返回原始 memory 内容；结构化 metadata 先用于内部治理与后续演进。
+- 验证结果：
+  - `uv run pytest tests/test_memory_classification.py tests/test_memory_admission.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py`：通过（`49 passed`）
+  - `uv run mypy app/memory/classification.py app/memory/intake.py app/memory/__init__.py app/runtime/memory_manager.py tests/test_memory_classification.py tests/test_memory_admission.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 11 source files`）
+  - `uv run pytest -q`：通过（`104 passed in 0.62s`）
+
+30. [完成] 落地 Canonical Dedup V1：使用 `canonical_key + normalized_value` 做长期记忆同语义去重。
+- 说明：
+  - `app/memory/consolidation.py` 新增 canonical identity 去重逻辑：
+    - 批内若 `canonical_key + normalized_value` 相同，则按同一语义候选合并。
+    - 跨轮若目标作用域已存在相同 `canonical_key + normalized_value` 的 active record，则跳过重复写入。
+  - `app/memory/contracts.py` / `app/memory/stores/jsonl_file_store.py` 新增 `count_active_records_by_canonical_value(...)`，用于查询既有 active record 中的 canonical identity。
+  - 当前第一版只做“同语义去重”：
+    - 不再仅依赖 `content_hash`
+    - 但还不处理“同 `canonical_key` 不同 `normalized_value`”的冲突覆盖
+  - 新增测试 `tests/test_memory_consolidation.py::test_consolidation_dedupes_semantic_duplicates_by_canonical_key`，验证不同措辞但同一称呼偏好的重复写入会被合并。
+- 影响范围：
+  - 长期 memory 现在开始具备语义级别的去重能力，能减少“同一偏好/称呼只是换了句式就写出多条 record”的噪音。
+  - 这为后续做 `canonical_key` 级 upsert / conflict resolution 提供了更稳的基础。
+  - 当前未引入旧 record 的自动 supersede；冲突覆盖仍是后续阶段。
+- 验证结果：
+  - `uv run pytest tests/test_memory_consolidation.py tests/test_memory_classification.py tests/test_memory_manager.py`：通过（`18 passed`）
+  - `uv run mypy app/memory/contracts.py app/memory/stores/jsonl_file_store.py app/memory/consolidation.py tests/test_memory_consolidation.py tests/test_memory_classification.py tests/test_memory_manager.py`：通过（`Success: no issues found in 6 source files`）
+  - `uv run pytest -q`：通过（`105 passed in 0.63s`）
+
+31. [完成] 落地 Canonical Supersede V1：同 `canonical_key` 的新值可接管旧值，并引入来源优先级。
+- 说明：
+  - `app/memory/contracts.py` / `app/memory/stores/jsonl_file_store.py` 新增两类能力：
+    - `list_active_records_by_canonical_key(...)`
+    - `archive_records_by_memory_ids(...)`
+  - `app/memory/consolidation.py` 新增 canonical conflict 处理：
+    - 若新候选与既有 active record 具有相同 `canonical_key`、不同 `normalized_value`，则进入 supersede 判定。
+    - 新候选来源权重不低于旧记录时，归档旧记录并写入新记录。
+    - 新候选来源权重更低时，拒绝覆盖，并将本轮记为 `conflicts`。
+  - 当前已落地来源优先级顺序：
+    - `system_policy`
+    - `explicit_user_rule`
+    - `explicit_user`
+    - `user_feedback`
+    - `tool_verified`
+    - `repeated_behavior`
+    - `assistant_inferred`
+  - supersede 的审计链路：
+    - 旧记录 metadata 写入 `superseded_by_memory_id` / `superseded_by_normalized_value`
+    - 新记录 `parent_memory_id` 指向上一条被替代记录
+  - 新增测试：
+    - `test_consolidation_supersedes_old_canonical_value_with_new_value`
+    - `test_consolidation_does_not_let_low_priority_source_override_explicit_user`
+- 影响范围：
+  - memory 已经从“只会去重”提升到“可以按 canonical key 做受控更新”。
+  - 用户明确更新称呼/偏好这类场景，现已能形成更干净的单条 active 语义，而不是把旧值和新值都保留为 active。
+  - 当前仍未实现更细粒度的 `contradicted/suppressed` 正式状态；本阶段先使用 `archived` 作为被替代旧值的隐藏状态。
+- 验证结果：
+  - `uv run pytest tests/test_memory_consolidation.py tests/test_memory_classification.py tests/test_memory_manager.py`：通过（`20 passed`）
+  - `uv run mypy app/memory/contracts.py app/memory/stores/jsonl_file_store.py app/memory/consolidation.py tests/test_memory_consolidation.py tests/test_memory_classification.py tests/test_memory_manager.py`：通过（`Success: no issues found in 6 source files`）
+  - `uv run pytest -q`：通过（`107 passed in 0.62s`）
+
+32. [完成] 落地 `memory_update` Canonical Match V1：更新链路优先按 `canonical_key + normalized_value` 精准定位。
+- 说明：
+  - `app/memory/classification.py` 扩展了 preferred name 识别：
+    - 除了 `以后叫我李华` / `请叫我李华`
+    - 现在也能识别 `用户称呼是李华` / `用户称呼改为小李` / `用户名字叫李华`
+  - `app/memory/contracts.py` / `app/memory/facade.py` 新增 facade 级 canonical 查询能力：
+    - `list_active_records_by_canonical_key(...)`
+    - manager 可以在不依赖 store 细节的前提下做结构化精确匹配
+  - `app/runtime/memory_manager.py` 新增 `resolve_update_targets(...)`：
+    - 先尝试 `canonical_exact`
+    - 如果 query 无法结构化，或当前没有 active exact match，再回退到原有 `text_search`
+  - `app/tools/builtins.py` 中的 `memory_update` 已切到新链路，并在结果里返回 `match_strategy`
+  - 新增测试：
+    - `tests/test_memory_classification.py`：陈述式 preferred name 识别
+    - `tests/test_memory_manager.py`：`resolve_update_targets` 优先命中 canonical exact
+    - `tests/test_tool_registry.py`：即使全文搜索会歧义，`memory_update` 仍优先锁定 canonical exact 目标
+- 影响范围：
+  - `memory_update` 不再完全依赖全文搜索，更新“称呼/偏好/长期事实”这类结构化记忆时更稳。
+  - 当 query 同时命中多条文本相似 record 时，structured memory 现在会优先走精确定位，减少误改 active memory 的风险。
+  - 文本搜索仍保留为兜底路径，兼容尚未 canonicalized 的旧记录和自由文本记忆。
+- 验证结果：
+  - `uv run pytest tests/test_memory_classification.py tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`37 passed`）
+  - `uv run mypy app/memory/classification.py app/memory/contracts.py app/memory/facade.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_classification.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 8 source files`）
+  - `uv run pytest -q`：通过（`110 passed`）
+
+33. [完成] 落地 `memory_update` Canonical Direct V2：canonical memory 更新不再先删旧值，而是直接走 supersede / dedupe / conflict。
+- 说明：
+  - `app/runtime/memory_manager.py` 新增 `MemoryWriteResult` 和 `write_memory_with_result(...)`：
+    - 写入链路现在可以向上层返回 `ConsolidateResult`
+    - 工具层可以根据 `written_records / merged_records / conflicts` 判断本次更新到底是 supersede、no-op 还是被阻止
+  - `app/tools/builtins.py` 中的 `memory_update` 已拆成两条路径：
+    - target 带 `canonical_key` 时：
+      - 不再执行 `forget -> write`
+      - 直接提交新 candidate，让 consolidation 决定 `supersede / semantic_noop / source_priority_conflict`
+    - target 不带 `canonical_key` 时：
+      - 仍保留旧的 replace fallback（`forget -> write`）
+  - 这一步还新增了 `update_mode` 返回值：
+    - `canonical_supersede`
+    - `canonical_direct`
+    - `replace_rewrite`
+  - 同步修正了 `app/memory/classification.py` 的 `source_kind` 推断：
+    - 之前带 `system_policy` / `explicit_user_rule` tag 的记录，会错误保留为工具 source 名
+    - 现在会被正确归类为 `system_policy` / `explicit_user_rule`
+    - 这样 consolidation 的来源优先级才真正可靠
+  - 新增测试：
+    - `tests/test_tool_registry.py`：canonical update 会保留 supersede 审计链，而不是先删旧值
+    - `tests/test_tool_registry.py`：`system_policy` 级 canonical memory 不能被 `memory_update` 低优先级覆盖
+    - `tests/test_memory_classification.py`：`system_policy` tag 能正确写成 `source_kind=system_policy`
+- 影响范围：
+  - canonical memory 的更新现在真正走“受控更新”链路，而不是假装更新、实际重写。
+  - `memory_update` 不会再因为先归档旧值而绕过来源优先级校验。
+  - supersede 审计链 (`parent_memory_id` / `superseded_by_*`) 在工具更新场景下也能保持完整。
+  - 非结构化旧 memory 暂时仍保留 replace fallback，兼容历史数据。
+- 验证结果：
+  - `uv run pytest tests/test_tool_registry.py tests/test_memory_manager.py tests/test_memory_classification.py -q`：通过（`39 passed`）
+  - `uv run mypy app/memory/classification.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_tool_registry.py tests/test_memory_manager.py tests/test_memory_classification.py`：通过（`Success: no issues found in 6 source files`）
+  - `uv run pytest -q`：通过（`112 passed`）
+
+34. [完成] 落地 Legacy Structured Backfill V1：旧 memory 在首次 update 时自动补齐结构化 metadata。
+- 说明：
+  - `app/memory/contracts.py` / `app/memory/facade.py` / `app/memory/stores/jsonl_file_store.py` 新增 `refresh_record_metadata(...)`：
+    - 用于对既有 record 做窄范围 metadata patch
+    - 当前只服务于 memory 子系统内部，不暴露给通用工具层
+  - `app/runtime/memory_manager.py` 新增 `ensure_structured_metadata(...)`：
+    - 对选中的 target record 重新跑 classification
+    - 仅在缺失结构化字段时回填：
+      - `kind`
+      - `source_kind`
+      - `canonical_key`
+      - `normalized_value`
+      - `subject_kind`
+      - `classification_version`
+  - `app/tools/builtins.py` 中的 `memory_update` 现在会在定位到 target 后，先尝试对 legacy record 做 metadata backfill，再判断是否能走 canonical direct path。
+  - 这样旧数据也能逐步迁入新语义，不必等离线全量迁移后才享受 canonical supersede / source priority。
+  - 新增测试：
+    - `tests/test_memory_manager.py`：legacy record metadata backfill
+    - `tests/test_tool_registry.py`：legacy name memory 首次 update 即转入 canonical supersede
+- 影响范围：
+  - `replace_rewrite` fallback 再次收窄：一部分“旧但可识别”的 memory，不再走旧重写路径。
+  - 老 record 的结构化语义会在首次被编辑时就地补齐，减少历史数据长期卡在旧模型里的问题。
+  - 当前 backfill 仍是按需、单条触发；还没有做离线批量迁移。
+- 验证结果：
+  - `uv run pytest tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`36 passed`）
+  - `uv run mypy app/memory/contracts.py app/memory/facade.py app/memory/stores/jsonl_file_store.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 7 source files`）
+  - `uv run pytest -q`：通过（`114 passed`）
+
+35. [完成] 落地 Offline Structured Backfill V1：提供批量 canonicalize 现存 memory 的离线迁移能力。
+- 说明：
+  - 新增批量 backfill 模型：
+    - `MemoryStructuredBackfillRequest`
+    - `MemoryStructuredBackfillResult`
+  - `app/memory/metadata_refresh.py` 新增 `build_metadata_refresh_patch(...)`：
+    - 用于统一“缺失字段补齐 + 少量已知脏值修正”的策略
+    - 当前已覆盖：
+      - 缺失的 `kind / source_kind / canonical_key / normalized_value / subject_kind / classification_version`
+      - 旧实现遗留的 `source_kind=memory_write_tool/memory_update_tool/...` 修正
+  - `app/memory/stores/jsonl_file_store.py` 新增 `backfill_structured_metadata(...)`：
+    - 按 scope / agent / session 过滤扫描现存 records
+    - 对可识别但缺失结构化 metadata 的 legacy records 做就地 patch
+    - 支持对 archived records 一并回填
+    - 默认跳过 deleted records
+    - 写入 `ops/structured_backfill.log.jsonl`
+  - `app/memory/lifecycle.py` / `app/memory/facade.py` 已接出统一生命周期入口。
+  - 新增 CLI：
+    - `python -m app.memory.backfill_cli --root-dir data/memory_v2`
+    - 支持 `--scope`、`--agent-id`、`--session-id`、`--include-deleted`
+  - 新增测试：
+    - `tests/test_memory_structured_backfill.py`
+    - 覆盖 agent_long 批量 patch、archived record patch、deleted skip、stale source_kind 修复、short session 定向 backfill
+- 影响范围：
+  - memory 迁移不再只依赖运行时“首次编辑时在线回填”，现在可以对现存数据做批量治理。
+  - 这一步会显著减少 legacy records 命中 `replace_rewrite` fallback 的概率。
+  - 当前迁移仍是保守模式：
+    - 只修补缺失结构化字段
+    - 只修正少数已知 stale metadata
+    - 不主动重写已有 canonical value
+- 验证结果：
+  - `uv run pytest tests/test_memory_structured_backfill.py tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`38 passed`）
+  - `uv run mypy app/memory/models.py app/memory/metadata_refresh.py app/memory/contracts.py app/memory/lifecycle.py app/memory/facade.py app/memory/stores/jsonl_file_store.py app/memory/backfill_cli.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_structured_backfill.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 12 source files`）
+  - `uv run python -m app.memory.backfill_cli --root-dir /tmp/memory_backfill_cli_smoke --scope agent_long`：可执行，输出 JSON summary
+  - `uv run pytest -q`：通过（`116 passed`）
+
+36. [完成] 落地 Canonical-Aware Retrieval V1：读取链路开始优先利用结构化 metadata 排序。
+- 说明：
+  - `app/memory/retrieval.py` 现在不再只按 `confidence / importance / updated_at` 排序。
+  - 新增 query-aware rerank：
+    - 先对 query 做轻量 canonical intent 识别
+    - 如果 query 能映射到 `canonical_key + normalized_value`，则精确匹配该 canonical identity 的 record 会获得最高优先级
+    - 如果 query 呈现明确 name intent（例如 `你叫什么名字`），则 `preferred_name` 类型 record 会优先于普通文本命中
+  - 当前第一版先覆盖：
+    - `canonical exact` 查询优先
+    - `preferred_name` name-intent 查询优先
+  - 在实现这一步时顺手修复了一个分类 bug：
+    - 之前 `这个项目名字叫珍格格` 这类文本会被误判为 `preferred_name`
+    - 现在 statement-form 的名字规则已收窄到句首/用户语境，避免把项目名、文件名等误当成用户称呼
+  - 新增测试：
+    - `tests/test_memory_manager.py`：`memory_search` 对 name-intent 与 canonical exact query 的排序
+    - `tests/test_context_assembler.py`：`Relevant memories` 中优先注入 `preferred_name`
+    - `tests/test_memory_classification.py`：项目名不再误分类为 `preferred_name`
+- 影响范围：
+  - `memory_search` 和 runtime prompt 注入现在开始消费结构化 metadata，不再完全依赖纯文本命中顺序。
+  - 这会降低“query 命中多个文本相似 memory 时，长期偏好反而被普通事实压后”的情况。
+  - 当前仍是 rerank V1，不是 lane-based retrieval；文本 fallback 仍然保留。
+- 验证结果：
+  - `uv run pytest tests/test_memory_classification.py tests/test_memory_manager.py tests/test_context_assembler.py -q`：通过（`26 passed`）
+  - `uv run mypy app/memory/classification.py app/memory/retrieval.py tests/test_memory_classification.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py`：通过（`Success: no issues found in 6 source files`）
+  - `uv run pytest -q`：通过（`120 passed`）
