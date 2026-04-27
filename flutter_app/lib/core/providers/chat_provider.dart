@@ -27,12 +27,14 @@ class ChatProvider extends ChangeNotifier {
   bool _isUploadingFile = false;
   bool _isLoadingSkills = false;
   String _streamBuffer = "";
+  String _streamThinkingBuffer = "";
   String _streamAnswerFormat = "plain_text";
   String _streamRenderHint = "plain";
   String _streamLayoutHint = "paragraph";
   String _streamSourceKind = "direct_answer";
   List<AnswerArtifactView> _streamArtifacts = [];
   String _pendingStreamDelta = "";
+  String _pendingThinkingDelta = "";
   Timer? _streamFlushTimer;
   Timer? _recentActivatedFileTimer;
   final Map<String, Future<void>> _pendingTitleRefreshes = {};
@@ -51,6 +53,8 @@ class ChatProvider extends ChangeNotifier {
   List<MemoryView> _lastMemoryHits = [];
   List<EventView> _streamEvents = [];
   List<SessionFileView> _sessionFiles = [];
+  bool _streamThinkingCollapsed = false;
+  int _streamThinkingCollapseVersion = 0;
 
   // ── Getters ─────────────────────────────────────────────────────────
   String? get sessionId => _sessionId;
@@ -59,12 +63,15 @@ class ChatProvider extends ChangeNotifier {
   bool get isUploadingFile => _isUploadingFile;
   bool get isLoadingSkills => _isLoadingSkills;
   String get streamBuffer => _streamBuffer;
+  String get streamThinkingBuffer => _streamThinkingBuffer;
   String get streamAnswerFormat => _streamAnswerFormat;
   String get streamRenderHint => _streamRenderHint;
   String get streamLayoutHint => _streamLayoutHint;
   String get streamSourceKind => _streamSourceKind;
   List<AnswerArtifactView> get streamArtifacts =>
       List.unmodifiable(_streamArtifacts);
+  bool get streamThinkingCollapsed => _streamThinkingCollapsed;
+  int get streamThinkingCollapseVersion => _streamThinkingCollapseVersion;
   String? get error => _error;
   String? get skillsError => _skillsError;
   List<SessionMeta> get sessions => List.unmodifiable(_sessions);
@@ -278,6 +285,7 @@ class ChatProvider extends ChangeNotifier {
     _sessionId = null;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
+    _resetThinkingBuffer(notify: false);
     _clearRecentActivatedFile(notify: false);
     _error = null;
     _activeFileIds = [];
@@ -346,6 +354,7 @@ class ChatProvider extends ChangeNotifier {
     _sessionId = sessionId;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
+    _resetThinkingBuffer(notify: false);
     _clearRecentActivatedFile(notify: false);
     _error = null;
     _streamEvents = [];
@@ -491,6 +500,7 @@ class ChatProvider extends ChangeNotifier {
     _messages.add(ChatMessage(role: "user", content: content.trim()));
     _isStreaming = true;
     _resetStreamingBuffer(notify: false);
+    _resetThinkingBuffer(notify: false);
     notifyListeners();
 
     try {
@@ -580,9 +590,11 @@ class ChatProvider extends ChangeNotifier {
       }
     } on ApiException catch (e) {
       _flushPendingStreamDelta(notify: false);
+      _flushPendingThinkingDelta(notify: false);
       _error = e.message;
     } catch (e) {
       _flushPendingStreamDelta(notify: false);
+      _flushPendingThinkingDelta(notify: false);
       _error = e.toString();
     } finally {
       _isStreaming = false;
@@ -606,6 +618,38 @@ class ChatProvider extends ChangeNotifier {
       case "answer_delta":
         final delta = data["delta"]?.toString() ?? "";
         _queueStreamDelta(delta);
+        return null;
+
+      case "thinking_delta":
+        final delta = data["delta"]?.toString() ?? "";
+        _queueThinkingDelta(delta);
+        _streamThinkingCollapsed = false;
+        return null;
+
+      case "answer_to_thinking":
+        _flushPendingStreamDelta(notify: false);
+        _flushPendingThinkingDelta(notify: false);
+        final content = data["content"]?.toString() ?? _streamBuffer;
+        if (content.isNotEmpty) {
+          if (_streamThinkingBuffer.isNotEmpty) {
+            _streamThinkingBuffer = "$_streamThinkingBuffer\n\n$content";
+          } else {
+            _streamThinkingBuffer = content;
+          }
+        }
+        _streamThinkingCollapsed = false;
+        _streamBuffer = "";
+        _resetStreamingMeta(notify: false);
+        notifyListeners();
+        return null;
+
+      case "thinking_done":
+        _flushPendingThinkingDelta(notify: false);
+        if (data["auto_collapse"] == true) {
+          _streamThinkingCollapsed = true;
+          _streamThinkingCollapseVersion += 1;
+        }
+        notifyListeners();
         return null;
 
       case "answer_meta":
@@ -838,15 +882,36 @@ class ChatProvider extends ChangeNotifier {
     _streamFlushTimer ??= Timer(_streamFlushInterval, _flushPendingStreamDelta);
   }
 
+  void _queueThinkingDelta(String delta) {
+    if (delta.isEmpty) return;
+    _pendingThinkingDelta += delta;
+    if (_pendingThinkingDelta.length > 512) {
+      _flushPendingThinkingDelta();
+      return;
+    }
+    _streamFlushTimer ??= Timer(_streamFlushInterval, _flushPendingStreamDelta);
+  }
+
   void _flushPendingStreamDelta({bool notify = true}) {
     _streamFlushTimer?.cancel();
     _streamFlushTimer = null;
-    if (_pendingStreamDelta.isEmpty) return;
-    _streamBuffer += _pendingStreamDelta;
-    _pendingStreamDelta = "";
-    if (notify) {
+    final hasPending =
+        _pendingStreamDelta.isNotEmpty || _pendingThinkingDelta.isNotEmpty;
+    if (_pendingStreamDelta.isNotEmpty) {
+      _streamBuffer += _pendingStreamDelta;
+      _pendingStreamDelta = "";
+    }
+    if (_pendingThinkingDelta.isNotEmpty) {
+      _streamThinkingBuffer += _pendingThinkingDelta;
+      _pendingThinkingDelta = "";
+    }
+    if (notify && hasPending) {
       notifyListeners();
     }
+  }
+
+  void _flushPendingThinkingDelta({bool notify = true}) {
+    _flushPendingStreamDelta(notify: notify);
   }
 
   void _resetStreamingBuffer({required bool notify}) {
@@ -855,6 +920,16 @@ class ChatProvider extends ChangeNotifier {
     _pendingStreamDelta = "";
     _streamBuffer = "";
     _resetStreamingMeta(notify: false);
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _resetThinkingBuffer({required bool notify}) {
+    _pendingThinkingDelta = "";
+    _streamThinkingBuffer = "";
+    _streamThinkingCollapsed = false;
+    _streamThinkingCollapseVersion = 0;
     if (notify) {
       notifyListeners();
     }

@@ -300,6 +300,9 @@ class _ChatMessageLayer extends ConsumerWidget {
       scrollCtrl: scrollCtrl,
       isStreaming: provider.isStreaming,
       streamBuffer: provider.streamBuffer,
+      streamThinkingBuffer: provider.streamThinkingBuffer,
+      streamThinkingCollapsed: provider.streamThinkingCollapsed,
+      streamThinkingCollapseVersion: provider.streamThinkingCollapseVersion,
       streamAnswerFormat: provider.streamAnswerFormat,
       streamRenderHint: provider.streamRenderHint,
       streamLayoutHint: provider.streamLayoutHint,
@@ -796,6 +799,9 @@ class _MessageList extends StatefulWidget {
   final ScrollController scrollCtrl;
   final bool isStreaming;
   final String streamBuffer;
+  final String streamThinkingBuffer;
+  final bool streamThinkingCollapsed;
+  final int streamThinkingCollapseVersion;
   final String streamAnswerFormat;
   final String streamRenderHint;
   final String streamLayoutHint;
@@ -809,6 +815,9 @@ class _MessageList extends StatefulWidget {
     required this.scrollCtrl,
     required this.isStreaming,
     required this.streamBuffer,
+    required this.streamThinkingBuffer,
+    required this.streamThinkingCollapsed,
+    required this.streamThinkingCollapseVersion,
     required this.streamAnswerFormat,
     required this.streamRenderHint,
     required this.streamLayoutHint,
@@ -853,11 +862,14 @@ class _MessageListState extends State<_MessageList> {
           if (widget.isStreaming && msgIdx == widget.messages.length) {
             child = StreamingBubble(
               buffer: widget.streamBuffer,
+              thinkingContent: widget.streamThinkingBuffer,
+              thinkingCollapsed: widget.streamThinkingCollapsed,
+              thinkingCollapseVersion: widget.streamThinkingCollapseVersion,
               answerFormat: widget.streamAnswerFormat,
               renderHint: widget.streamRenderHint,
               layoutHint: widget.streamLayoutHint,
               artifacts: widget.streamArtifacts,
-              thinkingLines: _buildThinkingLines(widget.streamEvents),
+              processLines: _buildProcessLines(widget.streamEvents),
             );
           } else if (msgIdx < widget.messages.length) {
             // Regular messages
@@ -877,20 +889,13 @@ class _MessageListState extends State<_MessageList> {
     );
   }
 
-  List<String> _buildThinkingLines(List<EventView> events) {
+  List<String> _buildProcessLines(List<EventView> events) {
     final lines = <String>[];
     for (final e in events) {
       final time = DateFormat("HH:mm:ss").format(e.createdAt);
       switch (e.type) {
         case "run_started":
           lines.add("[$time] 开始执行任务");
-          break;
-        case "assistant_thinking":
-          final content = (e.payload["content"] ?? "").toString();
-          final short = content.length > 120
-              ? "${content.substring(0, 120)}..."
-              : content;
-          lines.add("[$time] 模型思考: $short");
           break;
         case "tool_call":
           final name = e.payload["name"] ?? "unknown";

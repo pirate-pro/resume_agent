@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall
-from app.domain.protocols import ChatModelClient, ModelResponse
+from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
@@ -329,9 +329,79 @@ def test_runtime_stream_does_not_emit_and_reset_partial_answer_before_tool_call(
     output, events = asyncio.run(_run())
 
     answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
+    thinking_promotions = [data["content"] for event, data in events if event == "answer_to_thinking"]
     event_names = [event for event, _ in events]
 
     assert output.answer == "已经处理完毕。"
-    assert answer_deltas == ["已经处理完毕。"]
+    assert answer_deltas[0] == "我先帮你看一下"
+    assert answer_deltas[-1] == "已经处理完毕。"
+    assert thinking_promotions == ["我先帮你看一下"]
     assert "answer_reset" not in event_names
     assert "answer_meta_reset" not in event_names
+
+
+def test_runtime_stream_moves_answer_to_thinking_when_tool_delta_appears_mid_stream(tmp_path: Path) -> None:
+    class MidToolDeltaModelClient:
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages, tools)
+            raise NotImplementedError
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ):
+            _ = (system_prompt, messages, tools)
+            yield StreamChunk(delta="先看一下", finished=False, has_tool_call_delta=False)
+            yield StreamChunk(delta="，准备调工具", finished=False, has_tool_call_delta=True)
+            yield StreamChunk(
+                delta="",
+                tool_calls=[
+                    ToolCall(
+                        name="memory_write",
+                        arguments={"content": "mid-tool", "tags": ["note"]},
+                    )
+                ],
+                finished=True,
+                has_tool_call_delta=True,
+            )
+
+    runtime, _, _ = _build_runtime(tmp_path, MidToolDeltaModelClient())
+
+    class RecordingEventChannel(EventChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event: str, data: dict[str, Any]) -> None:
+            self.events.append((event, data))
+
+    async def _run() -> list[tuple[str, dict[str, Any]]]:
+        channel = RecordingEventChannel()
+        await runtime.run_stream(
+            AgentRunInput(
+                session_id="sess_stream_mid_tool_delta",
+                user_message="mid tool delta",
+                skill_names=["base", "memory"],
+                max_tool_rounds=0,
+                context=_context("sess_stream_mid_tool_delta"),
+            ),
+            channel,
+        )
+        return channel.events
+
+    events = asyncio.run(_run())
+
+    answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
+    thinking_deltas = [data["delta"] for event, data in events if event == "thinking_delta"]
+    thinking_promotions = [data["content"] for event, data in events if event == "answer_to_thinking"]
+
+    assert answer_deltas == ["先看一下"]
+    assert thinking_promotions == ["先看一下"]
+    assert thinking_deltas == ["，准备调工具"]

@@ -278,17 +278,39 @@ class AgentRuntime:
         for round_index in range(run_input.max_tool_rounds + 1):
             _logger.debug("流式模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
             round_content_parts: list[str] = []
-            round_content_deltas: list[str] = []
             resolved_tool_calls: list[ToolCall] = []
+            saw_tool_call_delta = False
+            emitted_answer_meta: tuple[str, str, str, str, str] | None = None
+            visible_answer_parts: list[str] = []
 
             async for chunk in self._model_client.generate_stream(
                 system_prompt=context.system_prompt,
                 messages=messages,
                 tools=tools_payload,
             ):
+                if chunk.has_tool_call_delta and not saw_tool_call_delta:
+                    saw_tool_call_delta = True
+                    if visible_answer_parts:
+                        await channel.emit(
+                            "answer_to_thinking",
+                            {"content": "".join(visible_answer_parts)},
+                        )
+                        visible_answer_parts = []
+                        emitted_answer_meta = None
+
                 if chunk.delta:
                     round_content_parts.append(chunk.delta)
-                    round_content_deltas.append(chunk.delta)
+                    if saw_tool_call_delta:
+                        await channel.emit("thinking_delta", {"delta": chunk.delta})
+                    else:
+                        emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
+                            channel=channel,
+                            content="".join(round_content_parts),
+                            tool_calls=used_tool_calls,
+                            previous_meta=emitted_answer_meta,
+                        )
+                        await channel.emit("answer_delta", {"delta": chunk.delta})
+                        visible_answer_parts.append(chunk.delta)
 
                 if chunk.finished:
                     resolved_tool_calls = self._ensure_tool_call_ids(chunk.tool_calls or [])
@@ -304,18 +326,6 @@ class AgentRuntime:
 
             if not resolved_tool_calls:
                 answer = round_content
-                if round_content_deltas:
-                    emitted_answer_meta: tuple[str, str, str, str, str] | None = None
-                    cumulative_parts: list[str] = []
-                    for delta in round_content_deltas:
-                        cumulative_parts.append(delta)
-                        emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
-                            channel=channel,
-                            content="".join(cumulative_parts),
-                            tool_calls=used_tool_calls,
-                            previous_meta=emitted_answer_meta,
-                        )
-                        await channel.emit("answer_delta", {"delta": delta})
                 if not answer:
                     answer = await self._recover_final_answer_stream(
                         system_prompt=context.system_prompt,
@@ -333,12 +343,18 @@ class AgentRuntime:
                 break
 
             if round_content:
+                if not saw_tool_call_delta and visible_answer_parts:
+                    await channel.emit(
+                        "answer_to_thinking",
+                        {"content": round_content},
+                    )
                 await self._event_recorder.record_async(
                     context=run_context,
                     event_type="assistant_thinking",
                     payload={"content": round_content},
                     channel=channel,
                 )
+                await channel.emit("thinking_done", {"auto_collapse": True})
 
             messages.append(self._build_assistant_tool_call_message(round_content, resolved_tool_calls))
 

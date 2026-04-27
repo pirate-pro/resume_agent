@@ -142,19 +142,25 @@ class _ChatBubbleState extends State<ChatBubble> {
 
 class StreamingBubble extends StatelessWidget {
   final String buffer;
+  final String thinkingContent;
+  final bool thinkingCollapsed;
+  final int thinkingCollapseVersion;
   final String? answerFormat;
   final String? renderHint;
   final String? layoutHint;
   final List<AnswerArtifactView> artifacts;
-  final List<String> thinkingLines;
+  final List<String> processLines;
   const StreamingBubble(
       {super.key,
       required this.buffer,
+      this.thinkingContent = "",
+      this.thinkingCollapsed = false,
+      this.thinkingCollapseVersion = 0,
       this.answerFormat,
       this.renderHint,
       this.layoutHint,
       this.artifacts = const [],
-      this.thinkingLines = const []});
+      this.processLines = const []});
 
   @override
   Widget build(BuildContext context) {
@@ -191,7 +197,13 @@ class StreamingBubble extends StatelessWidget {
               ),
             ),
             // Thinking section (collapsible)
-            if (thinkingLines.isNotEmpty) _ThinkingBlock(lines: thinkingLines),
+            if (thinkingContent.isNotEmpty)
+              _ReasoningBlock(
+                content: thinkingContent,
+                collapsed: thinkingCollapsed,
+                collapseVersion: thinkingCollapseVersion,
+              ),
+            if (processLines.isNotEmpty) _ThinkingBlock(lines: processLines),
             // Content
             if (buffer.isNotEmpty)
               ConstrainedBox(
@@ -240,6 +252,106 @@ class StreamingBubble extends StatelessWidget {
 
 // ── Thinking block (collapsible) ────────────────────────────────────────
 
+class _ReasoningBlock extends StatefulWidget {
+  final String content;
+  final bool collapsed;
+  final int collapseVersion;
+
+  const _ReasoningBlock({
+    required this.content,
+    required this.collapsed,
+    required this.collapseVersion,
+  });
+
+  @override
+  State<_ReasoningBlock> createState() => _ReasoningBlockState();
+}
+
+class _ReasoningBlockState extends State<_ReasoningBlock> {
+  late bool _expanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = !widget.collapsed;
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReasoningBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.collapseVersion != oldWidget.collapseVersion && widget.collapsed) {
+      _expanded = false;
+    } else if (oldWidget.content.isEmpty && widget.content.isNotEmpty) {
+      _expanded = !widget.collapsed;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.52),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Row(
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: AppTheme.accent.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Icon(
+                      _expanded
+                          ? Icons.expand_more_rounded
+                          : Icons.chevron_right_rounded,
+                      size: 15,
+                      color: AppTheme.accent,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    "模型思考",
+                    style: AppTheme.ts(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: SelectableText(
+                widget.content,
+                style: AppTheme.ts(
+                  fontSize: 12.5,
+                  color: AppTheme.textSecondary,
+                  height: 1.6,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ThinkingBlock extends StatefulWidget {
   final List<String> lines;
   const _ThinkingBlock({required this.lines});
@@ -286,7 +398,7 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Text("执行过程",
+                  Text("工具过程",
                       style: AppTheme.ts(
                           fontSize: 12.5,
                           fontWeight: FontWeight.w600,
