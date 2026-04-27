@@ -3,25 +3,38 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import ValidationError
 from app.domain.models import MemoryItem, RunContext
+from app.memory.admission import evaluate_memory_admission
+from app.memory.classification import classify_memory
 from app.memory.contracts import MemoryFacade
 from app.memory.intake import build_candidate_request, infer_scope_hint_from_tags
+from app.memory.metadata_refresh import build_metadata_refresh_patch
 from app.memory.models import (
+    ConsolidateResult,
     ForgetResult,
     MemoryConsolidateRequest,
     MemoryForgetRequest,
     MemoryReadBundle,
     MemoryReadRequest,
+    MemoryRecord,
     MemoryScope,
 )
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 
-__all__ = ["MemoryManager"]
+__all__ = ["MemoryManager", "MemoryWriteResult"]
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class MemoryWriteResult:
+    memory: MemoryItem
+    candidate_id: str
+    consolidate_result: ConsolidateResult
 
 
 class MemoryManager:
@@ -44,6 +57,25 @@ class MemoryManager:
         source: str = "memory_manager",
         target_agent_id: str | None = None,
     ) -> MemoryItem:
+        result = self.write_memory_with_result(
+            content=content,
+            tags=tags,
+            context=context,
+            source_event_id=source_event_id,
+            source=source,
+            target_agent_id=target_agent_id,
+        )
+        return result.memory
+
+    def write_memory_with_result(
+        self,
+        content: str,
+        tags: list[str],
+        context: RunContext,
+        source_event_id: str | None,
+        source: str = "memory_manager",
+        target_agent_id: str | None = None,
+    ) -> MemoryWriteResult:
         run_context = _normalize_context(context)
         if not isinstance(content, str) or not content.strip():
             raise ValidationError("content must be a non-empty string.")
@@ -55,6 +87,9 @@ class MemoryManager:
         )
         normalized_content = content.strip()
         normalized_tags = [tag.strip() for tag in tags if isinstance(tag, str) and tag.strip()]
+        admission = evaluate_memory_admission(normalized_content, normalized_tags)
+        if not admission.accepted:
+            raise ValidationError(admission.reason)
         requester_capability = self._capability_registry.require(run_context.agent_id)
         target_scope = infer_scope_hint_from_tags(normalized_tags)
         if not requester_capability.can_write_scope(target_scope):
@@ -97,11 +132,45 @@ class MemoryManager:
             resolved_agent_id,
             len(memory.tags),
         )
-        return memory
+        return MemoryWriteResult(
+            memory=memory,
+            candidate_id=candidate.candidate_id,
+            consolidate_result=consolidate_result,
+        )
 
     def search(self, query: str, limit: int, context: RunContext) -> list[MemoryItem]:
         items, _ = self.search_with_summary(query=query, limit=limit, context=context)
         return items
+
+    def search_context_memories(
+        self,
+        query: str,
+        limit: int,
+        context: RunContext,
+    ) -> tuple[list[MemoryItem], dict[str, Any]]:
+        run_context = _normalize_context(context)
+        normalized_query, normalized_limit, bundle = self._search_bundle_for_context(
+            query=query,
+            limit=limit,
+            context=run_context,
+        )
+        result = [_to_memory_item(item) for item in bundle.items]
+        summary = _build_search_summary(
+            query=normalized_query,
+            agent_id=run_context.agent_id,
+            session_id=run_context.session_id,
+            bundle=bundle,
+            hit_count=len(result),
+        )
+        _logger.debug(
+            "检索上下文长期记忆完成(v2): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s",
+            normalized_query,
+            normalized_limit,
+            run_context.agent_id,
+            len(result),
+            bundle.total_scanned,
+        )
+        return result, summary
 
     def search_with_summary(
         self,
@@ -152,6 +221,130 @@ class MemoryManager:
             short_session_id=read_plan.short_session_id,
         )
         return normalized_query, normalized_limit, bundle
+
+    def resolve_update_targets(
+        self,
+        *,
+        query: str,
+        limit: int,
+        context: RunContext,
+    ) -> tuple[list[MemoryRecord], str]:
+        run_context = _normalize_context(context)
+        normalized_query = _normalize_query(query)
+        normalized_limit = _normalize_limit(limit)
+        canonical_hits = self._search_canonical_update_targets(
+            query=normalized_query,
+            limit=normalized_limit,
+            context=run_context,
+        )
+        if canonical_hits is not None:
+            return canonical_hits, "canonical_exact"
+        _, _, bundle = self.search_bundle(
+            query=normalized_query,
+            limit=normalized_limit,
+            context=run_context,
+        )
+        return bundle.items, "text_search"
+
+    def ensure_structured_metadata(
+        self,
+        *,
+        context: RunContext,
+        record: MemoryRecord,
+    ) -> MemoryRecord:
+        run_context = _normalize_context(context)
+        requester_capability = self._capability_registry.require(run_context.agent_id)
+        if not requester_capability.can_write_scope(record.scope):
+            raise ValidationError(
+                f"Memory metadata refresh scope not allowed for agent '{run_context.agent_id}': {record.scope.value}"
+            )
+        existing_metadata = dict(record.metadata)
+        source = existing_metadata.get("source", "legacy_memory_backfill")
+        classification = classify_memory(
+            content=record.content,
+            tags=record.tags,
+            source=source,
+        )
+        patch = build_metadata_refresh_patch(
+            existing_metadata=existing_metadata,
+            classified_metadata=classification.to_metadata(),
+        )
+        if not patch:
+            return record
+        refreshed = self._memory_facade.refresh_record_metadata(
+            scope=record.scope,
+            agent_id=record.owner_agent_id,
+            session_id=record.session_id,
+            memory_id=record.memory_id,
+            metadata_patch=patch,
+        )
+        return refreshed or record
+
+    def _search_bundle_for_context(
+        self,
+        *,
+        query: str,
+        limit: int,
+        context: RunContext,
+    ) -> tuple[str, int, MemoryReadBundle]:
+        run_context = _normalize_context(context)
+        normalized_query = _normalize_query(query)
+        normalized_limit = _normalize_limit(limit)
+        requester_capability = self._capability_registry.require(run_context.agent_id)
+        read_plan = _build_context_read_plan(
+            capability=requester_capability,
+            session_id=run_context.session_id,
+            include_short=False,
+        )
+        bundle = self._read_bundle(
+            agent_id=run_context.agent_id,
+            query=normalized_query,
+            limit=normalized_limit,
+            include_scopes=read_plan.include_scopes,
+            short_session_id=read_plan.short_session_id,
+        )
+        return normalized_query, normalized_limit, bundle
+
+    def _search_canonical_update_targets(
+        self,
+        *,
+        query: str,
+        limit: int,
+        context: RunContext,
+    ) -> list[MemoryRecord] | None:
+        classification = classify_memory(
+            content=query,
+            tags=[],
+            source="memory_update_query",
+        )
+        canonical_key = classification.canonical_key
+        normalized_value = classification.normalized_value
+        if canonical_key is None or normalized_value is None:
+            return None
+
+        requester_capability = self._capability_registry.require(context.agent_id)
+        read_plan = _build_context_read_plan(capability=requester_capability, session_id=context.session_id)
+        records = self._memory_facade.list_active_records_by_canonical_key(
+            agent_id=context.agent_id,
+            session_id=read_plan.short_session_id,
+            include_scopes=read_plan.include_scopes,
+            canonical_key=canonical_key,
+        )
+        matches = [
+            record
+            for record in records
+            if str(record.metadata.get("normalized_value", "")).strip() == normalized_value
+        ]
+        if not matches:
+            return None
+        _logger.debug(
+            "memory_update 命中 canonical 精确匹配: query=%s canonical_key=%s hit_count=%s agent_id=%s",
+            query,
+            canonical_key,
+            len(matches),
+            context.agent_id,
+        )
+        return matches[:limit]
 
     def search_for_agent(
         self,
@@ -411,8 +604,10 @@ def _to_memory_item(record: Any) -> MemoryItem:
     )
 
 
-def _build_context_read_plan(capability: AgentCapability, session_id: str) -> _ReadPlan:
+def _build_context_read_plan(capability: AgentCapability, session_id: str, *, include_short: bool = True) -> _ReadPlan:
     scopes = list(capability.memory_read_scopes)
+    if not include_short:
+        scopes = [scope for scope in scopes if scope != MemoryScope.AGENT_SHORT]
     short_session_id = None
     if MemoryScope.AGENT_SHORT in scopes and not capability.allow_cross_session_short_read:
         short_session_id = session_id

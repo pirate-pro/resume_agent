@@ -14,15 +14,20 @@ description: Deterministic workflow for memory add/update/delete operations. Use
 
 执行顺序：
 
-1. 先判定意图（新增/删除/更新）。
+1. 先判定意图（新增/删除/更新），并先区分“这是长期 memory，还是当前 session working state”。
 2. 删除或更新前，先调用 `memory_search` 定位目标。
 3. 若命中 0 条：反馈未找到，不要假装已更新。
 4. 若命中 >1 条：先澄清目标，不要盲改。
 5. 目标唯一时执行：
-   - 新增：`memory_write`
+   - 新增长期 memory：`memory_write`
    - 删除：`memory_forget`
    - 更新：`memory_update`（内部是先删旧、再写新）
 6. 操作后再调用 `memory_search` 做一次校验（可选但推荐）。
+
+补充规则：
+
+1. 当前任务目标、下一步、会话内临时决策、working notes，不要写进 memory，优先用 `state_set`。
+2. 只有“跨会话仍有复用价值”的用户经验、稳定偏好、长期事实，才走 `memory_write`。
 
 回复约束：
 

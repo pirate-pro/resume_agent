@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall
-from app.domain.protocols import ChatModelClient, ModelResponse
+from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
@@ -21,6 +22,8 @@ from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
+from app.state.manager import StateManager
+from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.tools.builtins import MemoryWriteTool
 from app.tools.registry import ToolRegistry
 from tests.helpers import SequenceModelClient, StaticModelClient
@@ -52,6 +55,8 @@ def _build_runtime(
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    state_store = JsonlFileStateStore(root_dir=tmp_path / "state_v1")
+    state_manager = StateManager(store=state_store)
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     capability_registry = _capability_registry()
 
@@ -65,6 +70,7 @@ def _build_runtime(
         session_repository=session_repo,
         skill_repository=skill_repo,
         memory_manager=memory_manager,
+        state_manager=state_manager,
         tool_executor=tool_registry,
     )
     runtime = AgentRuntime(
@@ -226,6 +232,17 @@ def test_runtime_builds_valid_tool_message_flow(tmp_path: Path) -> None:
                     ],
                 )
             return ModelResponse(content="done", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
 
     model = CapturingModelClient()
     runtime, _, _ = _build_runtime(tmp_path, model)

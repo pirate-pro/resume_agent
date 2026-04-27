@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -11,11 +12,13 @@ from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.facade import FileMemoryFacade
-from app.memory.models import MemoryReadRequest, MemoryScope
+from app.memory.models import MemoryReadRequest, MemoryRecord, MemoryScope, MemoryStatus, MemoryType
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 from app.runtime.memory_manager import MemoryManager
+from app.state.manager import StateManager
+from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.tools.builtins import (
     MemoryForgetTool,
     MemorySearchTool,
@@ -25,6 +28,9 @@ from app.tools.builtins import (
     SessionPlanFileAccessTool,
     SessionReadFileTool,
     SessionSearchFileTool,
+    StateListTool,
+    StatePublishTool,
+    StateSetTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
@@ -62,6 +68,23 @@ def _memory_manager(
 ) -> MemoryManager:
     resolved = capability_registry if capability_registry is not None else _capability_registry()
     return MemoryManager(memory_facade=memory_facade, capability_registry=resolved)
+
+
+def _state_manager(tmp_path: Path) -> StateManager:
+    return StateManager(store=JsonlFileStateStore(root_dir=tmp_path / "state_v1"))
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            rows.append(json.loads(stripped))
+    return rows
 
 
 
@@ -172,6 +195,24 @@ def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
     assert json.loads(other_search_result.content) == []
 
 
+def test_memory_write_tool_rejects_working_state_and_points_to_state_set(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+
+    with pytest.raises(ToolExecutionError) as exc_info:
+        registry.execute(
+            ToolCall(name="memory_write", arguments={"content": "当前目标：先整理 session working state"}),
+            context=_context("sess_reject_tool"),
+        )
+
+    message = str(exc_info.value)
+    assert "state_set" in message
+
+
 def test_memory_forget_tool_forgets_target_memory(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
@@ -249,9 +290,18 @@ def test_memory_update_tool_replaces_single_match(tmp_path: Path) -> None:
     update_payload = json.loads(update_result.content)
     assert update_result.success is True
     assert update_payload["updated"] is True
+    assert update_payload["update_mode"] == "canonical_supersede"
     assert len(json.loads(new_search.content)) >= 1
     old_payload = json.loads(old_search.content)
     assert all(item.get("content") != "用户称呼是李华" for item in old_payload)
+    rows = _read_jsonl(tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl")
+    active_rows = [row for row in rows if row["status"] == "active"]
+    archived_rows = [row for row in rows if row["status"] == "archived"]
+    assert len(active_rows) == 1
+    assert active_rows[0]["metadata"]["normalized_value"] == "小李"
+    assert active_rows[0]["parent_memory_id"] == update_payload["old_memory_id"]
+    assert len(archived_rows) == 1
+    assert archived_rows[0]["metadata"]["superseded_by_normalized_value"] == "小李"
 
 
 def test_memory_update_tool_returns_ambiguous_when_multi_match(tmp_path: Path) -> None:
@@ -294,6 +344,242 @@ def test_memory_update_tool_returns_ambiguous_when_multi_match(tmp_path: Path) -
     assert payload["updated"] is False
     assert payload["reason"] == "ambiguous_match"
     assert len(payload["candidates"]) >= 2
+
+
+def test_memory_update_tool_prefers_canonical_exact_before_text_search(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemorySearchTool(memory_manager=memory_manager))
+    registry.register(MemoryUpdateTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户称呼是李华", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_update_4"),
+    )
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户长期目标是加入李华实验室", "tags": ["long_term"]},
+        ),
+        context=_context("sess_update_4"),
+    )
+    ambiguous_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "用户称呼是李华", "limit": 5}),
+        context=_context("sess_update_4"),
+    )
+
+    update_result = registry.execute(
+        ToolCall(
+            name="memory_update",
+            arguments={
+                "query": "用户称呼是李华",
+                "new_content": "用户称呼改为小李",
+                "new_tags": ["preference", "long_term"],
+                "limit": 5,
+            },
+        ),
+        context=_context("sess_update_4"),
+    )
+    new_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "小李", "limit": 5}),
+        context=_context("sess_update_5"),
+    )
+    old_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "李华", "limit": 5}),
+        context=_context("sess_update_5"),
+    )
+
+    payload = json.loads(update_result.content)
+    ambiguous_payload = json.loads(ambiguous_search.content)
+    assert update_result.success is True
+    assert len(ambiguous_payload) >= 2
+    assert payload["updated"] is True
+    assert payload["match_strategy"] == "canonical_exact"
+    assert payload["update_mode"] == "canonical_supersede"
+    assert len(json.loads(new_search.content)) >= 1
+    old_payload = json.loads(old_search.content)
+    assert all(item.get("content") != "用户称呼是李华" for item in old_payload)
+
+
+def test_memory_update_tool_canonical_update_respects_source_priority(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemorySearchTool(memory_manager=memory_manager))
+    registry.register(MemoryUpdateTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户称呼是李华", "tags": ["preference", "long_term", "system_policy"]},
+        ),
+        context=_context("sess_update_6"),
+    )
+
+    update_result = registry.execute(
+        ToolCall(
+            name="memory_update",
+            arguments={
+                "query": "用户称呼是李华",
+                "new_content": "用户称呼改为小李",
+                "new_tags": ["preference", "long_term"],
+                "limit": 3,
+            },
+        ),
+        context=_context("sess_update_6"),
+    )
+    old_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "李华", "limit": 5}),
+        context=_context("sess_update_7"),
+    )
+    new_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "小李", "limit": 5}),
+        context=_context("sess_update_7"),
+    )
+
+    payload = json.loads(update_result.content)
+    assert update_result.success is True
+    assert payload["updated"] is False
+    assert payload["reason"] == "source_priority_conflict"
+    assert payload["match_strategy"] == "canonical_exact"
+    assert payload["update_mode"] == "canonical_direct"
+    assert any(item.get("content") == "用户称呼是李华" for item in json.loads(old_search.content))
+    assert all(item.get("content") != "用户称呼改为小李" for item in json.loads(new_search.content))
+
+
+def test_memory_update_tool_backfills_legacy_target_and_uses_canonical_supersede(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+    now = datetime.now(UTC)
+    memory_store.write_records(
+        [
+            MemoryRecord(
+                memory_id="mem_legacy_name",
+                scope=MemoryScope.AGENT_LONG,
+                owner_agent_id="agent_main",
+                session_id=None,
+                memory_type=MemoryType.PREFERENCE,
+                content="以后叫我李华",
+                tags=["preference", "long_term"],
+                importance=0.7,
+                confidence=0.7,
+                status=MemoryStatus.ACTIVE,
+                created_at=now,
+                updated_at=now,
+                expires_at=None,
+                source_event_id=None,
+                source_agent_id="agent_main",
+                version=1,
+                parent_memory_id=None,
+                content_hash="",
+                metadata={},
+            )
+        ]
+    )
+
+    registry = _registry()
+    registry.register(MemorySearchTool(memory_manager=memory_manager))
+    registry.register(MemoryUpdateTool(memory_manager=memory_manager))
+
+    update_result = registry.execute(
+        ToolCall(
+            name="memory_update",
+            arguments={
+                "query": "以后叫我李华",
+                "new_content": "以后叫我小李",
+                "new_tags": ["preference", "long_term"],
+                "limit": 3,
+            },
+        ),
+        context=_context("sess_update_legacy"),
+    )
+    new_search = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "小李", "limit": 5}),
+        context=_context("sess_update_legacy"),
+    )
+
+    payload = json.loads(update_result.content)
+    rows = _read_jsonl(tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl")
+    active_rows = [row for row in rows if row["status"] == "active"]
+    archived_rows = [row for row in rows if row["status"] == "archived"]
+    assert update_result.success is True
+    assert payload["updated"] is True
+    assert payload["match_strategy"] == "text_search"
+    assert payload["update_mode"] == "canonical_supersede"
+    assert len(json.loads(new_search.content)) >= 1
+    assert len(active_rows) == 1
+    assert active_rows[0]["metadata"]["normalized_value"] == "小李"
+    assert active_rows[0]["parent_memory_id"] == "mem_legacy_name"
+    assert len(archived_rows) == 1
+    assert archived_rows[0]["memory_id"] == "mem_legacy_name"
+    assert archived_rows[0]["metadata"]["canonical_key"] == "preferred_name"
+    assert archived_rows[0]["metadata"]["metadata_refresh_reason"] == "structured_backfill"
+
+
+def test_state_tools_write_list_and_publish_session_state(tmp_path: Path) -> None:
+    state_manager = _state_manager(tmp_path)
+
+    registry = _registry()
+    registry.register(StateSetTool(state_manager=state_manager))
+    registry.register(StateListTool(state_manager=state_manager))
+    registry.register(StatePublishTool(state_manager=state_manager))
+
+    set_result = registry.execute(
+        ToolCall(name="state_set", arguments={"key": "current_goal", "value": "完成 state 接线"}),
+        context=_context("sess_state_1"),
+    )
+    publish_result = registry.execute(
+        ToolCall(name="state_publish", arguments={"keys": ["current_goal"]}),
+        context=_context("sess_state_1"),
+    )
+    list_result = registry.execute(
+        ToolCall(name="state_list", arguments={"scope": "all"}),
+        context=_context("sess_state_1"),
+    )
+
+    assert set_result.success is True
+    assert publish_result.success is True
+    payload = json.loads(list_result.content)
+    assert payload["scope"] == "all"
+    assert len(payload["agent_state"]) == 1
+    assert payload["agent_state"][0]["key"] == "current_goal"
+    assert payload["agent_state"][0]["value"] == "完成 state 接线"
+    assert len(payload["shared_state"]) == 1
+    assert payload["shared_state"][0]["key"] == "current_goal"
+    assert payload["shared_state"][0]["metadata"]["published_from_agent_id"] == "agent_main"
+
+
+def test_state_list_tool_keeps_private_state_isolated_by_agent(tmp_path: Path) -> None:
+    state_manager = _state_manager(tmp_path)
+
+    writer_registry = _registry()
+    writer_registry.register(StateSetTool(state_manager=state_manager))
+    writer_registry.execute(
+        ToolCall(name="state_set", arguments={"key": "current_goal", "value": "仅主 agent 可见"}),
+        context=_context("sess_state_2", agent_id="agent_main"),
+    )
+
+    reader_registry = _registry()
+    reader_registry.register(StateListTool(state_manager=state_manager))
+    result = reader_registry.execute(
+        ToolCall(name="state_list", arguments={"scope": "all"}),
+        context=_context("sess_state_2", agent_id="agent_other"),
+    )
+
+    payload = json.loads(result.content)
+    assert payload["agent_state"] == []
+    assert payload["shared_state"] == []
 
 
 

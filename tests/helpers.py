@@ -20,6 +20,8 @@ from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
+from app.state.manager import StateManager
+from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.services.chat_service import ChatService
 from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
@@ -31,6 +33,9 @@ from app.tools.builtins import (
     SessionPlanFileAccessTool,
     SessionReadFileTool,
     SessionSearchFileTool,
+    StateListTool,
+    StatePublishTool,
+    StateSetTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
@@ -118,6 +123,8 @@ def build_chat_service(
     session_repository = JsonlSessionRepository(data_dir=data_dir)
     memory_store = JsonlFileMemoryStore(root_dir=data_dir / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    state_store = JsonlFileStateStore(root_dir=data_dir / "state_v1")
+    state_manager = StateManager(store=state_store)
     capability_registry = AgentCapabilityRegistry.for_tests()
     memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
     skill_repository = MarkdownSkillRepository(skills_dir=Path("app/skills"))
@@ -127,6 +134,9 @@ def build_chat_service(
     tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
     tool_registry.register(MemoryForgetTool(memory_manager=memory_manager))
     tool_registry.register(MemoryUpdateTool(memory_manager=memory_manager))
+    tool_registry.register(StateSetTool(state_manager=state_manager))
+    tool_registry.register(StatePublishTool(state_manager=state_manager))
+    tool_registry.register(StateListTool(state_manager=state_manager))
     tool_registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     tool_registry.register(WorkspaceReadFileTool(session_repository=session_repository))
     tool_registry.register(SessionListFilesTool(session_repository=session_repository))
@@ -139,6 +149,7 @@ def build_chat_service(
         session_repository=session_repository,
         skill_repository=skill_repository,
         memory_manager=memory_manager,
+        state_manager=state_manager,
         tool_executor=tool_registry,
     )
     runtime = AgentRuntime(

@@ -8,10 +8,14 @@ from app.core.errors import ValidationError
 from app.domain.models import ContextBundle, EventRecord, MemoryItem, RunContext, SessionFile
 from app.domain.protocols import SessionRepository, SkillRepository, ToolExecutor
 from app.runtime.memory_manager import MemoryManager
+from app.state.manager import StateManager
+from app.state.models import StateRecord
 
 __all__ = ["ContextAssembler"]
 _logger = logging.getLogger(__name__)
 _ACTIVE_FILE_MAX_COUNT = 12
+_AGENT_STATE_MAX_COUNT = 8
+_SHARED_STATE_MAX_COUNT = 8
 _OUTPUT_FORMAT_RULES = """Answer output rules:
 1. If the user asks for a Markdown document to read/render, return direct Markdown body. Do not wrap the whole document in an outer ```markdown fenced block.
 2. Only use ```markdown fenced block when the user explicitly wants Markdown source code.
@@ -37,11 +41,13 @@ class ContextAssembler:
         session_repository: SessionRepository,
         skill_repository: SkillRepository,
         memory_manager: MemoryManager,
+        state_manager: StateManager,
         tool_executor: ToolExecutor,
     ) -> None:
         self._session_repository = session_repository
         self._skill_repository = skill_repository
         self._memory_manager = memory_manager
+        self._state_manager = state_manager
         self._tool_executor = tool_executor
 
     def assemble(self, context: RunContext, user_message: str, skill_names: list[str]) -> ContextBundle:
@@ -56,6 +62,7 @@ class ContextAssembler:
         normalized_message = user_message.strip()
 
         skills = self._skill_repository.load_skills(skill_names) if skill_names else {}
+        agent_state, shared_state = self._load_state(context)
         memory_hits, memory_summary = self._safe_memory_search(normalized_message, limit=5, context=context)
         active_files = self._load_active_files(normalized_session_id)
         recent_events = self._session_repository.list_recent_events(normalized_session_id, limit=12)
@@ -64,12 +71,14 @@ class ContextAssembler:
         if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != normalized_message:
             messages.append({"role": "user", "content": normalized_message})
 
-        system_prompt = self._build_system_prompt(skills, memory_hits, active_files)
+        system_prompt = self._build_system_prompt(skills, agent_state, shared_state, memory_hits, active_files)
         tool_definitions = self._tool_executor.list_definitions()
         _logger.debug(
-            "上下文组装: session_id=%s skills=%s memory_hits=%s active_files=%s recent_events=%s output_messages=%s",
+            "上下文组装: session_id=%s skills=%s agent_state=%s shared_state=%s memory_hits=%s active_files=%s recent_events=%s output_messages=%s",
             normalized_session_id,
             len(skills),
+            len(agent_state),
+            len(shared_state),
             len(memory_hits),
             len(active_files),
             len(recent_events),
@@ -83,6 +92,14 @@ class ContextAssembler:
             memory_summary=memory_summary,
         )
 
+    def _load_state(self, context: RunContext) -> tuple[list[StateRecord], list[StateRecord]]:
+        agent_state = self._state_manager.list_agent_state(
+            session_id=context.session_id,
+            agent_id=context.agent_id,
+        )[:_AGENT_STATE_MAX_COUNT]
+        shared_state = self._state_manager.list_shared_state(session_id=context.session_id)[:_SHARED_STATE_MAX_COUNT]
+        return agent_state, shared_state
+
     def _safe_memory_search(
         self,
         query: str,
@@ -90,7 +107,7 @@ class ContextAssembler:
         context: RunContext,
     ) -> tuple[list[MemoryItem], dict[str, str | int | bool | list[str]]]:
         try:
-            hits, summary = self._memory_manager.search_with_summary(
+            hits, summary = self._memory_manager.search_context_memories(
                 query=query,
                 limit=limit,
                 context=context,
@@ -122,6 +139,8 @@ class ContextAssembler:
     def _build_system_prompt(
         self,
         skills: dict[str, str],
+        agent_state: list[StateRecord],
+        shared_state: list[StateRecord],
         memory_hits: list[MemoryItem],
         active_files: list[SessionFile],
     ) -> str:
@@ -132,6 +151,19 @@ class ContextAssembler:
         ]
         if skills:
             sections.append("Skills:\n" + "\n\n".join(f"[{name}]\n{text}" for name, text in skills.items()))
+        if agent_state:
+            sections.append(
+                "Current agent state:\n"
+                + "\n".join(f"- {item.key}: {item.value}" for item in agent_state)
+            )
+        if shared_state:
+            sections.append(
+                "Shared session state:\n"
+                + "\n".join(
+                    f"- {item.key}: {item.value} [owner_agent_id: {item.owner_agent_id}]"
+                    for item in shared_state
+                )
+            )
         if memory_hits:
             memory_lines = [f"- ({item.memory_id}) {item.content} [tags: {', '.join(item.tags)}]" for item in memory_hits]
             sections.append("Relevant memories:\n" + "\n".join(memory_lines))

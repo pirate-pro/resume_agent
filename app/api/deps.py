@@ -19,6 +19,8 @@ from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
+from app.state.manager import StateManager
+from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.services.chat_service import ChatService
 from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
@@ -30,6 +32,9 @@ from app.tools.builtins import (
     SessionPlanFileAccessTool,
     SessionReadFileTool,
     SessionSearchFileTool,
+    StateListTool,
+    StatePublishTool,
+    StateSetTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
@@ -46,6 +51,8 @@ __all__ = [
     "get_model_client",
     "get_memory_facade",
     "get_memory_store",
+    "get_state_manager",
+    "get_state_store",
     "get_session_manager",
     "get_session_repository",
     "get_session_title_service",
@@ -78,6 +85,17 @@ def get_memory_facade() -> FileMemoryFacade:
 
 
 @lru_cache(maxsize=1)
+def get_state_store() -> JsonlFileStateStore:
+    settings = get_settings()
+    return JsonlFileStateStore(root_dir=settings.data_dir / "state_v1")
+
+
+@lru_cache(maxsize=1)
+def get_state_manager() -> StateManager:
+    return StateManager(store=get_state_store())
+
+
+@lru_cache(maxsize=1)
 def get_agent_capability_registry() -> AgentCapabilityRegistry:
     settings = get_settings()
     return load_agent_capability_registry(settings.agent_capabilities_path)
@@ -96,6 +114,9 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(MemorySearchTool(memory_manager=get_memory_manager()))
     registry.register(MemoryForgetTool(memory_manager=get_memory_manager()))
     registry.register(MemoryUpdateTool(memory_manager=get_memory_manager()))
+    registry.register(StateSetTool(state_manager=get_state_manager()))
+    registry.register(StatePublishTool(state_manager=get_state_manager()))
+    registry.register(StateListTool(state_manager=get_state_manager()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
     registry.register(SessionListFilesTool(session_repository=get_session_repository()))
@@ -129,6 +150,7 @@ def get_context_assembler() -> ContextAssembler:
         session_repository=get_session_repository(),
         skill_repository=get_skill_repository(),
         memory_manager=get_memory_manager(),
+        state_manager=get_state_manager(),
         tool_executor=get_tool_registry(),
     )
 

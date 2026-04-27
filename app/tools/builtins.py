@@ -1,4 +1,4 @@
-"""Built-in tools for memory and workspace access."""
+"""Built-in tools for memory, state, and workspace access."""
 
 from __future__ import annotations
 
@@ -13,9 +13,12 @@ from uuid import uuid4
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
+from app.memory.classification import classify_memory
 from app.memory.intake import infer_scope_hint_from_tags
 from app.memory.models import MemoryScope
 from app.runtime.memory_manager import MemoryManager
+from app.state.manager import StateManager
+from app.state.models import StateRecord
 
 __all__ = [
     "MemoryForgetTool",
@@ -26,6 +29,9 @@ __all__ = [
     "SessionPlanFileAccessTool",
     "SessionReadFileTool",
     "SessionSearchFileTool",
+    "StateListTool",
+    "StatePublishTool",
+    "StateSetTool",
     "WorkspaceReadFileTool",
     "WorkspaceWriteFileTool",
 ]
@@ -45,6 +51,7 @@ class MemoryWriteTool:
             name="memory_write",
             description=(
                 "Write a memory candidate. Default route is agent_short. "
+                "Rejects session working state and raw file/tool output; use state_set for current task notes. "
                 "Use tags like preference/constraint/long_term for agent_long, "
                 "and shared/global/cross_agent for shared_long candidate."
             ),
@@ -73,13 +80,16 @@ class MemoryWriteTool:
             len(tags),
             len(content),
         )
-        memory = self._memory_manager.write_memory(
-            content=content,
-            tags=tags,
-            context=run_context,
-            source_event_id=None,
-            source="memory_write_tool",
-        )
+        try:
+            memory = self._memory_manager.write_memory(
+                content=content,
+                tags=tags,
+                context=run_context,
+                source_event_id=None,
+                source="memory_write_tool",
+            )
+        except ValidationError as exc:
+            raise ToolExecutionError(str(exc)) from exc
         # memory_id 统一使用 memory manager 返回值，避免工具层重复实现入库与合并策略。
         payload = {
             "memory_id": memory.memory_id,
@@ -250,7 +260,8 @@ class MemoryUpdateTool:
         return ToolDefinition(
             name="memory_update",
             description=(
-                "Replace one memory by query: locate target -> forget old -> write new. "
+                "Replace one memory by query: prefer canonical exact match for structured memories, "
+                "then fall back to text search; locate target -> forget old -> write new. "
                 "If multiple targets match, return ambiguity candidates instead of blind update."
             ),
             parameters_schema={
@@ -283,12 +294,11 @@ class MemoryUpdateTool:
         if not isinstance(hard_delete_old, bool):
             raise ToolExecutionError("'hard_delete_old' must be boolean.")
 
-        _, _, bundle = self._memory_manager.search_bundle(
+        hits, match_strategy = self._memory_manager.resolve_update_targets(
             query=query,
             limit=limit,
             context=run_context,
         )
-        hits = bundle.items
         if not hits:
             return ToolExecutionResult(
                 tool_name="memory_update",
@@ -298,6 +308,7 @@ class MemoryUpdateTool:
                         "updated": False,
                         "reason": "no_match",
                         "query": query,
+                        "match_strategy": match_strategy,
                     },
                     ensure_ascii=False,
                 ),
@@ -323,6 +334,7 @@ class MemoryUpdateTool:
                         "updated": False,
                         "reason": "ambiguous_match",
                         "query": query,
+                        "match_strategy": match_strategy,
                         "candidates": candidates,
                     },
                     ensure_ascii=False,
@@ -330,6 +342,100 @@ class MemoryUpdateTool:
             )
 
         target = hits[0]
+        target = self._memory_manager.ensure_structured_metadata(
+            context=run_context,
+            record=target,
+        )
+        resolved_tags = _resolve_update_tags(new_tags=new_tags, target_scope=target.scope, target_tags=target.tags)
+        target_canonical_key = str(target.metadata.get("canonical_key", "")).strip() or None
+        update_classification = classify_memory(
+            content=new_content,
+            tags=resolved_tags,
+            source="memory_update_tool",
+        )
+        new_canonical_key = update_classification.canonical_key
+        if target_canonical_key is not None:
+            if new_canonical_key != target_canonical_key:
+                return ToolExecutionResult(
+                    tool_name="memory_update",
+                    success=True,
+                    content=json.dumps(
+                        {
+                            "updated": False,
+                            "reason": "canonical_key_mismatch",
+                            "query": query,
+                            "match_strategy": match_strategy,
+                            "update_mode": "canonical_direct",
+                            "target_canonical_key": target_canonical_key,
+                            "new_canonical_key": new_canonical_key,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            write_result = self._memory_manager.write_memory_with_result(
+                content=new_content,
+                tags=resolved_tags,
+                context=run_context,
+                source_event_id=None,
+                source="memory_update_tool",
+            )
+            consolidate_result = write_result.consolidate_result
+            if consolidate_result.conflicts > 0:
+                return ToolExecutionResult(
+                    tool_name="memory_update",
+                    success=True,
+                    content=json.dumps(
+                        {
+                            "updated": False,
+                            "reason": "source_priority_conflict",
+                            "query": query,
+                            "match_strategy": match_strategy,
+                            "update_mode": "canonical_direct",
+                            "old_memory_id": target.memory_id,
+                            "old_scope": target.scope.value,
+                            "new_tags": resolved_tags,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            if consolidate_result.written_records == 0:
+                return ToolExecutionResult(
+                    tool_name="memory_update",
+                    success=True,
+                    content=json.dumps(
+                        {
+                            "updated": False,
+                            "reason": "semantic_noop",
+                            "query": query,
+                            "match_strategy": match_strategy,
+                            "update_mode": "canonical_direct",
+                            "old_memory_id": target.memory_id,
+                            "old_scope": target.scope.value,
+                            "new_tags": resolved_tags,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            payload = {
+                "updated": True,
+                "match_strategy": match_strategy,
+                "update_mode": "canonical_supersede",
+                "old_memory_id": target.memory_id,
+                "new_memory_id": write_result.memory.memory_id,
+                "new_tags": resolved_tags,
+                "old_scope": target.scope.value,
+                "forget_result": {
+                    "touched": 0,
+                    "deleted": 0,
+                    "archived": 0,
+                },
+            }
+            return ToolExecutionResult(
+                tool_name="memory_update",
+                success=True,
+                content=json.dumps(payload, ensure_ascii=False),
+            )
+
         forget_result = self._memory_manager.forget_memory_ids(
             context=run_context,
             memory_ids=[target.memory_id],
@@ -337,7 +443,6 @@ class MemoryUpdateTool:
             hard_delete=hard_delete_old,
             reason=f"memory_update_replace:{query[:80]}",
         )
-        resolved_tags = _resolve_update_tags(new_tags=new_tags, target_scope=target.scope, target_tags=target.tags)
         written = self._memory_manager.write_memory(
             content=new_content,
             tags=resolved_tags,
@@ -347,6 +452,8 @@ class MemoryUpdateTool:
         )
         payload = {
             "updated": True,
+            "match_strategy": match_strategy,
+            "update_mode": "replace_rewrite",
             "old_memory_id": target.memory_id,
             "new_memory_id": written.memory_id,
             "new_tags": resolved_tags,
@@ -359,6 +466,146 @@ class MemoryUpdateTool:
         }
         return ToolExecutionResult(
             tool_name="memory_update",
+            success=True,
+            content=json.dumps(payload, ensure_ascii=False),
+        )
+
+
+class StateSetTool:
+    """Write agent-private working state for the current session."""
+
+    def __init__(self, state_manager: StateManager) -> None:
+        self._state_manager = state_manager
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="state_set",
+            description=(
+                "Write or update current agent private session state. "
+                "Use for current goal, next step, temporary decisions, and working notes "
+                "that should persist in this session but are not long-term memory."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["key", "value"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        key = _require_non_empty_argument(arguments, "key")
+        value = _require_non_empty_argument(arguments, "value")
+        record = self._state_manager.set_agent_state(
+            session_id=run_context.session_id,
+            agent_id=run_context.agent_id,
+            key=key,
+            value=value,
+            source_run_id=run_context.run_id,
+            metadata={"updated_by": "state_set_tool"},
+        )
+        return ToolExecutionResult(
+            tool_name="state_set",
+            success=True,
+            content=json.dumps(_serialize_state_record(record), ensure_ascii=False),
+        )
+
+
+class StatePublishTool:
+    """Publish selected private state records to shared session state."""
+
+    def __init__(self, state_manager: StateManager) -> None:
+        self._state_manager = state_manager
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="state_publish",
+            description=(
+                "Publish selected private state keys into shared session state. "
+                "Use this only when another agent in the same session should see the state."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                    },
+                },
+                "required": ["keys"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        raw_keys = arguments.get("keys")
+        if not isinstance(raw_keys, list):
+            raise ToolExecutionError("'keys' must be an array of strings.")
+        keys = _normalize_state_keys(raw_keys)
+        published = self._state_manager.publish_agent_state(
+            session_id=run_context.session_id,
+            agent_id=run_context.agent_id,
+            keys=keys,
+        )
+        payload = {
+            "published": len(published),
+            "records": [_serialize_state_record(record) for record in published],
+        }
+        return ToolExecutionResult(
+            tool_name="state_publish",
+            success=True,
+            content=json.dumps(payload, ensure_ascii=False),
+        )
+
+
+class StateListTool:
+    """List private/shared state visible to the current agent."""
+
+    def __init__(self, state_manager: StateManager) -> None:
+        self._state_manager = state_manager
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="state_list",
+            description=(
+                "List current session state. Scope can be 'agent', 'shared', or 'all'. "
+                "Private agent state is isolated per agent; shared state is visible within the session."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "enum": ["agent", "shared", "all"],
+                        "default": "all",
+                    },
+                },
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        scope = _normalize_state_list_scope(arguments.get("scope", "all"))
+        agent_records: list[StateRecord] = []
+        shared_records: list[StateRecord] = []
+        if scope in {"agent", "all"}:
+            agent_records = self._state_manager.list_agent_state(
+                session_id=run_context.session_id,
+                agent_id=run_context.agent_id,
+            )
+        if scope in {"shared", "all"}:
+            shared_records = self._state_manager.list_shared_state(session_id=run_context.session_id)
+        payload = {
+            "scope": scope,
+            "agent_state": [_serialize_state_record(record) for record in agent_records],
+            "shared_state": [_serialize_state_record(record) for record in shared_records],
+        }
+        return ToolExecutionResult(
+            tool_name="state_list",
             success=True,
             content=json.dumps(payload, ensure_ascii=False),
         )
@@ -909,6 +1156,48 @@ def _collect_text_hits(text: str, query: str, top_k: int, window_chars: int) -> 
         )
         cursor = index + len(query)
     return hits
+
+
+def _normalize_state_keys(raw_keys: list[Any]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_keys:
+        key = str(raw).strip()
+        if not key:
+            continue
+        if key in seen:
+            continue
+        normalized.append(key)
+        seen.add(key)
+    if not normalized:
+        raise ToolExecutionError("'keys' must contain at least one non-empty string.")
+    return normalized
+
+
+def _normalize_state_list_scope(raw_scope: Any) -> str:
+    if not isinstance(raw_scope, str):
+        raise ToolExecutionError("'scope' must be one of: agent, shared, all.")
+    normalized = raw_scope.strip().lower()
+    if normalized not in {"agent", "shared", "all"}:
+        raise ToolExecutionError("'scope' must be one of: agent, shared, all.")
+    return normalized
+
+
+def _serialize_state_record(record: StateRecord) -> dict[str, Any]:
+    return {
+        "state_id": record.state_id,
+        "scope": record.scope.value,
+        "owner_agent_id": record.owner_agent_id,
+        "session_id": record.session_id,
+        "key": record.key,
+        "value": record.value,
+        "status": record.status.value,
+        "version": record.version,
+        "source_run_id": record.source_run_id,
+        "metadata": record.metadata,
+        "created_at": record.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "updated_at": record.updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+    }
 
 
 def _estimate_tokens_from_text(text: str) -> int:
