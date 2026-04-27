@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from app.memory.facade import FileMemoryFacade
@@ -195,3 +196,163 @@ def test_shared_promotion_bypasses_repeat_for_explicit_rule_source(tmp_path: Pat
         )
     )
     assert len(shared_hits.items) == 1
+
+
+def test_consolidation_dedupes_semantic_duplicates_by_canonical_key(tmp_path: Path) -> None:
+    facade = _build_facade(tmp_path)
+
+    first = build_candidate_request(
+        agent_id="agent_main",
+        session_id="sess_name",
+        content="以后叫我李华",
+        tags=["preference", "long_term"],
+        source_event_id="evt_name_1",
+        source="test",
+    )
+    facade.write_candidate(first)
+    first_result = facade.consolidate(MemoryConsolidateRequest(max_candidates=20))
+    assert first_result.written_records == 1
+
+    second = build_candidate_request(
+        agent_id="agent_main",
+        session_id="sess_name_other",
+        content="请叫我李华",
+        tags=["preference", "long_term"],
+        source_event_id="evt_name_2",
+        source="test",
+    )
+    facade.write_candidate(second)
+    second_result = facade.consolidate(MemoryConsolidateRequest(max_candidates=20))
+
+    assert second_result.written_records == 0
+    assert second_result.merged_records >= 1
+
+    agent_long = facade.read_context(
+        MemoryReadRequest(
+            agent_id="agent_main",
+            session_id="sess_name",
+            query="李华",
+            include_scopes=[MemoryScope.AGENT_LONG],
+            limit=10,
+            token_budget=2000,
+        )
+    )
+    assert len(agent_long.items) == 1
+    assert agent_long.items[0].metadata["canonical_key"] == "preferred_name"
+    assert agent_long.items[0].metadata["normalized_value"] == "李华"
+
+
+def test_consolidation_supersedes_old_canonical_value_with_new_value(tmp_path: Path) -> None:
+    facade = _build_facade(tmp_path)
+
+    first = build_candidate_request(
+        agent_id="agent_main",
+        session_id="sess_name",
+        content="以后叫我李华",
+        tags=["preference", "long_term"],
+        source_event_id="evt_name_old",
+        source="test",
+    )
+    facade.write_candidate(first)
+    facade.consolidate(MemoryConsolidateRequest(max_candidates=20))
+
+    second = build_candidate_request(
+        agent_id="agent_main",
+        session_id="sess_name",
+        content="以后叫我小李",
+        tags=["preference", "long_term"],
+        source_event_id="evt_name_new",
+        source="test",
+    )
+    facade.write_candidate(second)
+    result = facade.consolidate(MemoryConsolidateRequest(max_candidates=20))
+
+    assert result.written_records == 1
+    old_hits = facade.read_context(
+        MemoryReadRequest(
+            agent_id="agent_main",
+            session_id="sess_name",
+            query="李华",
+            include_scopes=[MemoryScope.AGENT_LONG],
+            limit=10,
+            token_budget=2000,
+        )
+    )
+    new_hits = facade.read_context(
+        MemoryReadRequest(
+            agent_id="agent_main",
+            session_id="sess_name",
+            query="小李",
+            include_scopes=[MemoryScope.AGENT_LONG],
+            limit=10,
+            token_budget=2000,
+        )
+    )
+
+    assert len(new_hits.items) == 1
+    assert new_hits.items[0].metadata["normalized_value"] == "小李"
+    assert new_hits.items[0].version >= 2
+    assert new_hits.items[0].parent_memory_id is not None
+    record_file = tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl"
+    rows = _read_jsonl(record_file)
+    active_rows = [row for row in rows if row["status"] == "active"]
+    archived_rows = [row for row in rows if row["status"] == "archived"]
+    assert len(active_rows) == 1
+    assert active_rows[0]["metadata"]["normalized_value"] == "小李"
+    assert len(archived_rows) == 1
+    assert archived_rows[0]["metadata"]["normalized_value"] == "李华"
+    assert archived_rows[0]["metadata"]["superseded_by_normalized_value"] == "小李"
+
+
+def test_consolidation_does_not_let_low_priority_source_override_explicit_user(tmp_path: Path) -> None:
+    facade = _build_facade(tmp_path)
+
+    first = build_candidate_request(
+        agent_id="agent_main",
+        session_id="sess_name",
+        content="以后叫我李华",
+        tags=["preference", "long_term"],
+        source_event_id="evt_name_user",
+        source="test",
+    )
+    facade.write_candidate(first)
+    facade.consolidate(MemoryConsolidateRequest(max_candidates=20))
+
+    second = build_candidate_request(
+        agent_id="agent_main",
+        session_id="sess_name",
+        content="以后叫我小李",
+        tags=["preference", "long_term", "assistant_inferred"],
+        source_event_id="evt_name_inferred",
+        source="test",
+    )
+    facade.write_candidate(second)
+    result = facade.consolidate(MemoryConsolidateRequest(max_candidates=20))
+
+    assert result.written_records == 0
+    assert result.conflicts == 1
+    hits = facade.read_context(
+        MemoryReadRequest(
+            agent_id="agent_main",
+            session_id="sess_name",
+            query="李华",
+            include_scopes=[MemoryScope.AGENT_LONG],
+            limit=10,
+            token_budget=2000,
+        )
+    )
+    assert len(hits.items) == 1
+    assert hits.items[0].metadata["normalized_value"] == "李华"
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            rows.append(json.loads(stripped))
+    return rows

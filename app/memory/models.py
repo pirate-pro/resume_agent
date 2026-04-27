@@ -23,6 +23,8 @@ __all__ = [
     "MemoryRecord",
     "MemoryScope",
     "MemoryStatus",
+    "MemoryStructuredBackfillRequest",
+    "MemoryStructuredBackfillResult",
     "MemoryType",
     "MemoryWriteCandidateRequest",
     "make_content_hash",
@@ -329,6 +331,51 @@ class CompactResult:
             "dropped_duplicate_hash",
             "invalid_rows",
             "index_files_written",
+        ):
+            value = getattr(self, field_name)
+            if value < 0:
+                raise ValidationError(f"{field_name} cannot be negative.")
+
+
+@dataclass(slots=True)
+class MemoryStructuredBackfillRequest:
+    scopes: list[MemoryScope] = field(
+        default_factory=lambda: [MemoryScope.AGENT_SHORT, MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG]
+    )
+    agent_id: str | None = None
+    session_id: str | None = None
+    include_deleted: bool = False
+    write_log: bool = True
+
+    def __post_init__(self) -> None:
+        self.scopes = _normalize_scopes(self.scopes)
+        self.agent_id = _normalize_optional("agent_id", self.agent_id)
+        self.session_id = _normalize_optional("session_id", self.session_id)
+        if not isinstance(self.include_deleted, bool):
+            raise ValidationError("include_deleted must be bool.")
+        if not isinstance(self.write_log, bool):
+            raise ValidationError("write_log must be bool.")
+
+
+@dataclass(slots=True)
+class MemoryStructuredBackfillResult:
+    scanned_files: int
+    rewritten_files: int
+    scanned_rows: int
+    patched_records: int
+    skipped_structured: int
+    skipped_deleted: int
+    invalid_rows: int
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "scanned_files",
+            "rewritten_files",
+            "scanned_rows",
+            "patched_records",
+            "skipped_structured",
+            "skipped_deleted",
+            "invalid_rows",
         ):
             value = getattr(self, field_name)
             if value < 0:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 
+from app.memory.classification import classify_memory
 from app.memory.models import MemoryScope, MemoryType, MemoryWriteCandidateRequest
 
 __all__ = ["build_candidate_request", "infer_scope_hint_from_tags"]
@@ -32,6 +33,7 @@ def build_candidate_request(
     memory_type = _infer_memory_type(normalized_tags)
     scope_hint = infer_scope_hint_from_tags(normalized_tags)
     confidence = _infer_confidence(normalized_tags)
+    classification = classify_memory(content=content, tags=normalized_tags, source=source)
     idempotency_key = _build_idempotency_key(
         agent_id=agent_id,
         session_id=session_id,
@@ -50,7 +52,10 @@ def build_candidate_request(
         confidence=confidence,
         source_event_id=source_event_id,
         idempotency_key=idempotency_key,
-        metadata={"source": source},
+        metadata={
+            "source": source,
+            **classification.to_metadata(),
+        },
     )
 
 

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.core.errors import StorageError, ValidationError
+from app.memory.classification import classify_memory
+from app.memory.metadata_refresh import build_metadata_refresh_patch
 from app.memory.models import (
     CompactResult,
     ForgetResult,
@@ -21,6 +23,8 @@ from app.memory.models import (
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
+    MemoryStructuredBackfillRequest,
+    MemoryStructuredBackfillResult,
     MemoryType,
     make_content_hash,
 )
@@ -235,6 +239,218 @@ class JsonlFileMemoryStore:
                 count += 1
         return count
 
+    def count_active_records_by_canonical_value(
+        self,
+        *,
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        canonical_key: str,
+        normalized_value: str,
+        now: datetime,
+    ) -> int:
+        normalized_key = str(canonical_key).strip()
+        normalized_value_text = str(normalized_value).strip()
+        if not normalized_key:
+            raise ValidationError("canonical_key must be non-empty string.")
+        if not normalized_value_text:
+            raise ValidationError("normalized_value must be non-empty string.")
+        count = 0
+        for path in self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id):
+            rows = _read_jsonl_rows(path)
+            for row in rows:
+                try:
+                    record = _payload_to_record(row)
+                except ValidationError as exc:
+                    _logger.warning("memory record 不合法，已跳过: path=%s error=%s row=%s", path, exc, row)
+                    continue
+                if record.status != MemoryStatus.ACTIVE:
+                    continue
+                if record.expires_at is not None and record.expires_at <= now:
+                    continue
+                if record.metadata.get("canonical_key", "") != normalized_key:
+                    continue
+                if record.metadata.get("normalized_value", "") != normalized_value_text:
+                    continue
+                count += 1
+        return count
+
+    def list_active_records_by_canonical_key(
+        self,
+        *,
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        canonical_key: str,
+        now: datetime,
+    ) -> list[MemoryRecord]:
+        normalized_key = str(canonical_key).strip()
+        if not normalized_key:
+            raise ValidationError("canonical_key must be non-empty string.")
+        matches: list[MemoryRecord] = []
+        for path in self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id):
+            rows = _read_jsonl_rows(path)
+            for row in rows:
+                try:
+                    record = _payload_to_record(row)
+                except ValidationError as exc:
+                    _logger.warning("memory record 不合法，已跳过: path=%s error=%s row=%s", path, exc, row)
+                    continue
+                if record.status != MemoryStatus.ACTIVE:
+                    continue
+                if record.expires_at is not None and record.expires_at <= now:
+                    continue
+                if record.metadata.get("canonical_key", "") != normalized_key:
+                    continue
+                matches.append(record)
+        matches.sort(key=lambda item: (item.updated_at, item.version, item.created_at, item.memory_id), reverse=True)
+        return matches
+
+    def archive_records_by_memory_ids(
+        self,
+        *,
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        memory_ids: list[str],
+        now: datetime,
+        reason: str,
+        superseded_by_memory_id: str | None = None,
+        superseded_by_normalized_value: str | None = None,
+    ) -> int:
+        normalized_ids = {item.strip() for item in memory_ids if isinstance(item, str) and item.strip()}
+        if not normalized_ids:
+            return 0
+        normalized_reason = str(reason).strip()
+        if not normalized_reason:
+            raise ValidationError("reason must be non-empty string.")
+        normalized_superseded_by = (
+            None
+            if superseded_by_memory_id is None or not str(superseded_by_memory_id).strip()
+            else str(superseded_by_memory_id).strip()
+        )
+        normalized_superseded_value = (
+            None
+            if superseded_by_normalized_value is None or not str(superseded_by_normalized_value).strip()
+            else str(superseded_by_normalized_value).strip()
+        )
+        path = self._record_file_for(scope, agent_id, session_id)
+        rows = _read_jsonl_rows(path)
+        if not rows:
+            return 0
+
+        touched = 0
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                record = _payload_to_record(row)
+            except ValidationError:
+                output.append(row)
+                continue
+            if record.status != MemoryStatus.ACTIVE or record.memory_id not in normalized_ids:
+                output.append(row)
+                continue
+            metadata = dict(record.metadata)
+            metadata["archive_reason"] = normalized_reason
+            if normalized_superseded_by is not None:
+                metadata["superseded_by_memory_id"] = normalized_superseded_by
+            if normalized_superseded_value is not None:
+                metadata["superseded_by_normalized_value"] = normalized_superseded_value
+            updated_record = MemoryRecord(
+                memory_id=record.memory_id,
+                scope=record.scope,
+                owner_agent_id=record.owner_agent_id,
+                session_id=record.session_id,
+                memory_type=record.memory_type,
+                content=record.content,
+                tags=record.tags,
+                importance=record.importance,
+                confidence=record.confidence,
+                status=MemoryStatus.ARCHIVED,
+                created_at=record.created_at,
+                updated_at=now,
+                expires_at=record.expires_at,
+                source_event_id=record.source_event_id,
+                source_agent_id=record.source_agent_id,
+                version=record.version + 1,
+                parent_memory_id=record.parent_memory_id,
+                content_hash=record.content_hash,
+                metadata=metadata,
+            )
+            output.append(_record_to_payload(updated_record))
+            touched += 1
+        if touched > 0:
+            _write_jsonl_rows(path, output)
+        return touched
+
+    def refresh_record_metadata(
+        self,
+        *,
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        memory_id: str,
+        metadata_patch: dict[str, str],
+        now: datetime,
+    ) -> MemoryRecord | None:
+        normalized_memory_id = str(memory_id).strip()
+        if not normalized_memory_id:
+            raise ValidationError("memory_id must be non-empty string.")
+        normalized_patch = {
+            str(key).strip(): str(value).strip()
+            for key, value in dict(metadata_patch).items()
+            if str(key).strip() and str(value).strip()
+        }
+        if not normalized_patch:
+            return None
+
+        path = self._record_file_for(scope, agent_id, session_id)
+        rows = _read_jsonl_rows(path)
+        if not rows:
+            return None
+
+        updated_record: MemoryRecord | None = None
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                record = _payload_to_record(row)
+            except ValidationError:
+                output.append(row)
+                continue
+            if record.memory_id != normalized_memory_id:
+                output.append(row)
+                continue
+            metadata = dict(record.metadata)
+            metadata.update(normalized_patch)
+            metadata["metadata_refresh_reason"] = "structured_backfill"
+            refreshed = MemoryRecord(
+                memory_id=record.memory_id,
+                scope=record.scope,
+                owner_agent_id=record.owner_agent_id,
+                session_id=record.session_id,
+                memory_type=record.memory_type,
+                content=record.content,
+                tags=record.tags,
+                importance=record.importance,
+                confidence=record.confidence,
+                status=record.status,
+                created_at=record.created_at,
+                updated_at=now,
+                expires_at=record.expires_at,
+                source_event_id=record.source_event_id,
+                source_agent_id=record.source_agent_id,
+                version=record.version + 1,
+                parent_memory_id=record.parent_memory_id,
+                content_hash=record.content_hash,
+                metadata=metadata,
+            )
+            updated_record = refreshed
+            output.append(_record_to_payload(refreshed))
+        if updated_record is None:
+            return None
+        _write_jsonl_rows(path, output)
+        return updated_record
+
     def forget(self, request: MemoryForgetRequest, now: datetime) -> ForgetResult:
         touched = 0
         deleted = 0
@@ -346,6 +562,99 @@ class JsonlFileMemoryStore:
         self._append_compact_log(request=request, result=result, now=now)
         return result
 
+    def backfill_structured_metadata(
+        self,
+        request: MemoryStructuredBackfillRequest,
+        now: datetime,
+    ) -> MemoryStructuredBackfillResult:
+        if not isinstance(request, MemoryStructuredBackfillRequest):
+            raise ValidationError("request must be MemoryStructuredBackfillRequest.")
+        unique_paths = _dedupe_paths(self._collect_backfill_paths(request))
+
+        scanned_files = 0
+        rewritten_files = 0
+        scanned_rows = 0
+        patched_records = 0
+        skipped_structured = 0
+        skipped_deleted = 0
+        invalid_rows = 0
+
+        for path in unique_paths:
+            rows = _read_jsonl_rows(path)
+            if not rows:
+                continue
+            scanned_files += 1
+            scanned_rows += len(rows)
+            changed = False
+            output: list[dict[str, Any]] = []
+            for row in rows:
+                try:
+                    record = _payload_to_record(row)
+                except ValidationError:
+                    invalid_rows += 1
+                    output.append(row)
+                    continue
+                if record.status == MemoryStatus.DELETED and not request.include_deleted:
+                    skipped_deleted += 1
+                    output.append(row)
+                    continue
+                source = record.metadata.get("source", "legacy_memory_backfill")
+                classification = classify_memory(
+                    content=record.content,
+                    tags=record.tags,
+                    source=source,
+                )
+                patch = build_metadata_refresh_patch(
+                    existing_metadata=record.metadata,
+                    classified_metadata=classification.to_metadata(),
+                )
+                if not patch:
+                    skipped_structured += 1
+                    output.append(row)
+                    continue
+                metadata = dict(record.metadata)
+                metadata.update(patch)
+                metadata["metadata_refresh_reason"] = "bulk_structured_backfill"
+                updated_record = MemoryRecord(
+                    memory_id=record.memory_id,
+                    scope=record.scope,
+                    owner_agent_id=record.owner_agent_id,
+                    session_id=record.session_id,
+                    memory_type=record.memory_type,
+                    content=record.content,
+                    tags=record.tags,
+                    importance=record.importance,
+                    confidence=record.confidence,
+                    status=record.status,
+                    created_at=record.created_at,
+                    updated_at=now,
+                    expires_at=record.expires_at,
+                    source_event_id=record.source_event_id,
+                    source_agent_id=record.source_agent_id,
+                    version=record.version + 1,
+                    parent_memory_id=record.parent_memory_id,
+                    content_hash=record.content_hash,
+                    metadata=metadata,
+                )
+                patched_records += 1
+                changed = True
+                output.append(_record_to_payload(updated_record))
+            if changed:
+                _write_jsonl_rows(path, output)
+                rewritten_files += 1
+        result = MemoryStructuredBackfillResult(
+            scanned_files=scanned_files,
+            rewritten_files=rewritten_files,
+            scanned_rows=scanned_rows,
+            patched_records=patched_records,
+            skipped_structured=skipped_structured,
+            skipped_deleted=skipped_deleted,
+            invalid_rows=invalid_rows,
+        )
+        if request.write_log:
+            self._append_structured_backfill_log(request=request, result=result, now=now)
+        return result
+
     def _load_pending_idempotency_keys(self) -> set[str]:
         keys: set[str] = set()
         for row in _read_jsonl_rows(self._pending_file):
@@ -381,6 +690,12 @@ class JsonlFileMemoryStore:
         return self._agents_dir / owner_agent_id / "short" / f"{session_id}.jsonl"
 
     def _collect_compact_paths(self, request: MemoryCompactRequest) -> list[Path]:
+        paths: list[Path] = []
+        for scope in request.scopes:
+            paths.extend(self._iter_scope_files(scope=scope, agent_id=request.agent_id, session_id=request.session_id))
+        return paths
+
+    def _collect_backfill_paths(self, request: MemoryStructuredBackfillRequest) -> list[Path]:
         paths: list[Path] = []
         for scope in request.scopes:
             paths.extend(self._iter_scope_files(scope=scope, agent_id=request.agent_id, session_id=request.session_id))
@@ -463,6 +778,35 @@ class JsonlFileMemoryStore:
             },
         }
         _append_jsonl_rows(self._ops_dir / "compact.log.jsonl", [payload])
+
+    def _append_structured_backfill_log(
+        self,
+        *,
+        request: MemoryStructuredBackfillRequest,
+        result: MemoryStructuredBackfillResult,
+        now: datetime,
+    ) -> None:
+        payload = {
+            "operation": "structured_backfill",
+            "timestamp": _to_iso(now),
+            "request": {
+                "scopes": [scope.value for scope in request.scopes],
+                "agent_id": request.agent_id,
+                "session_id": request.session_id,
+                "include_deleted": request.include_deleted,
+                "write_log": request.write_log,
+            },
+            "result": {
+                "scanned_files": result.scanned_files,
+                "rewritten_files": result.rewritten_files,
+                "scanned_rows": result.scanned_rows,
+                "patched_records": result.patched_records,
+                "skipped_structured": result.skipped_structured,
+                "skipped_deleted": result.skipped_deleted,
+                "invalid_rows": result.invalid_rows,
+            },
+        }
+        _append_jsonl_rows(self._ops_dir / "structured_backfill.log.jsonl", [payload])
 
 
 def _score_record(record: MemoryRecord, tokens: list[str], normalized_query: str) -> int:
