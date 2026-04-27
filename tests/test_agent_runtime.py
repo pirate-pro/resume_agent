@@ -332,40 +332,6 @@ def test_runtime_stream_does_not_emit_and_reset_partial_answer_before_tool_call(
     event_names = [event for event, _ in events]
 
     assert output.answer == "已经处理完毕。"
-    assert "".join(answer_deltas) == "已经处理完毕。"
+    assert answer_deltas == ["已经处理完毕。"]
     assert "answer_reset" not in event_names
     assert "answer_meta_reset" not in event_names
-
-
-def test_runtime_stream_replays_buffered_answer_in_multiple_chunks(tmp_path: Path) -> None:
-    model = StaticModelClient(content="这是一段明显长于单个回放块长度的最终答复，用来验证流式回放不会一次性整段塞给前端。")
-    runtime, _, _ = _build_runtime(tmp_path, model)
-
-    class RecordingEventChannel(EventChannel):
-        def __init__(self) -> None:
-            super().__init__()
-            self.events: list[tuple[str, dict[str, Any]]] = []
-
-        async def emit(self, event: str, data: dict[str, Any]) -> None:
-            self.events.append((event, data))
-
-    async def _run() -> tuple[AgentRunOutput, list[tuple[str, dict[str, Any]]]]:
-        channel = RecordingEventChannel()
-        output = await runtime.run_stream(
-            AgentRunInput(
-                session_id="sess_stream_replay_chunks",
-                user_message="stream replay chunks",
-                skill_names=["base"],
-                max_tool_rounds=1,
-                context=_context("sess_stream_replay_chunks"),
-            ),
-            channel,
-        )
-        return output, channel.events
-
-    output, events = asyncio.run(_run())
-
-    answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
-
-    assert "".join(answer_deltas) == output.answer
-    assert len(answer_deltas) >= 2

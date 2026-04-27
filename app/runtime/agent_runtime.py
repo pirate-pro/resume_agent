@@ -19,8 +19,6 @@ from app.services.answer_normalizer import AnswerNormalizer
 
 __all__ = ["AgentRuntime"]
 _logger = logging.getLogger(__name__)
-_BUFFERED_STREAM_REPLAY_CHARS = 24
-_BUFFERED_STREAM_REPLAY_DELAY_SECONDS = 0.02
 _FINAL_ANSWER_RECOVERY_PROMPT = (
     "你已经拿到了前面对话和工具结果。现在请直接给用户最终答复。"
     "不要再调用任何工具。"
@@ -307,11 +305,17 @@ class AgentRuntime:
             if not resolved_tool_calls:
                 answer = round_content
                 if round_content_deltas:
-                    await self._replay_buffered_answer_stream(
-                        channel=channel,
-                        content_deltas=round_content_deltas,
-                        tool_calls=used_tool_calls,
-                    )
+                    emitted_answer_meta: tuple[str, str, str, str, str] | None = None
+                    cumulative_parts: list[str] = []
+                    for delta in round_content_deltas:
+                        cumulative_parts.append(delta)
+                        emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
+                            channel=channel,
+                            content="".join(cumulative_parts),
+                            tool_calls=used_tool_calls,
+                            previous_meta=emitted_answer_meta,
+                        )
+                        await channel.emit("answer_delta", {"delta": delta})
                 if not answer:
                     answer = await self._recover_final_answer_stream(
                         system_prompt=context.system_prompt,
@@ -415,26 +419,6 @@ class AgentRuntime:
             tool_calls=used_tool_calls,
             memory_hits=context.memory_hits,
         )
-
-    async def _replay_buffered_answer_stream(
-        self,
-        *,
-        channel: EventChannel,
-        content_deltas: list[str],
-        tool_calls: list[ToolCall],
-    ) -> None:
-        replay_chunks = self._build_stream_replay_chunks(content_deltas)
-        full_content = "".join(content_deltas)
-        await self._emit_stream_answer_meta_if_changed(
-            channel=channel,
-            content=full_content,
-            tool_calls=tool_calls,
-            previous_meta=None,
-        )
-        for index, chunk in enumerate(replay_chunks):
-            await channel.emit("answer_delta", {"delta": chunk})
-            if index < len(replay_chunks) - 1:
-                await asyncio.sleep(_BUFFERED_STREAM_REPLAY_DELAY_SECONDS)
 
     def _execute_tool_safely(self, call: ToolCall, context: RunContext) -> ToolExecutionResult:
         try:
@@ -608,29 +592,6 @@ class AgentRuntime:
             },
         )
         return current_meta
-
-    def _build_stream_replay_chunks(self, content_deltas: list[str]) -> list[str]:
-        chunks: list[str] = []
-        buffer = ""
-        for raw_delta in content_deltas:
-            if not raw_delta:
-                continue
-            buffer += raw_delta
-            while len(buffer) >= _BUFFERED_STREAM_REPLAY_CHARS:
-                split_at = self._choose_replay_split_index(buffer)
-                chunks.append(buffer[:split_at])
-                buffer = buffer[split_at:]
-        if buffer:
-            chunks.append(buffer)
-        return chunks
-
-    def _choose_replay_split_index(self, text: str) -> int:
-        hard_limit = min(len(text), _BUFFERED_STREAM_REPLAY_CHARS)
-        punctuation = "，。！？；：,.!?\n"
-        for idx in range(hard_limit, 0, -1):
-            if text[idx - 1] in punctuation:
-                return idx
-        return hard_limit
 
     def _resolve_run_context(self, session_id: str, run_input: AgentRunInput) -> RunContext:
         if run_input.context is None:
