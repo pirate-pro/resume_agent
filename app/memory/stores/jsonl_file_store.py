@@ -22,22 +22,14 @@ from app.memory.models import (
     MemoryScope,
     MemoryStatus,
     MemoryType,
-    make_content_hash,
 )
+from app.memory.index import MemoryIndex, SqliteMemoryIndex
+from app.memory.policies import TEXT_SEARCH_NAME_EXPANSIONS, should_expand_name_query
+from app.memory.serialization import memory_payload_to_record, memory_record_to_payload
 
 __all__ = ["JsonlFileMemoryStore"]
 _logger = logging.getLogger(__name__)
 
-_NAME_INTENT_TRIGGERS = (
-    "你叫什么名字",
-    "叫什么名字",
-    "你的名字",
-    "叫你什么",
-    "怎么称呼",
-    "称呼",
-    "名字",
-)
-_NAME_INTENT_EXPANSIONS = ("名字", "称呼", "叫我", "叫你", "名称")
 _CHAR_STOPWORDS = {"的", "了", "呢", "吗", "啊", "呀", "是", "在", "和", "与", "及", "你", "我", "他", "她", "它"}
 
 
@@ -52,7 +44,7 @@ class _QueryPlan:
 class JsonlFileMemoryStore:
     """Persist memory candidates and records in JSONL files."""
 
-    def __init__(self, root_dir: Path) -> None:
+    def __init__(self, root_dir: Path, index: MemoryIndex | None = None, enable_index: bool = True) -> None:
         if not isinstance(root_dir, Path):
             raise ValidationError("root_dir must be pathlib.Path.")
         self._root_dir = root_dir
@@ -61,7 +53,9 @@ class JsonlFileMemoryStore:
         self._candidates_dir = self._root_dir / "candidates"
         self._processed_dir = self._candidates_dir / "processed"
         self._ops_dir = self._root_dir / "ops"
+        self._index_dir = self._root_dir / "index"
         self._pending_file = self._candidates_dir / "pending.jsonl"
+        self._index: MemoryIndex | None = index
 
         self._shared_dir.mkdir(parents=True, exist_ok=True)
         self._agents_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +63,11 @@ class JsonlFileMemoryStore:
         self._processed_dir.mkdir(parents=True, exist_ok=True)
         self._ops_dir.mkdir(parents=True, exist_ok=True)
         self._pending_file.touch(exist_ok=True)
+        if self._index is None and enable_index:
+            try:
+                self._index = SqliteMemoryIndex(self._index_dir / "memory_index.sqlite3")
+            except StorageError as exc:
+                _logger.warning("memory SQLite 派生索引初始化失败，降级为 JSONL 扫描: error=%s", exc)
 
     def add_candidate(self, candidate: MemoryCandidate) -> None:
         if not isinstance(candidate, MemoryCandidate):
@@ -130,6 +129,7 @@ class JsonlFileMemoryStore:
             grouped.setdefault(target, []).append(_record_to_payload(record))
         for path, rows in grouped.items():
             _append_jsonl_rows(path, rows)
+            self._sync_index_for_path(path)
 
     def search_records(
         self,
@@ -154,56 +154,17 @@ class JsonlFileMemoryStore:
             len(query_plan.fallback_tokens),
             query_plan.wildcard,
         )
-        strict_candidates: list[tuple[int, MemoryRecord]] = []
-        fallback_candidates: list[tuple[int, MemoryRecord]] = []
-
-        for path in self._iter_scope_files(scope=scope, agent_id=agent_id.strip(), session_id=session_id):
-            rows = _read_jsonl_rows(path)
-            for row in rows:
-                try:
-                    record = _payload_to_record(row)
-                except ValidationError as exc:
-                    _logger.warning("memory record 不合法，已跳过: path=%s error=%s row=%s", path, exc, row)
-                    continue
-                if record.status != MemoryStatus.ACTIVE:
-                    continue
-                if record.expires_at is not None and record.expires_at <= now:
-                    continue
-                if query_plan.wildcard:
-                    strict_candidates.append((1, record))
-                    continue
-
-                strict_score = _score_record(
-                    record=record,
-                    tokens=query_plan.strict_tokens,
-                    normalized_query=query_plan.normalized_query,
-                )
-                if strict_score > 0:
-                    strict_candidates.append((strict_score, record))
-                    continue
-
-                # 两阶段召回：严格阶段未命中时，再尝试更宽松的中文短词兜底召回。
-                fallback_score = _score_record(
-                    record=record,
-                    tokens=query_plan.fallback_tokens,
-                    normalized_query="",
-                )
-                if fallback_score > 0:
-                    fallback_candidates.append((fallback_score, record))
-
-        candidates = strict_candidates if strict_candidates else fallback_candidates
-        if not strict_candidates and fallback_candidates:
-            _logger.debug(
-                "memory 检索使用兜底召回: query=%s fallback_hit_count=%s",
-                query_plan.normalized_query,
-                len(fallback_candidates),
-            )
-
-        candidates.sort(
-            key=lambda item: (item[0], item[1].confidence, item[1].importance, item[1].updated_at),
-            reverse=True,
+        paths = self._iter_scope_files(scope=scope, agent_id=agent_id.strip(), session_id=session_id)
+        indexed_records = self._list_active_records_from_index(
+            paths=paths,
+            scope=scope,
+            agent_id=agent_id.strip(),
+            session_id=session_id,
+            now=now,
         )
-        return [record for _, record in candidates[:limit]]
+        if indexed_records is not None:
+            return _rank_records_by_query(records=indexed_records, query_plan=query_plan, limit=limit)
+        return _search_records_from_jsonl(paths=paths, query_plan=query_plan, limit=limit, now=now)
 
     def count_active_records_by_hash(
         self,
@@ -217,8 +178,19 @@ class JsonlFileMemoryStore:
         normalized_hash = str(content_hash).strip()
         if not normalized_hash:
             raise ValidationError("content_hash must be non-empty string.")
+        paths = self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id)
+        indexed_count = self._count_active_records_by_hash_from_index(
+            paths=paths,
+            scope=scope,
+            agent_id=agent_id,
+            session_id=session_id,
+            content_hash=normalized_hash,
+            now=now,
+        )
+        if indexed_count is not None:
+            return indexed_count
         count = 0
-        for path in self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id):
+        for path in paths:
             rows = _read_jsonl_rows(path)
             for row in rows:
                 try:
@@ -251,8 +223,20 @@ class JsonlFileMemoryStore:
             raise ValidationError("canonical_key must be non-empty string.")
         if not normalized_value_text:
             raise ValidationError("normalized_value must be non-empty string.")
+        paths = self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id)
+        indexed_count = self._count_active_records_by_canonical_value_from_index(
+            paths=paths,
+            scope=scope,
+            agent_id=agent_id,
+            session_id=session_id,
+            canonical_key=normalized_key,
+            normalized_value=normalized_value_text,
+            now=now,
+        )
+        if indexed_count is not None:
+            return indexed_count
         count = 0
-        for path in self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id):
+        for path in paths:
             rows = _read_jsonl_rows(path)
             for row in rows:
                 try:
@@ -283,8 +267,19 @@ class JsonlFileMemoryStore:
         normalized_key = str(canonical_key).strip()
         if not normalized_key:
             raise ValidationError("canonical_key must be non-empty string.")
+        paths = self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id)
+        indexed_matches = self._list_active_records_by_canonical_key_from_index(
+            paths=paths,
+            scope=scope,
+            agent_id=agent_id,
+            session_id=session_id,
+            canonical_key=normalized_key,
+            now=now,
+        )
+        if indexed_matches is not None:
+            return indexed_matches
         matches: list[MemoryRecord] = []
-        for path in self._iter_scope_files(scope=scope, agent_id=agent_id, session_id=session_id):
+        for path in paths:
             rows = _read_jsonl_rows(path)
             for row in rows:
                 try:
@@ -377,6 +372,7 @@ class JsonlFileMemoryStore:
             touched += 1
         if touched > 0:
             _write_jsonl_rows(path, output)
+            self._sync_index_for_path(path)
         return touched
 
     def forget(self, request: MemoryForgetRequest, now: datetime) -> ForgetResult:
@@ -434,6 +430,7 @@ class JsonlFileMemoryStore:
                     archived += 1
                 if changed:
                     _write_jsonl_rows(path, output)
+                    self._sync_index_for_path(path)
 
         return ForgetResult(touched_records=touched, deleted_records=deleted, archived_records=archived)
 
@@ -456,6 +453,7 @@ class JsonlFileMemoryStore:
         for path in unique_paths:
             rows = _read_jsonl_rows(path)
             if not rows:
+                self._sync_index_for_path(path)
                 continue
             scanned_files += 1
             scanned_rows += len(rows)
@@ -474,6 +472,7 @@ class JsonlFileMemoryStore:
             if request.write_index:
                 self._write_index_file(path=path, records=compacted.records, invalid_rows=compacted.invalid_rows, now=now)
                 index_files_written += 1
+            self._sync_index_for_path(path)
 
         result = CompactResult(
             scanned_files=scanned_files,
@@ -497,6 +496,143 @@ class JsonlFileMemoryStore:
             if isinstance(raw, str) and raw.strip():
                 keys.add(raw.strip())
         return keys
+
+    def _list_active_records_from_index(
+        self,
+        *,
+        paths: list[Path],
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        now: datetime,
+    ) -> list[MemoryRecord] | None:
+        if not self._ensure_index_for_paths(paths):
+            return None
+        assert self._index is not None
+        try:
+            return self._index.list_active_records(
+                scope=scope,
+                agent_id=agent_id,
+                session_id=session_id,
+                now=now,
+            )
+        except StorageError as exc:
+            _logger.warning("memory SQLite 派生索引读取失败，降级为 JSONL 扫描: error=%s", exc)
+            return None
+
+    def _count_active_records_by_hash_from_index(
+        self,
+        *,
+        paths: list[Path],
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        content_hash: str,
+        now: datetime,
+    ) -> int | None:
+        if not self._ensure_index_for_paths(paths):
+            return None
+        assert self._index is not None
+        try:
+            return self._index.count_active_records_by_hash(
+                scope=scope,
+                agent_id=agent_id,
+                session_id=session_id,
+                content_hash=content_hash,
+                now=now,
+            )
+        except StorageError as exc:
+            _logger.warning("memory SQLite 派生索引 hash 计数失败，降级为 JSONL 扫描: error=%s", exc)
+            return None
+
+    def _count_active_records_by_canonical_value_from_index(
+        self,
+        *,
+        paths: list[Path],
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        canonical_key: str,
+        normalized_value: str,
+        now: datetime,
+    ) -> int | None:
+        if not self._ensure_index_for_paths(paths):
+            return None
+        assert self._index is not None
+        try:
+            return self._index.count_active_records_by_canonical_value(
+                scope=scope,
+                agent_id=agent_id,
+                session_id=session_id,
+                canonical_key=canonical_key,
+                normalized_value=normalized_value,
+                now=now,
+            )
+        except StorageError as exc:
+            _logger.warning("memory SQLite 派生索引 canonical 计数失败，降级为 JSONL 扫描: error=%s", exc)
+            return None
+
+    def _list_active_records_by_canonical_key_from_index(
+        self,
+        *,
+        paths: list[Path],
+        scope: MemoryScope,
+        agent_id: str | None,
+        session_id: str | None,
+        canonical_key: str,
+        now: datetime,
+    ) -> list[MemoryRecord] | None:
+        if not self._ensure_index_for_paths(paths):
+            return None
+        assert self._index is not None
+        try:
+            return self._index.list_active_records_by_canonical_key(
+                scope=scope,
+                agent_id=agent_id,
+                session_id=session_id,
+                canonical_key=canonical_key,
+                now=now,
+            )
+        except StorageError as exc:
+            _logger.warning("memory SQLite 派生索引 canonical 读取失败，降级为 JSONL 扫描: error=%s", exc)
+            return None
+
+    def _ensure_index_for_paths(self, paths: list[Path]) -> bool:
+        if self._index is None:
+            return False
+        try:
+            for path in paths:
+                source_file = self._source_file_for_path(path)
+                fingerprint = _source_fingerprint(path)
+                if self._index.source_is_fresh(source_file, fingerprint):
+                    continue
+                self._replace_index_source(path=path, source_file=source_file, fingerprint=fingerprint)
+        except StorageError as exc:
+            _logger.warning("memory SQLite 派生索引刷新失败，降级为 JSONL 扫描: error=%s", exc)
+            return False
+        return True
+
+    def _sync_index_for_path(self, path: Path) -> None:
+        if self._index is None:
+            return
+        source_file = self._source_file_for_path(path)
+        fingerprint = _source_fingerprint(path)
+        try:
+            self._replace_index_source(path=path, source_file=source_file, fingerprint=fingerprint)
+        except StorageError as exc:
+            _logger.warning("memory SQLite 派生索引同步失败: path=%s error=%s", path, exc)
+
+    def _replace_index_source(self, *, path: Path, source_file: str, fingerprint: str) -> None:
+        if self._index is None:
+            return
+        records = _load_valid_records_from_path(path)
+        self._index.replace_source_records(source_file=source_file, fingerprint=fingerprint, records=records)
+
+    def _source_file_for_path(self, path: Path) -> str:
+        try:
+            return path.relative_to(self._root_dir).as_posix()
+        except ValueError:
+            return path.as_posix()
 
     def _iter_scope_files(self, scope: MemoryScope, agent_id: str | None, session_id: str | None) -> list[Path]:
         if scope == MemoryScope.SHARED_LONG:
@@ -608,6 +744,88 @@ class JsonlFileMemoryStore:
         }
         _append_jsonl_rows(self._ops_dir / "compact.log.jsonl", [payload])
 
+
+def _search_records_from_jsonl(
+    *,
+    paths: list[Path],
+    query_plan: _QueryPlan,
+    limit: int,
+    now: datetime,
+) -> list[MemoryRecord]:
+    records: list[MemoryRecord] = []
+    for path in paths:
+        for record in _load_valid_records_from_path(path):
+            if record.status != MemoryStatus.ACTIVE:
+                continue
+            if record.expires_at is not None and record.expires_at <= now:
+                continue
+            records.append(record)
+    return _rank_records_by_query(records=records, query_plan=query_plan, limit=limit)
+
+
+def _rank_records_by_query(
+    *,
+    records: list[MemoryRecord],
+    query_plan: _QueryPlan,
+    limit: int,
+) -> list[MemoryRecord]:
+    strict_candidates: list[tuple[int, MemoryRecord]] = []
+    fallback_candidates: list[tuple[int, MemoryRecord]] = []
+    for record in records:
+        if query_plan.wildcard:
+            strict_candidates.append((1, record))
+            continue
+
+        strict_score = _score_record(
+            record=record,
+            tokens=query_plan.strict_tokens,
+            normalized_query=query_plan.normalized_query,
+        )
+        if strict_score > 0:
+            strict_candidates.append((strict_score, record))
+            continue
+
+        # 两阶段召回：严格阶段未命中时，再尝试更宽松的中文短词兜底召回。
+        fallback_score = _score_record(
+            record=record,
+            tokens=query_plan.fallback_tokens,
+            normalized_query="",
+        )
+        if fallback_score > 0:
+            fallback_candidates.append((fallback_score, record))
+
+    candidates = strict_candidates if strict_candidates else fallback_candidates
+    if not strict_candidates and fallback_candidates:
+        _logger.debug(
+            "memory 检索使用兜底召回: query=%s fallback_hit_count=%s",
+            query_plan.normalized_query,
+            len(fallback_candidates),
+        )
+
+    candidates.sort(
+        key=lambda item: (item[0], item[1].confidence, item[1].importance, item[1].updated_at),
+        reverse=True,
+    )
+    return [record for _, record in candidates[:limit]]
+
+
+def _load_valid_records_from_path(path: Path) -> list[MemoryRecord]:
+    records: list[MemoryRecord] = []
+    for row in _read_jsonl_rows(path):
+        try:
+            records.append(_payload_to_record(row))
+        except ValidationError as exc:
+            _logger.warning("memory record 不合法，已跳过: path=%s error=%s row=%s", path, exc, row)
+    return records
+
+
+def _source_fingerprint(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    stat = path.stat()
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
 def _score_record(record: MemoryRecord, tokens: list[str], normalized_query: str) -> int:
     if not tokens and not normalized_query:
         return 0
@@ -692,8 +910,8 @@ def _build_strict_tokens(normalized_query: str) -> list[str]:
         for gram in _cjk_ngrams(compact_query, min_n=2, max_n=3):
             add_token(gram)
 
-    if any(trigger in compact_query for trigger in _NAME_INTENT_TRIGGERS):
-        for item in _NAME_INTENT_EXPANSIONS:
+    if should_expand_name_query(compact_query):
+        for item in TEXT_SEARCH_NAME_EXPANSIONS:
             add_token(item)
 
     return tokens[:80]
@@ -932,78 +1150,11 @@ def _payload_to_candidate(payload: dict[str, Any]) -> MemoryCandidate:
 
 
 def _record_to_payload(record: MemoryRecord) -> dict[str, Any]:
-    return {
-        "memory_id": record.memory_id,
-        "scope": record.scope.value,
-        "owner_agent_id": record.owner_agent_id,
-        "session_id": record.session_id,
-        "memory_type": record.memory_type.value,
-        "content": record.content,
-        "tags": record.tags,
-        "importance": record.importance,
-        "confidence": record.confidence,
-        "status": record.status.value,
-        "created_at": _to_iso(record.created_at),
-        "updated_at": _to_iso(record.updated_at),
-        "expires_at": None if record.expires_at is None else _to_iso(record.expires_at),
-        "source_event_id": record.source_event_id,
-        "source_agent_id": record.source_agent_id,
-        "version": record.version,
-        "parent_memory_id": record.parent_memory_id,
-        "content_hash": record.content_hash or make_content_hash(record.content),
-        "metadata": record.metadata,
-    }
+    return memory_record_to_payload(record)
 
 
 def _payload_to_record(payload: dict[str, Any]) -> MemoryRecord:
-    _require_payload_keys(
-        payload,
-        [
-            "memory_id",
-            "scope",
-            "owner_agent_id",
-            "session_id",
-            "memory_type",
-            "content",
-            "tags",
-            "importance",
-            "confidence",
-            "status",
-            "created_at",
-            "updated_at",
-            "expires_at",
-            "source_event_id",
-            "source_agent_id",
-            "version",
-            "parent_memory_id",
-            "content_hash",
-            "metadata",
-        ],
-    )
-    try:
-        return MemoryRecord(
-            memory_id=str(payload["memory_id"]),
-            scope=MemoryScope(str(payload["scope"])),
-            owner_agent_id=None if payload["owner_agent_id"] is None else str(payload["owner_agent_id"]),
-            session_id=None if payload["session_id"] is None else str(payload["session_id"]),
-            memory_type=MemoryType(str(payload["memory_type"])),
-            content=str(payload["content"]),
-            tags=_normalize_payload_string_list(payload["tags"], "tags"),
-            importance=float(payload["importance"]),
-            confidence=float(payload["confidence"]),
-            status=MemoryStatus(str(payload["status"])),
-            created_at=_from_iso(str(payload["created_at"])),
-            updated_at=_from_iso(str(payload["updated_at"])),
-            expires_at=None if payload["expires_at"] is None else _from_iso(str(payload["expires_at"])),
-            source_event_id=None if payload["source_event_id"] is None else str(payload["source_event_id"]),
-            source_agent_id=None if payload["source_agent_id"] is None else str(payload["source_agent_id"]),
-            version=int(payload["version"]),
-            parent_memory_id=None if payload["parent_memory_id"] is None else str(payload["parent_memory_id"]),
-            content_hash=str(payload["content_hash"]),
-            metadata=_normalize_payload_metadata(payload["metadata"]),
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValidationError(f"invalid memory record payload: {exc}") from exc
+    return memory_payload_to_record(payload)
 
 
 def _require_payload_keys(payload: dict[str, Any], keys: list[str]) -> None:
