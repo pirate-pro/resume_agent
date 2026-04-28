@@ -13,15 +13,24 @@ from uuid import uuid4
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
+from app.memory.admission import evaluate_memory_admission
 from app.memory.classification import classify_memory
 from app.memory.intake import infer_scope_hint_from_tags
-from app.memory.models import MemoryScope
+from app.memory.models import MemoryRecord, MemoryScope
+from app.memory.policies import (
+    infer_confidence_from_tags,
+    infer_memory_type_from_tags,
+    memory_lane_for_metadata,
+    normalize_memory_tags,
+)
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 from app.state.models import StateRecord
 
 __all__ = [
     "MemoryForgetTool",
+    "MemoryExplainTool",
+    "MemoryInspectTool",
     "MemorySearchTool",
     "MemoryUpdateTool",
     "MemoryWriteTool",
@@ -162,6 +171,133 @@ class MemorySearchTool:
         ]
         return ToolExecutionResult(
             tool_name="memory_search",
+            success=True,
+            content=json.dumps(payload, ensure_ascii=False),
+        )
+
+
+class MemoryInspectTool:
+    """Inspect current agent-visible memory records with structured metadata."""
+
+    def __init__(self, memory_manager: MemoryManager) -> None:
+        self._memory_manager = memory_manager
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="memory_inspect",
+            description=(
+                "Inspect current agent-visible active memory records with scope, lane, canonical metadata, "
+                "source, timestamps, and status. Use query='*' to list visible memories."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "default": "*"},
+                    "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
+                    "include_metadata": {"type": "boolean", "default": True},
+                },
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = _validate_context(context)
+        query = _optional_string_argument(arguments, "query", default="*")
+        raw_limit = arguments.get("limit", 20)
+        if not isinstance(raw_limit, int) or raw_limit <= 0:
+            raise ToolExecutionError("'limit' must be a positive integer.")
+        limit = min(raw_limit, 100)
+        include_metadata = arguments.get("include_metadata", True)
+        if not isinstance(include_metadata, bool):
+            raise ToolExecutionError("'include_metadata' must be boolean.")
+
+        normalized_query, normalized_limit, bundle = self._memory_manager.search_bundle(
+            query=query,
+            limit=limit,
+            context=run_context,
+        )
+        records = bundle.items
+        payload = {
+            "query": normalized_query,
+            "limit": normalized_limit,
+            "agent_id": run_context.agent_id,
+            "session_id": run_context.session_id,
+            "count": len(records),
+            "searched_scopes": [scope.value for scope in bundle.searched_scopes],
+            "total_scanned": bundle.total_scanned,
+            "truncated": bundle.truncated,
+            "notes": bundle.notes,
+            "memories": [_serialize_memory_record(record, include_metadata=include_metadata) for record in records],
+        }
+        return ToolExecutionResult(
+            tool_name="memory_inspect",
+            success=True,
+            content=json.dumps(payload, ensure_ascii=False),
+        )
+
+
+class MemoryExplainTool:
+    """Dry-run memory admission/classification/routing for one content string."""
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="memory_explain",
+            description=(
+                "Explain how a content string would be handled by memory admission, policy routing, "
+                "classification, canonicalization, and lane mapping. Dry-run only; does not write memory."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "default": [],
+                    },
+                    "source": {"type": "string", "default": "memory_explain_tool"},
+                },
+                "required": ["content"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        _validate_context(context)
+        content = _require_non_empty_argument(arguments, "content")
+        tags = normalize_memory_tags(_normalize_tags(arguments.get("tags", [])))
+        source = _optional_string_argument(arguments, "source", default="memory_explain_tool")
+        admission = evaluate_memory_admission(content, tags)
+        classification = classify_memory(content=content, tags=tags, source=source)
+        scope_hint = infer_scope_hint_from_tags(tags)
+        memory_type = infer_memory_type_from_tags(tags)
+        confidence = infer_confidence_from_tags(tags)
+        lane = memory_lane_for_metadata(classification.canonical_key, classification.kind)
+        payload = {
+            "content": content,
+            "tags": tags,
+            "source": source,
+            "admission": {
+                "accepted": admission.accepted,
+                "decision": admission.decision.value,
+                "reason": admission.reason,
+            },
+            "candidate": {
+                "scope_hint": scope_hint.value,
+                "memory_type": memory_type.value,
+                "confidence": confidence,
+            },
+            "classification": {
+                "kind": classification.kind,
+                "source_kind": classification.source_kind,
+                "canonical_key": classification.canonical_key,
+                "normalized_value": classification.normalized_value,
+                "subject_kind": classification.subject_kind,
+                "classification_version": classification.classification_version,
+            },
+            "lane": lane,
+            "dry_run": True,
+        }
+        return ToolExecutionResult(
+            tool_name="memory_explain",
             success=True,
             content=json.dumps(payload, ensure_ascii=False),
         )
@@ -901,6 +1037,18 @@ def _require_non_empty_argument(arguments: dict[str, Any], key: str) -> str:
     return raw_value.strip()
 
 
+def _optional_string_argument(arguments: dict[str, Any], key: str, *, default: str) -> str:
+    if not isinstance(arguments, dict):
+        raise ToolExecutionError("Tool arguments must be an object.")
+    raw_value = arguments.get(key, default)
+    if raw_value is None:
+        return default
+    if not isinstance(raw_value, str):
+        raise ToolExecutionError(f"'{key}' must be a string.")
+    normalized = raw_value.strip()
+    return normalized or default
+
+
 
 def _normalize_tags(raw_tags: Any) -> list[str]:
     if raw_tags is None:
@@ -1168,6 +1316,43 @@ def _serialize_state_record(record: StateRecord) -> dict[str, Any]:
         "created_at": record.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "updated_at": record.updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
     }
+
+
+def _serialize_memory_record(record: MemoryRecord, *, include_metadata: bool) -> dict[str, Any]:
+    canonical_key = str(record.metadata.get("canonical_key", "")).strip() or None
+    normalized_value = str(record.metadata.get("normalized_value", "")).strip() or None
+    kind = str(record.metadata.get("kind", "")).strip() or None
+    source_kind = str(record.metadata.get("source_kind", "")).strip() or None
+    payload: dict[str, Any] = {
+        "memory_id": record.memory_id,
+        "scope": record.scope.value,
+        "owner_agent_id": record.owner_agent_id,
+        "session_id": record.session_id,
+        "status": record.status.value,
+        "memory_type": record.memory_type.value,
+        "content": record.content,
+        "tags": record.tags,
+        "importance": record.importance,
+        "confidence": record.confidence,
+        "canonical_key": canonical_key,
+        "normalized_value": normalized_value,
+        "kind": kind,
+        "source_kind": source_kind,
+        "lane": memory_lane_for_metadata(canonical_key, kind),
+        "created_at": record.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "updated_at": record.updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "expires_at": None
+        if record.expires_at is None
+        else record.expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "source_event_id": record.source_event_id,
+        "source_agent_id": record.source_agent_id,
+        "version": record.version,
+        "parent_memory_id": record.parent_memory_id,
+        "content_hash": record.content_hash,
+    }
+    if include_metadata:
+        payload["metadata"] = record.metadata
+    return payload
 
 
 def _estimate_tokens_from_text(text: str) -> int:

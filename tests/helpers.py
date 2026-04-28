@@ -26,7 +26,9 @@ from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.services.chat_service import ChatService
 from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
+    MemoryExplainTool,
     MemoryForgetTool,
+    MemoryInspectTool,
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
@@ -134,6 +136,8 @@ def build_chat_service(
     tool_registry = ToolRegistry(capability_registry=capability_registry)
     tool_registry.register(MemoryWriteTool(memory_manager=memory_manager))
     tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
+    tool_registry.register(MemoryInspectTool(memory_manager=memory_manager))
+    tool_registry.register(MemoryExplainTool())
     tool_registry.register(MemoryForgetTool(memory_manager=memory_manager))
     tool_registry.register(MemoryUpdateTool(memory_manager=memory_manager))
     tool_registry.register(StateSetTool(state_manager=state_manager))

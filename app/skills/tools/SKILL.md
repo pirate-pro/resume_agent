@@ -11,14 +11,16 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
 3. `state_list(scope="all")`：查看当前 session state；`scope` 可选 `agent/shared/all`。
 4. `memory_write(content, tags=[])`：写入记忆候选（默认短期；可通过 tags 指定长期/共享倾向）。
 5. `memory_search(query, limit=5)`：按当前 agent 作用域检索相关记忆（包含同 agent 的跨会话 short 记忆）。
-6. `memory_forget(query, limit=5, hard_delete=false, reason?)`：先检索后遗忘，删除/作废符合查询的记忆。
-7. `memory_update(query, new_content, new_tags=[], limit=3)`：更新结构化 canonical 记忆；目标必须唯一且带 `canonical_key`。
-8. `workspace_write_file(path, content)`：写入当前 session 的 workspace 文件。
-9. `workspace_read_file(path)`：读取文件，查找顺序为“workspace 优先，若未命中则逐级向上到文件系统根目录”。
-10. `session_list_files()`：列出当前会话上传文件及 active 状态。
-11. `session_plan_file_access(file_id, user_goal?)`：基于文件元数据给出推荐访问策略（直读/先检索后精读等）。
-12. `session_read_file(file_id, offset=0, max_chars=3000)`：读取文件文本内容，若未解析会懒解析。
-13. `session_search_file(file_id, query, top_k=3, window_chars=160)`：在文件中检索关键词并返回片段。
+6. `memory_inspect(query="*", limit=20, include_metadata=true)`：查看当前 agent 可见 active memory 的详细结构化信息。
+7. `memory_explain(content, tags=[], source="memory_explain_tool")`：dry-run 解释一段内容会如何被 admission/classification/policy 处理，不写入记忆。
+8. `memory_forget(query, limit=5, hard_delete=false, reason?)`：先检索后遗忘，删除/作废符合查询的记忆。
+9. `memory_update(query, new_content, new_tags=[], limit=3)`：更新结构化 canonical 记忆；目标必须唯一且带 `canonical_key`。
+10. `workspace_write_file(path, content)`：写入当前 session 的 workspace 文件。
+11. `workspace_read_file(path)`：读取文件，查找顺序为“workspace 优先，若未命中则逐级向上到文件系统根目录”。
+12. `session_list_files()`：列出当前会话上传文件及 active 状态。
+13. `session_plan_file_access(file_id, user_goal?)`：基于文件元数据给出推荐访问策略（直读/先检索后精读等）。
+14. `session_read_file(file_id, offset=0, max_chars=3000)`：读取文件文本内容，若未解析会懒解析。
+15. `session_search_file(file_id, query, top_k=3, window_chars=160)`：在文件中检索关键词并返回片段。
 
 规则：
 
@@ -34,6 +36,9 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
   - 临时信息可不带长期标签（默认走短期层）。
   - 长期偏好/约束建议带 `preference/constraint/long_term/policy` 等标签。
   - 仅在确实需要跨 Agent 共享时带 `shared/global/cross_agent`。
+- 使用 `memory_inspect` / `memory_explain` 时：
+  - 当需要回答“现在有哪些记忆”“为什么这句话没被记住”“这条内容会进哪个 scope/lane”时优先使用。
+  - `memory_explain` 是 dry-run，不会写入、更新、删除任何记忆。
 - 使用 `memory_forget` 时：
   - 先用足够具体的 query，避免误删。
   - 若命中多条，不要自行猜测，应先向用户澄清。

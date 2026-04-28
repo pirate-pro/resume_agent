@@ -25,7 +25,9 @@ from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.services.chat_service import ChatService
 from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
+    MemoryExplainTool,
     MemoryForgetTool,
+    MemoryInspectTool,
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
@@ -120,6 +122,8 @@ def get_tool_registry() -> ToolRegistry:
     registry = ToolRegistry(capability_registry=get_agent_capability_registry())
     registry.register(MemoryWriteTool(memory_manager=get_memory_manager()))
     registry.register(MemorySearchTool(memory_manager=get_memory_manager()))
+    registry.register(MemoryInspectTool(memory_manager=get_memory_manager()))
+    registry.register(MemoryExplainTool())
     registry.register(MemoryForgetTool(memory_manager=get_memory_manager()))
     registry.register(MemoryUpdateTool(memory_manager=get_memory_manager()))
     registry.register(StateSetTool(state_manager=get_state_manager()))

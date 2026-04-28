@@ -712,3 +712,83 @@
   - `uv run pytest tests/test_storage.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`53 passed`）
   - `uv run mypy app/infra/storage/__init__.py app/domain/protocols.py tests/test_storage.py app/memory/stores/jsonl_file_store.py app/memory/models.py app/memory/contracts.py app/memory/facade.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 12 source files`）
   - `uv run pytest -q`：通过
+
+40. [完成] 落地 Memory Policy Kernel V1：把分散规则收敛到统一 policy 层。
+- 说明：
+  - 扩展 `app/memory/policies.py`，新增集中定义：
+    - `MemoryKind`
+    - `MemorySourceKind`
+    - `MemoryCanonicalKey`
+    - `MemoryLane`
+    - scope/tag/type/confidence/source priority/lane/name intent 等规则函数
+  - `admission.py` 不再自带 state/long/shared tag 集合，改为使用 policy kernel。
+  - `classification.py` 不再自带 kind/source/canonical 常量，改为使用 policy kernel 的枚举和推断函数。
+  - `intake.py` 的 tag normalization、scope/type/confidence 推断改为走 policy kernel。
+  - `consolidation.py` 的 source priority 与 explicit rule 判定改为走 policy kernel。
+  - `retrieval.py`、`JsonlFileMemoryStore`、`MemoryManager`、`ContextAssembler` 的 name intent、lane、always-on canonical key 规则开始统一引用 policy kernel。
+  - 新增 `tests/test_memory_policies.py`，把 policy 本身作为独立可测对象。
+- 影响范围：
+  - 这一步不改变工具接口、前端响应结构、JSONL schema。
+  - 当前 memory 行为保持兼容，但规则入口更集中，后续增加 multi-agent policy、索引策略、agent 私有/共享订阅时不需要在多个模块重复散改。
+  - 后续应继续推进 `Memory Index V1`，把读取性能从 JSONL 扫描逐步迁移到可索引视图。
+- 验证结果：
+  - `uv run pytest tests/test_memory_policies.py tests/test_memory_classification.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_memory_consolidation.py tests/test_tool_registry.py tests/test_memory_compaction.py -q`：通过（`70 passed`）
+  - `uv run mypy app/memory/policies.py app/memory/admission.py app/memory/classification.py app/memory/intake.py app/memory/consolidation.py app/memory/retrieval.py app/memory/stores/jsonl_file_store.py app/runtime/memory_manager.py app/runtime/context_assembler.py tests/test_memory_policies.py tests/test_memory_classification.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_memory_consolidation.py tests/test_tool_registry.py`：通过（`Success: no issues found in 15 source files`）
+  - `uv run pytest -q`：通过
+
+41. [完成] 落地 Memory Index V1：SQLite 作为 JSONL 的可重建派生索引。
+- 说明：
+  - 新增 `app/memory/index.py`：
+    - `MemoryIndex` 协议
+    - `SqliteMemoryIndex` 实现
+    - SQLite 文件默认位于 `data/memory_v2/index/memory_index.sqlite3`
+  - 新增 `app/memory/serialization.py`：
+    - 抽出当前 schema 的 `MemoryRecord <-> payload` 序列化
+    - JSONL store 和 SQLite index 共享同一套 record 反序列化规则
+  - `JsonlFileMemoryStore` 默认启用派生索引：
+    - `write_records` 后刷新对应 JSONL source file 的 SQLite 视图
+    - `archive_records_by_memory_ids` / `forget` / `compact` 后刷新对应 source file
+    - 读路径优先使用 SQLite index
+    - 如果 index 缺失、source fingerprint 不一致，会从当前 JSONL 文件重建该 source 的 index
+    - 如果 SQLite 读取失败，降级为 JSONL 扫描，不阻断主存储
+  - 当前索引覆盖：
+    - active records list
+    - content hash count
+    - canonical value count
+    - canonical key listing
+    - text search 的候选读取层
+  - 新增 `tests/test_memory_index.py`：
+    - fresh SQLite index 下 search 不再扫描 JSONL
+    - 删除 SQLite index 后可从 JSONL 重建
+    - archive 后 SQLite index 不再返回旧 active 记录
+- 影响范围：
+  - JSONL 仍是 source of truth。
+  - SQLite 只作为派生读取加速层，可删除、可重建，不承载业务语义。
+  - 当前不引入 DB migration；schema 变化时优先删除并重建 `data/memory_v2/index/`。
+  - 这一步为后续 FTS / lane index / multi-agent subscription index 留出接口边界。
+- 验证结果：
+  - `uv run pytest tests/test_memory_index.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_memory_consolidation.py tests/test_tool_registry.py -q`：通过（`52 passed`）
+  - `uv run mypy app/memory/index.py app/memory/serialization.py app/memory/stores/jsonl_file_store.py app/memory/__init__.py tests/test_memory_index.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_memory_consolidation.py tests/test_tool_registry.py`：通过（`Success: no issues found in 9 source files`）
+
+42. [完成] 落地 Memory Debug/Inspect V1：补齐 memory 可观察性工具。
+- 说明：
+  - 新增 `memory_inspect(query="*", limit=20, include_metadata=true)`：
+    - 查看当前 agent 可见 active memory
+    - 返回 `scope/status/type/content/tags/confidence/importance`
+    - 返回结构化字段 `kind/source_kind/canonical_key/normalized_value/lane`
+    - 返回时间、来源、版本、metadata 等调试信息
+  - 新增 `memory_explain(content, tags=[], source="memory_explain_tool")`：
+    - dry-run admission / policy routing / classification / lane mapping
+    - 返回 `admission decision/reason`
+    - 返回 `scope_hint/memory_type/confidence`
+    - 返回 `kind/source_kind/canonical_key/normalized_value/subject_kind`
+    - 不写 candidate，不触发 consolidation，不修改 memory 状态
+  - API DI 与测试 helper 已注册新工具。
+  - `app/skills/tools/SKILL.md` 已补充新工具说明和使用边界。
+- 影响范围：
+  - 不改变 memory 写入、更新、删除、检索语义。
+  - 后续调 admission/classification/index 时，可以先用 explain/inspect 定位问题。
+  - 用户询问“现在有哪些记忆”时，不必再直接查看文件路径，可走 `memory_inspect`。
+- 验证结果：
+  - `uv run pytest tests/test_tool_registry.py tests/test_memory_manager.py tests/test_memory_index.py tests/test_context_assembler.py -q`：通过（`52 passed`）
+  - `uv run mypy app/tools/builtins.py app/api/deps.py tests/helpers.py tests/test_tool_registry.py app/memory/index.py app/memory/serialization.py app/memory/stores/jsonl_file_store.py`：通过（`Success: no issues found in 7 source files`）

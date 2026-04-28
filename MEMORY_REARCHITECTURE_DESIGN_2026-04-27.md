@@ -472,6 +472,112 @@ prompt 注入顺序：
 - 冲突证据
 - 衰减
 
+### 6.4 Policy Kernel 约定
+
+memory 子系统保留当前生命周期骨架，但规则层必须收敛到统一 policy kernel。
+
+目标：
+
+- admission / classification / routing / consolidation / retrieval 不各自维护重复常量
+- kind、source_kind、canonical_key、lane、scope tag、source priority 使用统一枚举和函数
+- 后续 multi-agent policy、索引策略、agent 私有/共享订阅基于同一规则入口扩展
+
+当前实现入口：
+
+- `app/memory/policies.py`
+
+Policy Kernel V1 已集中定义：
+
+- `MemoryKind`
+- `MemorySourceKind`
+- `MemoryCanonicalKey`
+- `MemoryLane`
+- tag normalization
+- scope/type/confidence 推断
+- source priority
+- explicit rule 判定
+- runtime lane 映射
+- name intent / text-search expansion 判定
+
+保留策略：
+
+- `MemoryRecord / MemoryCandidate / MemoryFacade / MemoryStore` 骨架保留
+- `admission.py` 继续负责入口判定，但规则来源使用 policy kernel
+- `classification.py` 继续负责文本 canonicalization，但输出枚举与 kind/source 判定使用 policy kernel
+- `consolidation.py` 继续负责生命周期治理，但 source priority 与 explicit rule 判定使用 policy kernel
+- `retrieval.py` / `MemoryManager` 继续负责读取编排，但 lane 与 always-on canonical key 来自 policy kernel
+
+后续重构方向：
+
+1. 将 `kind / canonical_key / normalized_value / source_kind` 从 `metadata` 提升为顶层 schema 字段。
+2. 引入 `Memory Index V1`，让 canonical / lane / text 查询先走索引，不再依赖 JSONL 全量扫描。
+3. 将 agent 私有订阅、shared 发布、跨 agent 可见性纳入 policy kernel。
+
+### 6.5 Memory Index V1 约定
+
+主存储与索引边界：
+
+- JSONL 是 source of truth。
+- SQLite 是派生 index。
+- SQLite 可删除、可重建，不承载不可恢复的业务语义。
+- schema 变化时优先删除 `data/memory_v2/index/` 并按当前 JSONL schema 重建，不写历史迁移兼容层。
+
+当前实现入口：
+
+- `app/memory/index.py`
+- `app/memory/serialization.py`
+- `app/memory/stores/jsonl_file_store.py`
+
+默认路径：
+
+- `data/memory_v2/index/memory_index.sqlite3`
+
+同步策略：
+
+- `write_records`：JSONL append 成功后刷新对应 source file 的 index。
+- `archive_records_by_memory_ids` / `forget`：JSONL rewrite 成功后刷新对应 source file 的 index。
+- `compact`：压缩后刷新对应 source file 的 index。
+- 读路径发现 index 缺失或 source fingerprint 不一致时，从当前 JSONL 文件重建该 source 的 index。
+- SQLite 读取失败时可降级为 JSONL 扫描，避免派生索引阻断主存储。
+
+当前索引能力：
+
+- active records list
+- content hash count
+- canonical value count
+- canonical key listing
+- text search 的候选读取层
+
+后续优化方向：
+
+1. 将 text search 候选读取升级为 FTS5。
+2. 将 lane query 做成显式 index 查询，而不是只在 payload 里派生。
+3. 为 multi-agent 增加 subscription / visibility index。
+4. 增加手动 rebuild 命令，但仍只面向当前 schema。
+
+### 6.6 Debug / Inspect 约定
+
+memory 子系统必须可解释，否则 admission / classification / retrieval 的优化会变成黑盒调参。
+
+当前工具：
+
+- `memory_inspect(query="*", limit=20, include_metadata=true)`
+- `memory_explain(content, tags=[], source="memory_explain_tool")`
+
+边界：
+
+- `memory_inspect` 是只读工具，只返回当前 agent 可见 active memory，不绕过 capability。
+- `memory_explain` 是 dry-run，只运行 admission / policy / classification / lane mapping，不写入 candidate，不触发 consolidation。
+- 两个工具都不改变 JSONL 主存储，也不改变 SQLite 派生索引。
+
+调试用途：
+
+- 查看“当前有哪些记忆”
+- 判断“为什么这句话没被记住”
+- 判断“这句话会进哪个 scope / lane”
+- 判断 canonical 识别结果是否正确
+- 排查 retrieval 没召回时，是 admission、classification、index 还是 query 命中的问题
+
 ## 7. Memory 的动态生命周期
 
 ### 7.1 候选产生

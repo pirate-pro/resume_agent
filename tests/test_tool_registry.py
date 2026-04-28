@@ -19,7 +19,9 @@ from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.tools.builtins import (
+    MemoryExplainTool,
     MemoryForgetTool,
+    MemoryInspectTool,
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
@@ -192,6 +194,68 @@ def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
     assert len(json.loads(main_search_result.content)) >= 1
     assert other_search_result.success is True
     assert json.loads(other_search_result.content) == []
+
+
+def test_memory_inspect_tool_lists_structured_memory_details(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemoryInspectTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "以后回答简洁一点", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_inspect"),
+    )
+    inspect_result = registry.execute(
+        ToolCall(name="memory_inspect", arguments={"query": "*", "limit": 10}),
+        context=_context("sess_inspect"),
+    )
+
+    payload = json.loads(inspect_result.content)
+    assert inspect_result.success is True
+    assert payload["count"] == 1
+    assert payload["memories"][0]["content"] == "以后回答简洁一点"
+    assert payload["memories"][0]["scope"] == "agent_long"
+    assert payload["memories"][0]["canonical_key"] == "response_style"
+    assert payload["memories"][0]["normalized_value"] == "concise"
+    assert payload["memories"][0]["lane"] == "response_preferences"
+    assert payload["memories"][0]["metadata"]["source"] == "memory_write_tool"
+
+
+def test_memory_explain_tool_dry_runs_admission_and_classification(tmp_path: Path) -> None:
+    _ = tmp_path
+    registry = _registry()
+    registry.register(MemoryExplainTool())
+
+    preference_result = registry.execute(
+        ToolCall(
+            name="memory_explain",
+            arguments={"content": "以后回答简洁一点", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_explain"),
+    )
+    state_result = registry.execute(
+        ToolCall(name="memory_explain", arguments={"content": "下一步：补充 inspect 测试"}),
+        context=_context("sess_explain"),
+    )
+
+    preference_payload = json.loads(preference_result.content)
+    state_payload = json.loads(state_result.content)
+    assert preference_result.success is True
+    assert preference_payload["dry_run"] is True
+    assert preference_payload["admission"]["accepted"] is True
+    assert preference_payload["candidate"]["scope_hint"] == "agent_long"
+    assert preference_payload["classification"]["canonical_key"] == "response_style"
+    assert preference_payload["classification"]["normalized_value"] == "concise"
+    assert preference_payload["lane"] == "response_preferences"
+    assert state_payload["admission"]["accepted"] is False
+    assert state_payload["admission"]["decision"] == "reject_use_state"
 
 
 def test_memory_write_tool_rejects_working_state_and_points_to_state_set(tmp_path: Path) -> None:
