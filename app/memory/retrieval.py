@@ -9,19 +9,10 @@ from datetime import UTC, datetime
 from app.memory.classification import classify_memory
 from app.memory.contracts import MemoryStore
 from app.memory.models import MemoryReadBundle, MemoryReadRequest, MemoryRecord
-from app.memory.policies import MemoryPolicy, default_memory_policy
+from app.memory.policies import MemoryCanonicalKey, MemoryPolicy, default_memory_policy, is_name_query
 
 __all__ = ["MemoryRetrievalService"]
 _logger = logging.getLogger(__name__)
-_NAME_QUERY_TRIGGERS = (
-    "你叫什么名字",
-    "叫什么名字",
-    "你的名字",
-    "叫你什么",
-    "怎么称呼",
-    "如何称呼",
-    "怎么叫你",
-)
 
 
 @dataclass(slots=True)
@@ -111,7 +102,6 @@ def _rank_records(items: list[MemoryRecord], query: str) -> list[MemoryRecord]:
 
 def _build_query_targets(query: str) -> list[_QueryTarget]:
     normalized_query = query.strip().lower()
-    compact_query = normalized_query.replace(" ", "")
     targets: list[_QueryTarget] = []
     seen: set[tuple[str, str | None]] = set()
 
@@ -130,8 +120,8 @@ def _build_query_targets(query: str) -> list[_QueryTarget]:
     if classification.canonical_key is not None:
         add_target(classification.canonical_key, classification.normalized_value)
 
-    if any(trigger in compact_query for trigger in _NAME_QUERY_TRIGGERS):
-        add_target("preferred_name", None)
+    if is_name_query(normalized_query):
+        add_target(MemoryCanonicalKey.PREFERRED_NAME.value, None)
 
     return targets
 

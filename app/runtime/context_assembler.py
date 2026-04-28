@@ -8,6 +8,7 @@ from app.core.errors import StorageError
 from app.core.errors import ValidationError
 from app.domain.models import AgentIdentityDocuments, ContextBundle, EventRecord, MemoryItem, RunContext, SessionFile
 from app.domain.protocols import AgentDocumentRepository, SessionRepository, SkillRepository, ToolExecutor
+from app.memory.policies import MemoryLane
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 from app.state.models import StateRecord
@@ -18,11 +19,11 @@ _ACTIVE_FILE_MAX_COUNT = 12
 _AGENT_STATE_MAX_COUNT = 8
 _SHARED_STATE_MAX_COUNT = 8
 _MEMORY_LANE_LABELS = {
-    "identity": "Identity",
-    "response_preferences": "Response preferences",
-    "interaction_feedback": "Interaction feedback",
-    "user_profile": "User profile",
-    "other_memories": "Other relevant memory",
+    MemoryLane.IDENTITY.value: "Identity",
+    MemoryLane.RESPONSE_PREFERENCES.value: "Response preferences",
+    MemoryLane.INTERACTION_FEEDBACK.value: "Interaction feedback",
+    MemoryLane.USER_PROFILE.value: "User profile",
+    MemoryLane.OTHER_MEMORIES.value: "Other relevant memory",
 }
 _OUTPUT_FORMAT_RULES = """Answer output rules:
 1. If the user asks for a Markdown document to read/render, return direct Markdown body. Do not wrap the whole document in an outer ```markdown fenced block.

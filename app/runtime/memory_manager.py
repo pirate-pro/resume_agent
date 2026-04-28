@@ -23,40 +23,18 @@ from app.memory.models import (
     MemoryRecord,
     MemoryScope,
 )
+from app.memory.policies import (
+    ALWAYS_ON_CONTEXT_CANONICAL_KEYS,
+    CONTEXT_LANE_LIMITS,
+    CONTEXT_LANE_ORDER,
+    MemoryCanonicalKey,
+    is_name_query,
+    memory_lane_for_metadata,
+)
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 
 __all__ = ["MemoryManager", "MemoryWriteResult"]
 _logger = logging.getLogger(__name__)
-_CONTEXT_LANE_ORDER = (
-    "identity",
-    "response_preferences",
-    "interaction_feedback",
-    "user_profile",
-    "other_memories",
-)
-_CONTEXT_LANE_LIMITS = {
-    "identity": 2,
-    "response_preferences": 4,
-    "interaction_feedback": 3,
-    "user_profile": 4,
-    "other_memories": 2,
-}
-_ALWAYS_ON_CONTEXT_CANONICAL_KEYS = (
-    "preferred_language",
-    "response_style",
-    "preferred_format",
-    "disliked_format",
-    "interaction_style",
-)
-_NAME_QUERY_TRIGGERS = (
-    "你叫什么名字",
-    "叫什么名字",
-    "你的名字",
-    "叫你什么",
-    "怎么称呼",
-    "如何称呼",
-    "怎么叫你",
-)
 
 
 @dataclass(slots=True)
@@ -640,17 +618,16 @@ def _context_canonical_keys_for_query(query: str) -> list[str]:
         tags=[],
         source="memory_context_query",
     )
-    keys: list[str] = list(_ALWAYS_ON_CONTEXT_CANONICAL_KEYS)
+    keys: list[str] = list(ALWAYS_ON_CONTEXT_CANONICAL_KEYS)
     if classification.canonical_key is not None:
         keys.append(classification.canonical_key)
-    compact_query = query.strip().lower().replace(" ", "")
-    if any(trigger in compact_query for trigger in _NAME_QUERY_TRIGGERS):
-        keys.append("preferred_name")
+    if is_name_query(query):
+        keys.append(MemoryCanonicalKey.PREFERRED_NAME.value)
     return _dedupe_strings(keys)
 
 
 def _group_records_by_context_lane(records: list[MemoryRecord]) -> dict[str, list[MemoryItem]]:
-    lanes: dict[str, list[MemoryItem]] = {lane: [] for lane in _CONTEXT_LANE_ORDER}
+    lanes: dict[str, list[MemoryItem]] = {lane: [] for lane in CONTEXT_LANE_ORDER}
     for record in records:
         lane = _context_lane_for_record(record)
         lanes.setdefault(lane, []).append(_to_memory_item(record))
@@ -660,17 +637,7 @@ def _group_records_by_context_lane(records: list[MemoryRecord]) -> dict[str, lis
 def _context_lane_for_record(record: MemoryRecord) -> str:
     canonical_key = str(record.metadata.get("canonical_key", "")).strip()
     kind = str(record.metadata.get("kind", "")).strip()
-    if canonical_key == "preferred_name":
-        return "identity"
-    if canonical_key in {"preferred_language", "response_style", "preferred_format", "disliked_format"}:
-        return "response_preferences"
-    if canonical_key == "interaction_style" or kind in {"interaction_pattern", "feedback_memory"}:
-        return "interaction_feedback"
-    if canonical_key in {"long_term_goal", "primary_stack"} or kind == "user_fact":
-        return "user_profile"
-    if kind == "user_preference":
-        return "response_preferences"
-    return "other_memories"
+    return memory_lane_for_metadata(canonical_key, kind)
 
 
 def _limit_memory_lanes(
@@ -680,13 +647,13 @@ def _limit_memory_lanes(
 ) -> dict[str, list[MemoryItem]]:
     limited: dict[str, list[MemoryItem]] = {}
     remaining = max(0, max_total)
-    for lane in _CONTEXT_LANE_ORDER:
+    for lane in CONTEXT_LANE_ORDER:
         if remaining <= 0:
             break
         items = lanes.get(lane, [])
         if not items:
             continue
-        lane_limit = min(_CONTEXT_LANE_LIMITS[lane], remaining)
+        lane_limit = min(CONTEXT_LANE_LIMITS[lane], remaining)
         selected = _dedupe_memory_items(items)[:lane_limit]
         if not selected:
             continue
@@ -697,7 +664,7 @@ def _limit_memory_lanes(
 
 def _flatten_memory_lanes(lanes: dict[str, list[MemoryItem]]) -> list[MemoryItem]:
     flattened: list[MemoryItem] = []
-    for lane in _CONTEXT_LANE_ORDER:
+    for lane in CONTEXT_LANE_ORDER:
         flattened.extend(lanes.get(lane, []))
     return _dedupe_memory_items(flattened)
 

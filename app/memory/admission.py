@@ -7,25 +7,14 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from app.memory.policies import LONG_OR_SHARED_TAGS, STATE_TAGS, normalize_memory_tags
+
 __all__ = [
     "MemoryAdmissionDecision",
     "MemoryAdmissionResult",
     "evaluate_memory_admission",
 ]
 
-_STATE_TAGS = {"todo", "next_step", "scratch", "temp", "ephemeral", "working_state", "session_state"}
-_LONG_OR_SHARED_TAGS = {
-    "long",
-    "long_term",
-    "preference",
-    "constraint",
-    "policy",
-    "profile",
-    "memory",
-    "shared",
-    "global",
-    "cross_agent",
-}
 _WORKING_STATE_PATTERNS = [
     re.compile(
         r"^(当前目标|当前任务|下一步|待办|工作备注|工作笔记|临时(?:记录|备注|说明|约束|决定)?|本轮(?:目标|计划)?|本次(?:任务|会话))\s*[:：\-]?",
@@ -56,7 +45,7 @@ class MemoryAdmissionResult:
 
 def evaluate_memory_admission(content: str, tags: list[str]) -> MemoryAdmissionResult:
     normalized_content = content.strip()
-    normalized_tags = {tag.strip().lower() for tag in tags if isinstance(tag, str) and tag.strip()}
+    normalized_tags = set(normalize_memory_tags(tags))
 
     if _looks_like_working_state(normalized_content, normalized_tags):
         return MemoryAdmissionResult(
@@ -77,9 +66,9 @@ def evaluate_memory_admission(content: str, tags: list[str]) -> MemoryAdmissionR
 
 
 def _looks_like_working_state(content: str, tags: set[str]) -> bool:
-    if tags.intersection(_STATE_TAGS):
+    if tags.intersection(STATE_TAGS):
         return True
-    if "plan" in tags and not tags.intersection(_LONG_OR_SHARED_TAGS):
+    if "plan" in tags and not tags.intersection(LONG_OR_SHARED_TAGS):
         lowered = content.lower()
         if lowered.startswith(("下一步", "待办", "todo", "to-do", "next step", "current goal", "current task")):
             return True

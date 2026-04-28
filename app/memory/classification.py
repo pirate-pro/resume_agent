@@ -5,17 +5,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.memory.policies import (
+    MemoryCanonicalKey,
+    infer_memory_kind,
+    infer_source_kind_from_tags,
+    normalize_memory_tags,
+)
+
 __all__ = [
     "MemoryClassification",
     "classify_memory",
 ]
-
-_PREFERENCE_TAGS = {"preference", "style", "habit"}
-_CONSTRAINT_TAGS = {"constraint", "rule", "policy", "limit"}
-_FEEDBACK_TAGS = {"feedback"}
-_INTERACTION_TAGS = {"interaction_pattern"}
-_VERIFIED_TAGS = {"verified", "tool_verified"}
-_INFERRED_TAGS = {"assistant_inferred", "guess", "draft"}
 
 _NEGATIVE_CUES = ("不要", "别", "不喜欢", "禁止", "不要再", "别再", "not use", "avoid", "don't")
 _POSITIVE_CUES = ("以后", "请用", "保持", "prefer", "use", "请叫", "call me")
@@ -68,11 +68,11 @@ class MemoryClassification:
 
 def classify_memory(content: str, tags: list[str], source: str) -> MemoryClassification:
     normalized_content = content.strip()
-    normalized_tags = {tag.strip().lower() for tag in tags if isinstance(tag, str) and tag.strip()}
+    normalized_tags = set(normalize_memory_tags(tags))
     lowered = normalized_content.lower()
-    source_kind = _infer_source_kind(normalized_tags, source)
+    source_kind = infer_source_kind_from_tags(normalized_tags, source)
     canonical_key, normalized_value = _infer_canonical_key_and_value(normalized_content, lowered)
-    kind = _infer_kind(normalized_tags, lowered, canonical_key)
+    kind = infer_memory_kind(normalized_tags, lowered, canonical_key)
     return MemoryClassification(
         kind=kind,
         source_kind=source_kind,
@@ -81,66 +81,39 @@ def classify_memory(content: str, tags: list[str], source: str) -> MemoryClassif
     )
 
 
-def _infer_source_kind(tags: set[str], source: str) -> str:
-    normalized_source = source.strip().lower()
-    if "system_policy" in tags or normalized_source == "system_policy":
-        return "system_policy"
-    if "explicit_user_rule" in tags or normalized_source == "explicit_user_rule":
-        return "explicit_user_rule"
-    if tags.intersection(_VERIFIED_TAGS):
-        return "tool_verified"
-    if tags.intersection(_INFERRED_TAGS):
-        return "assistant_inferred"
-    return "explicit_user"
-
-
-def _infer_kind(tags: set[str], lowered_content: str, canonical_key: str | None) -> str:
-    if tags.intersection(_FEEDBACK_TAGS):
-        return "feedback_memory"
-    if _looks_like_feedback(lowered_content):
-        return "feedback_memory"
-    if tags.intersection(_INTERACTION_TAGS) or canonical_key == "interaction_style":
-        return "interaction_pattern"
-    if canonical_key in {"preferred_name", "preferred_language", "response_style", "preferred_format", "disliked_format"}:
-        return "user_preference"
-    if tags.intersection(_PREFERENCE_TAGS) or tags.intersection(_CONSTRAINT_TAGS):
-        return "user_preference"
-    return "user_fact"
-
-
 def _infer_canonical_key_and_value(content: str, lowered_content: str) -> tuple[str | None, str | None]:
     name_value = _extract_preferred_name(content)
     if name_value is not None:
-        return "preferred_name", name_value
+        return MemoryCanonicalKey.PREFERRED_NAME.value, name_value
 
     if "中文" in content or "汉语" in content:
-        return "preferred_language", "zh-CN"
+        return MemoryCanonicalKey.PREFERRED_LANGUAGE.value, "zh-CN"
     if "英文" in content or "英语" in content or "english" in lowered_content:
-        return "preferred_language", "en"
+        return MemoryCanonicalKey.PREFERRED_LANGUAGE.value, "en"
 
     if "表格" in content and _contains_any(lowered_content, _NEGATIVE_CUES):
-        return "disliked_format", "table"
+        return MemoryCanonicalKey.DISLIKED_FORMAT.value, "table"
     if "markdown" in lowered_content and _contains_any(lowered_content, _POSITIVE_CUES):
-        return "preferred_format", "markdown"
+        return MemoryCanonicalKey.PREFERRED_FORMAT.value, "markdown"
     if "代码块" in content or "code block" in lowered_content:
         if _contains_any(lowered_content, _POSITIVE_CUES):
-            return "preferred_format", "code_block"
+            return MemoryCanonicalKey.PREFERRED_FORMAT.value, "code_block"
 
     response_style = _infer_response_style(content, lowered_content)
     if response_style is not None:
-        return "response_style", response_style
+        return MemoryCanonicalKey.RESPONSE_STYLE.value, response_style
 
     goal_match = _GOAL_PATTERN.search(content)
     if goal_match:
-        return "long_term_goal", _clean_value(goal_match.group(1))
+        return MemoryCanonicalKey.LONG_TERM_GOAL.value, _clean_value(goal_match.group(1))
 
     stack_match = _STACK_PATTERN.search(content)
     if stack_match:
-        return "primary_stack", _clean_value(stack_match.group(1)).lower()
+        return MemoryCanonicalKey.PRIMARY_STACK.value, _clean_value(stack_match.group(1)).lower()
 
     interaction_style = _infer_interaction_style(content, lowered_content)
     if interaction_style is not None:
-        return "interaction_style", interaction_style
+        return MemoryCanonicalKey.INTERACTION_STYLE.value, interaction_style
 
     return None, None
 
@@ -173,10 +146,6 @@ def _extract_preferred_name(content: str) -> str | None:
         if match:
             return _clean_value(match.group(1))
     return None
-
-
-def _looks_like_feedback(lowered_content: str) -> bool:
-    return any(token in lowered_content for token in ("不要再", "别再", "以后保持", "这个格式很好", "keep this format"))
 
 
 def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:

@@ -5,19 +5,15 @@ from __future__ import annotations
 from hashlib import sha256
 
 from app.memory.classification import classify_memory
-from app.memory.models import MemoryScope, MemoryType, MemoryWriteCandidateRequest
+from app.memory.models import MemoryScope, MemoryWriteCandidateRequest
+from app.memory.policies import (
+    infer_confidence_from_tags,
+    infer_memory_type_from_tags,
+    infer_scope_from_tags,
+    normalize_memory_tags,
+)
 
 __all__ = ["build_candidate_request", "infer_scope_hint_from_tags"]
-
-_SHARED_SCOPE_TAGS = {"shared", "global", "cross_agent"}
-_LONG_SCOPE_TAGS = {"long", "long_term", "preference", "constraint", "policy", "profile", "memory"}
-
-_PREFERENCE_TAGS = {"preference", "style", "habit"}
-_CONSTRAINT_TAGS = {"constraint", "rule", "policy", "limit"}
-_PLAN_TAGS = {"plan", "todo", "next_step"}
-_SCRATCH_TAGS = {"scratch", "temp", "ephemeral"}
-
-_HIGH_CONFIDENCE_TAGS = {"verified", "tool_verified", "user_confirmed"}
 
 
 def build_candidate_request(
@@ -29,10 +25,10 @@ def build_candidate_request(
     source_event_id: str | None,
     source: str,
 ) -> MemoryWriteCandidateRequest:
-    normalized_tags = _normalize_tags(tags)
-    memory_type = _infer_memory_type(normalized_tags)
+    normalized_tags = normalize_memory_tags(tags)
+    memory_type = infer_memory_type_from_tags(normalized_tags)
     scope_hint = infer_scope_hint_from_tags(normalized_tags)
-    confidence = _infer_confidence(normalized_tags)
+    confidence = infer_confidence_from_tags(normalized_tags)
     classification = classify_memory(content=content, tags=normalized_tags, source=source)
     idempotency_key = _build_idempotency_key(
         agent_id=agent_id,
@@ -59,49 +55,8 @@ def build_candidate_request(
     )
 
 
-def _normalize_tags(tags: list[str]) -> list[str]:
-    dedup: list[str] = []
-    seen: set[str] = set()
-    for raw in tags:
-        if not isinstance(raw, str):
-            continue
-        tag = raw.strip().lower()
-        if not tag or tag in seen:
-            continue
-        seen.add(tag)
-        dedup.append(tag)
-    return dedup
-
-
 def infer_scope_hint_from_tags(tags: list[str]) -> MemoryScope:
-    values = set(tags)
-    if values.intersection(_SHARED_SCOPE_TAGS):
-        return MemoryScope.SHARED_LONG
-    if values.intersection(_LONG_SCOPE_TAGS):
-        return MemoryScope.AGENT_LONG
-    return MemoryScope.AGENT_SHORT
-
-
-def _infer_memory_type(tags: list[str]) -> MemoryType:
-    values = set(tags)
-    if values.intersection(_PREFERENCE_TAGS):
-        return MemoryType.PREFERENCE
-    if values.intersection(_CONSTRAINT_TAGS):
-        return MemoryType.CONSTRAINT
-    if values.intersection(_PLAN_TAGS):
-        return MemoryType.PLAN
-    if values.intersection(_SCRATCH_TAGS):
-        return MemoryType.SCRATCH
-    return MemoryType.FACT
-
-
-def _infer_confidence(tags: list[str]) -> float:
-    values = set(tags)
-    if values.intersection(_HIGH_CONFIDENCE_TAGS):
-        return 0.9
-    if "guess" in values or "draft" in values:
-        return 0.5
-    return 0.7
+    return infer_scope_from_tags(tags)
 
 
 def _build_idempotency_key(

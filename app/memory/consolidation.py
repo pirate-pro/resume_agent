@@ -16,20 +16,14 @@ from app.memory.models import (
     MemoryStatus,
     make_content_hash,
 )
-from app.memory.policies import MemoryPolicy, default_memory_policy
+from app.memory.policies import (
+    MemoryPolicy,
+    default_memory_policy,
+    is_explicit_rule_identity,
+    source_priority_for_kind,
+)
 
 __all__ = ["MemoryConsolidationService"]
-_EXPLICIT_RULE_TAGS = {"explicit_user_rule", "system_policy"}
-_EXPLICIT_RULE_SOURCES = {"explicit_user_rule", "system_policy"}
-_SOURCE_PRIORITY = {
-    "system_policy": 100,
-    "explicit_user_rule": 95,
-    "explicit_user": 90,
-    "user_feedback": 80,
-    "tool_verified": 70,
-    "repeated_behavior": 60,
-    "assistant_inferred": 10,
-}
 
 
 @dataclass(slots=True)
@@ -306,12 +300,12 @@ def _resolve_canonical_identity(candidate: MemoryCandidate) -> tuple[str | None,
 
 def _source_priority_for_candidate(candidate: MemoryCandidate) -> int:
     source_kind = str(candidate.metadata.get("source_kind", "")).strip().lower()
-    return _SOURCE_PRIORITY.get(source_kind, 50)
+    return source_priority_for_kind(source_kind)
 
 
 def _source_priority_for_record(record: MemoryRecord) -> int:
     source_kind = str(record.metadata.get("source_kind", "")).strip().lower()
-    return _SOURCE_PRIORITY.get(source_kind, 50)
+    return source_priority_for_kind(source_kind)
 
 
 def _can_supersede_existing_records(candidate: MemoryCandidate, records: list[MemoryRecord]) -> bool:
@@ -342,9 +336,6 @@ def _should_promote_short_to_long(
 
 
 def _is_explicit_rule_candidate(candidate: MemoryCandidate) -> bool:
-    tags = {tag.strip().lower() for tag in candidate.tags if isinstance(tag, str) and tag.strip()}
-    if tags.intersection(_EXPLICIT_RULE_TAGS):
-        return True
     source = str(candidate.metadata.get("source", "")).strip().lower()
     source_kind = str(candidate.metadata.get("source_kind", "")).strip().lower()
-    return source in _EXPLICIT_RULE_SOURCES or source_kind in _EXPLICIT_RULE_SOURCES
+    return is_explicit_rule_identity(candidate.tags, source, source_kind)
