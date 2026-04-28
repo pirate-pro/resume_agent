@@ -4,7 +4,7 @@
 
 - 记录位置：仓库根目录（本文件）。
 - 记录方式：每完成一项即追加一条，包含时间、变更内容、影响范围、验证结果。
-- 当前目标：按 `MEMORY_FILE_BASED_DESIGN.md` 继续推进（在 v2 直连基线上完善治理与检索质量）。
+- 当前目标：memory 子系统以最新 schema 为唯一运行结构；结构变化时清空重建，不保留旧数据兼容层。
 
 ## 进度日志
 
@@ -63,7 +63,7 @@
 - 说明：
   - 更新 `tests/helpers.py`、`tests/test_memory_manager.py`、`tests/test_tool_registry.py`、
     `tests/test_context_assembler.py`、`tests/test_agent_runtime.py`。
-  - 移除对 `JsonlMemoryRepository` 的运行时依赖断言，改为校验 `FileMemoryFacade` 读写结果。
+  - 移除对旧 JSONL memory 仓储的运行时依赖断言，改为校验 `FileMemoryFacade` 读写结果。
 - 影响范围：
   - 测试语义与运行时架构一致，避免“实现已切换但测试仍走旧链路”。
 
@@ -312,7 +312,7 @@
 - 说明：
   - 新增记忆工具：
     - `memory_forget(query, limit, hard_delete, reason?)`：先检索后遗忘，支持软删除/硬删除。
-    - `memory_update(query, new_content, new_tags, limit, hard_delete_old)`：按“先删旧，再写新”流程替换记忆。
+    - `memory_update(query, new_content, new_tags, limit)`：按结构化 canonical 目标更新记忆。
   - `MemoryManager` 增加 `forget_memory_ids(...)`，统一执行删除权限校验（按 scope 检查能力矩阵）并调用 memory lifecycle。
   - `ToolRegistry` 侧接入两个新工具，保持工具权限矩阵统一生效。
   - 新增 `app/skills/memory-editor/SKILL.md`，固化记忆新增/删除/更新的触发条件与执行顺序。
@@ -553,7 +553,7 @@
 - 影响范围：
   - `memory_update` 不再完全依赖全文搜索，更新“称呼/偏好/长期事实”这类结构化记忆时更稳。
   - 当 query 同时命中多条文本相似 record 时，structured memory 现在会优先走精确定位，减少误改 active memory 的风险。
-  - 文本搜索仍保留为兜底路径，兼容尚未 canonicalized 的旧记录和自由文本记忆。
+  - 文本搜索仍保留为兜底定位路径；命中目标缺少 `canonical_key` 时不会自动改写。
 - 验证结果：
   - `uv run pytest tests/test_memory_classification.py tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`37 passed`）
   - `uv run mypy app/memory/classification.py app/memory/contracts.py app/memory/facade.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_classification.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 8 source files`）
@@ -568,12 +568,9 @@
     - target 带 `canonical_key` 时：
       - 不再执行 `forget -> write`
       - 直接提交新 candidate，让 consolidation 决定 `supersede / semantic_noop / source_priority_conflict`
-    - target 不带 `canonical_key` 时：
-      - 仍保留旧的 replace fallback（`forget -> write`）
   - 这一步还新增了 `update_mode` 返回值：
     - `canonical_supersede`
     - `canonical_direct`
-    - `replace_rewrite`
   - 同步修正了 `app/memory/classification.py` 的 `source_kind` 推断：
     - 之前带 `system_policy` / `explicit_user_rule` tag 的记录，会错误保留为工具 source 名
     - 现在会被正确归类为 `system_policy` / `explicit_user_rule`
@@ -586,75 +583,29 @@
   - canonical memory 的更新现在真正走“受控更新”链路，而不是假装更新、实际重写。
   - `memory_update` 不会再因为先归档旧值而绕过来源优先级校验。
   - supersede 审计链 (`parent_memory_id` / `superseded_by_*`) 在工具更新场景下也能保持完整。
-  - 非结构化旧 memory 暂时仍保留 replace fallback，兼容历史数据。
+  - 非 canonical target 不再自动替换；后续统一要求按最新 schema 写入。
 - 验证结果：
   - `uv run pytest tests/test_tool_registry.py tests/test_memory_manager.py tests/test_memory_classification.py -q`：通过（`39 passed`）
   - `uv run mypy app/memory/classification.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_tool_registry.py tests/test_memory_manager.py tests/test_memory_classification.py`：通过（`Success: no issues found in 6 source files`）
   - `uv run pytest -q`：通过（`112 passed`）
 
-34. [完成] 落地 Legacy Structured Backfill V1：旧 memory 在首次 update 时自动补齐结构化 metadata。
+34. [完成] 移除历史结构兼容层：memory 子系统只服务最新 schema。
 - 说明：
-  - `app/memory/contracts.py` / `app/memory/facade.py` / `app/memory/stores/jsonl_file_store.py` 新增 `refresh_record_metadata(...)`：
-    - 用于对既有 record 做窄范围 metadata patch
-    - 当前只服务于 memory 子系统内部，不暴露给通用工具层
-  - `app/runtime/memory_manager.py` 新增 `ensure_structured_metadata(...)`：
-    - 对选中的 target record 重新跑 classification
-    - 仅在缺失结构化字段时回填：
-      - `kind`
-      - `source_kind`
-      - `canonical_key`
-      - `normalized_value`
-      - `subject_kind`
-      - `classification_version`
-  - `app/tools/builtins.py` 中的 `memory_update` 现在会在定位到 target 后，先尝试对 legacy record 做 metadata backfill，再判断是否能走 canonical direct path。
-  - 这样旧数据也能逐步迁入新语义，不必等离线全量迁移后才享受 canonical supersede / source priority。
-  - 新增测试：
-    - `tests/test_memory_manager.py`：legacy record metadata backfill
-    - `tests/test_tool_registry.py`：legacy name memory 首次 update 即转入 canonical supersede
+  - 删除在线 metadata 修补链路。
+  - 删除离线批量结构修补 CLI 与生命周期入口。
+  - 删除非 canonical target 的替换式 update fallback。
+  - memory JSONL 读取改为严格 schema：
+    - candidate / record 缺少当前 schema 必填字段时视为无效行
+    - 不再为 `tags / importance / confidence / status / version / metadata` 等字段自动补默认值
+  - `memory_update` 现在要求目标带 `canonical_key`；缺失时返回 `target_missing_canonical_key`。
 - 影响范围：
-  - `replace_rewrite` fallback 再次收窄：一部分“旧但可识别”的 memory，不再走旧重写路径。
-  - 老 record 的结构化语义会在首次被编辑时就地补齐，减少历史数据长期卡在旧模型里的问题。
-  - 当前 backfill 仍是按需、单条触发；还没有做离线批量迁移。
+  - 开发期 memory schema 允许破坏式升级。
+  - 结构变化时优先清空 `data/memory_v2` 并重建，不再维护旧数据适配层。
+  - 后续 lifecycle / multi-agent 设计可以直接基于最新模型推进。
 - 验证结果：
-  - `uv run pytest tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`36 passed`）
-  - `uv run mypy app/memory/contracts.py app/memory/facade.py app/memory/stores/jsonl_file_store.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 7 source files`）
-  - `uv run pytest -q`：通过（`114 passed`）
-
-35. [完成] 落地 Offline Structured Backfill V1：提供批量 canonicalize 现存 memory 的离线迁移能力。
-- 说明：
-  - 新增批量 backfill 模型：
-    - `MemoryStructuredBackfillRequest`
-    - `MemoryStructuredBackfillResult`
-  - `app/memory/metadata_refresh.py` 新增 `build_metadata_refresh_patch(...)`：
-    - 用于统一“缺失字段补齐 + 少量已知脏值修正”的策略
-    - 当前已覆盖：
-      - 缺失的 `kind / source_kind / canonical_key / normalized_value / subject_kind / classification_version`
-      - 旧实现遗留的 `source_kind=memory_write_tool/memory_update_tool/...` 修正
-  - `app/memory/stores/jsonl_file_store.py` 新增 `backfill_structured_metadata(...)`：
-    - 按 scope / agent / session 过滤扫描现存 records
-    - 对可识别但缺失结构化 metadata 的 legacy records 做就地 patch
-    - 支持对 archived records 一并回填
-    - 默认跳过 deleted records
-    - 写入 `ops/structured_backfill.log.jsonl`
-  - `app/memory/lifecycle.py` / `app/memory/facade.py` 已接出统一生命周期入口。
-  - 新增 CLI：
-    - `python -m app.memory.backfill_cli --root-dir data/memory_v2`
-    - 支持 `--scope`、`--agent-id`、`--session-id`、`--include-deleted`
-  - 新增测试：
-    - `tests/test_memory_structured_backfill.py`
-    - 覆盖 agent_long 批量 patch、archived record patch、deleted skip、stale source_kind 修复、short session 定向 backfill
-- 影响范围：
-  - memory 迁移不再只依赖运行时“首次编辑时在线回填”，现在可以对现存数据做批量治理。
-  - 这一步会显著减少 legacy records 命中 `replace_rewrite` fallback 的概率。
-  - 当前迁移仍是保守模式：
-    - 只修补缺失结构化字段
-    - 只修正少数已知 stale metadata
-    - 不主动重写已有 canonical value
-- 验证结果：
-  - `uv run pytest tests/test_memory_structured_backfill.py tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`38 passed`）
-  - `uv run mypy app/memory/models.py app/memory/metadata_refresh.py app/memory/contracts.py app/memory/lifecycle.py app/memory/facade.py app/memory/stores/jsonl_file_store.py app/memory/backfill_cli.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_structured_backfill.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 12 source files`）
-  - `uv run python -m app.memory.backfill_cli --root-dir /tmp/memory_backfill_cli_smoke --scope agent_long`：可执行，输出 JSON summary
-  - `uv run pytest -q`：通过（`116 passed`）
+  - `uv run pytest tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_consolidation.py -q`：通过（`49 passed`）
+  - `uv run mypy app/memory/stores/jsonl_file_store.py app/memory/models.py app/memory/contracts.py app/memory/facade.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 9 source files`）
+  - `uv run pytest`：通过（`124 passed`）
 
 36. [完成] 落地 Canonical-Aware Retrieval V1：读取链路开始优先利用结构化 metadata 排序。
 - 说明：
@@ -681,3 +632,83 @@
   - `uv run pytest tests/test_memory_classification.py tests/test_memory_manager.py tests/test_context_assembler.py -q`：通过（`26 passed`）
   - `uv run mypy app/memory/classification.py app/memory/retrieval.py tests/test_memory_classification.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py`：通过（`Success: no issues found in 6 source files`）
   - `uv run pytest -q`：通过（`120 passed`）
+
+37. [完成] 落地 `AGENT.md` / `SOUL.md` Integration V1：静态行为宪法与人格层正式接入 runtime 主链路。
+- 说明：
+  - 新增 `app/infra/storage/markdown_agent_document_repository.py`：
+    - 负责按 `app/agents/<agent_id>/AGENT.md|SOUL.md` 读取静态文档
+    - 当前 agent 缺失专属文件时，自动回退 `app/agents/default/`
+    - 空文件会被视为配置错误并拒绝加载
+  - `app/runtime/context_assembler.py` 已接入新的文档仓库：
+    - 每轮组 prompt 时按 `context.agent_id` 加载 `AGENT.md` / `SOUL.md`
+    - 注入顺序固定为：runtime 硬规则 -> `AGENT.md` -> `SOUL.md` -> skills -> `state` -> `memory` -> files
+    - 文档读取失败时只记 warning，不阻断本轮组装
+  - `app/api/deps.py` / `tests/helpers.py` / `tests/test_agent_runtime.py` 已补齐依赖装配
+  - 新增默认静态文档：
+    - `app/agents/default/AGENT.md`
+    - `app/agents/default/SOUL.md`
+  - 新增测试：
+    - `tests/test_storage.py`：default fallback、agent 专属优先、空文档拒绝
+    - `tests/test_context_assembler.py`：prompt 注入顺序、仓库缺失时安全降级
+- 影响范围：
+  - 四层架构第一次在 runtime 主链路中闭环，`AGENT.md` / `SOUL.md` 不再只停留在设计文档。
+  - 后续做 Retrieval V2 时，可以在已接入静态层的前提下调整 `state` / `memory` 的召回策略，不必二次返工 prompt 优先级。
+  - 这一步仍是只读接入，不引入新的写接口，也不会与 memory/state 的动态写入链路混用。
+- 验证结果：
+  - `uv run pytest tests/test_storage.py tests/test_context_assembler.py tests/test_agent_runtime.py -q`：通过
+  - `uv run mypy app/infra/storage/markdown_agent_document_repository.py app/runtime/context_assembler.py app/api/deps.py tests/test_storage.py tests/test_context_assembler.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 7 source files`）
+
+38. [完成] 落地 Retrieval V2：runtime prompt 开始按 lane 注入 memory。
+- 说明：
+  - `app/runtime/memory_manager.py` 新增 `search_context_memory_lanes(...)`：
+    - 只服务 runtime prompt 上下文
+    - 不改变 `memory_search` 工具和通用 `search_with_summary(...)` 的既有行为
+    - 继续排除 `agent_short`，避免短期 working state 被当作长期 memory 注入
+  - 当前 memory lane：
+    - `identity`
+    - `response_preferences`
+    - `interaction_feedback`
+    - `user_profile`
+    - `other_memories`
+  - V2 会 always-on 读取少量输出相关 canonical keys：
+    - `preferred_language`
+    - `response_style`
+    - `preferred_format`
+    - `disliked_format`
+    - `interaction_style`
+  - name intent query 才会额外读取 `preferred_name`。
+  - `app/runtime/context_assembler.py` 不再生成旧的 `Relevant memories` 单块，而是按 lane 注入：
+    - `Memory - Identity`
+    - `Memory - Response preferences`
+    - `Memory - Interaction feedback`
+    - `Memory - User profile`
+    - `Memory - Other relevant memory`
+  - `ContextBundle` 新增 `memory_lanes` 字段，同时保留扁平的 `memory_hits`，保证上层已有响应结构继续可用。
+- 影响范围：
+  - runtime prompt 的 memory 结构更清晰，长期输出偏好不再完全依赖当前 query 文本命中。
+  - 前端和工具接口仍使用原有 `memory_hits` 视图，不需要同步改 UI。
+  - 这一步是 Retrieval V2 的第一版，后续可以继续增加 query intent router 和 per-agent lane subscription。
+- 验证结果：
+  - `uv run pytest tests/test_memory_manager.py tests/test_context_assembler.py -q`：通过
+  - `uv run mypy app/domain/models.py app/runtime/memory_manager.py app/runtime/context_assembler.py tests/test_memory_manager.py tests/test_context_assembler.py`：通过（`Success: no issues found in 5 source files`）
+  - `uv run pytest`：通过（`127 passed`）
+
+39. [完成] 清空重建 memory 本地数据，并删除旧 `data/memory` 仓储链路。
+- 说明：
+  - 本地 `data/memory` 已删除。
+  - 本地 `data/memory_v2` 已清空并重建为空目录结构：
+    - `shared/`
+    - `agents/`
+    - `candidates/pending.jsonl`
+    - `candidates/processed/`
+    - `ops/`
+  - 删除旧单文件 memory 仓储实现 `app/infra/storage/jsonl_memory_repository.py`。
+  - 删除旧仓储对应测试与域层 `MemoryRepository` 协议，避免后续代码继续引用旧 `data/memory/memories.jsonl` 结构。
+- 影响范围：
+  - 仓库不再保留旧 `data/memory` 运行入口。
+  - 当前 memory 读写只面向 `data/memory_v2` + 最新 schema。
+  - 历史 memory 内容不保留，后续从新结构重新积累。
+- 验证结果：
+  - `uv run pytest tests/test_storage.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`53 passed`）
+  - `uv run mypy app/infra/storage/__init__.py app/domain/protocols.py tests/test_storage.py app/memory/stores/jsonl_file_store.py app/memory/models.py app/memory/contracts.py app/memory/facade.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 12 source files`）
+  - `uv run pytest -q`：通过

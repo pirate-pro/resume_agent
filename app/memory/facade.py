@@ -21,8 +21,6 @@ from app.memory.models import (
     MemoryReadRequest,
     MemoryRecord,
     MemoryScope,
-    MemoryStructuredBackfillRequest,
-    MemoryStructuredBackfillResult,
     MemoryWriteCandidateRequest,
 )
 from app.memory.policies import MemoryPolicy, default_memory_policy
@@ -71,12 +69,6 @@ class FileMemoryFacade:
     def compact(self, request: MemoryCompactRequest) -> CompactResult:
         return self._lifecycle.compact(request)
 
-    def backfill_structured_metadata(
-        self,
-        request: MemoryStructuredBackfillRequest,
-    ) -> MemoryStructuredBackfillResult:
-        return self._lifecycle.backfill_structured_metadata(request)
-
     def list_active_records_by_canonical_key(
         self,
         *,
@@ -104,21 +96,3 @@ class FileMemoryFacade:
                 seen_memory_ids.add(record.memory_id)
         matches.sort(key=lambda item: (item.updated_at, item.version, item.created_at, item.memory_id), reverse=True)
         return matches
-
-    def refresh_record_metadata(
-        self,
-        *,
-        scope: MemoryScope,
-        agent_id: str | None,
-        session_id: str | None,
-        memory_id: str,
-        metadata_patch: dict[str, str],
-    ) -> MemoryRecord | None:
-        return self._store.refresh_record_metadata(
-            scope=scope,
-            agent_id=agent_id,
-            session_id=session_id,
-            memory_id=memory_id,
-            metadata_patch=metadata_patch,
-            now=datetime.now(UTC),
-        )

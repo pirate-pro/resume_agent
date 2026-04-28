@@ -260,9 +260,8 @@ class MemoryUpdateTool:
         return ToolDefinition(
             name="memory_update",
             description=(
-                "Replace one memory by query: prefer canonical exact match for structured memories, "
-                "then fall back to text search; locate target -> forget old -> write new. "
-                "If multiple targets match, return ambiguity candidates instead of blind update."
+                "Update one structured canonical memory by query. "
+                "If multiple targets match or the target lacks canonical metadata, return a non-updating result."
             ),
             parameters_schema={
                 "type": "object",
@@ -275,7 +274,6 @@ class MemoryUpdateTool:
                         "default": [],
                     },
                     "limit": {"type": "integer", "default": 3, "minimum": 1, "maximum": 8},
-                    "hard_delete_old": {"type": "boolean", "default": False},
                 },
                 "required": ["query", "new_content"],
             },
@@ -290,9 +288,6 @@ class MemoryUpdateTool:
         if not isinstance(raw_limit, int) or raw_limit <= 0:
             raise ToolExecutionError("'limit' must be a positive integer.")
         limit = min(raw_limit, 8)
-        hard_delete_old = arguments.get("hard_delete_old", False)
-        if not isinstance(hard_delete_old, bool):
-            raise ToolExecutionError("'hard_delete_old' must be boolean.")
 
         hits, match_strategy = self._memory_manager.resolve_update_targets(
             query=query,
@@ -342,126 +337,101 @@ class MemoryUpdateTool:
             )
 
         target = hits[0]
-        target = self._memory_manager.ensure_structured_metadata(
-            context=run_context,
-            record=target,
-        )
         resolved_tags = _resolve_update_tags(new_tags=new_tags, target_scope=target.scope, target_tags=target.tags)
         target_canonical_key = str(target.metadata.get("canonical_key", "")).strip() or None
+        if target_canonical_key is None:
+            return ToolExecutionResult(
+                tool_name="memory_update",
+                success=True,
+                content=json.dumps(
+                    {
+                        "updated": False,
+                        "reason": "target_missing_canonical_key",
+                        "query": query,
+                        "match_strategy": match_strategy,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
         update_classification = classify_memory(
             content=new_content,
             tags=resolved_tags,
             source="memory_update_tool",
         )
         new_canonical_key = update_classification.canonical_key
-        if target_canonical_key is not None:
-            if new_canonical_key != target_canonical_key:
-                return ToolExecutionResult(
-                    tool_name="memory_update",
-                    success=True,
-                    content=json.dumps(
-                        {
-                            "updated": False,
-                            "reason": "canonical_key_mismatch",
-                            "query": query,
-                            "match_strategy": match_strategy,
-                            "update_mode": "canonical_direct",
-                            "target_canonical_key": target_canonical_key,
-                            "new_canonical_key": new_canonical_key,
-                        },
-                        ensure_ascii=False,
-                    ),
-                )
-            write_result = self._memory_manager.write_memory_with_result(
-                content=new_content,
-                tags=resolved_tags,
-                context=run_context,
-                source_event_id=None,
-                source="memory_update_tool",
-            )
-            consolidate_result = write_result.consolidate_result
-            if consolidate_result.conflicts > 0:
-                return ToolExecutionResult(
-                    tool_name="memory_update",
-                    success=True,
-                    content=json.dumps(
-                        {
-                            "updated": False,
-                            "reason": "source_priority_conflict",
-                            "query": query,
-                            "match_strategy": match_strategy,
-                            "update_mode": "canonical_direct",
-                            "old_memory_id": target.memory_id,
-                            "old_scope": target.scope.value,
-                            "new_tags": resolved_tags,
-                        },
-                        ensure_ascii=False,
-                    ),
-                )
-            if consolidate_result.written_records == 0:
-                return ToolExecutionResult(
-                    tool_name="memory_update",
-                    success=True,
-                    content=json.dumps(
-                        {
-                            "updated": False,
-                            "reason": "semantic_noop",
-                            "query": query,
-                            "match_strategy": match_strategy,
-                            "update_mode": "canonical_direct",
-                            "old_memory_id": target.memory_id,
-                            "old_scope": target.scope.value,
-                            "new_tags": resolved_tags,
-                        },
-                        ensure_ascii=False,
-                    ),
-                )
-            payload = {
-                "updated": True,
-                "match_strategy": match_strategy,
-                "update_mode": "canonical_supersede",
-                "old_memory_id": target.memory_id,
-                "new_memory_id": write_result.memory.memory_id,
-                "new_tags": resolved_tags,
-                "old_scope": target.scope.value,
-                "forget_result": {
-                    "touched": 0,
-                    "deleted": 0,
-                    "archived": 0,
-                },
-            }
+        if new_canonical_key != target_canonical_key:
             return ToolExecutionResult(
                 tool_name="memory_update",
                 success=True,
-                content=json.dumps(payload, ensure_ascii=False),
+                content=json.dumps(
+                    {
+                        "updated": False,
+                        "reason": "canonical_key_mismatch",
+                        "query": query,
+                        "match_strategy": match_strategy,
+                        "update_mode": "canonical_direct",
+                        "target_canonical_key": target_canonical_key,
+                        "new_canonical_key": new_canonical_key,
+                    },
+                    ensure_ascii=False,
+                ),
             )
-
-        forget_result = self._memory_manager.forget_memory_ids(
-            context=run_context,
-            memory_ids=[target.memory_id],
-            scopes=[target.scope],
-            hard_delete=hard_delete_old,
-            reason=f"memory_update_replace:{query[:80]}",
-        )
-        written = self._memory_manager.write_memory(
+        write_result = self._memory_manager.write_memory_with_result(
             content=new_content,
             tags=resolved_tags,
             context=run_context,
             source_event_id=None,
             source="memory_update_tool",
         )
+        consolidate_result = write_result.consolidate_result
+        if consolidate_result.conflicts > 0:
+            return ToolExecutionResult(
+                tool_name="memory_update",
+                success=True,
+                content=json.dumps(
+                    {
+                        "updated": False,
+                        "reason": "source_priority_conflict",
+                        "query": query,
+                        "match_strategy": match_strategy,
+                        "update_mode": "canonical_direct",
+                        "old_memory_id": target.memory_id,
+                        "old_scope": target.scope.value,
+                        "new_tags": resolved_tags,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        if consolidate_result.written_records == 0:
+            return ToolExecutionResult(
+                tool_name="memory_update",
+                success=True,
+                content=json.dumps(
+                    {
+                        "updated": False,
+                        "reason": "semantic_noop",
+                        "query": query,
+                        "match_strategy": match_strategy,
+                        "update_mode": "canonical_direct",
+                        "old_memory_id": target.memory_id,
+                        "old_scope": target.scope.value,
+                        "new_tags": resolved_tags,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
         payload = {
             "updated": True,
             "match_strategy": match_strategy,
-            "update_mode": "replace_rewrite",
+            "update_mode": "canonical_supersede",
             "old_memory_id": target.memory_id,
-            "new_memory_id": written.memory_id,
+            "new_memory_id": write_result.memory.memory_id,
             "new_tags": resolved_tags,
             "old_scope": target.scope.value,
             "forget_result": {
-                "touched": forget_result.touched_records,
-                "deleted": forget_result.deleted_records,
-                "archived": forget_result.archived_records,
+                "touched": 0,
+                "deleted": 0,
+                "archived": 0,
             },
         }
         return ToolExecutionResult(

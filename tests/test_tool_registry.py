@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,7 @@ from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.facade import FileMemoryFacade
-from app.memory.models import MemoryReadRequest, MemoryRecord, MemoryScope, MemoryStatus, MemoryType
+from app.memory.models import MemoryReadRequest, MemoryScope
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
@@ -346,6 +345,43 @@ def test_memory_update_tool_returns_ambiguous_when_multi_match(tmp_path: Path) -
     assert len(payload["candidates"]) >= 2
 
 
+def test_memory_update_tool_rejects_unkeyed_target_without_rewrite(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    memory_manager = _memory_manager(memory_facade)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemoryUpdateTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户喜欢奶茶", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_update_unkeyed"),
+    )
+
+    update_result = registry.execute(
+        ToolCall(
+            name="memory_update",
+            arguments={
+                "query": "用户喜欢奶茶",
+                "new_content": "用户喜欢美式",
+                "limit": 3,
+            },
+        ),
+        context=_context("sess_update_unkeyed"),
+    )
+
+    payload = json.loads(update_result.content)
+    rows = _read_jsonl(tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl")
+    assert update_result.success is True
+    assert payload["updated"] is False
+    assert payload["reason"] == "target_missing_canonical_key"
+    assert len([row for row in rows if row["status"] == "active"]) == 1
+
+
 def test_memory_update_tool_prefers_canonical_exact_before_text_search(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
@@ -455,76 +491,6 @@ def test_memory_update_tool_canonical_update_respects_source_priority(tmp_path: 
     assert payload["update_mode"] == "canonical_direct"
     assert any(item.get("content") == "用户称呼是李华" for item in json.loads(old_search.content))
     assert all(item.get("content") != "用户称呼改为小李" for item in json.loads(new_search.content))
-
-
-def test_memory_update_tool_backfills_legacy_target_and_uses_canonical_supersede(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
-    now = datetime.now(UTC)
-    memory_store.write_records(
-        [
-            MemoryRecord(
-                memory_id="mem_legacy_name",
-                scope=MemoryScope.AGENT_LONG,
-                owner_agent_id="agent_main",
-                session_id=None,
-                memory_type=MemoryType.PREFERENCE,
-                content="以后叫我李华",
-                tags=["preference", "long_term"],
-                importance=0.7,
-                confidence=0.7,
-                status=MemoryStatus.ACTIVE,
-                created_at=now,
-                updated_at=now,
-                expires_at=None,
-                source_event_id=None,
-                source_agent_id="agent_main",
-                version=1,
-                parent_memory_id=None,
-                content_hash="",
-                metadata={},
-            )
-        ]
-    )
-
-    registry = _registry()
-    registry.register(MemorySearchTool(memory_manager=memory_manager))
-    registry.register(MemoryUpdateTool(memory_manager=memory_manager))
-
-    update_result = registry.execute(
-        ToolCall(
-            name="memory_update",
-            arguments={
-                "query": "以后叫我李华",
-                "new_content": "以后叫我小李",
-                "new_tags": ["preference", "long_term"],
-                "limit": 3,
-            },
-        ),
-        context=_context("sess_update_legacy"),
-    )
-    new_search = registry.execute(
-        ToolCall(name="memory_search", arguments={"query": "小李", "limit": 5}),
-        context=_context("sess_update_legacy"),
-    )
-
-    payload = json.loads(update_result.content)
-    rows = _read_jsonl(tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl")
-    active_rows = [row for row in rows if row["status"] == "active"]
-    archived_rows = [row for row in rows if row["status"] == "archived"]
-    assert update_result.success is True
-    assert payload["updated"] is True
-    assert payload["match_strategy"] == "text_search"
-    assert payload["update_mode"] == "canonical_supersede"
-    assert len(json.loads(new_search.content)) >= 1
-    assert len(active_rows) == 1
-    assert active_rows[0]["metadata"]["normalized_value"] == "小李"
-    assert active_rows[0]["parent_memory_id"] == "mem_legacy_name"
-    assert len(archived_rows) == 1
-    assert archived_rows[0]["memory_id"] == "mem_legacy_name"
-    assert archived_rows[0]["metadata"]["canonical_key"] == "preferred_name"
-    assert archived_rows[0]["metadata"]["metadata_refresh_reason"] == "structured_backfill"
 
 
 def test_state_tools_write_list_and_publish_session_state(tmp_path: Path) -> None:

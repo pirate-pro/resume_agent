@@ -6,7 +6,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from app.memory.models import MemoryCompactRequest, MemoryRecord, MemoryScope, MemoryStatus, MemoryType
+from app.memory.facade import FileMemoryFacade
+from app.memory.models import MemoryCompactRequest, MemoryReadRequest, MemoryRecord, MemoryScope, MemoryStatus, MemoryType
+from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 
 __all__ = []
@@ -180,6 +182,41 @@ def test_compact_dedupe_by_content_hash_is_optional(tmp_path: Path) -> None:
     )
     assert result_with_hash_dedupe.dropped_duplicate_hash == 1
     assert result_with_hash_dedupe.kept_rows == 1
+
+
+def test_store_skips_records_missing_current_schema_fields(tmp_path: Path) -> None:
+    store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    record_file = tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl"
+    record_file.parent.mkdir(parents=True, exist_ok=True)
+    record_file.write_text(
+        json.dumps(
+            {
+                "memory_id": "mem_old_shape",
+                "scope": "agent_long",
+                "owner_agent_id": "agent_main",
+                "content": "old shape",
+                "created_at": datetime.now(UTC).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    facade = FileMemoryFacade(store=store, policy=default_memory_policy())
+    bundle = facade.read_context(
+        MemoryReadRequest(
+            agent_id="agent_main",
+            session_id=None,
+            query="old shape",
+            include_scopes=[MemoryScope.AGENT_LONG],
+            limit=5,
+            token_budget=1200,
+        )
+    )
+
+    assert bundle.items == []
 
 
 def _build_record(

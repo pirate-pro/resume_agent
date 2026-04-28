@@ -10,6 +10,7 @@ from typing import Any
 from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.policies import default_memory_policy
@@ -128,6 +129,7 @@ def build_chat_service(
     capability_registry = AgentCapabilityRegistry.for_tests()
     memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
     skill_repository = MarkdownSkillRepository(skills_dir=Path("app/skills"))
+    agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))
 
     tool_registry = ToolRegistry(capability_registry=capability_registry)
     tool_registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -148,6 +150,7 @@ def build_chat_service(
     context_assembler = ContextAssembler(
         session_repository=session_repository,
         skill_repository=skill_repository,
+        agent_document_repository=agent_document_repository,
         memory_manager=memory_manager,
         state_manager=state_manager,
         tool_executor=tool_registry,

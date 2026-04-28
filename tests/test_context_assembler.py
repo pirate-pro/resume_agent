@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.domain.models import EventRecord, RunContext, SessionFile
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.policies import default_memory_policy
@@ -40,6 +41,11 @@ def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
 
 def _state_manager(tmp_path: Path) -> StateManager:
     return StateManager(store=JsonlFileStateStore(root_dir=tmp_path / "state_v1"))
+
+
+def _agent_document_repository(root: Path | None = None) -> MarkdownAgentDocumentRepository:
+    agents_dir = root if root is not None else Path("app/agents")
+    return MarkdownAgentDocumentRepository(agents_dir=agents_dir)
 
 
 
@@ -89,6 +95,7 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
+        agent_document_repository=_agent_document_repository(),
         memory_manager=memory_manager,
         state_manager=state_manager,
         tool_executor=tool_registry,
@@ -137,6 +144,7 @@ def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) 
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
+        agent_document_repository=_agent_document_repository(),
         memory_manager=MemoryManager(memory_facade=memory_facade, capability_registry=_capability_registry()),
         state_manager=_state_manager(tmp_path),
         tool_executor=ToolRegistry(capability_registry=_capability_registry()),
@@ -175,6 +183,7 @@ def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: P
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
+        agent_document_repository=_agent_document_repository(),
         memory_manager=memory_manager,
         state_manager=_state_manager(tmp_path),
         tool_executor=ToolRegistry(capability_registry=capability_registry),
@@ -186,7 +195,7 @@ def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: P
     )
 
     assert any("李华" in item.content for item in bundle.memory_hits)
-    assert "Relevant memories:" in bundle.system_prompt
+    assert "Memory - Identity:" in bundle.system_prompt
 
 
 def test_context_assembler_prioritizes_preferred_name_memory_for_name_question(tmp_path: Path) -> None:
@@ -216,6 +225,7 @@ def test_context_assembler_prioritizes_preferred_name_memory_for_name_question(t
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
+        agent_document_repository=_agent_document_repository(),
         memory_manager=memory_manager,
         state_manager=_state_manager(tmp_path),
         tool_executor=ToolRegistry(capability_registry=capability_registry),
@@ -258,6 +268,7 @@ def test_context_assembler_includes_agent_and_shared_state_prompt(tmp_path: Path
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
         memory_manager=MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry),
         state_manager=state_manager,
         tool_executor=ToolRegistry(capability_registry=capability_registry),
@@ -292,6 +303,7 @@ def test_context_assembler_excludes_agent_short_from_relevant_memories(tmp_path:
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
         memory_manager=memory_manager,
         state_manager=_state_manager(tmp_path),
         tool_executor=ToolRegistry(capability_registry=capability_registry),
@@ -304,4 +316,112 @@ def test_context_assembler_excludes_agent_short_from_relevant_memories(tmp_path:
     )
 
     assert bundle.memory_hits == []
-    assert "Relevant memories:" not in bundle.system_prompt
+    assert "Memory -" not in bundle.system_prompt
+
+
+def test_context_assembler_injects_memory_lanes_separately(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_lane_prompt")
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    capability_registry = _capability_registry()
+    memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
+    memory_manager.write_memory(
+        content="以后回答简洁一点",
+        tags=["preference", "long_term"],
+        context=_context("sess_lane_prompt"),
+        source_event_id="evt_lane_prompt_style",
+    )
+    memory_manager.write_memory(
+        content="用户长期目标是提升后端工程能力",
+        tags=["long_term"],
+        context=_context("sess_lane_prompt"),
+        source_event_id="evt_lane_prompt_goal",
+    )
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=memory_manager,
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=capability_registry),
+    )
+
+    bundle = assembler.assemble(
+        context=_context("sess_lane_prompt"),
+        user_message="后端怎么继续优化",
+        skill_names=["base", "memory"],
+    )
+
+    assert "Memory - Response preferences:" in bundle.system_prompt
+    assert "以后回答简洁一点" in bundle.system_prompt
+    assert "Memory - User profile:" in bundle.system_prompt
+    assert "用户长期目标是提升后端工程能力" in bundle.system_prompt
+    assert set(bundle.memory_lanes) == {"response_preferences", "user_profile"}
+
+
+def test_context_assembler_injects_agent_and_soul_documents_before_skills(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_identity_1")
+    docs_dir = tmp_path / "agents"
+    agent_dir = docs_dir / "agent_main"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "AGENT.md").write_text("# Rules\n\n- 永远不要伪造工具结果。", encoding="utf-8")
+    (agent_dir / "SOUL.md").write_text("# Soul\n\n冷静、直接、协作。", encoding="utf-8")
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(docs_dir),
+        memory_manager=MemoryManager(
+            memory_facade=FileMemoryFacade(
+                store=JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2"),
+                policy=default_memory_policy(),
+            ),
+            capability_registry=_capability_registry(),
+        ),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
+    )
+
+    bundle = assembler.assemble(
+        context=_context("sess_identity_1"),
+        user_message="继续",
+        skill_names=["base"],
+    )
+
+    assert "AGENT.md:\n# Rules" in bundle.system_prompt
+    assert "SOUL.md:\n# Soul" in bundle.system_prompt
+    assert bundle.system_prompt.index("AGENT.md:") < bundle.system_prompt.index("SOUL.md:")
+    assert bundle.system_prompt.index("SOUL.md:") < bundle.system_prompt.index("Skills:")
+
+
+def test_context_assembler_skips_agent_documents_when_repository_unavailable(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_identity_2")
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(tmp_path / "missing_agents"),
+        memory_manager=MemoryManager(
+            memory_facade=FileMemoryFacade(
+                store=JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2"),
+                policy=default_memory_policy(),
+            ),
+            capability_registry=_capability_registry(),
+        ),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
+    )
+
+    bundle = assembler.assemble(
+        context=_context("sess_identity_2"),
+        user_message="继续",
+        skill_names=["base"],
+    )
+
+    assert "AGENT.md:" not in bundle.system_prompt
+    assert "SOUL.md:" not in bundle.system_prompt
+    assert "Skills:" in bundle.system_prompt

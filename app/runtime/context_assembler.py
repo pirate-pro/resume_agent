@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from app.core.errors import StorageError
 from app.core.errors import ValidationError
-from app.domain.models import ContextBundle, EventRecord, MemoryItem, RunContext, SessionFile
-from app.domain.protocols import SessionRepository, SkillRepository, ToolExecutor
+from app.domain.models import AgentIdentityDocuments, ContextBundle, EventRecord, MemoryItem, RunContext, SessionFile
+from app.domain.protocols import AgentDocumentRepository, SessionRepository, SkillRepository, ToolExecutor
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 from app.state.models import StateRecord
@@ -16,6 +17,13 @@ _logger = logging.getLogger(__name__)
 _ACTIVE_FILE_MAX_COUNT = 12
 _AGENT_STATE_MAX_COUNT = 8
 _SHARED_STATE_MAX_COUNT = 8
+_MEMORY_LANE_LABELS = {
+    "identity": "Identity",
+    "response_preferences": "Response preferences",
+    "interaction_feedback": "Interaction feedback",
+    "user_profile": "User profile",
+    "other_memories": "Other relevant memory",
+}
 _OUTPUT_FORMAT_RULES = """Answer output rules:
 1. If the user asks for a Markdown document to read/render, return direct Markdown body. Do not wrap the whole document in an outer ```markdown fenced block.
 2. Only use ```markdown fenced block when the user explicitly wants Markdown source code.
@@ -40,12 +48,14 @@ class ContextAssembler:
         self,
         session_repository: SessionRepository,
         skill_repository: SkillRepository,
+        agent_document_repository: AgentDocumentRepository,
         memory_manager: MemoryManager,
         state_manager: StateManager,
         tool_executor: ToolExecutor,
     ) -> None:
         self._session_repository = session_repository
         self._skill_repository = skill_repository
+        self._agent_document_repository = agent_document_repository
         self._memory_manager = memory_manager
         self._state_manager = state_manager
         self._tool_executor = tool_executor
@@ -62,8 +72,13 @@ class ContextAssembler:
         normalized_message = user_message.strip()
 
         skills = self._skill_repository.load_skills(skill_names) if skill_names else {}
+        agent_documents = self._load_agent_documents(context)
         agent_state, shared_state = self._load_state(context)
-        memory_hits, memory_summary = self._safe_memory_search(normalized_message, limit=5, context=context)
+        memory_hits, memory_summary, memory_lanes = self._safe_memory_search(
+            normalized_message,
+            limit=5,
+            context=context,
+        )
         active_files = self._load_active_files(normalized_session_id)
         recent_events = self._session_repository.list_recent_events(normalized_session_id, limit=12)
         messages = self._build_messages_from_events(recent_events)
@@ -71,12 +86,21 @@ class ContextAssembler:
         if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != normalized_message:
             messages.append({"role": "user", "content": normalized_message})
 
-        system_prompt = self._build_system_prompt(skills, agent_state, shared_state, memory_hits, active_files)
+        system_prompt = self._build_system_prompt(
+            skills,
+            agent_documents,
+            agent_state,
+            shared_state,
+            memory_lanes,
+            active_files,
+        )
         tool_definitions = self._tool_executor.list_definitions()
         _logger.debug(
-            "上下文组装: session_id=%s skills=%s agent_state=%s shared_state=%s memory_hits=%s active_files=%s recent_events=%s output_messages=%s",
+            "上下文组装: session_id=%s skills=%s has_agent_md=%s has_soul_md=%s agent_state=%s shared_state=%s memory_hits=%s active_files=%s recent_events=%s output_messages=%s",
             normalized_session_id,
             len(skills),
+            bool(agent_documents.agent_markdown),
+            bool(agent_documents.soul_markdown),
             len(agent_state),
             len(shared_state),
             len(memory_hits),
@@ -90,7 +114,19 @@ class ContextAssembler:
             memory_hits=memory_hits,
             tool_definitions=tool_definitions,
             memory_summary=memory_summary,
+            memory_lanes=memory_lanes,
         )
+
+    def _load_agent_documents(self, context: RunContext) -> AgentIdentityDocuments:
+        try:
+            return self._agent_document_repository.load_documents(context.agent_id)
+        except (StorageError, ValidationError) as exc:
+            _logger.warning(
+                "AGENT/SOUL 文档加载失败，跳过静态身份注入: agent_id=%s error=%s",
+                context.agent_id,
+                exc,
+            )
+            return AgentIdentityDocuments()
 
     def _load_state(self, context: RunContext) -> tuple[list[StateRecord], list[StateRecord]]:
         agent_state = self._state_manager.list_agent_state(
@@ -105,14 +141,15 @@ class ContextAssembler:
         query: str,
         limit: int,
         context: RunContext,
-    ) -> tuple[list[MemoryItem], dict[str, str | int | bool | list[str]]]:
+    ) -> tuple[list[MemoryItem], dict[str, str | int | bool | list[str] | dict[str, int]], dict[str, list[MemoryItem]]]:
         try:
-            hits, summary = self._memory_manager.search_context_memories(
+            lanes, summary = self._memory_manager.search_context_memory_lanes(
                 query=query,
                 limit=limit,
                 context=context,
             )
-            normalized_summary: dict[str, str | int | bool | list[str]] = {
+            hits = _flatten_memory_lanes(lanes)
+            normalized_summary: dict[str, str | int | bool | list[str] | dict[str, int]] = {
                 "query": str(summary.get("query", "")),
                 "agent_id": str(summary.get("agent_id", "")),
                 "session_id": str(summary.get("session_id", "")),
@@ -122,7 +159,14 @@ class ContextAssembler:
                 "searched_scopes": [str(item) for item in summary.get("searched_scopes", [])],
                 "notes": [str(item) for item in summary.get("notes", [])],
             }
-            return hits, normalized_summary
+            raw_lanes = summary.get("lanes", {})
+            if isinstance(raw_lanes, dict):
+                normalized_summary["lanes"] = {
+                    str(key): int(value)
+                    for key, value in raw_lanes.items()
+                    if isinstance(value, int)
+                }
+            return hits, normalized_summary, lanes
         except ValidationError as exc:
             _logger.warning("记忆检索参数不合法，跳过检索: query=%s limit=%s error=%s", query, limit, exc)
             return [], {
@@ -134,14 +178,15 @@ class ContextAssembler:
                 "truncated": False,
                 "searched_scopes": [],
                 "notes": [f"validation_error: {exc}"],
-            }
+            }, {}
 
     def _build_system_prompt(
         self,
         skills: dict[str, str],
+        agent_documents: AgentIdentityDocuments,
         agent_state: list[StateRecord],
         shared_state: list[StateRecord],
-        memory_hits: list[MemoryItem],
+        memory_lanes: dict[str, list[MemoryItem]],
         active_files: list[SessionFile],
     ) -> str:
         sections: list[str] = [
@@ -149,6 +194,10 @@ class ContextAssembler:
             "If information is unknown, say you do not know.",
             _OUTPUT_FORMAT_RULES,
         ]
+        if agent_documents.agent_markdown:
+            sections.append("AGENT.md:\n" + agent_documents.agent_markdown)
+        if agent_documents.soul_markdown:
+            sections.append("SOUL.md:\n" + agent_documents.soul_markdown)
         if skills:
             sections.append("Skills:\n" + "\n\n".join(f"[{name}]\n{text}" for name, text in skills.items()))
         if agent_state:
@@ -164,9 +213,12 @@ class ContextAssembler:
                     for item in shared_state
                 )
             )
-        if memory_hits:
-            memory_lines = [f"- ({item.memory_id}) {item.content} [tags: {', '.join(item.tags)}]" for item in memory_hits]
-            sections.append("Relevant memories:\n" + "\n".join(memory_lines))
+        for lane, items in memory_lanes.items():
+            if not items:
+                continue
+            label = _MEMORY_LANE_LABELS.get(lane, lane.replace("_", " ").title())
+            memory_lines = [f"- ({item.memory_id}) {item.content} [tags: {', '.join(item.tags)}]" for item in items]
+            sections.append(f"Memory - {label}:\n" + "\n".join(memory_lines))
         if active_files:
             file_lines = [
                 (
@@ -209,3 +261,15 @@ class ContextAssembler:
             if len(output) >= _ACTIVE_FILE_MAX_COUNT:
                 break
         return output
+
+
+def _flatten_memory_lanes(lanes: dict[str, list[MemoryItem]]) -> list[MemoryItem]:
+    flattened: list[MemoryItem] = []
+    seen: set[str] = set()
+    for items in lanes.values():
+        for item in items:
+            if item.memory_id in seen:
+                continue
+            seen.add(item.memory_id)
+            flattened.append(item)
+    return flattened

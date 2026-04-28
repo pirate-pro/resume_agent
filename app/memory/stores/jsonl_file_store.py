@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.core.errors import StorageError, ValidationError
-from app.memory.classification import classify_memory
-from app.memory.metadata_refresh import build_metadata_refresh_patch
 from app.memory.models import (
     CompactResult,
     ForgetResult,
@@ -23,8 +21,6 @@ from app.memory.models import (
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
-    MemoryStructuredBackfillRequest,
-    MemoryStructuredBackfillResult,
     MemoryType,
     make_content_hash,
 )
@@ -383,74 +379,6 @@ class JsonlFileMemoryStore:
             _write_jsonl_rows(path, output)
         return touched
 
-    def refresh_record_metadata(
-        self,
-        *,
-        scope: MemoryScope,
-        agent_id: str | None,
-        session_id: str | None,
-        memory_id: str,
-        metadata_patch: dict[str, str],
-        now: datetime,
-    ) -> MemoryRecord | None:
-        normalized_memory_id = str(memory_id).strip()
-        if not normalized_memory_id:
-            raise ValidationError("memory_id must be non-empty string.")
-        normalized_patch = {
-            str(key).strip(): str(value).strip()
-            for key, value in dict(metadata_patch).items()
-            if str(key).strip() and str(value).strip()
-        }
-        if not normalized_patch:
-            return None
-
-        path = self._record_file_for(scope, agent_id, session_id)
-        rows = _read_jsonl_rows(path)
-        if not rows:
-            return None
-
-        updated_record: MemoryRecord | None = None
-        output: list[dict[str, Any]] = []
-        for row in rows:
-            try:
-                record = _payload_to_record(row)
-            except ValidationError:
-                output.append(row)
-                continue
-            if record.memory_id != normalized_memory_id:
-                output.append(row)
-                continue
-            metadata = dict(record.metadata)
-            metadata.update(normalized_patch)
-            metadata["metadata_refresh_reason"] = "structured_backfill"
-            refreshed = MemoryRecord(
-                memory_id=record.memory_id,
-                scope=record.scope,
-                owner_agent_id=record.owner_agent_id,
-                session_id=record.session_id,
-                memory_type=record.memory_type,
-                content=record.content,
-                tags=record.tags,
-                importance=record.importance,
-                confidence=record.confidence,
-                status=record.status,
-                created_at=record.created_at,
-                updated_at=now,
-                expires_at=record.expires_at,
-                source_event_id=record.source_event_id,
-                source_agent_id=record.source_agent_id,
-                version=record.version + 1,
-                parent_memory_id=record.parent_memory_id,
-                content_hash=record.content_hash,
-                metadata=metadata,
-            )
-            updated_record = refreshed
-            output.append(_record_to_payload(refreshed))
-        if updated_record is None:
-            return None
-        _write_jsonl_rows(path, output)
-        return updated_record
-
     def forget(self, request: MemoryForgetRequest, now: datetime) -> ForgetResult:
         touched = 0
         deleted = 0
@@ -562,99 +490,6 @@ class JsonlFileMemoryStore:
         self._append_compact_log(request=request, result=result, now=now)
         return result
 
-    def backfill_structured_metadata(
-        self,
-        request: MemoryStructuredBackfillRequest,
-        now: datetime,
-    ) -> MemoryStructuredBackfillResult:
-        if not isinstance(request, MemoryStructuredBackfillRequest):
-            raise ValidationError("request must be MemoryStructuredBackfillRequest.")
-        unique_paths = _dedupe_paths(self._collect_backfill_paths(request))
-
-        scanned_files = 0
-        rewritten_files = 0
-        scanned_rows = 0
-        patched_records = 0
-        skipped_structured = 0
-        skipped_deleted = 0
-        invalid_rows = 0
-
-        for path in unique_paths:
-            rows = _read_jsonl_rows(path)
-            if not rows:
-                continue
-            scanned_files += 1
-            scanned_rows += len(rows)
-            changed = False
-            output: list[dict[str, Any]] = []
-            for row in rows:
-                try:
-                    record = _payload_to_record(row)
-                except ValidationError:
-                    invalid_rows += 1
-                    output.append(row)
-                    continue
-                if record.status == MemoryStatus.DELETED and not request.include_deleted:
-                    skipped_deleted += 1
-                    output.append(row)
-                    continue
-                source = record.metadata.get("source", "legacy_memory_backfill")
-                classification = classify_memory(
-                    content=record.content,
-                    tags=record.tags,
-                    source=source,
-                )
-                patch = build_metadata_refresh_patch(
-                    existing_metadata=record.metadata,
-                    classified_metadata=classification.to_metadata(),
-                )
-                if not patch:
-                    skipped_structured += 1
-                    output.append(row)
-                    continue
-                metadata = dict(record.metadata)
-                metadata.update(patch)
-                metadata["metadata_refresh_reason"] = "bulk_structured_backfill"
-                updated_record = MemoryRecord(
-                    memory_id=record.memory_id,
-                    scope=record.scope,
-                    owner_agent_id=record.owner_agent_id,
-                    session_id=record.session_id,
-                    memory_type=record.memory_type,
-                    content=record.content,
-                    tags=record.tags,
-                    importance=record.importance,
-                    confidence=record.confidence,
-                    status=record.status,
-                    created_at=record.created_at,
-                    updated_at=now,
-                    expires_at=record.expires_at,
-                    source_event_id=record.source_event_id,
-                    source_agent_id=record.source_agent_id,
-                    version=record.version + 1,
-                    parent_memory_id=record.parent_memory_id,
-                    content_hash=record.content_hash,
-                    metadata=metadata,
-                )
-                patched_records += 1
-                changed = True
-                output.append(_record_to_payload(updated_record))
-            if changed:
-                _write_jsonl_rows(path, output)
-                rewritten_files += 1
-        result = MemoryStructuredBackfillResult(
-            scanned_files=scanned_files,
-            rewritten_files=rewritten_files,
-            scanned_rows=scanned_rows,
-            patched_records=patched_records,
-            skipped_structured=skipped_structured,
-            skipped_deleted=skipped_deleted,
-            invalid_rows=invalid_rows,
-        )
-        if request.write_log:
-            self._append_structured_backfill_log(request=request, result=result, now=now)
-        return result
-
     def _load_pending_idempotency_keys(self) -> set[str]:
         keys: set[str] = set()
         for row in _read_jsonl_rows(self._pending_file):
@@ -690,12 +525,6 @@ class JsonlFileMemoryStore:
         return self._agents_dir / owner_agent_id / "short" / f"{session_id}.jsonl"
 
     def _collect_compact_paths(self, request: MemoryCompactRequest) -> list[Path]:
-        paths: list[Path] = []
-        for scope in request.scopes:
-            paths.extend(self._iter_scope_files(scope=scope, agent_id=request.agent_id, session_id=request.session_id))
-        return paths
-
-    def _collect_backfill_paths(self, request: MemoryStructuredBackfillRequest) -> list[Path]:
         paths: list[Path] = []
         for scope in request.scopes:
             paths.extend(self._iter_scope_files(scope=scope, agent_id=request.agent_id, session_id=request.session_id))
@@ -778,36 +607,6 @@ class JsonlFileMemoryStore:
             },
         }
         _append_jsonl_rows(self._ops_dir / "compact.log.jsonl", [payload])
-
-    def _append_structured_backfill_log(
-        self,
-        *,
-        request: MemoryStructuredBackfillRequest,
-        result: MemoryStructuredBackfillResult,
-        now: datetime,
-    ) -> None:
-        payload = {
-            "operation": "structured_backfill",
-            "timestamp": _to_iso(now),
-            "request": {
-                "scopes": [scope.value for scope in request.scopes],
-                "agent_id": request.agent_id,
-                "session_id": request.session_id,
-                "include_deleted": request.include_deleted,
-                "write_log": request.write_log,
-            },
-            "result": {
-                "scanned_files": result.scanned_files,
-                "rewritten_files": result.rewritten_files,
-                "scanned_rows": result.scanned_rows,
-                "patched_records": result.patched_records,
-                "skipped_structured": result.skipped_structured,
-                "skipped_deleted": result.skipped_deleted,
-                "invalid_rows": result.invalid_rows,
-            },
-        }
-        _append_jsonl_rows(self._ops_dir / "structured_backfill.log.jsonl", [payload])
-
 
 def _score_record(record: MemoryRecord, tokens: list[str], normalized_query: str) -> int:
     if not tokens and not normalized_query:
@@ -1096,20 +895,40 @@ def _candidate_to_payload(candidate: MemoryCandidate) -> dict[str, Any]:
 
 
 def _payload_to_candidate(payload: dict[str, Any]) -> MemoryCandidate:
-    return MemoryCandidate(
-        candidate_id=str(payload["candidate_id"]),
-        agent_id=str(payload["agent_id"]),
-        session_id=None if payload.get("session_id") is None else str(payload["session_id"]),
-        scope_hint=MemoryScope(str(payload["scope_hint"])),
-        memory_type=MemoryType(str(payload["memory_type"])),
-        content=str(payload["content"]),
-        tags=[str(item) for item in payload.get("tags", [])],
-        confidence=float(payload["confidence"]),
-        source_event_id=None if payload.get("source_event_id") is None else str(payload["source_event_id"]),
-        idempotency_key=str(payload["idempotency_key"]),
-        created_at=_from_iso(str(payload["created_at"])),
-        metadata={str(key): str(value) for key, value in dict(payload.get("metadata", {})).items()},
+    _require_payload_keys(
+        payload,
+        [
+            "candidate_id",
+            "agent_id",
+            "session_id",
+            "scope_hint",
+            "memory_type",
+            "content",
+            "tags",
+            "confidence",
+            "source_event_id",
+            "idempotency_key",
+            "created_at",
+            "metadata",
+        ],
     )
+    try:
+        return MemoryCandidate(
+            candidate_id=str(payload["candidate_id"]),
+            agent_id=str(payload["agent_id"]),
+            session_id=None if payload["session_id"] is None else str(payload["session_id"]),
+            scope_hint=MemoryScope(str(payload["scope_hint"])),
+            memory_type=MemoryType(str(payload["memory_type"])),
+            content=str(payload["content"]),
+            tags=_normalize_payload_string_list(payload["tags"], "tags"),
+            confidence=float(payload["confidence"]),
+            source_event_id=None if payload["source_event_id"] is None else str(payload["source_event_id"]),
+            idempotency_key=str(payload["idempotency_key"]),
+            created_at=_from_iso(str(payload["created_at"])),
+            metadata=_normalize_payload_metadata(payload["metadata"]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"invalid memory candidate payload: {exc}") from exc
 
 
 def _record_to_payload(record: MemoryRecord) -> dict[str, Any]:
@@ -1137,27 +956,72 @@ def _record_to_payload(record: MemoryRecord) -> dict[str, Any]:
 
 
 def _payload_to_record(payload: dict[str, Any]) -> MemoryRecord:
-    return MemoryRecord(
-        memory_id=str(payload["memory_id"]),
-        scope=MemoryScope(str(payload["scope"])),
-        owner_agent_id=None if payload.get("owner_agent_id") is None else str(payload["owner_agent_id"]),
-        session_id=None if payload.get("session_id") is None else str(payload["session_id"]),
-        memory_type=MemoryType(str(payload["memory_type"])),
-        content=str(payload["content"]),
-        tags=[str(item) for item in payload.get("tags", [])],
-        importance=float(payload.get("importance", 0.5)),
-        confidence=float(payload.get("confidence", 0.5)),
-        status=MemoryStatus(str(payload.get("status", "active"))),
-        created_at=_from_iso(str(payload["created_at"])),
-        updated_at=_from_iso(str(payload["updated_at"])),
-        expires_at=None if payload.get("expires_at") is None else _from_iso(str(payload["expires_at"])),
-        source_event_id=None if payload.get("source_event_id") is None else str(payload["source_event_id"]),
-        source_agent_id=None if payload.get("source_agent_id") is None else str(payload["source_agent_id"]),
-        version=int(payload.get("version", 1)),
-        parent_memory_id=None if payload.get("parent_memory_id") is None else str(payload["parent_memory_id"]),
-        content_hash=str(payload.get("content_hash", "")),
-        metadata={str(key): str(value) for key, value in dict(payload.get("metadata", {})).items()},
+    _require_payload_keys(
+        payload,
+        [
+            "memory_id",
+            "scope",
+            "owner_agent_id",
+            "session_id",
+            "memory_type",
+            "content",
+            "tags",
+            "importance",
+            "confidence",
+            "status",
+            "created_at",
+            "updated_at",
+            "expires_at",
+            "source_event_id",
+            "source_agent_id",
+            "version",
+            "parent_memory_id",
+            "content_hash",
+            "metadata",
+        ],
     )
+    try:
+        return MemoryRecord(
+            memory_id=str(payload["memory_id"]),
+            scope=MemoryScope(str(payload["scope"])),
+            owner_agent_id=None if payload["owner_agent_id"] is None else str(payload["owner_agent_id"]),
+            session_id=None if payload["session_id"] is None else str(payload["session_id"]),
+            memory_type=MemoryType(str(payload["memory_type"])),
+            content=str(payload["content"]),
+            tags=_normalize_payload_string_list(payload["tags"], "tags"),
+            importance=float(payload["importance"]),
+            confidence=float(payload["confidence"]),
+            status=MemoryStatus(str(payload["status"])),
+            created_at=_from_iso(str(payload["created_at"])),
+            updated_at=_from_iso(str(payload["updated_at"])),
+            expires_at=None if payload["expires_at"] is None else _from_iso(str(payload["expires_at"])),
+            source_event_id=None if payload["source_event_id"] is None else str(payload["source_event_id"]),
+            source_agent_id=None if payload["source_agent_id"] is None else str(payload["source_agent_id"]),
+            version=int(payload["version"]),
+            parent_memory_id=None if payload["parent_memory_id"] is None else str(payload["parent_memory_id"]),
+            content_hash=str(payload["content_hash"]),
+            metadata=_normalize_payload_metadata(payload["metadata"]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"invalid memory record payload: {exc}") from exc
+
+
+def _require_payload_keys(payload: dict[str, Any], keys: list[str]) -> None:
+    missing = [key for key in keys if key not in payload]
+    if missing:
+        raise ValidationError(f"memory payload missing required fields: {', '.join(missing)}")
+
+
+def _normalize_payload_metadata(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValidationError("metadata must be a dictionary.")
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def _normalize_payload_string_list(value: Any, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValidationError(f"{field_name} must be a list.")
+    return [str(item) for item in value]
 
 
 def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:

@@ -129,6 +129,35 @@
 - 可缓慢演化，但不应由每轮对话自动写入
 - 不属于 memory
 
+### 3.2.1 `AGENT.md` / `SOUL.md` 接入约定（V1）
+
+运行时加载约定：
+
+- 每个 agent 的静态文档目录为 `app/agents/<agent_id>/`
+- 固定文件名：
+  - `AGENT.md`
+  - `SOUL.md`
+- 如果当前 agent 没有专属文件，则回退到：
+  - `app/agents/default/AGENT.md`
+  - `app/agents/default/SOUL.md`
+- runtime 只读加载，不提供自动写回路径
+
+prompt 注入顺序：
+
+1. runtime 硬规则
+2. `AGENT.md`
+3. `SOUL.md`
+4. skills
+5. `state`
+6. `memory`
+7. active files
+
+这样可以保证：
+
+- `AGENT.md` 的行为宪法优先于 skills 和 memory
+- `SOUL.md` 的身份与语气不会被长期记忆反向污染
+- `state` 和 `memory` 只能在静态规则之下影响当前回答
+
 ### 3.3 `state`
 
 职责：
@@ -313,7 +342,7 @@
 - `memory_agent_long`
 - `memory_shared_long`
 
-兼容阶段可以保留旧字段，但在内部语义上将：
+开发期可直接调整字段和目录结构；旧数据不作为必须兼容对象。语义演进目标为：
 
 - `agent_short` 默认逐步迁移为 `state_agent_session`
 - 仅显式发布的 `agent_short` 内容才可进入 `state_shared_session`
@@ -566,46 +595,24 @@ admission 结果建议只有以下几种：
 - 这样可以避免两个问题：
   - 先删旧值再写新值，导致 supersede 审计链丢失
   - 先删旧值再写新值，导致低优先级来源绕过 source priority 检查
-- 目前只有非 canonical target 仍保留 replace fallback。
+- 非 canonical target 不再执行兼容更新；`memory_update` 会返回 `target_missing_canonical_key`，要求按最新 schema 重新写入或先遗忘旧记录。
 - update 结果现在会额外返回 `update_mode`，用于区分：
   - `canonical_supersede`
   - `canonical_direct`
-  - `replace_rewrite`
 - 同时修正了 `source_kind` 推断中的一处实现偏差：
   - 带 `system_policy` / `explicit_user_rule` tag 的 candidate，现在会被正确归类到对应高优先级 source，而不是错误保留为工具名。
 
-实现注记（2026-04-27，Legacy Structured Backfill V1 已落地）：
+实现注记（2026-04-28，开发期破坏式 schema 策略已落地）：
 
-- 旧 record 即使还没有结构化 metadata，也不再只能走 `replace_rewrite`。
-- 当前策略：
-  - `memory_update` 在定位到 target 后，会先尝试对该 record 重新跑 classification
-  - 如果 target 缺失 `canonical_key / normalized_value / source_kind / kind` 等结构化字段，则先就地回填 metadata
-  - 回填完成后，再按新的结构化信息决定是否进入 canonical direct update
-- 这样可以覆盖一类重要历史数据：
-  - 旧数据内容本身可识别，例如 `以后叫我李华`
-  - 但写入发生在 canonicalization 上线前，因此 record 里没有结构化 metadata
-- 当前这一版仍是“按需触发的在线回填”：
-  - 只有当 legacy record 真正被 update 时，才会补 metadata
-  - 还没有做离线批量迁移任务
-- 这一步的价值是先把历史数据编辑路径拉进新规则，逐步缩小 `replace_rewrite` fallback 的适用面。
-
-实现注记（2026-04-27，Offline Structured Backfill V1 已落地）：
-
-- 现有 memory store 已支持离线批量回填结构化 metadata。
-- 当前策略：
-  - 按 `scope / agent_id / session_id` 扫描现存 records
-  - 对缺失结构化字段的 legacy records 就地 patch metadata
-  - 默认跳过 deleted records，但会处理 active / archived records
-  - 同时会修正一小类已知脏值：
-    - 旧实现遗留的 `source_kind=memory_write_tool / memory_update_tool / memory_manager ...`
-- 这一版采取保守迁移原则：
-  - 不主动覆盖已有 `canonical_key / normalized_value`
-  - 不重写已有稳定语义，只补缺失字段和少量明确错误字段
-  - 迁移操作会写独立 ops 日志，便于审计
-- 系统现在同时具备两种 legacy 收敛机制：
-  - 在线按需回填：第一次 update 目标 legacy record 时补 metadata
-  - 离线批量回填：对现存 memory 库整体治理
-- 这一步的目标是进一步减少运行时 fallback，而不是一上来做激进重写。
+- memory 子系统当前不承诺历史数据向后兼容。
+- 当 schema 或结构化 metadata 规则发生破坏式调整时，允许清空 `data/memory_v2` 并从最新结构重建。
+- 已移除在线 metadata 回填、离线批量回填、非 canonical 替换式更新等兼容路径。
+- 已删除旧 `data/memory` 本地数据目录及旧单文件仓储入口；当前运行存储只保留 `data/memory_v2`。
+- 新代码只服务最新结构：
+  - 写入必须经过当前 admission / classification / consolidation
+  - 更新目标必须带 `canonical_key`
+  - 不符合最新结构的旧记录不会被自动修补
+  - JSONL 读取不会为缺失字段自动补默认值；缺当前 schema 必填字段的记录会被视为无效行
 
 实现注记（2026-04-27，Canonical-Aware Retrieval V1 已落地）：
 
@@ -621,6 +628,30 @@ admission 结果建议只有以下几种：
   - `这个项目名字叫珍格格` 这类文本不再被错误识别成 `preferred_name`
   - statement-form 的名字规则已收窄到句首/用户语境
 - 这一步的作用是先让 `memory_search` 和 runtime 的 `Relevant memories` 对长期偏好更敏感，减少“普通文本命中把关键偏好压后”的情况。
+
+实现注记（2026-04-28，Retrieval V2 / Lane-Based Prompt Retrieval 已落地）：
+
+- runtime prompt 上下文开始按 lane 注入 memory，而不是继续把所有命中项放进一个 `Relevant memories` 块。
+- 当前 lane：
+  - `identity`：称呼、名字等身份相关偏好
+  - `response_preferences`：语言、回复风格、偏好格式、排斥格式
+  - `interaction_feedback`：互动方式、显式反馈
+  - `user_profile`：长期目标、常用技术栈、稳定用户事实
+  - `other_memories`：暂时无法结构化归类但仍被 query 命中的长期 memory
+- `ContextAssembler` 现在会生成类似：
+  - `Memory - Identity`
+  - `Memory - Response preferences`
+  - `Memory - User profile`
+- 这一步只改变 runtime prompt 上下文读取，不改变 `memory_search` 工具的既有统一检索接口。
+- 为了让长期输出偏好真正生效，V2 会对一小组常用 canonical key 做 always-on 读取：
+  - `preferred_language`
+  - `response_style`
+  - `preferred_format`
+  - `disliked_format`
+  - `interaction_style`
+- query 呈现 name intent 时，才额外读取 `preferred_name`。
+- 每个 lane 有独立限额，并共享总 prompt memory limit，避免某一类 memory 抢占全部上下文预算。
+- 这一版仍保留文本召回 fallback，目标是先让 prompt 使用结构更清晰，而不是一次性替换底层检索算法。
 
 ### 7.4 reinforce：强化
 
@@ -735,7 +766,7 @@ admission 结果建议只有以下几种：
 - `memory_forget(...)`
 - `memory_correct(...)`
 
-兼容阶段可保留 `memory_write`，但内部必须走 admission policy。
+当前可保留 `memory_write`，但内部必须走 admission policy；后续可以破坏式替换为更结构化的 capture 工具。
 
 ### 9.3 state 工具独立
 
@@ -846,18 +877,19 @@ data/
         └── shared/long.jsonl
 ```
 
-兼容阶段可以先不改磁盘结构，只改逻辑语义。
+磁盘结构可按最新设计破坏式调整；如果调整成本超过数据价值，直接清空 `data/memory_v2` 重建。旧 `data/memory` 目录不再作为 memory 子系统的一部分保留。
 
-### 11.2 旧数据迁移原则
+### 11.2 开发期 schema 策略
 
-旧的 `agent_short` 不自动当成 memory。
+当前阶段优先保持 memory 模型干净，不为旧数据长期保留兼容层。
 
-迁移策略建议：
+策略：
 
-1. `agent_short` 默认迁移到 `state archive`，不直接进入长期 memory。
-2. `agent_long` 中只有符合新 memory 定义的记录才保留，并迁入 `memory_agent_long`。
-3. `shared_long` 中系统 policy 类内容迁出到静态规则层，不继续当动态 memory。
-4. 无法判定的旧记录进入 `legacy_candidate`，不默认参与召回。
+1. memory schema 允许破坏式升级。
+2. 结构变化时优先清空 `data/memory_v2` 并重建，而不是写迁移适配。
+3. 不符合最新结构的记录不自动修补、不默认参与更新，也不会通过默认值静默读入。
+4. `agent_short` 继续从 runtime prompt memory 中排除，当前任务状态走 `state`。
+5. 旧 `data/memory` / `memories.jsonl` 路径不提供兼容入口。
 
 ## 12. 分阶段实施计划
 
@@ -933,6 +965,27 @@ data/
 
 - lane-based retrieval
 - 新的 `ContextAssembler`
+
+当前状态：
+
+- Phase 5 已完成第一版 runtime prompt 接入。
+- 后续还可以继续做 query intent router 和 per-agent lane subscription。
+
+## 12.1 实现注记：`AGENT.md` / `SOUL.md` Integration V1
+
+当前代码实现已补齐最小接入链路：
+
+- 新增 `MarkdownAgentDocumentRepository`
+- `ContextAssembler` 在每轮组 prompt 时按 `context.agent_id` 加载对应 `AGENT.md` / `SOUL.md`
+- 缺失 agent 专属文档时回退 `app/agents/default/`
+- 文档读取失败时，runtime 记录 warning 并降级为“无静态身份文档”，不阻断本轮执行
+
+这一版仍然是保守实现：
+
+- 只读，不支持 runtime 自动改写
+- 不提供独立工具接口
+- 不参与 memory consolidation
+- 也不参与 state publish/share
 
 ## 13. 测试策略
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,7 @@ import pytest
 from app.core.errors import ValidationError
 from app.domain.models import RunContext
 from app.memory.facade import FileMemoryFacade
-from app.memory.models import MemoryReadRequest, MemoryRecord, MemoryScope, MemoryStatus, MemoryType
+from app.memory.models import MemoryReadRequest, MemoryScope
 from app.memory.policies import default_memory_policy
 from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
@@ -263,6 +262,29 @@ def test_memory_manager_search_context_memories_excludes_agent_short(tmp_path: P
     assert "agent_short" not in summary["searched_scopes"]
 
 
+def test_memory_manager_context_lanes_include_response_preferences_without_text_match(tmp_path: Path) -> None:
+    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
+    facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
+    manager = MemoryManager(memory_facade=facade, capability_registry=_capability_registry())
+
+    manager.write_memory(
+        content="以后回答简洁一点",
+        tags=["preference", "long_term"],
+        context=_context("sess_lane_response"),
+        source_event_id="evt_lane_response",
+    )
+
+    lanes, summary = manager.search_context_memory_lanes(
+        query="帮我检查接口实现",
+        limit=5,
+        context=_context("sess_lane_response"),
+    )
+
+    assert "response_preferences" in lanes
+    assert lanes["response_preferences"][0].content == "以后回答简洁一点"
+    assert summary["lanes"]["response_preferences"] == 1
+
+
 def test_memory_manager_rejects_obvious_working_state_write(tmp_path: Path) -> None:
     memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
     facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
@@ -353,43 +375,3 @@ def test_memory_manager_resolve_update_targets_prefers_canonical_exact(tmp_path:
     assert len(hits) == 1
     assert hits[0].metadata["canonical_key"] == "preferred_name"
     assert hits[0].metadata["normalized_value"] == "李华"
-
-
-def test_memory_manager_ensure_structured_metadata_backfills_legacy_record(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    manager = MemoryManager(memory_facade=facade, capability_registry=_capability_registry())
-    now = datetime.now(UTC)
-    legacy_record = MemoryRecord(
-        memory_id="mem_legacy_name",
-        scope=MemoryScope.AGENT_LONG,
-        owner_agent_id="agent_main",
-        session_id=None,
-        memory_type=MemoryType.PREFERENCE,
-        content="以后叫我李华",
-        tags=["preference", "long_term"],
-        importance=0.7,
-        confidence=0.7,
-        status=MemoryStatus.ACTIVE,
-        created_at=now,
-        updated_at=now,
-        expires_at=None,
-        source_event_id=None,
-        source_agent_id="agent_main",
-        version=1,
-        parent_memory_id=None,
-        content_hash="",
-        metadata={},
-    )
-    memory_store.write_records([legacy_record])
-
-    refreshed = manager.ensure_structured_metadata(
-        context=_context("sess_update_resolve"),
-        record=legacy_record,
-    )
-
-    assert refreshed.memory_id == legacy_record.memory_id
-    assert refreshed.version == 2
-    assert refreshed.metadata["canonical_key"] == "preferred_name"
-    assert refreshed.metadata["normalized_value"] == "李华"
-    assert refreshed.metadata["source_kind"] == "explicit_user"

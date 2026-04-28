@@ -13,7 +13,6 @@ from app.memory.admission import evaluate_memory_admission
 from app.memory.classification import classify_memory
 from app.memory.contracts import MemoryFacade
 from app.memory.intake import build_candidate_request, infer_scope_hint_from_tags
-from app.memory.metadata_refresh import build_metadata_refresh_patch
 from app.memory.models import (
     ConsolidateResult,
     ForgetResult,
@@ -28,6 +27,36 @@ from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistr
 
 __all__ = ["MemoryManager", "MemoryWriteResult"]
 _logger = logging.getLogger(__name__)
+_CONTEXT_LANE_ORDER = (
+    "identity",
+    "response_preferences",
+    "interaction_feedback",
+    "user_profile",
+    "other_memories",
+)
+_CONTEXT_LANE_LIMITS = {
+    "identity": 2,
+    "response_preferences": 4,
+    "interaction_feedback": 3,
+    "user_profile": 4,
+    "other_memories": 2,
+}
+_ALWAYS_ON_CONTEXT_CANONICAL_KEYS = (
+    "preferred_language",
+    "response_style",
+    "preferred_format",
+    "disliked_format",
+    "interaction_style",
+)
+_NAME_QUERY_TRIGGERS = (
+    "你叫什么名字",
+    "叫什么名字",
+    "你的名字",
+    "叫你什么",
+    "怎么称呼",
+    "如何称呼",
+    "怎么叫你",
+)
 
 
 @dataclass(slots=True)
@@ -148,13 +177,37 @@ class MemoryManager:
         limit: int,
         context: RunContext,
     ) -> tuple[list[MemoryItem], dict[str, Any]]:
+        lanes, summary = self.search_context_memory_lanes(query=query, limit=limit, context=context)
+        result = _flatten_memory_lanes(lanes)
+        summary["hit_count"] = len(result)
+        return result, summary
+
+    def search_context_memory_lanes(
+        self,
+        query: str,
+        limit: int,
+        context: RunContext,
+    ) -> tuple[dict[str, list[MemoryItem]], dict[str, Any]]:
         run_context = _normalize_context(context)
         normalized_query, normalized_limit, bundle = self._search_bundle_for_context(
             query=query,
-            limit=limit,
+            limit=max(limit * 2, 12),
             context=run_context,
         )
-        result = [_to_memory_item(item) for item in bundle.items]
+        requester_capability = self._capability_registry.require(run_context.agent_id)
+        read_plan = _build_context_read_plan(
+            capability=requester_capability,
+            session_id=run_context.session_id,
+            include_short=False,
+        )
+        canonical_records = self._read_context_canonical_records(
+            query=normalized_query,
+            context=run_context,
+            read_plan=read_plan,
+        )
+        records = _dedupe_records(canonical_records + bundle.items)
+        lanes = _limit_memory_lanes(_group_records_by_context_lane(records), max_total=normalized_limit)
+        result = _flatten_memory_lanes(lanes)
         summary = _build_search_summary(
             query=normalized_query,
             agent_id=run_context.agent_id,
@@ -162,15 +215,17 @@ class MemoryManager:
             bundle=bundle,
             hit_count=len(result),
         )
+        summary["lanes"] = {lane: len(items) for lane, items in lanes.items()}
         _logger.debug(
-            "检索上下文长期记忆完成(v2): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s",
+            "检索上下文长期记忆完成(v2): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s lanes=%s",
             normalized_query,
             normalized_limit,
             run_context.agent_id,
             len(result),
             bundle.total_scanned,
+            summary["lanes"],
         )
-        return result, summary
+        return lanes, summary
 
     def search_with_summary(
         self,
@@ -246,40 +301,6 @@ class MemoryManager:
         )
         return bundle.items, "text_search"
 
-    def ensure_structured_metadata(
-        self,
-        *,
-        context: RunContext,
-        record: MemoryRecord,
-    ) -> MemoryRecord:
-        run_context = _normalize_context(context)
-        requester_capability = self._capability_registry.require(run_context.agent_id)
-        if not requester_capability.can_write_scope(record.scope):
-            raise ValidationError(
-                f"Memory metadata refresh scope not allowed for agent '{run_context.agent_id}': {record.scope.value}"
-            )
-        existing_metadata = dict(record.metadata)
-        source = existing_metadata.get("source", "legacy_memory_backfill")
-        classification = classify_memory(
-            content=record.content,
-            tags=record.tags,
-            source=source,
-        )
-        patch = build_metadata_refresh_patch(
-            existing_metadata=existing_metadata,
-            classified_metadata=classification.to_metadata(),
-        )
-        if not patch:
-            return record
-        refreshed = self._memory_facade.refresh_record_metadata(
-            scope=record.scope,
-            agent_id=record.owner_agent_id,
-            session_id=record.session_id,
-            memory_id=record.memory_id,
-            metadata_patch=patch,
-        )
-        return refreshed or record
-
     def _search_bundle_for_context(
         self,
         *,
@@ -345,6 +366,26 @@ class MemoryManager:
             context.agent_id,
         )
         return matches[:limit]
+
+    def _read_context_canonical_records(
+        self,
+        *,
+        query: str,
+        context: RunContext,
+        read_plan: "_ReadPlan",
+    ) -> list[MemoryRecord]:
+        canonical_keys = _context_canonical_keys_for_query(query)
+        records: list[MemoryRecord] = []
+        for canonical_key in canonical_keys:
+            records.extend(
+                self._memory_facade.list_active_records_by_canonical_key(
+                    agent_id=context.agent_id,
+                    session_id=read_plan.short_session_id,
+                    include_scopes=read_plan.include_scopes,
+                    canonical_key=canonical_key,
+                )
+            )
+        return _dedupe_records(records)
 
     def search_for_agent(
         self,
@@ -591,6 +632,108 @@ def _build_search_summary(
         "truncated": bundle.truncated,
         "notes": bundle.notes,
     }
+
+
+def _context_canonical_keys_for_query(query: str) -> list[str]:
+    classification = classify_memory(
+        content=query,
+        tags=[],
+        source="memory_context_query",
+    )
+    keys: list[str] = list(_ALWAYS_ON_CONTEXT_CANONICAL_KEYS)
+    if classification.canonical_key is not None:
+        keys.append(classification.canonical_key)
+    compact_query = query.strip().lower().replace(" ", "")
+    if any(trigger in compact_query for trigger in _NAME_QUERY_TRIGGERS):
+        keys.append("preferred_name")
+    return _dedupe_strings(keys)
+
+
+def _group_records_by_context_lane(records: list[MemoryRecord]) -> dict[str, list[MemoryItem]]:
+    lanes: dict[str, list[MemoryItem]] = {lane: [] for lane in _CONTEXT_LANE_ORDER}
+    for record in records:
+        lane = _context_lane_for_record(record)
+        lanes.setdefault(lane, []).append(_to_memory_item(record))
+    return lanes
+
+
+def _context_lane_for_record(record: MemoryRecord) -> str:
+    canonical_key = str(record.metadata.get("canonical_key", "")).strip()
+    kind = str(record.metadata.get("kind", "")).strip()
+    if canonical_key == "preferred_name":
+        return "identity"
+    if canonical_key in {"preferred_language", "response_style", "preferred_format", "disliked_format"}:
+        return "response_preferences"
+    if canonical_key == "interaction_style" or kind in {"interaction_pattern", "feedback_memory"}:
+        return "interaction_feedback"
+    if canonical_key in {"long_term_goal", "primary_stack"} or kind == "user_fact":
+        return "user_profile"
+    if kind == "user_preference":
+        return "response_preferences"
+    return "other_memories"
+
+
+def _limit_memory_lanes(
+    lanes: dict[str, list[MemoryItem]],
+    *,
+    max_total: int,
+) -> dict[str, list[MemoryItem]]:
+    limited: dict[str, list[MemoryItem]] = {}
+    remaining = max(0, max_total)
+    for lane in _CONTEXT_LANE_ORDER:
+        if remaining <= 0:
+            break
+        items = lanes.get(lane, [])
+        if not items:
+            continue
+        lane_limit = min(_CONTEXT_LANE_LIMITS[lane], remaining)
+        selected = _dedupe_memory_items(items)[:lane_limit]
+        if not selected:
+            continue
+        limited[lane] = selected
+        remaining -= len(selected)
+    return limited
+
+
+def _flatten_memory_lanes(lanes: dict[str, list[MemoryItem]]) -> list[MemoryItem]:
+    flattened: list[MemoryItem] = []
+    for lane in _CONTEXT_LANE_ORDER:
+        flattened.extend(lanes.get(lane, []))
+    return _dedupe_memory_items(flattened)
+
+
+def _dedupe_records(records: list[MemoryRecord]) -> list[MemoryRecord]:
+    output: list[MemoryRecord] = []
+    seen: set[str] = set()
+    for record in records:
+        if record.memory_id in seen:
+            continue
+        seen.add(record.memory_id)
+        output.append(record)
+    return output
+
+
+def _dedupe_memory_items(items: list[MemoryItem]) -> list[MemoryItem]:
+    output: list[MemoryItem] = []
+    seen: set[str] = set()
+    for item in items:
+        if item.memory_id in seen:
+            continue
+        seen.add(item.memory_id)
+        output.append(item)
+    return output
+
+
+def _dedupe_strings(items: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        item = raw.strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        output.append(item)
+    return output
 
 
 def _to_memory_item(record: Any) -> MemoryItem:

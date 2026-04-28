@@ -9,6 +9,7 @@ from app.core.settings import Settings
 from app.infra.llm.openai_compatible_client import OpenAICompatibleClient
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.policies import default_memory_policy
@@ -42,6 +43,7 @@ from app.tools.registry import ToolRegistry
 
 __all__ = [
     "get_agent_runtime",
+    "get_agent_document_repository",
     "get_chat_service",
     "get_context_assembler",
     "get_event_recorder",
@@ -108,6 +110,12 @@ def get_skill_repository() -> MarkdownSkillRepository:
 
 
 @lru_cache(maxsize=1)
+def get_agent_document_repository() -> MarkdownAgentDocumentRepository:
+    agents_dir = Path(__file__).resolve().parents[1] / "agents"
+    return MarkdownAgentDocumentRepository(agents_dir=agents_dir)
+
+
+@lru_cache(maxsize=1)
 def get_tool_registry() -> ToolRegistry:
     registry = ToolRegistry(capability_registry=get_agent_capability_registry())
     registry.register(MemoryWriteTool(memory_manager=get_memory_manager()))
@@ -149,6 +157,7 @@ def get_context_assembler() -> ContextAssembler:
     return ContextAssembler(
         session_repository=get_session_repository(),
         skill_repository=get_skill_repository(),
+        agent_document_repository=get_agent_document_repository(),
         memory_manager=get_memory_manager(),
         state_manager=get_state_manager(),
         tool_executor=get_tool_registry(),

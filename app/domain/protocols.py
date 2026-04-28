@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from app.domain.models import (
+    AgentIdentityDocuments,
     EventRecord,
-    MemoryItem,
     RunContext,
     SessionFile,
     SessionMeta,
@@ -19,8 +19,8 @@ from app.domain.models import (
 )
 
 __all__ = [
+    "AgentDocumentRepository",
     "ChatModelClient",
-    "MemoryRepository",
     "ModelResponse",
     "StreamChunk",
     "SessionRepository",
@@ -81,16 +81,12 @@ class SessionRepository(Protocol):
     def read_session_file_text(self, session_id: str, file_id: str) -> str: ...
 
 
-class MemoryRepository(Protocol):
-    def add_memory(self, item: MemoryItem) -> None: ...
-
-    def search(self, query: str, limit: int) -> list[MemoryItem]: ...
-
-    def list_memories(self, limit: int) -> list[MemoryItem]: ...
-
-
 class SkillRepository(Protocol):
     def load_skills(self, skill_names: list[str]) -> dict[str, str]: ...
+
+
+class AgentDocumentRepository(Protocol):
+    def load_documents(self, agent_id: str) -> AgentIdentityDocuments: ...
 
 
 class ChatModelClient(Protocol):

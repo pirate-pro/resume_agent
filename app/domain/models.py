@@ -9,6 +9,7 @@ from typing import Any
 from app.core.errors import ValidationError
 
 __all__ = [
+    "AgentIdentityDocuments",
     "AgentRunInput",
     "AgentRunOutput",
     "ContextBundle",
@@ -227,6 +228,7 @@ class ContextBundle:
     memory_hits: list[MemoryItem]
     tool_definitions: list[ToolDefinition]
     memory_summary: dict[str, Any] = field(default_factory=dict)
+    memory_lanes: dict[str, list[MemoryItem]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.system_prompt = _require_non_empty("system_prompt", self.system_prompt)
@@ -238,6 +240,27 @@ class ContextBundle:
             raise ValidationError("tool_definitions must be a list.")
         if not isinstance(self.memory_summary, dict):
             raise ValidationError("memory_summary must be a dictionary.")
+        if not isinstance(self.memory_lanes, dict):
+            raise ValidationError("memory_lanes must be a dictionary.")
+        normalized_lanes: dict[str, list[MemoryItem]] = {}
+        for raw_key, raw_items in self.memory_lanes.items():
+            key = _require_non_empty("memory_lane", str(raw_key))
+            if not isinstance(raw_items, list):
+                raise ValidationError("memory_lanes values must be lists.")
+            normalized_lanes[key] = raw_items
+        self.memory_lanes = normalized_lanes
+
+
+@dataclass(slots=True)
+class AgentIdentityDocuments:
+    agent_markdown: str | None = None
+    soul_markdown: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.agent_markdown is not None:
+            self.agent_markdown = _require_non_empty("agent_markdown", self.agent_markdown)
+        if self.soul_markdown is not None:
+            self.soul_markdown = _require_non_empty("soul_markdown", self.soul_markdown)
 
 
 @dataclass(slots=True)

@@ -6,7 +6,6 @@ from app.memory.admission import MemoryAdmissionDecision, MemoryAdmissionResult,
 from app.memory.classification import MemoryClassification, classify_memory
 from app.memory.facade import FileMemoryFacade
 from app.memory.intake import build_candidate_request
-from app.memory.metadata_refresh import build_metadata_refresh_patch
 from app.memory.models import (
     CandidateResult,
     CompactResult,
@@ -21,8 +20,6 @@ from app.memory.models import (
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
-    MemoryStructuredBackfillRequest,
-    MemoryStructuredBackfillResult,
     MemoryType,
     MemoryWriteCandidateRequest,
 )
@@ -47,12 +44,9 @@ __all__ = [
     "MemoryRecord",
     "MemoryScope",
     "MemoryStatus",
-    "MemoryStructuredBackfillRequest",
-    "MemoryStructuredBackfillResult",
     "MemoryType",
     "MemoryWriteCandidateRequest",
     "build_candidate_request",
-    "build_metadata_refresh_patch",
     "classify_memory",
     "default_memory_policy",
     "evaluate_memory_admission",

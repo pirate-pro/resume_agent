@@ -12,7 +12,7 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
 4. `memory_write(content, tags=[])`：写入记忆候选（默认短期；可通过 tags 指定长期/共享倾向）。
 5. `memory_search(query, limit=5)`：按当前 agent 作用域检索相关记忆（包含同 agent 的跨会话 short 记忆）。
 6. `memory_forget(query, limit=5, hard_delete=false, reason?)`：先检索后遗忘，删除/作废符合查询的记忆。
-7. `memory_update(query, new_content, new_tags=[], limit=3, hard_delete_old=false)`：替换记忆（先定位旧记忆，再删旧写新）。
+7. `memory_update(query, new_content, new_tags=[], limit=3)`：更新结构化 canonical 记忆；目标必须唯一且带 `canonical_key`。
 8. `workspace_write_file(path, content)`：写入当前 session 的 workspace 文件。
 9. `workspace_read_file(path)`：读取文件，查找顺序为“workspace 优先，若未命中则逐级向上到文件系统根目录”。
 10. `session_list_files()`：列出当前会话上传文件及 active 状态。
@@ -38,8 +38,9 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
   - 先用足够具体的 query，避免误删。
   - 若命中多条，不要自行猜测，应先向用户澄清。
 - 使用 `memory_update` 时：
-  - 只有在目标唯一明确时才执行“先删后写”。
+  - 只有在目标唯一明确且属于结构化 canonical memory 时才执行更新。
   - 当返回 `ambiguous_match` 时，先让用户确认目标后再重试。
+  - 当返回 `target_missing_canonical_key` 时，说明目标不符合最新 memory 结构；应重新写入一条符合新 schema 的 memory，或让用户确认是否遗忘该记录。
 - 文件工具必须使用相对路径，不允许路径逃逸。
 - workspace 目录定义：`data/sessions/<session_id>/workspace`（由后端运行目录决定绝对路径）。
 - 文件读取优先用会话文件工具（`session_*`），而不是盲猜文件内容。

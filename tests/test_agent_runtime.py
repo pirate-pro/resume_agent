@@ -10,6 +10,7 @@ from typing import Any
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall
 from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.facade import FileMemoryFacade
 from app.memory.models import MemoryReadRequest
@@ -58,6 +59,7 @@ def _build_runtime(
     state_store = JsonlFileStateStore(root_dir=tmp_path / "state_v1")
     state_manager = StateManager(store=state_store)
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
+    agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))
     capability_registry = _capability_registry()
 
     memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
@@ -69,6 +71,7 @@ def _build_runtime(
     context_assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=skill_repo,
+        agent_document_repository=agent_document_repository,
         memory_manager=memory_manager,
         state_manager=state_manager,
         tool_executor=tool_registry,

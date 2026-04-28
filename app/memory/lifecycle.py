@@ -11,8 +11,6 @@ from app.memory.models import (
     MemoryCompactRequest,
     MemoryForgetRequest,
     MemoryScope,
-    MemoryStructuredBackfillRequest,
-    MemoryStructuredBackfillResult,
 )
 
 __all__ = ["MemoryLifecycleService"]
@@ -29,12 +27,6 @@ class MemoryLifecycleService:
 
     def compact(self, request: MemoryCompactRequest) -> CompactResult:
         return self._store.compact(request, now=datetime.now(UTC))
-
-    def backfill_structured_metadata(
-        self,
-        request: MemoryStructuredBackfillRequest,
-    ) -> MemoryStructuredBackfillResult:
-        return self._store.backfill_structured_metadata(request, now=datetime.now(UTC))
 
     def expire_short_memory(self, agent_id: str, session_id: str | None = None) -> ForgetResult:
         request = MemoryForgetRequest(

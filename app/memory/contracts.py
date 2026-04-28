@@ -18,8 +18,6 @@ from app.memory.models import (
     MemoryReadRequest,
     MemoryRecord,
     MemoryScope,
-    MemoryStructuredBackfillRequest,
-    MemoryStructuredBackfillResult,
     MemoryWriteCandidateRequest,
 )
 
@@ -37,11 +35,6 @@ class MemoryFacade(Protocol):
 
     def compact(self, request: MemoryCompactRequest) -> CompactResult: ...
 
-    def backfill_structured_metadata(
-        self,
-        request: MemoryStructuredBackfillRequest,
-    ) -> MemoryStructuredBackfillResult: ...
-
     def list_active_records_by_canonical_key(
         self,
         *,
@@ -50,16 +43,6 @@ class MemoryFacade(Protocol):
         include_scopes: list[MemoryScope],
         canonical_key: str,
     ) -> list[MemoryRecord]: ...
-
-    def refresh_record_metadata(
-        self,
-        *,
-        scope: MemoryScope,
-        agent_id: str | None,
-        session_id: str | None,
-        memory_id: str,
-        metadata_patch: dict[str, str],
-    ) -> MemoryRecord | None: ...
 
 
 class MemoryStore(Protocol):
@@ -126,23 +109,6 @@ class MemoryStore(Protocol):
         superseded_by_normalized_value: str | None = None,
     ) -> int: ...
 
-    def refresh_record_metadata(
-        self,
-        *,
-        scope: MemoryScope,
-        agent_id: str | None,
-        session_id: str | None,
-        memory_id: str,
-        metadata_patch: dict[str, str],
-        now: datetime,
-    ) -> MemoryRecord | None: ...
-
     def forget(self, request: MemoryForgetRequest, now: datetime) -> ForgetResult: ...
 
     def compact(self, request: MemoryCompactRequest, now: datetime) -> CompactResult: ...
-
-    def backfill_structured_metadata(
-        self,
-        request: MemoryStructuredBackfillRequest,
-        now: datetime,
-    ) -> MemoryStructuredBackfillResult: ...

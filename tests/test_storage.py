@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.models import EventRecord, MemoryItem, SessionFile
+from app.domain.models import EventRecord, SessionFile
 from app.core.errors import SessionNotFoundError, StorageError
-from app.infra.storage.jsonl_memory_repository import JsonlMemoryRepository
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 
 __all__ = []
@@ -35,26 +35,6 @@ def test_session_create_and_append_event(tmp_path: Path) -> None:
 
     assert len(events) == 1
     assert events[0].payload["content"] == "hello"
-
-
-
-def test_memory_write_and_search(tmp_path: Path) -> None:
-    repository = JsonlMemoryRepository(data_dir=tmp_path)
-    repository.add_memory(
-        MemoryItem(
-            memory_id="mem_1",
-            session_id="sess_test",
-            content="User prefers JSONL storage",
-            tags=["preference", "storage"],
-            created_at=datetime.now(UTC),
-            source_event_id="evt_1",
-        )
-    )
-
-    hits = repository.search(query="jsonl", limit=5)
-
-    assert len(hits) == 1
-    assert hits[0].memory_id == "mem_1"
 
 
 
@@ -150,6 +130,50 @@ def test_skill_file_invalid_frontmatter_raises(tmp_path: Path) -> None:
     repository = MarkdownSkillRepository(skills_dir=skills_dir)
     with pytest.raises(StorageError):
         repository.load_skills(["bad-skill"])
+
+
+def test_agent_document_repository_falls_back_to_default_documents(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    default_dir = agents_dir / "default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    (default_dir / "AGENT.md").write_text("# Default Agent", encoding="utf-8")
+    (default_dir / "SOUL.md").write_text("# Default Soul", encoding="utf-8")
+
+    repository = MarkdownAgentDocumentRepository(agents_dir=agents_dir)
+    documents = repository.load_documents("agent_main")
+
+    assert documents.agent_markdown == "# Default Agent"
+    assert documents.soul_markdown == "# Default Soul"
+
+
+def test_agent_document_repository_prefers_agent_specific_documents(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    default_dir = agents_dir / "default"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    (default_dir / "AGENT.md").write_text("# Default Agent", encoding="utf-8")
+    (default_dir / "SOUL.md").write_text("# Default Soul", encoding="utf-8")
+    agent_dir = agents_dir / "agent_main"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "AGENT.md").write_text("# Agent Main", encoding="utf-8")
+    (agent_dir / "SOUL.md").write_text("# Soul Main", encoding="utf-8")
+
+    repository = MarkdownAgentDocumentRepository(agents_dir=agents_dir)
+    documents = repository.load_documents("agent_main")
+
+    assert documents.agent_markdown == "# Agent Main"
+    assert documents.soul_markdown == "# Soul Main"
+
+
+def test_agent_document_repository_rejects_empty_document(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agent_dir = agents_dir / "agent_main"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "AGENT.md").write_text("\n\n", encoding="utf-8")
+
+    repository = MarkdownAgentDocumentRepository(agents_dir=agents_dir)
+
+    with pytest.raises(StorageError):
+        repository.load_documents("agent_main")
 
 
 def test_session_delete_removes_session_directory(tmp_path: Path) -> None:
