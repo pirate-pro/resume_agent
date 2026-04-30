@@ -2,6 +2,7 @@
 *.class
 *.log
 *.pyc
+__pycache__/
 *.swp
 .DS_Store
 .atom/
@@ -11,6 +12,14 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Local runtime data
+data/
+!data/.gitkeep
 
 # IntelliJ related
 *.iml
