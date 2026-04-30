@@ -18,7 +18,7 @@ migrate_working_dir/
 .venv/
 
 # Local runtime data
-data/
+data/*
 !data/.gitkeep
 
 # IntelliJ related

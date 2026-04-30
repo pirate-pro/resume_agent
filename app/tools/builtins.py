@@ -102,7 +102,7 @@ class MemoryWriteTool:
         payload = {
             "memory_id": memory.memory_id,
             "written_records": 1,
-            "storage": "memory_v3",
+            "storage": "memory",
         }
         return ToolExecutionResult(
             tool_name="memory_write",

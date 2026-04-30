@@ -20,8 +20,8 @@ from app.memory.policies import (
     CONTEXT_LANE_ORDER,
     memory_lane_for_metadata,
 )
-from app.memory.v3_models import MemoryV3Fact
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_models import MemoryFact
+from app.memory.file_store import FileMemoryStore
 from app.memory.write_plan import MemoryWritePlan, build_memory_write_plan, infer_write_scope_from_tags
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 
@@ -43,10 +43,10 @@ class MemoryManager:
     def __init__(
         self,
         capability_registry: AgentCapabilityRegistry,
-        memory_v3_store: FileMemoryV3Store,
+        memory_store: FileMemoryStore,
     ) -> None:
         self._capability_registry = capability_registry
-        self._memory_v3_store = memory_v3_store
+        self._memory_store = memory_store
 
     def write_memory(
         self,
@@ -110,7 +110,7 @@ class MemoryManager:
             source_event_id=normalized_source_event,
             source=source,
         )
-        existing_fact = self._memory_v3_store.find_active_fact_by_content(
+        existing_fact = self._memory_store.find_active_fact_by_content(
             scope=plan.scope,
             agent_id=None if plan.scope == MemoryScope.SHARED_LONG else resolved_agent_id,
             content=plan.content,
@@ -123,7 +123,7 @@ class MemoryManager:
                 source_kind=plan.source_kind,
             )
             _logger.debug(
-                "跳过重复记忆写入(v3): memory_id=%s session_id=%s agent_id=%s scope=%s",
+                "跳过重复记忆写入: memory_id=%s session_id=%s agent_id=%s scope=%s",
                 memory.memory_id,
                 memory.session_id,
                 resolved_agent_id,
@@ -136,7 +136,7 @@ class MemoryManager:
                 written_memory_ids=[],
             )
         if plan.canonical_key and plan.scope in {MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG}:
-            archived = self._memory_v3_store.archive_active_facts_by_canonical_key(
+            archived = self._memory_store.archive_active_facts_by_canonical_key(
                 scope=plan.scope,
                 agent_id=None if plan.scope == MemoryScope.SHARED_LONG else resolved_agent_id,
                 canonical_key=plan.canonical_key,
@@ -144,13 +144,13 @@ class MemoryManager:
             )
             if archived.archived_records:
                 _logger.debug(
-                    "归档同 canonical_key 旧记忆(v3): key=%s archived=%s agent_id=%s scope=%s",
+                    "归档同 canonical_key 旧记忆: key=%s archived=%s agent_id=%s scope=%s",
                     plan.canonical_key,
                     archived.archived_records,
                     resolved_agent_id,
                     plan.scope.value,
                 )
-        fact = self._memory_v3_store.append_fact(
+        fact = self._memory_store.append_fact(
             content=plan.content,
             category=plan.category,
             confidence=plan.confidence,
@@ -161,7 +161,7 @@ class MemoryManager:
             source_type=source,
             tags=plan.tags,
             inject_policy=plan.inject_policy,
-            metadata=_v3_metadata_from_plan(
+            metadata=_memory_metadata_from_plan(
                 plan=plan,
                 source_agent_id=run_context.agent_id,
                 target_agent_id=resolved_agent_id,
@@ -172,7 +172,7 @@ class MemoryManager:
         memory_metadata.update(
             {
                 "memory_layer": "facts",
-                "v3_scope": fact.scope,
+                "storage_scope": fact.scope,
                 "category": fact.category,
                 "visibility": fact.visibility,
                 "inject_policy": fact.inject_policy,
@@ -191,7 +191,7 @@ class MemoryManager:
             metadata=memory_metadata,
         )
         _logger.debug(
-            "写入记忆成功(v3): memory_id=%s session_id=%s agent_id=%s scope=%s tag_count=%s",
+            "写入记忆成功: memory_id=%s session_id=%s agent_id=%s scope=%s tag_count=%s",
             memory.memory_id,
             memory.session_id,
             resolved_agent_id,
@@ -261,7 +261,7 @@ class MemoryManager:
         summary["total_scanned"] = bundle.total_scanned + standing_bundle.total_scanned
         summary["lanes"] = {lane: len(items) for lane, items in lanes.items()}
         _logger.debug(
-            "检索上下文长期记忆完成(v3): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s lanes=%s",
+            "检索上下文长期记忆完成: query=%s limit=%s agent_id=%s hit_count=%s scanned=%s lanes=%s",
             normalized_query,
             normalized_limit,
             run_context.agent_id,
@@ -292,7 +292,7 @@ class MemoryManager:
             hit_count=len(result),
         )
         _logger.debug(
-            "检索记忆完成(v3): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s",
+            "检索记忆完成: query=%s limit=%s agent_id=%s hit_count=%s scanned=%s",
             normalized_query,
             normalized_limit,
             run_context.agent_id,
@@ -399,7 +399,7 @@ class MemoryManager:
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
-            "检索记忆完成(v3): query=%s limit=%s request_agent=%s target_agent=%s hit_count=%s",
+            "检索记忆完成: query=%s limit=%s request_agent=%s target_agent=%s hit_count=%s",
             normalized_query,
             normalized_limit,
             normalized_request_agent_id,
@@ -442,7 +442,7 @@ class MemoryManager:
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
-            "读取记忆列表完成(v3): request_agent=%s target_agent=%s limit=%s count=%s",
+            "读取记忆列表完成: request_agent=%s target_agent=%s limit=%s count=%s",
             normalized_request_agent_id,
             normalized_target_agent_id,
             normalized_limit,
@@ -473,7 +473,7 @@ class MemoryManager:
                     f"Memory forget scope not allowed for agent '{run_context.agent_id}': {scope.value}"
                 )
 
-        result = self._memory_v3_store.forget(
+        result = self._memory_store.forget(
             agent_id=run_context.agent_id,
             memory_ids=normalized_ids,
             scopes=normalized_scopes,
@@ -484,7 +484,7 @@ class MemoryManager:
             for scope in normalized_scopes:
                 self._refresh_long_term_summary_best_effort(scope=scope, agent_id=run_context.agent_id)
         _logger.debug(
-            "遗忘记忆完成(v3): agent_id=%s memory_ids=%s scopes=%s touched=%s deleted=%s archived=%s",
+            "遗忘记忆完成: agent_id=%s memory_ids=%s scopes=%s touched=%s deleted=%s archived=%s",
             run_context.agent_id,
             len(normalized_ids),
             [item.value for item in normalized_scopes],
@@ -507,7 +507,7 @@ class MemoryManager:
         include_long_term_summaries: bool = False,
     ) -> MemoryReadBundle:
         _ = short_session_id
-        return self._memory_v3_store.read_bundle(
+        return self._memory_store.read_bundle(
             agent_id=agent_id,
             query=query,
             limit=limit,
@@ -525,13 +525,13 @@ class MemoryManager:
     ) -> None:
         try:
             if scope == MemoryScope.SHARED_LONG:
-                self._memory_v3_store.refresh_long_term_summary_from_facts(
+                self._memory_store.refresh_long_term_summary_from_facts(
                     scope=MemoryScope.SHARED_LONG,
                     agent_id=None,
                 )
                 return
             if scope == MemoryScope.AGENT_LONG:
-                self._memory_v3_store.refresh_long_term_summary_from_facts(
+                self._memory_store.refresh_long_term_summary_from_facts(
                     scope=MemoryScope.AGENT_LONG,
                     agent_id=agent_id,
                 )
@@ -699,7 +699,7 @@ def _dedupe_memory_items(items: list[MemoryItem]) -> list[MemoryItem]:
     return output
 
 
-def _v3_metadata_from_plan(
+def _memory_metadata_from_plan(
     *,
     plan: MemoryWritePlan,
     source_agent_id: str,
@@ -754,7 +754,7 @@ def _to_memory_item(record: Any) -> MemoryItem:
 
 def _memory_item_from_fact(
     *,
-    fact: MemoryV3Fact,
+    fact: MemoryFact,
     session_id: str,
     scope: MemoryScope,
     source_kind: str,
@@ -763,7 +763,7 @@ def _memory_item_from_fact(
     metadata.update(
         {
             "memory_layer": "facts",
-            "v3_scope": fact.scope,
+            "storage_scope": fact.scope,
             "category": fact.category,
             "visibility": fact.visibility,
             "inject_policy": fact.inject_policy,

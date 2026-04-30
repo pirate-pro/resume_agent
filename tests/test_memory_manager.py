@@ -10,7 +10,7 @@ import pytest
 from app.core.errors import ValidationError
 from app.domain.models import RunContext
 from app.memory.models import MemoryScope
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 from app.runtime.memory_manager import MemoryManager
 
@@ -65,7 +65,7 @@ def _manager(
 ) -> MemoryManager:
     return MemoryManager(
         capability_registry=capability_registry or _capability_registry(),
-        memory_v3_store=FileMemoryV3Store(root_dir=tmp_path / "memory_v3"),
+        memory_store=FileMemoryStore(root_dir=tmp_path / "memory"),
     )
 
 
@@ -85,7 +85,7 @@ def test_memory_manager_write_and_search(tmp_path: Path) -> None:
     assert hits[0].content == "Prefer JSONL storage"
 
 
-def test_memory_manager_write_persists_v3_fact(tmp_path: Path) -> None:
+def test_memory_manager_write_persists_fact(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
 
     manager.write_memory(
@@ -138,7 +138,7 @@ def test_memory_manager_write_refreshes_agent_long_term_summary(tmp_path: Path) 
         source_event_id="evt_summary_1",
     )
 
-    payload = (tmp_path / "memory_v3" / "agents" / "agent_main" / "long_term_overlay.json").read_text(encoding="utf-8")
+    payload = (tmp_path / "memory" / "agents" / "agent_main" / "long_term_overlay.json").read_text(encoding="utf-8")
     long_term = json.loads(payload)
     summary = str(long_term["user"]["personalContext"]["summary"])
     assert "李华" in summary
@@ -383,7 +383,7 @@ def test_memory_manager_replaces_active_preferred_name_by_canonical_key(tmp_path
     assert new.metadata["canonical_key"] == "preferred_name"
     assert new.metadata["normalized_value"] == "小明"
 
-    facts_path = tmp_path / "memory_v3" / "agents" / "agent_main" / "facts.jsonl"
+    facts_path = tmp_path / "memory" / "agents" / "agent_main" / "facts.jsonl"
     rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     old_rows = [row for row in rows if row.get("content") == "用户希望我叫小猪。我应该记住这个名字。"]
     new_rows = [row for row in rows if row.get("content") == "用户希望我叫小明。我应该记住这个名字。"]

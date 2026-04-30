@@ -18,12 +18,12 @@ from app.memory.policies import (
     MemoryLane,
     MemorySourceKind,
 )
-from app.memory.v3_models import MemoryV3Fact, MemoryV3Source
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_models import MemoryFact, MemorySource
+from app.memory.file_store import FileMemoryStore
 from app.memory.write_plan import MemoryWritePlan, build_memory_write_plan, infer_write_scope_from_tags
 
 __all__ = [
-    "FileMemoryV3Store",
+    "FileMemoryStore",
     "ForgetResult",
     "MemoryAdmissionDecision",
     "MemoryAdmissionResult",
@@ -37,8 +37,8 @@ __all__ = [
     "MemorySourceKind",
     "MemoryStatus",
     "MemoryType",
-    "MemoryV3Fact",
-    "MemoryV3Source",
+    "MemoryFact",
+    "MemorySource",
     "MemoryWritePlan",
     "build_memory_write_plan",
     "classify_memory",

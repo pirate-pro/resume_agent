@@ -11,7 +11,7 @@ from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.models import MemoryScope
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
@@ -68,7 +68,7 @@ def _memory_manager(
     resolved = capability_registry if capability_registry is not None else _capability_registry()
     return MemoryManager(
         capability_registry=resolved,
-        memory_v3_store=FileMemoryV3Store(root_dir=tmp_path / "memory_v3"),
+        memory_store=FileMemoryStore(root_dir=tmp_path / "memory"),
     )
 
 
@@ -102,7 +102,7 @@ def test_tool_register_success_and_duplicate_error(tmp_path: Path) -> None:
         registry.register(MemoryWriteTool(memory_manager=memory_manager))
 
 
-def test_memory_write_tool_writes_v3_memory(tmp_path: Path) -> None:
+def test_memory_write_tool_writes_memory(tmp_path: Path) -> None:
     memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
@@ -362,7 +362,7 @@ def test_memory_update_tool_replaces_single_match(tmp_path: Path) -> None:
     assert len(json.loads(new_search.content)) >= 1
     old_payload = json.loads(old_search.content)
     assert all(item.get("content") != "用户称呼是李华" for item in old_payload)
-    rows = _read_jsonl(tmp_path / "memory_v3" / "agents" / "agent_main" / "facts.jsonl")
+    rows = _read_jsonl(tmp_path / "memory" / "agents" / "agent_main" / "facts.jsonl")
     active_rows = [row for row in rows if row["status"] == "active"]
     archived_rows = [row for row in rows if row["status"] == "archived"]
     assert len(active_rows) == 1
@@ -370,7 +370,7 @@ def test_memory_update_tool_replaces_single_match(tmp_path: Path) -> None:
     assert len(archived_rows) == 1
     assert archived_rows[0]["metadata"]["archivedReason"].startswith("memory_update_tool:")
     long_term_payload = json.loads(
-        (tmp_path / "memory_v3" / "agents" / "agent_main" / "long_term_overlay.json").read_text(encoding="utf-8")
+        (tmp_path / "memory" / "agents" / "agent_main" / "long_term_overlay.json").read_text(encoding="utf-8")
     )
     personal_context = long_term_payload["user"]["personalContext"]["summary"]
     assert "小李" in personal_context
@@ -445,7 +445,7 @@ def test_memory_update_tool_replaces_unkeyed_target_when_unique(tmp_path: Path) 
     )
 
     payload = json.loads(update_result.content)
-    rows = _read_jsonl(tmp_path / "memory_v3" / "agents" / "agent_main" / "facts.jsonl")
+    rows = _read_jsonl(tmp_path / "memory" / "agents" / "agent_main" / "facts.jsonl")
     assert update_result.success is True
     assert payload["updated"] is True
     assert payload["update_mode"] == "archive_then_write"

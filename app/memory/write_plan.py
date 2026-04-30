@@ -1,4 +1,4 @@
-"""Build v3 memory write plans from raw tool/runtime input."""
+"""Build memory memory write plans from raw tool/runtime input."""
 
 from __future__ import annotations
 

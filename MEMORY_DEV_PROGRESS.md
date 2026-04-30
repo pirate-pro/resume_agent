@@ -33,10 +33,10 @@
 
 4. [完成] 接入 memory 双写核心链路。
 - 说明：
-  - 新增 `app/memory/bridge.py`，统一 legacy 写入 -> v2 candidate 的映射策略。
+  - 新增 `app/memory/bridge.py`，统一 legacy 写入 -> legacy candidate 的映射策略。
   - `MemoryManager` 接入可选 `memory_facade`，在 legacy 成功写入后 best-effort 写候选。
   - `MemoryWriteTool` 接入可选 `memory_facade`，保持旧行为优先、候选写入失败只告警不阻断。
-  - DI 接入：`app/api/deps.py` 新增 `get_memory_store/get_memory_facade`，默认使用 `data/memory_v2` 文件存储。
+  - DI 接入：`app/api/deps.py` 新增 `get_memory_store/get_memory_facade`，默认使用 旧 memory 数据 文件存储。
   - 测试辅助接入：`tests/helpers.py` 同步接入 memory facade。
 - 影响范围：
   - 读路径仍保持旧逻辑（未切换）。
@@ -51,15 +51,15 @@
   - `uv run mypy app tests`：通过（`Success: no issues found in 58 source files`）
   - `uv run pytest -q`：通过（`30 passed`）
 
-6. [完成] 移除 Memory 兼容桥接层，切换为纯 v2 运行链路。
+6. [完成] 移除 Memory 兼容桥接层，切换为纯 legacy 运行链路。
 - 说明：
   - 删除 `app/memory/bridge.py`。
   - 删除 `app/memory/stores/legacy_adapter.py`，并同步更新 `stores/__init__.py` 导出。
   - `MemoryManager`、`MemoryWriteTool`、`MemorySearchTool` 保持仅依赖 `MemoryFacade`（不再保留旧构造参数路径）。
 - 影响范围：
-  - 运行时不再存在 dual-write/compat 逻辑，memory 主链路统一为 v2。
+  - 运行时不再存在 dual-write/compat 逻辑，memory 主链路统一为 legacy。
 
-7. [完成] 同步更新测试到 v2-only 语义。
+7. [完成] 同步更新测试到 legacy-only 语义。
 - 说明：
   - 更新 `tests/helpers.py`、`tests/test_memory_manager.py`、`tests/test_tool_registry.py`、
     `tests/test_context_assembler.py`、`tests/test_agent_runtime.py`。
@@ -67,7 +67,7 @@
 - 影响范围：
   - 测试语义与运行时架构一致，避免“实现已切换但测试仍走旧链路”。
 
-8. [完成] 修复 v2 列表查询通配语义。
+8. [完成] 修复 legacy 列表查询通配语义。
 - 说明：
   - 在 `JsonlFileMemoryStore.search_records` 中将 `*` / `__all__` 视为全量匹配，避免 `list_memories` 因关键词过滤返回空结果。
 - 影响范围：
@@ -560,7 +560,7 @@
   - `uv run mypy app/memory/classification.py app/memory/contracts.py app/memory/facade.py app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_classification.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 8 source files`）
   - `uv run pytest -q`：通过（`110 passed`）
 
-33. [完成] 落地 `memory_update` Canonical Direct V2：canonical memory 更新不再先删旧值，而是直接走 supersede / dedupe / conflict。
+33. [完成] 落地 `memory_update` Canonical Direct：canonical memory 更新不再先删旧值，而是直接走 supersede / dedupe / conflict。
 - 说明：
   - `app/runtime/memory_manager.py` 新增 `MemoryWriteResult` 和 `write_memory_with_result(...)`：
     - 写入链路现在可以向上层返回 `ConsolidateResult`
@@ -601,7 +601,7 @@
   - `memory_update` 现在要求目标带 `canonical_key`；缺失时返回 `target_missing_canonical_key`。
 - 影响范围：
   - 开发期 memory schema 允许破坏式升级。
-  - 结构变化时优先清空 `data/memory_v2` 并重建，不再维护旧数据适配层。
+  - 结构变化时优先清空 旧 memory 数据 并重建，不再维护旧数据适配层。
   - 后续 lifecycle / multi-agent 设计可以直接基于最新模型推进。
 - 验证结果：
   - `uv run pytest tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_consolidation.py -q`：通过（`49 passed`）
@@ -653,13 +653,13 @@
     - `tests/test_context_assembler.py`：prompt 注入顺序、仓库缺失时安全降级
 - 影响范围：
   - 四层架构第一次在 runtime 主链路中闭环，`AGENT.md` / `SOUL.md` 不再只停留在设计文档。
-  - 后续做 Retrieval V2 时，可以在已接入静态层的前提下调整 `state` / `memory` 的召回策略，不必二次返工 prompt 优先级。
+  - 后续做 Retrieval 时，可以在已接入静态层的前提下调整 `state` / `memory` 的召回策略，不必二次返工 prompt 优先级。
   - 这一步仍是只读接入，不引入新的写接口，也不会与 memory/state 的动态写入链路混用。
 - 验证结果：
   - `uv run pytest tests/test_storage.py tests/test_context_assembler.py tests/test_agent_runtime.py -q`：通过
   - `uv run mypy app/infra/storage/markdown_agent_document_repository.py app/runtime/context_assembler.py app/api/deps.py tests/test_storage.py tests/test_context_assembler.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 7 source files`）
 
-38. [完成] 落地 Retrieval V2：runtime prompt 开始按 lane 注入 memory。
+38. [完成] 落地 Retrieval：runtime prompt 开始按 lane 注入 memory。
 - 说明：
   - `app/runtime/memory_manager.py` 新增 `search_context_memory_lanes(...)`：
     - 只服务 runtime prompt 上下文
@@ -671,7 +671,7 @@
     - `interaction_feedback`
     - `user_profile`
     - `other_memories`
-  - V2 会 always-on 读取少量输出相关 canonical keys：
+  - Legacy 会 always-on 读取少量输出相关 canonical keys：
     - `preferred_language`
     - `response_style`
     - `preferred_format`
@@ -688,7 +688,7 @@
 - 影响范围：
   - runtime prompt 的 memory 结构更清晰，长期输出偏好不再完全依赖当前 query 文本命中。
   - 前端和工具接口仍使用原有 `memory_hits` 视图，不需要同步改 UI。
-  - 这一步是 Retrieval V2 的第一版，后续可以继续增加 query intent router 和 per-agent lane subscription。
+  - 这一步是 Retrieval 的第一版，后续可以继续增加 query intent router 和 per-agent lane subscription。
 - 验证结果：
   - `uv run pytest tests/test_memory_manager.py tests/test_context_assembler.py -q`：通过
   - `uv run mypy app/domain/models.py app/runtime/memory_manager.py app/runtime/context_assembler.py tests/test_memory_manager.py tests/test_context_assembler.py`：通过（`Success: no issues found in 5 source files`）
@@ -697,7 +697,7 @@
 39. [完成] 清空重建 memory 本地数据，并删除旧 `data/memory` 仓储链路。
 - 说明：
   - 本地 `data/memory` 已删除。
-  - 本地 `data/memory_v2` 已清空并重建为空目录结构：
+  - 本地 旧 memory 数据 已清空并重建为空目录结构：
     - `shared/`
     - `agents/`
     - `candidates/pending.jsonl`
@@ -707,7 +707,7 @@
   - 删除旧仓储对应测试与域层 `MemoryRepository` 协议，避免后续代码继续引用旧 `data/memory/memories.jsonl` 结构。
 - 影响范围：
   - 仓库不再保留旧 `data/memory` 运行入口。
-  - 当前 memory 读写只面向 `data/memory_v2` + 最新 schema。
+  - 当前 memory 读写只面向 旧 memory 数据 + 最新 schema。
   - 历史 memory 内容不保留，后续从新结构重新积累。
 - 验证结果：
   - `uv run pytest tests/test_storage.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py -q`：通过（`53 passed`）
@@ -742,7 +742,7 @@
   - 新增 `app/memory/index.py`：
     - `MemoryIndex` 协议
     - `SqliteMemoryIndex` 实现
-    - SQLite 文件默认位于 `data/memory_v2/index/memory_index.sqlite3`
+    - SQLite 文件默认位于 `旧 memory 数据/index/memory_index.sqlite3`
   - 新增 `app/memory/serialization.py`：
     - 抽出当前 schema 的 `MemoryRecord <-> payload` 序列化
     - JSONL store 和 SQLite index 共享同一套 record 反序列化规则
@@ -765,7 +765,7 @@
 - 影响范围：
   - JSONL 仍是 source of truth。
   - SQLite 只作为派生读取加速层，可删除、可重建，不承载业务语义。
-  - 当前不引入 DB migration；schema 变化时优先删除并重建 `data/memory_v2/index/`。
+  - 当前不引入 DB migration；schema 变化时优先删除并重建 `旧 memory 数据/index/`。
   - 这一步为后续 FTS / lane index / multi-agent subscription index 留出接口边界。
 - 验证结果：
   - `uv run pytest tests/test_memory_index.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_memory_consolidation.py tests/test_tool_registry.py -q`：通过（`52 passed`）
@@ -836,83 +836,83 @@
   - `uv run pytest tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_consolidation.py tests/test_memory_compaction.py tests/test_context_assembler.py -q`：通过（`60 passed`）
   - `uv run mypy app/memory/models.py app/memory/stores/jsonl_file_store.py app/memory/consolidation.py app/runtime/memory_manager.py app/tools/builtins.py app/memory/retrieval.py app/runtime/context_assembler.py app/memory/contracts.py app/memory/facade.py tests/test_memory_compaction.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_consolidation.py tests/test_context_assembler.py`：通过（`Success: no issues found in 14 source files`）
 
-45. [完成] 落地 Memory V3 第一批：文件主存储 + shared/agent 隔离运行时接线。
+45. [完成] 落地 Memory 第一批：文件主存储 + shared/agent 隔离运行时接线。
 - 背景：
-  - 当前目标从“继续细化 v2 结构字段”调整为“重建清晰的 short/mid/long 三层边界”。
+  - 当前目标从“继续细化 legacy 结构字段”调整为“重建清晰的 short/mid/long 三层边界”。
   - 现阶段不做 project/workspace 维度，也不接 SQLite/FTS/向量索引。
 - 说明：
-  - 新增 `app/memory/v3_models.py`：
-    - `MemoryV3Fact`
-    - `MemoryV3Source`
-    - v3 时间格式解析/输出
-  - 新增 `app/memory/v3_store.py`：
-    - 初始化 `data/memory_v3/shared/long_term.json`
+  - 新增 `app/memory/file_models.py`：
+    - `MemoryFact`
+    - `MemorySource`
+    - memory 时间格式解析/输出
+  - 新增 `app/memory/file_store.py`：
+    - 初始化 `data/memory/shared/long_term.json`
     - 初始化 `shared/facts.jsonl`、`shared/pending_promotions.jsonl`
     - 初始化 `shared/mid_term/rolling.md` 与 `daily/`
     - 初始化 `agents/<agent_id>/long_term_overlay.json`
     - 初始化 `agents/<agent_id>/facts.jsonl`
     - 初始化 `agents/<agent_id>/mid_term/rolling.md` 与 `daily/`
-  - `MemoryManager` 支持可选 v3 store：
-    - v3 存在时，`memory_write` 直接写入 v3 facts。
-    - v3 存在时，`memory_search` / runtime context retrieval 从 shared + 当前 agent 私有层读取。
+  - `MemoryManager` 支持可选 memory store：
+    - memory 存在时，`memory_write` 直接写入 memory facts。
+    - memory 存在时，`memory_search` / runtime context retrieval 从 shared + 当前 agent 私有层读取。
     - runtime standing memory 只常驻读取 long-term summary 与 `injectPolicy=always` facts。
-    - v3 存在时，`memory_forget` 归档或删除当前可写 facts。
-    - 旧 v2 facade 只作为未注入 v3 时的兜底路径。
-  - `app/api/deps.py` 默认注入 `FileMemoryV3Store(root_dir=data/memory_v3)`。
+    - memory 存在时，`memory_forget` 归档或删除当前可写 facts。
+    - 旧 legacy facade 只作为未注入 memory 时的兜底路径。
+  - `app/api/deps.py` 默认注入 `FileMemoryStore(root_dir=data/memory)`。
   - `ContextAssembler` 增加 memory access rules，明确：
     - events/state 是 short-term working context。
     - shared memory 与当前 agent overlay 分开。
     - 不默认读取其他 agent 私有 memory。
     - facts/long-term 优先于 mid-term notes。
-  - `memory_write` / `memory_search` 工具描述同步改为 v3 语义。
-- 当前 v3 规则：
-  - `short_term` 仍在 session events + state，不进入 memory_v3。
+  - `memory_write` / `memory_search` 工具描述同步改为 memory 语义。
+- 当前 memory 规则：
+  - `short_term` 仍在 session events + state，不进入 memory。
   - `mid_term` 是 rolling/daily Markdown，可检索，不默认全量注入。
   - `long_term` 是 `long_term.json` + `facts.jsonl`。
   - agent 私有 facts 默认隔离，shared facts 对其他 agent 可见。
   - 私有到 shared 的提升先预留 `pending_promotions.jsonl`，暂不自动 promote。
 - 影响范围：
-  - API 运行时默认开始使用 `data/memory_v3`。
-  - 旧 `memory_v2` 代码尚未删除，但不再是默认运行时主路径。
+  - API 运行时默认开始使用 `data/memory`。
+  - 旧 memory 代码尚未删除，但不再是默认运行时主路径。
   - 前端接口结构暂不变：工具仍返回 `memory_id/content/tags/scope/confidence`。
 - 验证结果：
-  - `python -m compileall app/memory/v3_models.py app/memory/v3_store.py app/runtime/memory_manager.py app/api/deps.py app/runtime/context_assembler.py app/tools/builtins.py`：通过
-  - `uv run pytest tests/test_memory_v3_store.py -q`：通过（`5 passed`）
-  - `uv run pytest tests/test_memory_v3_store.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py -q`：通过（`54 passed`）
-  - `uv run mypy app/memory/v3_models.py app/memory/v3_store.py app/runtime/memory_manager.py app/api/deps.py app/runtime/context_assembler.py app/tools/builtins.py app/memory/__init__.py tests/test_memory_v3_store.py`：通过（`Success: no issues found in 8 source files`）
+  - `python -m compileall app/memory/file_models.py app/memory/file_store.py app/runtime/memory_manager.py app/api/deps.py app/runtime/context_assembler.py app/tools/builtins.py`：通过
+  - `uv run pytest tests/test_memory_file_store.py -q`：通过（`5 passed`）
+  - `uv run pytest tests/test_memory_file_store.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py -q`：通过（`54 passed`）
+  - `uv run mypy app/memory/file_models.py app/memory/file_store.py app/runtime/memory_manager.py app/api/deps.py app/runtime/context_assembler.py app/tools/builtins.py app/memory/__init__.py tests/test_memory_file_store.py`：通过（`Success: no issues found in 8 source files`）
   - `uv run pytest -q`：通过
 
-46. [完成] 清除 v2 runtime 主链路，`MemoryManager` 改为 v3-only。
+46. [完成] 清除 legacy runtime 主链路，`MemoryManager` 改为 memory-only。
 - 背景：
-  - 第 45 步虽然默认注入了 v3，但 `MemoryManager` 仍保留 `MemoryFacade` 参数和 v2 fallback。
-  - 这会让后续维护者误以为 v2 仍是可用主链路，增加重构阻塞。
+  - 第 45 步虽然默认注入了 memory，但 `MemoryManager` 仍保留 `MemoryFacade` 参数和 legacy fallback。
+  - 这会让后续维护者误以为 legacy 仍是可用主链路，增加重构阻塞。
 - 说明：
   - `MemoryManager` 构造参数移除 `memory_facade`，现在只接收：
     - `capability_registry`
-    - `memory_v3_store`
-  - `write_memory_with_result(...)` 删除 v2 candidate/consolidate fallback，直接写 v3 facts。
-  - `_read_bundle(...)` 删除 v2 `read_context` fallback，统一走 `FileMemoryV3Store.read_bundle(...)`。
-  - `forget_memory_ids(...)` 删除 v2 facade forget fallback，统一操作 v3 facts。
+    - `memory_store`
+  - `write_memory_with_result(...)` 删除 legacy candidate/consolidate fallback，直接写 memory facts。
+  - `_read_bundle(...)` 删除 legacy `read_context` fallback，统一走 `FileMemoryStore.read_bundle(...)`。
+  - `forget_memory_ids(...)` 删除 legacy facade forget fallback，统一操作 memory facts。
   - `app/api/deps.py` 删除：
     - `get_memory_store`
     - `get_memory_facade`
     - `JsonlFileMemoryStore` / `FileMemoryFacade` / `default_memory_policy` 的 runtime DI 导入。
-  - 测试装配改为直接构造 `FileMemoryV3Store(root_dir=.../memory_v3)`。
-  - v3 store 补齐：
+  - 测试装配改为直接构造 `FileMemoryStore(root_dir=.../memory)`。
+  - memory store 补齐：
     - `scope_hint` metadata，用于保留原始写入意图。
     - `agent_short` hint 的 session-bound 读取过滤。
-    - 中文 query 2/3-gram 召回，补齐 v3 文本检索基础能力。
+    - 中文 query 2/3-gram 召回，补齐 memory 文本检索基础能力。
     - 跳过空默认 `# Rolling Context`，避免 inspect 把空 mid-term note 当 memory。
 - 当前遗留：
   - `app/memory/facade.py`、`JsonlFileMemoryStore`、consolidation/compaction 旧测试在第 47 步已删除。
 - 验证结果：
-  - `uv run pytest tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_memory_v3_store.py tests/test_agent_runtime.py -q`：通过（`61 passed`）
-  - `uv run mypy app/runtime/memory_manager.py app/memory/v3_store.py app/api/deps.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py tests/helpers.py tests/test_memory_v3_store.py`：通过（`Success: no issues found in 9 source files`）
+  - `uv run pytest tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_memory_file_store.py tests/test_agent_runtime.py -q`：通过（`61 passed`）
+  - `uv run mypy app/runtime/memory_manager.py app/memory/file_store.py app/api/deps.py tests/test_memory_manager.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py tests/helpers.py tests/test_memory_file_store.py`：通过（`Success: no issues found in 9 source files`）
   - `uv run pytest -q`：通过
 
-47. [完成] 删除 legacy v2 facade/store/consolidation/compaction 模块与测试。
+47. [完成] 删除 legacy legacy facade/store/consolidation/compaction 模块与测试。
 - 说明：
-  - 删除 legacy v2 模块：
+  - 删除 legacy legacy 模块：
     - `app/memory/contracts.py`
     - `app/memory/facade.py`
     - `app/memory/consolidation.py`
@@ -921,10 +921,10 @@
     - `app/memory/serialization.py`
     - `app/memory/stores/jsonl_file_store.py`
     - `app/memory/stores/__init__.py`
-  - 删除 legacy v2 测试：
+  - 删除 legacy legacy 测试：
     - `tests/test_memory_consolidation.py`
     - `tests/test_memory_compaction.py`
-  - `app/memory/models.py` 删除 v2 专属类型：
+  - `app/memory/models.py` 删除 legacy 专属类型：
     - `MemoryCandidate`
     - `MemoryReadRequest`
     - `CandidateResult`
@@ -935,7 +935,7 @@
   - `app/memory/policies.py` 删除旧 consolidation policy wrapper：
     - `MemoryPolicy`
     - `default_memory_policy`
-  - `app/memory/__init__.py` 同步收窄导出，只保留当前 v3/runtime 可用入口。
+  - `app/memory/__init__.py` 同步收窄导出，只保留当前 memory/runtime 可用入口。
 - 当前保留：
   - `MemoryRecord`
   - `MemoryReadBundle`
@@ -945,16 +945,16 @@
   - `ForgetResult`
   - `MemoryWriteCandidateRequest` / `ConsolidateResult` 已在第 48 步移除。
 - 影响范围：
-  - v2 文件存储、candidate consolidation、compact 生命周期治理已从代码主干移除。
-  - memory 子系统现在只剩 admission/classification/intake/policy/v3 models/v3 store/runtime manager 主链路。
+  - legacy 文件存储、candidate consolidation、compact 生命周期治理已从代码主干移除。
+  - memory 子系统现在只剩 admission/classification/intake/policy/memory models/file store/runtime manager 主链路。
 - 验证结果：
-  - `uv run mypy app/memory app/runtime/memory_manager.py app/api/deps.py tests/test_memory_manager.py tests/test_memory_v3_store.py tests/test_memory_policies.py tests/test_memory_classification.py tests/test_memory_admission.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 19 source files`）
-  - `uv run pytest tests/test_memory_admission.py tests/test_memory_classification.py tests/test_memory_policies.py tests/test_memory_manager.py tests/test_memory_v3_store.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py -q`：通过（`76 passed`）
+  - `uv run mypy app/memory app/runtime/memory_manager.py app/api/deps.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_memory_policies.py tests/test_memory_classification.py tests/test_memory_admission.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 19 source files`）
+  - `uv run pytest tests/test_memory_admission.py tests/test_memory_classification.py tests/test_memory_policies.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_context_assembler.py tests/test_tool_registry.py tests/test_agent_runtime.py -q`：通过（`76 passed`）
   - `uv run pytest -q`：通过
 
-48. [完成] 清除剩余 candidate/consolidate 写入语义，改为 v3 write plan。
+48. [完成] 清除剩余 candidate/consolidate 写入语义，改为 memory write plan。
 - 背景：
-  - 第 47 步删除了 v2 主模块，但模型和工具层还残留 `MemoryWriteCandidateRequest` / `ConsolidateResult` 命名。
+  - 第 47 步删除了 legacy 主模块，但模型和工具层还残留 `MemoryWriteCandidateRequest` / `ConsolidateResult` 命名。
   - 这些命名会误导后续开发者以为当前仍存在 candidate 队列和 consolidation 阶段。
 - 说明：
   - `app/memory/models.py` 删除：
@@ -963,21 +963,21 @@
   - `app/memory/write_plan.py` 成为写入前唯一规划入口：
     - `MemoryWritePlan.scope` 表示实际写入 scope。
     - `MemoryWritePlan.write_key` 表示本次写入的稳定 key。
-    - 不再使用 `scope_hint` / `idempotency_key` 这类 v2 candidate 语义。
+    - 不再使用 `scope_hint` / `idempotency_key` 这类 legacy candidate 语义。
   - `MemoryManager.write_memory_with_result(...)` 返回 `write_id/written_records/written_memory_ids`，不再伪造 consolidate result。
-  - v3 fact metadata 改为记录 `memory_scope` / `write_key`。
+  - memory fact metadata 改为记录 `memory_scope` / `write_key`。
   - `memory_explain` dry-run 输出从 `candidate` 改为 `write_plan`。
   - `memory_update` 只依赖直接写入结果，不再读取 `consolidate_result`。
 - 影响范围：
   - 当前 runtime 写入链路是：
     - admission
     - write plan
-    - v3 facts append
+    - memory facts append
   - 当前 runtime 不再存在 candidate queue、processed candidates、consolidation result 的主链路语义。
 - 验证结果：
   - `rg -n "app\\.memory\\.intake|MemoryWriteCandidateRequest|ConsolidateResult|build_candidate_request|candidate_id|consolidate_result|\"candidate\"|scope_hint|idempotency_key" app tests -g '*.py'`：无命中
   - `uv run mypy app/memory app/runtime/memory_manager.py app/tools/builtins.py tests/test_memory_manager.py tests/test_tool_registry.py`：通过（`Success: no issues found in 12 source files`）
-  - `uv run pytest tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_v3_store.py -q`：通过（`45 passed`）
+  - `uv run pytest tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_file_store.py -q`：通过（`45 passed`）
 
 49. [完成] 梳理 ContextAssembler multi-agent 上下文注入设计。
 - 背景：
@@ -1090,10 +1090,10 @@
 
 54. [完成] ContextAssembler Phase D 第一批：mid-term Markdown 独立 section 注入。
 - 背景：
-  - `memory_v3` 已有 `mid_term/rolling.md` 和 `mid_term/daily/*.md`。
+  - `memory` 已有 `mid_term/rolling.md` 和 `mid_term/daily/*.md`。
   - 之前 mid-term 召回结果会通过 lane 混入 `Long-term memory - Other relevant memory`，语义不清。
 - 说明：
-  - 复用当前 `FileMemoryV3Store` 的 Markdown 文本读取能力。
+  - 复用当前 `FileMemoryStore` 的 Markdown 文本读取能力。
   - 不新增 SQLite、向量、chunk index。
   - `ContextAssembler` 在渲染前按 tag 拆分：
     - `mid_term` tag：进入独立 `Mid-term context` section。
@@ -1105,17 +1105,17 @@
   - `uv run mypy app/runtime/context_assembler.py tests/test_context_assembler.py`：通过（`Success: no issues found in 2 source files`）
   - `uv run pytest tests/test_context_assembler.py -q`：通过（`13 passed`）
   - `uv run mypy app/runtime/context_assembler.py app/runtime/memory_manager.py app/runtime/agent_runtime.py tests/test_context_assembler.py tests/test_agent_runtime.py`：通过（`Success: no issues found in 5 source files`）
-  - `uv run pytest tests/test_context_assembler.py tests/test_memory_manager.py tests/test_memory_v3_store.py tests/test_agent_runtime.py -q`：通过（`39 passed`）
+  - `uv run pytest tests/test_context_assembler.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_agent_runtime.py -q`：通过（`39 passed`）
   - `uv run pytest -q`：通过
   - `git diff --check`：通过
 
 55. [完成] ContextAssembler Phase E 第一批：long-term summary / facts 分层注入。
 - 背景：
-  - `memory_v3` 底层 record 已有 `memory_layer/v3_scope/source_kind` 元数据。
+  - `memory` 底层 record 已有 `memory_layer/memory_scope/source_kind` 元数据。
   - 之前这些元数据在转换成 `MemoryItem` 后丢失，导致 `ContextAssembler` 只能按 lane 粗暴渲染。
 - 说明：
   - `MemoryItem` 新增 `scope/memory_layer/source_kind/metadata`，作为 runtime 层的轻量 memory 元数据通道。
-  - `MemoryManager` 写入返回和 record 转换时保留 v3 元数据。
+  - `MemoryManager` 写入返回和 record 转换时保留 memory 元数据。
   - `ContextAssembler` 渲染前拆分：
     - `long_term`：进入 `Long-term summaries`。
     - `facts`：进入 `Long-term facts`，并按 Shared / Agent overlay 分 section。
@@ -1127,9 +1127,9 @@
 - 验证结果：
   - `uv run mypy app/domain/models.py app/runtime/memory_manager.py app/runtime/context_assembler.py tests/test_context_assembler.py`：通过（`Success: no issues found in 4 source files`）
   - `uv run pytest tests/test_context_assembler.py -q`：通过（`14 passed`）
-  - `uv run pytest tests/test_memory_manager.py tests/test_memory_v3_store.py tests/test_context_assembler.py -q`：通过（`33 passed`）
-  - `uv run mypy app/domain/models.py app/runtime/context_assembler.py app/runtime/memory_manager.py app/runtime/agent_runtime.py app/tools/builtins.py tests/test_context_assembler.py tests/test_memory_manager.py tests/test_memory_v3_store.py tests/test_agent_runtime.py tests/test_tool_registry.py`：通过（`Success: no issues found in 10 source files`）
-  - `uv run pytest tests/test_context_assembler.py tests/test_memory_manager.py tests/test_memory_v3_store.py tests/test_agent_runtime.py tests/test_tool_registry.py -q`：通过（`66 passed`）
+  - `uv run pytest tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_context_assembler.py -q`：通过（`33 passed`）
+  - `uv run mypy app/domain/models.py app/runtime/context_assembler.py app/runtime/memory_manager.py app/runtime/agent_runtime.py app/tools/builtins.py tests/test_context_assembler.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_agent_runtime.py tests/test_tool_registry.py`：通过（`Success: no issues found in 10 source files`）
+  - `uv run pytest tests/test_context_assembler.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_agent_runtime.py tests/test_tool_registry.py -q`：通过（`66 passed`）
   - `uv run pytest -q`：通过
   - `git diff --check`：通过
 
@@ -1160,7 +1160,7 @@
   - `uv run mypy app/runtime/agent_events.py app/runtime/context_assembler.py tests/test_context_assembler.py`：通过（`Success: no issues found in 3 source files`）
   - `uv run pytest tests/test_context_assembler.py -q`：通过（`16 passed`）
   - `uv run mypy app/runtime/agent_events.py app/runtime/context_assembler.py app/runtime/agent_runtime.py app/runtime/memory_manager.py tests/test_context_assembler.py tests/test_agent_runtime.py`：通过（`Success: no issues found in 6 source files`）
-  - `uv run pytest tests/test_context_assembler.py tests/test_agent_runtime.py tests/test_memory_manager.py tests/test_memory_v3_store.py -q`：通过（`42 passed`）
+  - `uv run pytest tests/test_context_assembler.py tests/test_agent_runtime.py tests/test_memory_manager.py tests/test_memory_file_store.py -q`：通过（`42 passed`）
   - `uv run pytest -q`：通过
   - `git diff --check`：通过
 
@@ -1221,7 +1221,7 @@
   - 新增 `app/runtime/mid_term_flusher.py`，实现：
     - 触发输入：`session_id + agent_id` 的事件流。
     - 写入阈值：`delta_events>=10` 或 `signal_score>=6` 或 `20分钟+delta_events>=4`。
-    - cursor：`data/memory_v3/agents/<agent_id>/mid_term/flush_cursors/<session_id>.json`。
+    - cursor：`data/memory/agents/<agent_id>/mid_term/flush_cursors/<session_id>.json`。
     - daily 模板：`Meta / Active Context / Decisions / Progress / Open Questions / Candidate Long-Term Memories / Artifact References`。
     - Progress 行：`tool_call` 与 `tool_result` 合并一行并显式区分 `[CALL] ... | [RESULT] ...`。
   - `AgentRuntime`（sync + stream）在 `run_finished` 后后台触发 flush：
@@ -1240,7 +1240,7 @@
   - `uv run mypy app/runtime/mid_term_flusher.py app/runtime/agent_runtime.py app/api/deps.py tests/test_mid_term_flusher.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 6 source files`）
   - `git diff --check`：通过
 
-61. [完成] Mid-term v2：改为模型驱动 flush job，不再模板回退。
+61. [完成] Mid-term：改为模型驱动 flush job，不再模板回退。
 - 背景：
   - 旧版 daily 由规则模板直接拼接，语义压缩不足。
   - 新要求：失败不回退模板，只允许重试或延后，且不阻塞主回答链路。
@@ -1267,7 +1267,7 @@
   - `uv run pytest -q tests/test_chat_api.py tests/test_chat_service.py tests/test_context_assembler.py tests/test_memory_manager.py`：通过（`49 passed`）
   - `uv run mypy app/runtime/mid_term_flusher.py app/api/deps.py tests/test_mid_term_flusher.py tests/helpers.py tests/test_agent_runtime.py`：通过（`Success: no issues found in 5 source files`）
 
-62. [完成] Mid-term v2.1：新增独立后台轮询器，处理 retry/deferred job。
+62. [完成] Mid-term：新增独立后台轮询器，处理 retry/deferred job。
 - 背景：
   - 仅在 `run_finished` 时触发 flush，会导致 `retry/deferred` job 在无新会话流量时长期不被处理。
   - 目标是把 job 重试与对话请求解耦，改成持续后台处理。
@@ -1296,7 +1296,7 @@
   - `uv run mypy app/runtime/mid_term_flusher.py app/runtime/mid_term_flush_worker.py app/main.py app/api/deps.py app/core/settings.py tests/test_mid_term_flush_worker.py tests/test_mid_term_flusher.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 9 source files`）
   - `uv run pytest -q tests/test_mid_term_flush_worker.py tests/test_mid_term_flusher.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py tests/test_context_assembler.py tests/test_memory_manager.py`：通过（`63 passed`）
 
-63. [完成] Mid-term v2.2：补齐 retry/deferred 队列可观测指标。
+63. [完成] Mid-term：补齐 retry/deferred 队列可观测指标。
 - 背景：
   - worker 已能后台处理重试任务，但缺少统一指标，不利于排查“队列是否堆积、是否持续延后”。
 - 说明：
@@ -1357,7 +1357,7 @@
   - 当前环境缺少 `dart/flutter` 命令，未执行 `dart format` / `dart analyze`。
   - 已完成代码层面人工检查与编译风险自检（字段名与后端 `/health` 响应一致）。
 
-66. [完成] Mid-term v2.3：语义单元分批 + 动态 token 预算 + 提示词升级（COT 内推理）。
+66. [完成] Mid-term：语义单元分批 + 动态 token 预算 + 提示词升级（COT 内推理）。
 - 背景：
   - 旧实现按事件平铺输入，且依赖固定字符截断，语义保真度不稳定。
   - 用户要求：按模型上下文比例动态控制输入，时间顺序由远到近，tool call/result 成对处理，提示词提升为更强推理约束。
@@ -1405,18 +1405,18 @@
   - `uv run mypy app/runtime/mid_term_flusher.py app/api/deps.py app/core/settings.py tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_agent_runtime.py tests/helpers.py`：通过（`Success: no issues found in 7 source files`）
   - `uv run pytest -q tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py tests/test_context_assembler.py tests/test_memory_manager.py`：通过（`65 passed`）
 
-67. [完成] Mid-term v2.4：flush 同步落地 long-term facts（不只写 daily）。
+67. [完成] Mid-term：flush 同步落地 long-term facts（不只写 daily）。
 - 背景：
   - 现有 flush 仅写 `mid_term/daily/*.md`，`candidate_long_term` 未进入结构化 memory，导致“有提炼结果但长期记忆层无新增”。
   - 用户要求：flush 不仅记录 daily，还要把 memory 相关内容按 memory schema 写入。
 - 说明：
   - `app/runtime/mid_term_flusher.py` 新增 candidate materialization：
-    - 在 job 成功链路中，`candidate_long_term` 同步写入 `memory_v3/agents/<agent_id>/facts.jsonl`。
+    - 在 job 成功链路中，`candidate_long_term` 同步写入 `memory/agents/<agent_id>/facts.jsonl`。
     - 写入前走 `build_memory_write_plan(...)`，复用现有分类与 metadata 规范。
     - scope 强制为 `agent_long`（不自动 shared，避免跨 agent 污染）。
     - 增加 `origin_key` 幂等键，重试/重复处理时跳过已写候选。
     - 写入 metadata 补齐：`origin/flush_job_id/flush_id/flush_batch/flush_at/evidence_event_ids/why_reusable`。
-  - `app/memory/v3_store.py` 新增：
+  - `app/memory/file_store.py` 新增：
     - `has_active_fact_with_metadata(...)`，用于按 metadata 做 active fact 幂等检查。
   - daily 幂等增强：
     - `_append_daily_block(...)` 增加 `flush_id` 标记检查，若已存在同一 `flush_id` 则跳过重复追加。
@@ -1427,7 +1427,7 @@
       - tags 含 `long_term` 与 `mid_term_flush_candidate`
       - metadata 含 `origin=mid_term_flush` 与 `flush_job_id`
 - 验证结果：
-  - `uv run mypy app/runtime/mid_term_flusher.py app/memory/v3_store.py tests/test_mid_term_flusher.py`：通过（`Success: no issues found in 3 source files`）
+  - `uv run mypy app/runtime/mid_term_flusher.py app/memory/file_store.py tests/test_mid_term_flusher.py`：通过（`Success: no issues found in 3 source files`）
   - `uv run pytest -q tests/test_mid_term_flusher.py`：通过（`4 passed`）
   - `uv run pytest -q tests/test_mid_term_flush_worker.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_context_assembler.py tests/test_memory_manager.py`：通过（`53 passed`）
 
@@ -1436,7 +1436,7 @@
   - `ContextAssembler` 注入长期记忆时已区分 `long_term.json` summary 与 `facts.jsonl` facts。
   - `memory_update` 原本只做 `archive old fact -> write new fact`，不会刷新 `long_term.json/long_term_overlay.json` 的 `user/history` summary。
 - 说明：
-  - `app/memory/v3_store.py` 新增 `refresh_long_term_summary_from_facts(...)`：
+  - `app/memory/file_store.py` 新增 `refresh_long_term_summary_from_facts(...)`：
     - 从 active `agent_long/shared_long` facts 生成 DeerFlow 风格 `user/history` summary。
     - 不使用 `agent_short`，避免当前会话临时内容进入长期画像。
     - summary 写回 `long_term.json` 或 `long_term_overlay.json`。
@@ -1454,9 +1454,9 @@
   - `tests/test_tool_registry.py` 新增 `memory_update` 后 summary 从旧值切到新值的断言。
   - `tests/test_context_assembler.py` 调整长期记忆断言，覆盖 summary 与 facts 分层注入。
 - 验证结果：
-  - `uv run pytest -q tests/test_memory_manager.py tests/test_tool_registry.py tests/test_mid_term_flusher.py tests/test_memory_v3_store.py`：通过（`51 passed`）
-  - `uv run pytest -q tests/test_context_assembler.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_mid_term_flusher.py tests/test_memory_v3_store.py`：通过（`94 passed`）
-  - `uv run mypy app/memory/v3_store.py app/runtime/memory_manager.py app/runtime/mid_term_flusher.py app/runtime/context_assembler.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py`：通过（`Success: no issues found in 7 source files`）
+  - `uv run pytest -q tests/test_memory_manager.py tests/test_tool_registry.py tests/test_mid_term_flusher.py tests/test_memory_file_store.py`：通过（`51 passed`）
+  - `uv run pytest -q tests/test_context_assembler.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_mid_term_flusher.py tests/test_memory_file_store.py`：通过（`94 passed`）
+  - `uv run mypy app/memory/file_store.py app/runtime/memory_manager.py app/runtime/mid_term_flusher.py app/runtime/context_assembler.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py`：通过（`Success: no issues found in 7 source files`）
 
 69. [完成] Short-term context compression 第一版。
 - 背景：
@@ -1490,7 +1490,7 @@
     - 校验模型输出非法时不重写原 events。
     - 校验模型生成期间并发新增 event 时不重写旧快照。
 - 后续质量修正：
-  - `app/memory/v3_store.py` 新增按 content hash 查找 active fact。
+  - `app/memory/file_store.py` 新增按 content hash 查找 active fact。
   - `MemoryManager.write_memory_with_result(...)` 对同一 scope/agent 下完全相同 content 的 active fact 做幂等跳过，返回原 memory_id，`written_records=0`。
   - `MidTermFlusher` materialize candidate facts 时跳过完全相同 content 的 active fact，降低 flush 重试/重复候选造成的重复写入。
 - 真实接口调试结果：
@@ -1503,9 +1503,9 @@
 - 验证结果：
   - `uv run pytest -q tests/test_context_compactor.py tests/test_storage.py tests/test_context_assembler.py tests/test_agent_runtime.py`：通过（`38 passed`）
   - `uv run mypy app/runtime/context_compactor.py app/runtime/agent_runtime.py app/runtime/context_assembler.py app/infra/storage/jsonl_session_repository.py app/domain/protocols.py app/core/settings.py app/api/deps.py tests/test_context_compactor.py`：通过（`Success: no issues found in 8 source files`）
-  - `uv run pytest -q tests/test_context_compactor.py tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_context_assembler.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_v3_store.py`：通过。
-  - `uv run pytest -q tests/test_memory_manager.py tests/test_mid_term_flusher.py tests/test_tool_registry.py tests/test_memory_v3_store.py tests/test_context_compactor.py`：通过（`56 passed`）
-  - `uv run mypy app/memory/v3_store.py app/runtime/memory_manager.py app/runtime/mid_term_flusher.py tests/test_memory_manager.py`：通过（`Success: no issues found in 4 source files`）
+  - `uv run pytest -q tests/test_context_compactor.py tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_context_assembler.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_memory_file_store.py`：通过。
+  - `uv run pytest -q tests/test_memory_manager.py tests/test_mid_term_flusher.py tests/test_tool_registry.py tests/test_memory_file_store.py tests/test_context_compactor.py`：通过（`56 passed`）
+  - `uv run mypy app/memory/file_store.py app/runtime/memory_manager.py app/runtime/mid_term_flusher.py tests/test_memory_manager.py`：通过（`Success: no issues found in 4 source files`）
 
 70. [完成] P2：降低压缩触发门槛并限制 mid-term flush 单批模型输入。
 - 背景：
@@ -1531,3 +1531,19 @@
   - `uv run mypy app/runtime/mid_term_flusher.py app/runtime/context_compactor.py app/core/settings.py app/api/deps.py tests/test_mid_term_flusher.py tests/test_context_compactor.py`：通过（`Success: no issues found in 6 source files`）
   - `uv run pytest -q tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_context_compactor.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py tests/test_context_assembler.py tests/test_memory_manager.py`：通过。
   - `uv run pytest -q`：通过。
+
+71. [完成] 去除 memory 版本化命名并清理旧运行数据。
+- 背景：
+  - 当前 memory 子系统已经确定为文件主存储方案，不再需要暴露实现代号。
+  - 旧运行数据和旧 memory 目录会干扰后续判断当前真实结构。
+- 说明：
+  - 版本化的 memory models/store 模块重命名为 `app/memory/file_models.py` 与 `app/memory/file_store.py`。
+  - 版本化的 store/fact/source 类型重命名为 `FileMemoryStore` / `MemoryFact` / `MemorySource`。
+  - 默认运行目录改为 `data/memory`。
+  - runtime、工具、测试、压测脚本同步改为无版本命名。
+  - 删除旧 memory 设计文档 `MEMORY_FILE_BASED_DESIGN.md`。
+  - 清空本地 `data/` 运行数据，只保留 `data/.gitkeep`。
+- 验证结果：
+  - `uv run pytest -q tests/test_memory_file_store.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py tests/test_mid_term_flusher.py tests/test_agent_runtime.py tests/test_multi_agent_contracts.py tests/test_context_compactor.py tests/test_mid_term_flush_worker.py tests/test_chat_api.py`：通过。
+  - `uv run pytest -q`：通过。
+  - `uv run mypy app/memory/file_models.py app/memory/file_store.py app/runtime/memory_manager.py app/runtime/mid_term_flusher.py app/api/deps.py tests/test_memory_file_store.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py tests/test_agent_runtime.py tests/helpers.py`：通过。

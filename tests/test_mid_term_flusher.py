@@ -11,7 +11,7 @@ from typing import Any
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.mid_term_flusher import MidTermFlusher
@@ -256,10 +256,10 @@ def test_mid_term_flusher_writes_daily_with_model_summary(tmp_path: Path) -> Non
     session_id = "sess_mid_term_flush"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
-    store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
     flusher = MidTermFlusher(
         session_repository=repo,
-        memory_v3_store=store,
+        memory_store=store,
         model_client=_ValidSummaryModel(),
     )
 
@@ -330,7 +330,7 @@ def test_mid_term_flusher_writes_daily_with_model_summary(tmp_path: Path) -> Non
     assert "| [RESULT] success=True 返回检索结果" in content
     assert "### Candidate Long-Term Memories" in content
 
-    facts_path = tmp_path / "memory_v3" / "agents" / "agent_main" / "facts.jsonl"
+    facts_path = tmp_path / "memory" / "agents" / "agent_main" / "facts.jsonl"
     rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert any(row.get("content") == "用户偏好被长期记住" for row in rows)
     matched = [row for row in rows if row.get("content") == "用户偏好被长期记住"]
@@ -355,10 +355,10 @@ def test_mid_term_flusher_does_not_resurrect_archived_canonical_name_candidate(t
     session_id = "sess_mid_term_name_conflict"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
-    store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
     manager = MemoryManager(
         capability_registry=AgentCapabilityRegistry.for_tests(),
-        memory_v3_store=store,
+        memory_store=store,
     )
     old_content = "用户希望我叫小猪。我应该记住这个名字。"
     new_content = "用户希望我叫小明。我应该记住这个名字。"
@@ -376,7 +376,7 @@ def test_mid_term_flusher_does_not_resurrect_archived_canonical_name_candidate(t
     )
     flusher = MidTermFlusher(
         session_repository=repo,
-        memory_v3_store=store,
+        memory_store=store,
         model_client=_OldNameCandidateModel(old_content),
     )
 
@@ -425,7 +425,7 @@ def test_mid_term_flusher_does_not_resurrect_archived_canonical_name_candidate(t
     result = flusher.flush_for_run_finished(_context(session_id))
 
     assert result.flushed is True
-    facts_path = tmp_path / "memory_v3" / "agents" / "agent_main" / "facts.jsonl"
+    facts_path = tmp_path / "memory" / "agents" / "agent_main" / "facts.jsonl"
     rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     active_old = [row for row in rows if row.get("content") == old_content and row.get("status") == "active"]
     active_new = [row for row in rows if row.get("content") == new_content and row.get("status") == "active"]
@@ -440,10 +440,10 @@ def test_mid_term_flusher_cursor_skips_duplicate_flush(tmp_path: Path) -> None:
     session_id = "sess_mid_term_cursor"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
-    store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
     flusher = MidTermFlusher(
         session_repository=repo,
-        memory_v3_store=store,
+        memory_store=store,
         model_client=_ValidSummaryModel(),
     )
 
@@ -497,10 +497,10 @@ def test_mid_term_flusher_model_failure_enters_retry_without_cursor_commit(tmp_p
     session_id = "sess_mid_term_retry"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
-    store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
     flusher = MidTermFlusher(
         session_repository=repo,
-        memory_v3_store=store,
+        memory_store=store,
         model_client=_InvalidSummaryModel(),
     )
 
@@ -564,11 +564,11 @@ def test_mid_term_flusher_splits_batches_by_budget_and_keeps_tool_pairs_atomic(t
     session_id = "sess_mid_term_budget"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
-    store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
     model = _CapturingSummaryModel()
     flusher = MidTermFlusher(
         session_repository=repo,
-        memory_v3_store=store,
+        memory_store=store,
         model_client=model,
         model_context_window_tokens=2048,
         model_input_ratio=0.2,
@@ -670,11 +670,11 @@ def test_mid_term_flusher_caps_model_input_budget(tmp_path: Path) -> None:
     session_id = "sess_mid_term_budget_cap"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
-    store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
     model = _CapturingSummaryModel()
     flusher = MidTermFlusher(
         session_repository=repo,
-        memory_v3_store=store,
+        memory_store=store,
         model_client=model,
         model_context_window_tokens=32768,
         model_input_ratio=0.8,

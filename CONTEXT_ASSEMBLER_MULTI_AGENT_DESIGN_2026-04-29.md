@@ -63,7 +63,7 @@ other-agent 不默认读取其他 agent 的 state/events/memory。
    - `agent_session`
    - `shared_session`
 
-4. `memory_v3` 当前有：
+4. `memory` 当前有：
    - `shared`
    - `agents/<agent_id>`
 
@@ -358,7 +358,7 @@ data/sessions/<session_id>/events.jsonl
 
 ### 10.1 Short-Term
 
-short-term 不属于 `memory_v3`。
+short-term 不属于 `memory`。
 
 来源：
 
@@ -679,7 +679,7 @@ mid-term 有独立 section，不再混在 Long-term memory 下。
 
 ```text
 已完成第一批 mid-term 独立注入：
-- 复用现有 memory_v3 rolling/daily Markdown 读取能力
+- 复用现有 memory rolling/daily Markdown 读取能力
 - 不新增向量、不新增 SQLite、不新增 chunk index
 - ContextAssembler 按 tags 将 mid_term 记录从 memory lanes 中拆出
 - prompt 中新增独立 Mid-term context section
@@ -705,7 +705,7 @@ Long-term section 能区分 profile/history/facts/agent overlay。
 ```text
 已完成第一批 long-term 分层注入：
 - MemoryItem 保留 scope / memory_layer / source_kind / metadata
-- MemoryManager 从 v3 MemoryRecord 转换时不再丢失 memory_layer 与 scope
+- MemoryManager 从 memory MemoryRecord 转换时不再丢失 memory_layer 与 scope
 - ContextAssembler 将 long-term summary、facts、mid-term 拆成不同 section
 - long_term.json / long_term_overlay.json 的内容进入 Long-term summaries
 - facts.jsonl 的内容进入 Long-term facts，并按 Shared / Agent overlay 分 section

@@ -10,7 +10,7 @@ from app.domain.models import EventRecord, RunContext, SessionFile
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_events import (
     AGENT_RESULT_SUMMARY_EVENT,
@@ -57,7 +57,7 @@ def _agent_document_repository(root: Path | None = None) -> MarkdownAgentDocumen
 def _memory_manager(tmp_path: Path, capability_registry: AgentCapabilityRegistry | None = None) -> MemoryManager:
     return MemoryManager(
         capability_registry=capability_registry or _capability_registry(),
-        memory_v3_store=FileMemoryV3Store(root_dir=tmp_path / "memory_v3"),
+        memory_store=FileMemoryStore(root_dir=tmp_path / "memory"),
     )
 
 
@@ -620,7 +620,7 @@ def test_context_assembler_injects_long_term_summaries_separately(tmp_path: Path
     session_repo.create_session("sess_long_summary_prompt")
     capability_registry = _capability_registry()
     memory_manager = _memory_manager(tmp_path, capability_registry)
-    long_term_path = tmp_path / "memory_v3" / "shared" / "long_term.json"
+    long_term_path = tmp_path / "memory" / "shared" / "long_term.json"
     payload = json.loads(long_term_path.read_text(encoding="utf-8"))
     payload["user"]["workContext"]["summary"] = "用户长期在优化 Agent runtime 和 memory 系统。"
     payload["user"]["workContext"]["updatedAt"] = "2026-04-29T00:00:00Z"
@@ -652,7 +652,7 @@ def test_context_assembler_injects_mid_term_context_separately(tmp_path: Path) -
     session_repo.create_session("sess_mid_term_prompt")
     capability_registry = _capability_registry()
     memory_manager = _memory_manager(tmp_path, capability_registry)
-    rolling_path = tmp_path / "memory_v3" / "shared" / "mid_term" / "rolling.md"
+    rolling_path = tmp_path / "memory" / "shared" / "mid_term" / "rolling.md"
     rolling_path.write_text(
         "# Rolling Context\n\n## Current Focus\n\n用户最近在优化后端 ContextAssembler 的 multi-agent 注入边界。",
         encoding="utf-8",

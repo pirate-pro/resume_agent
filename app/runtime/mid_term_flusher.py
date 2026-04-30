@@ -18,7 +18,7 @@ from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import ChatModelClient, ModelResponse, SessionRepository, StreamChunk
 from app.memory.models import MemoryScope
 from app.memory.policies import normalize_memory_tags
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.memory.write_plan import MemoryWritePlan, build_memory_write_plan
 
 __all__ = [
@@ -922,7 +922,7 @@ class MidTermFlusher:
     def __init__(
         self,
         session_repository: SessionRepository,
-        memory_v3_store: FileMemoryV3Store,
+        memory_store: FileMemoryStore,
         model_client: ChatModelClient,
         *,
         model_context_window_tokens: int = 32768,
@@ -942,8 +942,8 @@ class MidTermFlusher:
         if max_input_tokens < _MIN_INPUT_BUDGET_TOKENS:
             raise ValidationError(f"max_input_tokens must be at least {_MIN_INPUT_BUDGET_TOKENS}.")
         self._session_repository = session_repository
-        self._memory_v3_store = memory_v3_store
-        self._job_store = MidTermFlushJobStore(memory_v3_store.root_dir)
+        self._memory_store = memory_store
+        self._job_store = MidTermFlushJobStore(memory_store.root_dir)
         self._event_pack_builder = MidTermEventPackBuilder(
             session_repository,
             model_context_window_tokens=model_context_window_tokens,
@@ -1247,7 +1247,7 @@ class MidTermFlusher:
         )
 
     def _daily_path(self, *, agent_id: str, now: datetime) -> Path:
-        base = self._memory_v3_store.root_dir / "agents" / agent_id / "mid_term" / "daily"
+        base = self._memory_store.root_dir / "agents" / agent_id / "mid_term" / "daily"
         base.mkdir(parents=True, exist_ok=True)
         return base / f"{now.astimezone(UTC).date().isoformat()}.md"
 
@@ -1329,7 +1329,7 @@ class MidTermFlusher:
                 content=content,
                 tags=candidate_tags,
             )
-            if self._memory_v3_store.has_active_fact_with_metadata(
+            if self._memory_store.has_active_fact_with_metadata(
                 scope=MemoryScope.AGENT_LONG,
                 agent_id=job.agent_id,
                 metadata_key="origin_key",
@@ -1337,14 +1337,14 @@ class MidTermFlusher:
             ):
                 skipped += 1
                 continue
-            if self._memory_v3_store.find_active_fact_by_content(
+            if self._memory_store.find_active_fact_by_content(
                 scope=MemoryScope.AGENT_LONG,
                 agent_id=job.agent_id,
                 content=content,
             ) is not None:
                 skipped += 1
                 continue
-            if self._memory_v3_store.has_archived_fact_by_content(
+            if self._memory_store.has_archived_fact_by_content(
                 scope=MemoryScope.AGENT_LONG,
                 agent_id=job.agent_id,
                 content=content,
@@ -1352,7 +1352,7 @@ class MidTermFlusher:
                 skipped += 1
                 continue
             if plan.canonical_key:
-                active_same_key = self._memory_v3_store.find_active_fact_by_canonical_key(
+                active_same_key = self._memory_store.find_active_fact_by_canonical_key(
                     scope=MemoryScope.AGENT_LONG,
                     agent_id=job.agent_id,
                     canonical_key=plan.canonical_key,
@@ -1361,7 +1361,7 @@ class MidTermFlusher:
                     skipped += 1
                     continue
             confidence = _flush_candidate_confidence(raw.get("confidence"), fallback=plan.confidence)
-            metadata = _flush_v3_metadata_from_plan(plan=plan, source_agent_id=job.agent_id, target_agent_id=job.agent_id)
+            metadata = _flush_memory_metadata_from_plan(plan=plan, source_agent_id=job.agent_id, target_agent_id=job.agent_id)
             metadata.update(
                 {
                     "source": "mid_term_flush",
@@ -1375,7 +1375,7 @@ class MidTermFlusher:
                     "evidence_event_ids": ",".join(evidence_ids),
                 }
             )
-            self._memory_v3_store.append_fact(
+            self._memory_store.append_fact(
                 content=plan.content,
                 category=plan.category,
                 confidence=confidence,
@@ -1391,7 +1391,7 @@ class MidTermFlusher:
             written += 1
         if written > 0:
             try:
-                self._memory_v3_store.refresh_long_term_summary_from_facts(
+                self._memory_store.refresh_long_term_summary_from_facts(
                     scope=MemoryScope.AGENT_LONG,
                     agent_id=job.agent_id,
                 )
@@ -1405,7 +1405,7 @@ class MidTermFlusher:
         return (written, skipped)
 
     def _cursor_path(self, *, session_id: str, agent_id: str) -> Path:
-        base = self._memory_v3_store.root_dir / "agents" / agent_id / "mid_term" / "flush_cursors"
+        base = self._memory_store.root_dir / "agents" / agent_id / "mid_term" / "flush_cursors"
         base.mkdir(parents=True, exist_ok=True)
         return base / f"{session_id}.json"
 
@@ -1570,7 +1570,7 @@ def _candidate_origin_key(
     return f"flush:{digest}"
 
 
-def _flush_v3_metadata_from_plan(
+def _flush_memory_metadata_from_plan(
     *,
     plan: MemoryWritePlan,
     source_agent_id: str,

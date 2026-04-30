@@ -24,7 +24,7 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
@@ -240,8 +240,8 @@ def build_chat_stack(
     state_store = JsonlFileStateStore(root_dir=data_dir / "state_v1")
     state_manager = StateManager(store=state_store)
     capability_registry = AgentCapabilityRegistry.for_tests()
-    memory_v3_store = FileMemoryV3Store(root_dir=data_dir / "memory_v3")
-    memory_manager = MemoryManager(capability_registry=capability_registry, memory_v3_store=memory_v3_store)
+    memory_store = FileMemoryStore(root_dir=data_dir / "memory")
+    memory_manager = MemoryManager(capability_registry=capability_registry, memory_store=memory_store)
     skill_repository = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))
     model_client = StressModelClient()
@@ -267,7 +267,7 @@ def build_chat_stack(
         tool_executor=tool_registry,
     )
     flusher = (
-        MidTermFlusher(session_repository=session_repository, memory_v3_store=memory_v3_store, model_client=model_client)
+        MidTermFlusher(session_repository=session_repository, memory_store=memory_store, model_client=model_client)
         if enable_flush
         else None
     )
@@ -443,7 +443,7 @@ def print_threshold(label: str, summary: ThresholdSummary) -> None:
 
 
 def inspect_mid_term_files(data_dir: Path) -> dict[str, int]:
-    base = data_dir / "memory_v3" / "agents" / "agent_main" / "mid_term"
+    base = data_dir / "memory" / "agents" / "agent_main" / "mid_term"
     json_files = list(base.rglob("*.json"))
     invalid_json_files = 0
     total_json_files = 0
@@ -476,7 +476,7 @@ async def run_memory_write_consistency_stress(
         turn_id="turn_memory_write_stress",
         entry_agent_id="agent_main",
     )
-    facts_path = data_dir / "memory_v3" / "agents" / "agent_main" / "facts.jsonl"
+    facts_path = data_dir / "memory" / "agents" / "agent_main" / "facts.jsonl"
     before = len([line for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]) if facts_path.exists() else 0
     success = 0
     fail = 0

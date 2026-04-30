@@ -636,7 +636,7 @@ def _group_memory_items_by_scope(items: list[MemoryItem]) -> dict[str, list[Memo
 def _memory_scope_key(item: MemoryItem) -> str:
     if item.scope:
         return item.scope.strip().lower()
-    raw_scope = item.metadata.get("memory_scope") or item.metadata.get("v3_scope")
+    raw_scope = item.metadata.get("memory_scope") or item.metadata.get("storage_scope")
     if isinstance(raw_scope, str) and raw_scope.strip():
         return raw_scope.strip().lower()
     return "unknown"

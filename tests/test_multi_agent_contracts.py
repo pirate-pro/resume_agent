@@ -27,7 +27,7 @@ def _context(session_id: str, agent_id: str) -> RunContext:
     )
 
 
-def test_single_agent_run_preserves_v2_event_fields_and_participants(tmp_path: Path) -> None:
+def test_single_agent_run_preserves_event_schema_fields_and_participants(tmp_path: Path) -> None:
     service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
 
     response = asyncio.run(

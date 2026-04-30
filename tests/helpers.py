@@ -12,7 +12,7 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
@@ -126,10 +126,10 @@ def build_chat_service(
     state_store = JsonlFileStateStore(root_dir=data_dir / "state_v1")
     state_manager = StateManager(store=state_store)
     capability_registry = AgentCapabilityRegistry.for_tests()
-    memory_v3_store = FileMemoryV3Store(root_dir=data_dir / "memory_v3")
+    memory_store = FileMemoryStore(root_dir=data_dir / "memory")
     memory_manager = MemoryManager(
         capability_registry=capability_registry,
-        memory_v3_store=memory_v3_store,
+        memory_store=memory_store,
     )
     skill_repository = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))
@@ -168,7 +168,7 @@ def build_chat_service(
         tool_executor=tool_registry,
         mid_term_flusher=MidTermFlusher(
             session_repository=session_repository,
-            memory_v3_store=memory_v3_store,
+            memory_store=memory_store,
             model_client=model_client,
         ),
     )

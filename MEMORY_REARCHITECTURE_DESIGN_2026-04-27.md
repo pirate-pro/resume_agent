@@ -664,12 +664,12 @@ admission 结果建议只有以下几种：
 - memory 子系统当前不承诺历史数据向后兼容。
 - 当 schema 或结构化分类规则发生破坏式调整时，允许清空当前 memory 数据并从最新结构重建。
 - 已移除在线 metadata 回填、离线批量回填等兼容路径。
-- 已删除旧 `data/memory` 本地数据目录及旧单文件仓储入口；当前运行存储使用 `data/memory_v3`。
+- 已删除旧单文件 memory 仓储入口；当前运行存储使用 `data/memory`。
 - 新代码只服务最新结构：
-  - 写入必须经过当前 admission / classification / v3 store
+  - 写入必须经过当前 admission / classification / memory store
   - 更新目标必须由文本检索唯一定位
   - 不符合最新结构的旧记录不会被自动修补
-  - v3 JSON/JSONL 读取不会为缺失字段自动补默认值；缺当前 schema 必填字段的记录会被视为无效行
+  - memory JSON/JSONL 读取不会为缺失字段自动补默认值；缺当前 schema 必填字段的记录会被视为无效行
 
 实现注记（2026-04-27，Canonical-Aware Retrieval V1 已落地）：
 
@@ -686,7 +686,7 @@ admission 结果建议只有以下几种：
   - statement-form 的名字规则已收窄到句首/用户语境
 - 这一步的作用是先让 `memory_search` 和 runtime 的 `Relevant memories` 对长期偏好更敏感，减少“普通文本命中把关键偏好压后”的情况。
 
-实现注记（2026-04-28，Retrieval V2 / Lane-Based Prompt Retrieval 已落地）：
+实现注记（2026-04-28，Retrieval / Lane-Based Prompt Retrieval 已落地）：
 
 - runtime prompt 上下文开始按 lane 注入 memory，而不是继续把所有命中项放进一个 `Relevant memories` 块。
 - 当前 lane：
@@ -700,7 +700,7 @@ admission 结果建议只有以下几种：
   - `Memory - Response preferences`
   - `Memory - User profile`
 - 这一步只改变 runtime prompt 上下文读取，不改变 `memory_search` 工具的既有统一检索接口。
-- 为了让长期输出偏好真正生效，V2 会对一小组常用 canonical key 做 always-on 读取：
+- 为了让长期输出偏好真正生效，Legacy 会对一小组常用 canonical key 做 always-on 读取：
   - `preferred_language`
   - `response_style`
   - `preferred_format`
@@ -929,7 +929,7 @@ data/
         └── shared/long.jsonl
 ```
 
-当前实际实施已采用 `data/memory_v3`，不再继续维护 `data/memory_v2` 主链路。磁盘结构可按最新设计破坏式调整；如果调整成本超过数据价值，直接清空当前 memory 数据重建。旧 `data/memory` 目录不再作为 memory 子系统的一部分保留。
+当前实际实施已采用 `data/memory`，不再继续维护旧 memory 主链路。磁盘结构可按最新设计破坏式调整；如果调整成本超过数据价值，直接清空当前 memory 数据重建。旧 `memories.jsonl` 单文件结构不再作为 memory 子系统的一部分保留。
 
 ### 11.2 开发期 schema 策略
 
@@ -938,12 +938,12 @@ data/
 策略：
 
 1. memory schema 允许破坏式升级。
-2. 结构变化时优先清空 `data/memory_v3` 并重建，而不是写迁移适配。
+2. 结构变化时优先清空 `data/memory` 并重建，而不是写迁移适配。
 3. 不符合最新结构的记录不自动修补、不默认参与更新，也不会通过默认值静默读入。
 4. `agent_short` 继续从 runtime prompt memory 中排除，当前任务状态走 `state`。
 5. 旧 `data/memory` / `memories.jsonl` 路径不提供兼容入口。
 
-### 11.3 Memory V3 实施结构
+### 11.3 Memory 实施结构
 
 2026-04-29 调整后的目标结构：
 
@@ -954,7 +954,7 @@ data/
 │       ├── events.jsonl
 │       ├── shared_state.json
 │       └── agents/<agent_id>/state.json
-└── memory_v3/
+└── memory/
     ├── shared/
     │   ├── long_term.json
     │   ├── facts.jsonl
@@ -974,7 +974,7 @@ data/
 
 - `projects/` 或 `workspace/` 维度：产品不是面向项目展开，先避免过早抽象。
 - SQLite / FTS / 向量索引：数据量未到瓶颈，先保持文件系统主存储和顺序扫描。
-- 旧 `memory_v2` 到 `memory_v3` 的兼容迁移：结构变化时清空重建。
+- 旧 memory 到当前 `memory` 的兼容迁移：结构变化时清空重建。
 
 三层边界：
 
@@ -1005,11 +1005,11 @@ prompt 注入顺序：
 
 当前代码落地状态：
 
-- `FileMemoryV3Store` 已建立 `memory_v3` 目录、默认 long-term JSON、facts JSONL、mid-term Markdown 目录。
-- `MemoryManager` 已切为 v3-only runtime 主链路：`memory_write/search/forget/context retrieval` 只走 v3 store。
+- `FileMemoryStore` 已建立 `memory` 目录、默认 long-term JSON、facts JSONL、mid-term Markdown 目录。
+- `MemoryManager` 已切为 memory-only runtime 主链路：`memory_write/search/forget/context retrieval` 只走 memory store。
 - runtime standing memory 只读取 long-term summary 与 `injectPolicy=always` facts；普通 facts 与 mid-term notes 只在相关检索命中时注入。
-- `app/api/deps.py` 默认注入 `data/memory_v3`。
-- 旧 `memory_v2` facade/store/consolidation/compaction 主链路与对应 legacy 测试已删除。
+- `app/api/deps.py` 默认注入 `data/memory`。
+- 旧 memory facade/store/consolidation/compaction 主链路与对应 legacy 测试已删除。
 
 ## 12. 分阶段实施计划
 
@@ -1166,14 +1166,14 @@ prompt 注入顺序：
 
 ## 16. 2026-04-29 当前实现边界
 
-当前实现已从 `memory_v2` 主链路切到 `memory_v3`，并清除了旧 candidate/consolidation 写入语义。
+当前实现已从 旧 memory 主链路切到 `memory`，并清除了旧 candidate/consolidation 写入语义。
 
 当前 runtime 写入链路：
 
 ```text
 admission
   -> write_plan
-  -> memory_v3 facts append
+  -> memory facts append
 ```
 
 当前不再存在以下主链路概念：
@@ -1193,7 +1193,7 @@ data/sessions/<session_id>/
   events.jsonl
   state
 
-data/memory_v3/
+data/memory/
   shared/
     long_term.json
     facts.jsonl

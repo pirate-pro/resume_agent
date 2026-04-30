@@ -1,8 +1,8 @@
-"""File-backed v3 memory store.
+"""File-backed memory store.
 
-The v3 layout keeps durable memory human-readable and agent-isolated:
+The memory layout keeps durable memory human-readable and agent-isolated:
 
-data/memory_v3/
+data/memory/
   shared/{long_term.json,facts.jsonl,pending_promotions.jsonl,mid_term/...}
   agents/<agent_id>/{long_term_overlay.json,facts.jsonl,mid_term/...}
 """
@@ -30,12 +30,12 @@ from app.memory.models import (
     make_content_hash,
 )
 from app.memory.policies import TEXT_SEARCH_NAME_EXPANSIONS, should_expand_name_query
-from app.memory.v3_models import MemoryV3Fact, MemoryV3Source, format_memory_v3_time
+from app.memory.file_models import MemoryFact, MemorySource, format_memory_time
 
-__all__ = ["FileMemoryV3Store"]
+__all__ = ["FileMemoryStore"]
 
 _logger = logging.getLogger(__name__)
-_SCHEMA_VERSION = "3.0"
+_SCHEMA_VERSION = "1.0"
 _MID_TERM_DAILY_LIMIT = 6
 _MID_TERM_MAX_CHARS = 2400
 
@@ -49,8 +49,8 @@ _LONG_TERM_SECTIONS = (
 )
 
 
-class FileMemoryV3Store:
-    """Read and write memory_v3 files without a derived database index."""
+class FileMemoryStore:
+    """Read and write memory files without a derived database index."""
 
     def __init__(self, root_dir: Path) -> None:
         if not isinstance(root_dir, Path):
@@ -77,10 +77,10 @@ class FileMemoryV3Store:
         inject_policy: str,
         metadata: dict[str, str],
         now: datetime | None = None,
-    ) -> MemoryV3Fact:
+    ) -> MemoryFact:
         normalized_now = _normalize_datetime(now or datetime.now(UTC))
-        normalized_scope, normalized_owner = _to_v3_scope(scope=scope, owner_agent_id=owner_agent_id)
-        fact = MemoryV3Fact(
+        normalized_scope, normalized_owner = _to_memory_scope(scope=scope, owner_agent_id=owner_agent_id)
+        fact = MemoryFact(
             id=f"fact_{uuid4().hex[:12]}",
             content=content,
             category=category,
@@ -91,7 +91,7 @@ class FileMemoryV3Store:
             status="active",
             created_at=normalized_now,
             updated_at=normalized_now,
-            source=MemoryV3Source(
+            source=MemorySource(
                 type=source_type,
                 session_id=session_id,
                 event_ids=[source_event_id] if source_event_id else [],
@@ -119,13 +119,13 @@ class FileMemoryV3Store:
         if scope not in {MemoryScope.SHARED_LONG, MemoryScope.AGENT_LONG}:
             raise ValidationError("long-term summary refresh only supports shared_long/agent_long.")
         normalized_now = _normalize_datetime(now or datetime.now(UTC))
-        normalized_scope, normalized_owner = _to_v3_scope(scope=scope, owner_agent_id=agent_id)
+        normalized_scope, normalized_owner = _to_memory_scope(scope=scope, owner_agent_id=agent_id)
         long_term_path = self._long_term_path(scope=normalized_scope, agent_id=normalized_owner)
         facts_path = self._facts_path(scope=normalized_scope, agent_id=normalized_owner)
         payload = self._read_json_payload(long_term_path)
         facts = self._list_active_facts(scope=normalized_scope, owner_agent_id=normalized_owner, path=facts_path)
         summaries = _build_long_term_summaries_from_facts(facts)
-        refreshed_at = format_memory_v3_time(normalized_now)
+        refreshed_at = format_memory_time(normalized_now)
         _set_long_term_section(payload, group="user", key="workContext", summary=summaries["user.workContext"], refreshed_at=refreshed_at)
         _set_long_term_section(
             payload,
@@ -170,7 +170,7 @@ class FileMemoryV3Store:
     ) -> bool:
         normalized_key = _require_non_empty("metadata_key", metadata_key)
         normalized_value = _require_non_empty("metadata_value", metadata_value)
-        normalized_scope, normalized_owner = _to_v3_scope(scope=scope, owner_agent_id=agent_id)
+        normalized_scope, normalized_owner = _to_memory_scope(scope=scope, owner_agent_id=agent_id)
         path = self._facts_path(scope=normalized_scope, agent_id=normalized_owner)
         for row in self._read_jsonl_payloads(path):
             if str(row.get("status", "")).strip().lower() != "active":
@@ -197,16 +197,16 @@ class FileMemoryV3Store:
         scope: MemoryScope,
         agent_id: str | None,
         content: str,
-    ) -> MemoryV3Fact | None:
+    ) -> MemoryFact | None:
         normalized_content = _require_non_empty("content", content)
         normalized_hash = make_content_hash(normalized_content)
-        normalized_scope, normalized_owner = _to_v3_scope(scope=scope, owner_agent_id=agent_id)
+        normalized_scope, normalized_owner = _to_memory_scope(scope=scope, owner_agent_id=agent_id)
         path = self._facts_path(scope=normalized_scope, agent_id=normalized_owner)
         for row in self._read_jsonl_payloads(path):
             try:
-                fact = MemoryV3Fact.from_payload(row)
+                fact = MemoryFact.from_payload(row)
             except ValidationError as exc:
-                _logger.warning("invalid memory_v3 fact skipped during duplicate check: path=%s error=%s", path, exc)
+                _logger.warning("invalid memory fact skipped during duplicate check: path=%s error=%s", path, exc)
                 continue
             if fact.status != "active":
                 continue
@@ -224,15 +224,15 @@ class FileMemoryV3Store:
         scope: MemoryScope,
         agent_id: str | None,
         canonical_key: str,
-    ) -> MemoryV3Fact | None:
+    ) -> MemoryFact | None:
         normalized_key = _require_non_empty("canonical_key", canonical_key)
-        normalized_scope, normalized_owner = _to_v3_scope(scope=scope, owner_agent_id=agent_id)
+        normalized_scope, normalized_owner = _to_memory_scope(scope=scope, owner_agent_id=agent_id)
         path = self._facts_path(scope=normalized_scope, agent_id=normalized_owner)
         for row in self._read_jsonl_payloads(path):
             try:
-                fact = MemoryV3Fact.from_payload(row)
+                fact = MemoryFact.from_payload(row)
             except ValidationError as exc:
-                _logger.warning("invalid memory_v3 fact skipped during canonical lookup: path=%s error=%s", path, exc)
+                _logger.warning("invalid memory fact skipped during canonical lookup: path=%s error=%s", path, exc)
                 continue
             if fact.status != "active":
                 continue
@@ -253,13 +253,13 @@ class FileMemoryV3Store:
     ) -> bool:
         normalized_content = _require_non_empty("content", content)
         normalized_hash = make_content_hash(normalized_content)
-        normalized_scope, normalized_owner = _to_v3_scope(scope=scope, owner_agent_id=agent_id)
+        normalized_scope, normalized_owner = _to_memory_scope(scope=scope, owner_agent_id=agent_id)
         path = self._facts_path(scope=normalized_scope, agent_id=normalized_owner)
         for row in self._read_jsonl_payloads(path):
             try:
-                fact = MemoryV3Fact.from_payload(row)
+                fact = MemoryFact.from_payload(row)
             except ValidationError as exc:
-                _logger.warning("invalid memory_v3 fact skipped during archive lookup: path=%s error=%s", path, exc)
+                _logger.warning("invalid memory fact skipped during archive lookup: path=%s error=%s", path, exc)
                 continue
             if fact.status != "archived":
                 continue
@@ -283,7 +283,7 @@ class FileMemoryV3Store:
         normalized_key = _require_non_empty("canonical_key", canonical_key)
         normalized_reason = _require_non_empty("reason", reason)
         normalized_now = _normalize_datetime(now or datetime.now(UTC))
-        normalized_scope, normalized_owner = _to_v3_scope(scope=scope, owner_agent_id=agent_id)
+        normalized_scope, normalized_owner = _to_memory_scope(scope=scope, owner_agent_id=agent_id)
         path = self._facts_path(scope=normalized_scope, agent_id=normalized_owner)
         rows = self._read_jsonl_payloads(path)
         rewritten: list[dict[str, Any]] = []
@@ -306,7 +306,7 @@ class FileMemoryV3Store:
                 rewritten.append(row)
                 continue
             row["status"] = "archived"
-            row["updatedAt"] = format_memory_v3_time(normalized_now)
+            row["updatedAt"] = format_memory_time(normalized_now)
             metadata["archivedReason"] = normalized_reason
             rewritten.append(row)
             changed = True
@@ -368,12 +368,12 @@ class FileMemoryV3Store:
                 collected.extend(agent_records)
         except (OSError, json.JSONDecodeError, ValidationError) as exc:
             _logger.exception(
-                "memory_v3 read failed: agent_id=%s query=%s error=%s",
+                "memory read failed: agent_id=%s query=%s error=%s",
                 normalized_agent_id,
                 normalized_query,
                 exc,
             )
-            notes.append(f"memory_v3 read_failed: {exc}")
+            notes.append(f"memory read_failed: {exc}")
 
         ranked = _rank_records(_dedupe_by_id(collected), normalized_query)
         return MemoryReadBundle(
@@ -425,7 +425,7 @@ class FileMemoryV3Store:
                     deleted += 1
                     continue
                 row["status"] = "archived"
-                row["updatedAt"] = format_memory_v3_time(normalized_now)
+                row["updatedAt"] = format_memory_time(normalized_now)
                 row.setdefault("metadata", {})
                 if isinstance(row["metadata"], dict):
                     row["metadata"]["archivedReason"] = reason or "forget"
@@ -471,15 +471,15 @@ class FileMemoryV3Store:
         scope: str,
         owner_agent_id: str | None,
         path: Path,
-    ) -> list[MemoryV3Fact]:
-        output: list[MemoryV3Fact] = []
+    ) -> list[MemoryFact]:
+        output: list[MemoryFact] = []
         for row in self._read_jsonl_payloads(path):
             if not _is_long_term_fact_row(row):
                 continue
             try:
-                fact = MemoryV3Fact.from_payload(row)
+                fact = MemoryFact.from_payload(row)
             except ValidationError as exc:
-                _logger.warning("invalid memory_v3 fact skipped during summary refresh: path=%s error=%s", path, exc)
+                _logger.warning("invalid memory fact skipped during summary refresh: path=%s error=%s", path, exc)
                 continue
             if fact.status != "active":
                 continue
@@ -536,7 +536,7 @@ class FileMemoryV3Store:
                     updated_at=updated_at,
                     metadata={
                         "memory_layer": "long_term",
-                        "v3_scope": scope,
+                        "storage_scope": scope,
                         "section": f"{group}.{key}",
                         "inject_policy": "always",
                     },
@@ -559,9 +559,9 @@ class FileMemoryV3Store:
         path = self._facts_path(scope=scope, agent_id=agent_id)
         for row in self._read_jsonl_payloads(path):
             try:
-                fact = MemoryV3Fact.from_payload(row)
+                fact = MemoryFact.from_payload(row)
             except ValidationError as exc:
-                _logger.warning("invalid memory_v3 fact skipped: path=%s error=%s row=%s", path, exc, row)
+                _logger.warning("invalid memory fact skipped: path=%s error=%s row=%s", path, exc, row)
                 continue
             if fact.status != "active":
                 continue
@@ -602,7 +602,7 @@ class FileMemoryV3Store:
             try:
                 content = path.read_text(encoding="utf-8").strip()
             except OSError as exc:
-                raise StorageError(f"Failed to read memory_v3 mid_term file '{path}': {exc}") from exc
+                raise StorageError(f"Failed to read memory mid_term file '{path}': {exc}") from exc
             if not content:
                 continue
             if content.strip() == "# Rolling Context":
@@ -634,7 +634,7 @@ class FileMemoryV3Store:
                     updated_at=updated_at,
                     metadata={
                         "memory_layer": "mid_term",
-                        "v3_scope": scope,
+                        "storage_scope": scope,
                         "path": str(path.relative_to(self._root_dir)),
                         "inject_policy": "retrieval",
                     },
@@ -691,12 +691,12 @@ class FileMemoryV3Store:
         try:
             path.write_text(initial_content, encoding="utf-8")
         except OSError as exc:
-            raise StorageError(f"Failed to initialize memory_v3 file '{path}': {exc}") from exc
+            raise StorageError(f"Failed to initialize memory file '{path}': {exc}") from exc
 
     def _ensure_long_term_file(self, path: Path, *, scope: str, agent_id: str | None) -> None:
         if path.exists():
             return
-        now = format_memory_v3_time(datetime.now(UTC))
+        now = format_memory_time(datetime.now(UTC))
         payload = _empty_long_term_payload(scope=scope, agent_id=agent_id, now=now)
         self._write_json_payload(path, payload)
 
@@ -704,11 +704,11 @@ class FileMemoryV3Store:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except OSError as exc:
-            raise StorageError(f"Failed to read memory_v3 JSON file '{path}': {exc}") from exc
+            raise StorageError(f"Failed to read memory JSON file '{path}': {exc}") from exc
         except json.JSONDecodeError as exc:
-            raise StorageError(f"Invalid memory_v3 JSON file '{path}': {exc}") from exc
+            raise StorageError(f"Invalid memory JSON file '{path}': {exc}") from exc
         if not isinstance(payload, dict):
-            raise StorageError(f"Invalid memory_v3 JSON object '{path}'.")
+            raise StorageError(f"Invalid memory JSON object '{path}'.")
         return {str(key): value for key, value in payload.items()}
 
     def _write_json_payload(self, path: Path, payload: dict[str, Any]) -> None:
@@ -718,7 +718,7 @@ class FileMemoryV3Store:
             tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             tmp_path.replace(path)
         except OSError as exc:
-            raise StorageError(f"Failed to write memory_v3 JSON file '{path}': {exc}") from exc
+            raise StorageError(f"Failed to write memory JSON file '{path}': {exc}") from exc
 
     def _append_jsonl(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -726,7 +726,7 @@ class FileMemoryV3Store:
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
         except OSError as exc:
-            raise StorageError(f"Failed to append memory_v3 JSONL file '{path}': {exc}") from exc
+            raise StorageError(f"Failed to append memory JSONL file '{path}': {exc}") from exc
 
     def _read_jsonl_payloads(self, path: Path) -> list[dict[str, Any]]:
         if not path.exists():
@@ -742,9 +742,9 @@ class FileMemoryV3Store:
                     if isinstance(payload, dict):
                         output.append(payload)
         except OSError as exc:
-            raise StorageError(f"Failed to read memory_v3 JSONL file '{path}': {exc}") from exc
+            raise StorageError(f"Failed to read memory JSONL file '{path}': {exc}") from exc
         except json.JSONDecodeError as exc:
-            raise StorageError(f"Invalid memory_v3 JSONL file '{path}': {exc}") from exc
+            raise StorageError(f"Invalid memory JSONL file '{path}': {exc}") from exc
         return output
 
     def _rewrite_jsonl(self, path: Path, rows: list[dict[str, Any]]) -> None:
@@ -756,7 +756,7 @@ class FileMemoryV3Store:
                     handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
             tmp_path.replace(path)
         except OSError as exc:
-            raise StorageError(f"Failed to rewrite memory_v3 JSONL file '{path}': {exc}") from exc
+            raise StorageError(f"Failed to rewrite memory JSONL file '{path}': {exc}") from exc
 
 
 def _empty_long_term_payload(*, scope: str, agent_id: str | None, now: str) -> dict[str, Any]:
@@ -801,7 +801,7 @@ def _set_long_term_section(
     section_obj["updatedAt"] = refreshed_at
 
 
-def _build_long_term_summaries_from_facts(facts: list[MemoryV3Fact]) -> dict[str, str]:
+def _build_long_term_summaries_from_facts(facts: list[MemoryFact]) -> dict[str, str]:
     sorted_facts = sorted([fact for fact in facts if _is_standing_summary_fact(fact)], key=lambda item: item.updated_at, reverse=True)
     preference_facts = [
         item
@@ -835,11 +835,11 @@ def _build_long_term_summaries_from_facts(facts: list[MemoryV3Fact]) -> dict[str
     }
 
 
-def _is_standing_summary_fact(fact: MemoryV3Fact) -> bool:
+def _is_standing_summary_fact(fact: MemoryFact) -> bool:
     return fact.inject_policy == "always"
 
 
-def _compose_fact_bullets(facts: list[MemoryV3Fact], *, max_items: int) -> str:
+def _compose_fact_bullets(facts: list[MemoryFact], *, max_items: int) -> str:
     if not facts or max_items <= 0:
         return ""
     lines: list[str] = []
@@ -894,7 +894,7 @@ def _fact_row_canonical_key(row: dict[str, Any]) -> str | None:
         return None
     raw_tags = row.get("tags")
     tags = [tag for tag in raw_tags if isinstance(tag, str)] if isinstance(raw_tags, list) else []
-    source = "memory_v3_store"
+    source = "memory_store"
     if isinstance(metadata, dict):
         raw_source = metadata.get("source")
         if isinstance(raw_source, str) and raw_source.strip():
@@ -905,7 +905,7 @@ def _fact_row_canonical_key(row: dict[str, Any]) -> str | None:
         return None
 
 
-def _fact_to_record(*, fact: MemoryV3Fact, now: datetime) -> MemoryRecord:
+def _fact_to_record(*, fact: MemoryFact, now: datetime) -> MemoryRecord:
     scope = _record_scope_for_fact(fact)
     kind = fact.metadata.get("kind", _kind_for_category(fact.category))
     source_kind = fact.metadata.get("source_kind", fact.source.type)
@@ -915,12 +915,12 @@ def _fact_to_record(*, fact: MemoryV3Fact, now: datetime) -> MemoryRecord:
     metadata.update(
         {
             "memory_layer": "facts",
-            "v3_scope": fact.scope,
+            "storage_scope": fact.scope,
             "category": fact.category,
             "visibility": fact.visibility,
             "inject_policy": fact.inject_policy,
             "source_type": fact.source.type,
-            "read_at": format_memory_v3_time(now),
+            "read_at": format_memory_time(now),
         }
     )
     return _make_memory_record(
@@ -1000,7 +1000,7 @@ def _fact_scope_visible(*, record_scope: MemoryScope, include_scopes: list[Memor
     return record_scope in include_scopes
 
 
-def _record_scope_for_fact(fact: MemoryV3Fact) -> MemoryScope:
+def _record_scope_for_fact(fact: MemoryFact) -> MemoryScope:
     if fact.scope == "shared":
         return MemoryScope.SHARED_LONG
     memory_scope = fact.metadata.get("memory_scope", "").strip()
@@ -1097,7 +1097,7 @@ def _dedupe_by_id(records: list[MemoryRecord]) -> list[MemoryRecord]:
     return output
 
 
-def _to_v3_scope(*, scope: MemoryScope, owner_agent_id: str | None) -> tuple[str, str | None]:
+def _to_memory_scope(*, scope: MemoryScope, owner_agent_id: str | None) -> tuple[str, str | None]:
     if scope == MemoryScope.SHARED_LONG:
         return "shared", None
     if scope in {MemoryScope.AGENT_LONG, MemoryScope.AGENT_SHORT}:

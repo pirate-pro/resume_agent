@@ -1,4 +1,4 @@
-"""Models for the v3 file-first memory layout."""
+"""Models for the file-first memory layout."""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ from typing import Any
 from app.core.errors import ValidationError
 
 __all__ = [
-    "MemoryV3Fact",
-    "MemoryV3Source",
-    "format_memory_v3_time",
-    "parse_memory_v3_time",
+    "MemoryFact",
+    "MemorySource",
+    "format_memory_time",
+    "parse_memory_time",
 ]
 
 
 @dataclass(slots=True)
-class MemoryV3Source:
+class MemorySource:
     type: str
     session_id: str | None = None
     event_ids: list[str] = field(default_factory=list)
@@ -35,9 +35,9 @@ class MemoryV3Source:
         }
 
     @classmethod
-    def from_payload(cls, payload: Any) -> "MemoryV3Source":
+    def from_payload(cls, payload: Any) -> "MemorySource":
         if not isinstance(payload, dict):
-            raise ValidationError("memory v3 source must be object.")
+            raise ValidationError("memory source must be object.")
         return cls(
             type=str(payload.get("type", "")),
             session_id=_optional_str_from_payload(payload.get("sessionId")),
@@ -46,7 +46,7 @@ class MemoryV3Source:
 
 
 @dataclass(slots=True)
-class MemoryV3Fact:
+class MemoryFact:
     id: str
     content: str
     category: str
@@ -57,7 +57,7 @@ class MemoryV3Fact:
     status: str
     created_at: datetime
     updated_at: datetime
-    source: MemoryV3Source
+    source: MemorySource
     tags: list[str] = field(default_factory=list)
     inject_policy: str = "retrieval"
     promote_state: dict[str, str | None] = field(default_factory=dict)
@@ -80,8 +80,8 @@ class MemoryV3Fact:
         self.updated_at = _normalize_datetime(self.updated_at)
         if self.updated_at < self.created_at:
             raise ValidationError("updated_at cannot be earlier than created_at.")
-        if not isinstance(self.source, MemoryV3Source):
-            raise ValidationError("source must be MemoryV3Source.")
+        if not isinstance(self.source, MemorySource):
+            raise ValidationError("source must be MemorySource.")
         self.tags = _normalize_string_list(self.tags, field_name="tags", lower=True)
         self.inject_policy = _require_non_empty("inject_policy", self.inject_policy)
         self.promote_state = _normalize_optional_metadata(self.promote_state)
@@ -97,8 +97,8 @@ class MemoryV3Fact:
             "ownerAgentId": self.owner_agent_id,
             "visibility": self.visibility,
             "status": self.status,
-            "createdAt": format_memory_v3_time(self.created_at),
-            "updatedAt": format_memory_v3_time(self.updated_at),
+            "createdAt": format_memory_time(self.created_at),
+            "updatedAt": format_memory_time(self.updated_at),
             "source": self.source.to_payload(),
             "tags": list(self.tags),
             "injectPolicy": self.inject_policy,
@@ -107,9 +107,9 @@ class MemoryV3Fact:
         }
 
     @classmethod
-    def from_payload(cls, payload: Any) -> "MemoryV3Fact":
+    def from_payload(cls, payload: Any) -> "MemoryFact":
         if not isinstance(payload, dict):
-            raise ValidationError("memory v3 fact must be object.")
+            raise ValidationError("memory fact must be object.")
         return cls(
             id=str(payload.get("id", "")),
             content=str(payload.get("content", "")),
@@ -119,9 +119,9 @@ class MemoryV3Fact:
             owner_agent_id=_optional_str_from_payload(payload.get("ownerAgentId")),
             visibility=str(payload.get("visibility", "")),
             status=str(payload.get("status", "")),
-            created_at=parse_memory_v3_time(payload.get("createdAt")),
-            updated_at=parse_memory_v3_time(payload.get("updatedAt")),
-            source=MemoryV3Source.from_payload(payload.get("source", {})),
+            created_at=parse_memory_time(payload.get("createdAt")),
+            updated_at=parse_memory_time(payload.get("updatedAt")),
+            source=MemorySource.from_payload(payload.get("source", {})),
             tags=_string_list_from_payload(payload.get("tags")),
             inject_policy=str(payload.get("injectPolicy", "retrieval")),
             promote_state=_optional_metadata_from_payload(payload.get("promoteState")),
@@ -129,12 +129,12 @@ class MemoryV3Fact:
         )
 
 
-def format_memory_v3_time(value: datetime) -> str:
+def format_memory_time(value: datetime) -> str:
     normalized = _normalize_datetime(value)
     return normalized.isoformat().replace("+00:00", "Z")
 
 
-def parse_memory_v3_time(value: Any) -> datetime:
+def parse_memory_time(value: Any) -> datetime:
     if isinstance(value, datetime):
         return _normalize_datetime(value)
     if not isinstance(value, str) or not value.strip():

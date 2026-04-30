@@ -14,7 +14,7 @@ from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
@@ -59,11 +59,11 @@ def _build_runtime(
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))
     capability_registry = _capability_registry()
-    memory_v3_store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
+    memory_store = FileMemoryStore(root_dir=tmp_path / "memory")
 
     memory_manager = MemoryManager(
         capability_registry=capability_registry,
-        memory_v3_store=memory_v3_store,
+        memory_store=memory_store,
     )
     tool_registry = ToolRegistry(capability_registry=capability_registry)
     tool_registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -86,7 +86,7 @@ def _build_runtime(
         tool_executor=tool_registry,
         mid_term_flusher=MidTermFlusher(
             session_repository=session_repo,
-            memory_v3_store=memory_v3_store,
+            memory_store=memory_store,
             model_client=model_client,
         ),
     )

@@ -11,7 +11,7 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.v3_store import FileMemoryV3Store
+from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
@@ -56,7 +56,7 @@ __all__ = [
     "get_mid_term_flusher",
     "get_mid_term_flush_worker",
     "get_model_client",
-    "get_memory_v3_store",
+    "get_memory_store",
     "get_state_manager",
     "get_state_store",
     "get_session_manager",
@@ -80,9 +80,9 @@ def get_session_repository() -> JsonlSessionRepository:
 
 
 @lru_cache(maxsize=1)
-def get_memory_v3_store() -> FileMemoryV3Store:
+def get_memory_store() -> FileMemoryStore:
     settings = get_settings()
-    return FileMemoryV3Store(root_dir=settings.data_dir / "memory_v3")
+    return FileMemoryStore(root_dir=settings.data_dir / "memory")
 
 
 @lru_cache(maxsize=1)
@@ -139,7 +139,7 @@ def get_tool_registry() -> ToolRegistry:
 def get_memory_manager() -> MemoryManager:
     return MemoryManager(
         capability_registry=get_agent_capability_registry(),
-        memory_v3_store=get_memory_v3_store(),
+        memory_store=get_memory_store(),
     )
 
 
@@ -158,7 +158,7 @@ def get_mid_term_flusher() -> MidTermFlusher:
     settings = get_settings()
     return MidTermFlusher(
         session_repository=get_session_repository(),
-        memory_v3_store=get_memory_v3_store(),
+        memory_store=get_memory_store(),
         model_client=get_model_client(),
         model_context_window_tokens=settings.mid_term_flush_model_context_window_tokens,
         model_input_ratio=settings.mid_term_flush_input_ratio,
