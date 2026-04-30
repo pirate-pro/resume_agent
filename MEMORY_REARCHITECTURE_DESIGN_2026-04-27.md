@@ -380,10 +380,12 @@ prompt 注入顺序：
 - `owner_agent_id`
 - `visibility`
 - `kind`
+- `subject_kind`
 - `canonical_key`
 - `content`
 - `normalized_value`
 - `source_kind`
+- `classification_version`
 - `source_refs`
 - `evidence_count`
 - `confidence`
@@ -503,57 +505,26 @@ Policy Kernel V1 已集中定义：
 
 - `MemoryRecord / MemoryCandidate / MemoryFacade / MemoryStore` 骨架保留
 - `admission.py` 继续负责入口判定，但规则来源使用 policy kernel
-- `classification.py` 继续负责文本 canonicalization，但输出枚举与 kind/source 判定使用 policy kernel
-- `consolidation.py` 继续负责生命周期治理，但 source priority 与 explicit rule 判定使用 policy kernel
-- `retrieval.py` / `MemoryManager` 继续负责读取编排，但 lane 与 always-on canonical key 来自 policy kernel
+- `classification.py` 继续负责粗分类，`canonical_key / normalized_value` 只作为可选 hint
+- `consolidation.py` 继续负责生命周期治理，但不再把 canonical exact 作为主路径
+- `retrieval.py` / `MemoryManager` 继续负责读取编排，当前以 lane 粗分类、文本召回、standing memory 注入为主
 
 后续重构方向：
 
-1. 将 `kind / canonical_key / normalized_value / source_kind` 从 `metadata` 提升为顶层 schema 字段。
-2. 引入 `Memory Index V1`，让 canonical / lane / text 查询先走索引，不再依赖 JSONL 全量扫描。
+1. 继续收敛 `MemoryRecord / MemoryCandidate` 的顶层 schema，避免核心语义退回自由 `metadata`。
+2. 先保持 JSONL 简单主存储，等数据量和查询模式稳定后再考虑索引。
 3. 将 agent 私有订阅、shared 发布、跨 agent 可见性纳入 policy kernel。
 
-### 6.5 Memory Index V1 约定
+### 6.5 当前存储与检索约定
 
-主存储与索引边界：
+当前阶段不引入 SQLite 或其它派生索引。
 
 - JSONL 是 source of truth。
-- SQLite 是派生 index。
-- SQLite 可删除、可重建，不承载不可恢复的业务语义。
-- schema 变化时优先删除 `data/memory_v2/index/` 并按当前 JSONL schema 重建，不写历史迁移兼容层。
-
-当前实现入口：
-
-- `app/memory/index.py`
-- `app/memory/serialization.py`
-- `app/memory/stores/jsonl_file_store.py`
-
-默认路径：
-
-- `data/memory_v2/index/memory_index.sqlite3`
-
-同步策略：
-
-- `write_records`：JSONL append 成功后刷新对应 source file 的 index。
-- `archive_records_by_memory_ids` / `forget`：JSONL rewrite 成功后刷新对应 source file 的 index。
-- `compact`：压缩后刷新对应 source file 的 index。
-- 读路径发现 index 缺失或 source fingerprint 不一致时，从当前 JSONL 文件重建该 source 的 index。
-- SQLite 读取失败时可降级为 JSONL 扫描，避免派生索引阻断主存储。
-
-当前索引能力：
-
-- active records list
-- content hash count
-- canonical value count
-- canonical key listing
-- text search 的候选读取层
-
-后续优化方向：
-
-1. 将 text search 候选读取升级为 FTS5。
-2. 将 lane query 做成显式 index 查询，而不是只在 payload 里派生。
-3. 为 multi-agent 增加 subscription / visibility index。
-4. 增加手动 rebuild 命令，但仍只面向当前 schema。
+- 读路径直接扫描当前 agent 可见的 JSONL 文件。
+- 文本召回负责相关性，lane 负责 prompt 注入分区。
+- context 组装会额外读取少量长期 standing memory，再按 lane 限额注入。
+- `canonical_key / normalized_value` 保留为可选调试 hint，不参与主检索、更新、合并路径。
+- 后续只有当数据量、查询延迟或 multi-agent subscription 明确成为瓶颈时，才重新评估索引。
 
 ### 6.6 Debug / Inspect 约定
 
@@ -632,17 +603,17 @@ admission 结果建议只有以下几种：
 
 这样后续更新可以基于 `canonical_key` 归并，而不是做全文模糊搜索。
 
-实现注记（2026-04-27，Canonicalization Metadata V1 已落地）：
+实现注记（2026-04-28，Schema Promotion V1 已落地）：
 
-- 当前尚未把 `kind / canonical_key / source_kind / normalized_value` 升级为 `MemoryRecord` 顶层字段。
-- 为降低迁移成本，第一版先在 candidate 写入阶段完成结构化归类，并把结果写入 `metadata`：
-  - `kind`
-  - `source_kind`
-  - `canonical_key`
-  - `normalized_value`
-  - `subject_kind`
-  - `classification_version`
-- 这样后续 consolidation、检索、迁移脚本都可以先消费 metadata，再决定何时升级正式 schema。
+- `kind / source_kind / canonical_key / normalized_value / subject_kind / classification_version` 已从 `metadata` 提升为 `MemoryWriteCandidateRequest / MemoryCandidate / MemoryRecord` 顶层字段。
+- candidate JSONL、record JSONL、SQLite 派生索引、consolidation、retrieval、update、inspect 都以顶层字段为准。
+- `metadata` 不再承载核心 memory 语义，只保留附加信息，例如：
+  - `source`
+  - `archive_reason`
+  - `forget_reason`
+  - `superseded_by_memory_id`
+  - `superseded_by_normalized_value`
+- 旧 JSONL 若缺少当前 schema 必填字段，会被视为无效行；开发期不做自动补默认值或历史结构兼容。
 
 实现注记（2026-04-27，Canonical Dedup V1 已落地）：
 
@@ -676,60 +647,40 @@ admission 结果建议只有以下几种：
 
 实现注记（2026-04-27，`memory_update` Canonical Match V1 已落地）：
 
-- `memory_update` 已不再完全依赖全文搜索。
-- 当前策略：
-  - 先对 update query 做同一套 canonicalization
-  - 如果能提取出 `canonical_key + normalized_value`，则优先做 active record 的 exact match
-  - 只有在 query 无法结构化，或当前没有 exact active match 时，才回退到原有全文搜索
-- 第一版已覆盖的关键点：
-  - 陈述式称呼语句也能结构化识别，例如：
-    - `用户称呼是李华`
-    - `用户称呼改为小李`
-    - `用户名字叫李华`
-  - update 结果中会显式返回 `match_strategy`，便于调试和后续审计。
-- 这一版的目标不是彻底消灭全文搜索，而是先把“结构化长期经验”的更新主路径拉到 canonical exact match 上。
+实现注记（2026-04-28，Memory Simplification V1 已落地）：
 
-实现注记（2026-04-27，`memory_update` Canonical Direct V2 已落地）：
-
-- canonical memory 的 update 路径已不再执行 `forget -> write`。
-- 当前策略：
-  - 如果 target 本身带 `canonical_key`，且新内容能 canonicalize 到同一个 `canonical_key`
-  - 则直接提交新 candidate，由 consolidation 决定：
-    - `supersede`
-    - `semantic_noop`
-    - `source_priority_conflict`
-- 这样可以避免两个问题：
-  - 先删旧值再写新值，导致 supersede 审计链丢失
-  - 先删旧值再写新值，导致低优先级来源绕过 source priority 检查
-- 非 canonical target 不再执行兼容更新；`memory_update` 会返回 `target_missing_canonical_key`，要求按最新 schema 重新写入或先遗忘旧记录。
-- update 结果现在会额外返回 `update_mode`，用于区分：
-  - `canonical_supersede`
-  - `canonical_direct`
-- 同时修正了 `source_kind` 推断中的一处实现偏差：
-  - 带 `system_policy` / `explicit_user_rule` tag 的 candidate，现在会被正确归类到对应高优先级 source，而不是错误保留为工具名。
+- `memory_update` 已回到文本检索主路径：
+  - query 先走当前 agent 可见 memory 检索
+  - 没有命中则不更新
+  - 多条命中则返回候选，不自动猜测
+  - 唯一命中时先 soft-forget 旧记录，再写入新记录
+- 更新不再要求 target 带 `canonical_key`。
+- consolidation 不再基于 `canonical_key + normalized_value` 做 semantic dedup / supersede。
+- source priority 仍用于避免低优先级来源覆盖高优先级记忆。
+- 目标是让当前单 agent 小数据量阶段保持简单、可解释、可继续调整，而不是提前做事实数据库式精确更新。
 
 实现注记（2026-04-28，开发期破坏式 schema 策略已落地）：
 
 - memory 子系统当前不承诺历史数据向后兼容。
-- 当 schema 或结构化 metadata 规则发生破坏式调整时，允许清空 `data/memory_v2` 并从最新结构重建。
-- 已移除在线 metadata 回填、离线批量回填、非 canonical 替换式更新等兼容路径。
-- 已删除旧 `data/memory` 本地数据目录及旧单文件仓储入口；当前运行存储只保留 `data/memory_v2`。
+- 当 schema 或结构化分类规则发生破坏式调整时，允许清空当前 memory 数据并从最新结构重建。
+- 已移除在线 metadata 回填、离线批量回填等兼容路径。
+- 已删除旧 `data/memory` 本地数据目录及旧单文件仓储入口；当前运行存储使用 `data/memory_v3`。
 - 新代码只服务最新结构：
-  - 写入必须经过当前 admission / classification / consolidation
-  - 更新目标必须带 `canonical_key`
+  - 写入必须经过当前 admission / classification / v3 store
+  - 更新目标必须由文本检索唯一定位
   - 不符合最新结构的旧记录不会被自动修补
-  - JSONL 读取不会为缺失字段自动补默认值；缺当前 schema 必填字段的记录会被视为无效行
+  - v3 JSON/JSONL 读取不会为缺失字段自动补默认值；缺当前 schema 必填字段的记录会被视为无效行
 
 实现注记（2026-04-27，Canonical-Aware Retrieval V1 已落地）：
 
-- 读取链路现在开始显式消费结构化 metadata。
+- 读取链路现在开始显式消费结构化顶层字段。
 - 当前策略：
   - 对 query 做轻量 canonical intent 识别
   - 若 query 能映射到 `canonical_key + normalized_value`，则 exact canonical match 优先
   - 若 query 呈现明确 name intent（如 `你叫什么名字`），则 `preferred_name` record 优先于普通文本命中
 - 这一版仍是“rerank”，不是彻底改写成 lane-based retrieval：
   - 先保留既有文本召回
-  - 再用 canonical metadata 做优先级提升
+  - 再用 canonical 顶层字段做优先级提升
 - 同期还修正了一处分类边界问题：
   - `这个项目名字叫珍格格` 这类文本不再被错误识别成 `preferred_name`
   - statement-form 的名字规则已收窄到句首/用户语境
@@ -965,12 +916,7 @@ admission 结果建议只有以下几种：
 
 ### 11.1 目录建议
 
-当前目录：
-
-- `memory_v2/agents/...`
-- `memory_v2/shared/...`
-
-建议未来拆成：
+早期方案曾建议拆成：
 
 ```text
 data/
@@ -983,7 +929,7 @@ data/
         └── shared/long.jsonl
 ```
 
-磁盘结构可按最新设计破坏式调整；如果调整成本超过数据价值，直接清空 `data/memory_v2` 重建。旧 `data/memory` 目录不再作为 memory 子系统的一部分保留。
+当前实际实施已采用 `data/memory_v3`，不再继续维护 `data/memory_v2` 主链路。磁盘结构可按最新设计破坏式调整；如果调整成本超过数据价值，直接清空当前 memory 数据重建。旧 `data/memory` 目录不再作为 memory 子系统的一部分保留。
 
 ### 11.2 开发期 schema 策略
 
@@ -992,10 +938,78 @@ data/
 策略：
 
 1. memory schema 允许破坏式升级。
-2. 结构变化时优先清空 `data/memory_v2` 并重建，而不是写迁移适配。
+2. 结构变化时优先清空 `data/memory_v3` 并重建，而不是写迁移适配。
 3. 不符合最新结构的记录不自动修补、不默认参与更新，也不会通过默认值静默读入。
 4. `agent_short` 继续从 runtime prompt memory 中排除，当前任务状态走 `state`。
 5. 旧 `data/memory` / `memories.jsonl` 路径不提供兼容入口。
+
+### 11.3 Memory V3 实施结构
+
+2026-04-29 调整后的目标结构：
+
+```text
+data/
+├── sessions/
+│   └── <session_id>/
+│       ├── events.jsonl
+│       ├── shared_state.json
+│       └── agents/<agent_id>/state.json
+└── memory_v3/
+    ├── shared/
+    │   ├── long_term.json
+    │   ├── facts.jsonl
+    │   ├── pending_promotions.jsonl
+    │   └── mid_term/
+    │       ├── rolling.md
+    │       └── daily/YYYY-MM-DD.md
+    └── agents/<agent_id>/
+        ├── long_term_overlay.json
+        ├── facts.jsonl
+        └── mid_term/
+            ├── rolling.md
+            └── daily/YYYY-MM-DD.md
+```
+
+当前阶段明确不引入：
+
+- `projects/` 或 `workspace/` 维度：产品不是面向项目展开，先避免过早抽象。
+- SQLite / FTS / 向量索引：数据量未到瓶颈，先保持文件系统主存储和顺序扫描。
+- 旧 `memory_v2` 到 `memory_v3` 的兼容迁移：结构变化时清空重建。
+
+三层边界：
+
+- `short_term`：`sessions/<session_id>/events.jsonl` + state，属于运行态来源，不属于 durable memory。
+- `mid_term`：Markdown rolling/daily notes，作为可检索自然语言上下文，不默认全量注入。
+- `long_term`：DeerFlow 风格 `long_term.json` + 结构化 `facts.jsonl`，保存长期画像、稳定事实、偏好和修正。
+
+agent 隔离规则：
+
+1. 当前 agent 默认只能读取 `shared` 与自己的 `agents/<agent_id>`。
+2. agent 私有 facts 不跨 agent 可见。
+3. 写 shared 仍受 capability 控制。
+4. 私有 memory 进入 shared 应走 `pending_promotions.jsonl` 或后续 promote 流程，不做自动污染。
+
+prompt 注入顺序：
+
+1. runtime hard rules
+2. `AGENT.md`
+3. `SOUL.md`
+4. skills
+5. memory access rules
+6. current state
+7. shared long-term summary
+8. agent long-term overlay
+9. relevant facts
+10. relevant mid-term notes
+11. recent events / messages
+
+当前代码落地状态：
+
+- `FileMemoryV3Store` 已建立 `memory_v3` 目录、默认 long-term JSON、facts JSONL、mid-term Markdown 目录。
+- `MemoryManager` 已切为 v3-only runtime 主链路：`memory_write/search/forget/context retrieval` 只走 v3 store。
+- runtime standing memory 只读取 long-term summary 与 `injectPolicy=always` facts；普通 facts 与 mid-term notes 只在相关检索命中时注入。
+- `app/api/deps.py` 默认注入 `data/memory_v3`。
+- 旧 `memory_v2` facade/store/consolidation/compaction 主链路与对应 legacy 测试已删除。
 
 ## 12. 分阶段实施计划
 
@@ -1149,3 +1163,57 @@ data/
 - `memory` 只负责长期互动经验
 
 只有先完成这个边界收敛，后续再做 embedding、向量检索、复杂召回、跨 agent 共享，才不会继续放大概念混乱的问题。
+
+## 16. 2026-04-29 当前实现边界
+
+当前实现已从 `memory_v2` 主链路切到 `memory_v3`，并清除了旧 candidate/consolidation 写入语义。
+
+当前 runtime 写入链路：
+
+```text
+admission
+  -> write_plan
+  -> memory_v3 facts append
+```
+
+当前不再存在以下主链路概念：
+
+```text
+candidate queue
+processed candidates
+consolidation result
+compact lifecycle
+sqlite/index
+```
+
+当前保留的核心结构：
+
+```text
+data/sessions/<session_id>/
+  events.jsonl
+  state
+
+data/memory_v3/
+  shared/
+    long_term.json
+    facts.jsonl
+    pending_promotions.jsonl
+    mid_term/
+      rolling.md
+      daily/
+
+  agents/<agent_id>/
+    long_term_overlay.json
+    facts.jsonl
+    mid_term/
+      rolling.md
+      daily/
+```
+
+当前关键规则：
+
+1. session events/state 是 short-term 来源，不属于 memory 主存储。
+2. shared memory 默认跨 agent 可见。
+3. agent memory 默认私有，跨 agent 读写必须经过 capability。
+4. 写入前只形成 `MemoryWritePlan`，不再进入 candidate 队列。
+5. `memory_explain` 只展示 dry-run write plan，不写入、不提升、不 consolidation。
