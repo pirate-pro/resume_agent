@@ -31,6 +31,23 @@ def _require_non_empty(name: str, value: str) -> str:
     return value.strip()
 
 
+def _normalize_optional_string(name: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _require_non_empty(name, value)
+
+
+def _normalize_string_metadata(metadata: dict[str, str]) -> dict[str, str]:
+    if not isinstance(metadata, dict):
+        raise ValidationError("metadata must be a dictionary.")
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in metadata.items():
+        key = _require_non_empty("metadata key", str(raw_key))
+        value = _require_non_empty("metadata value", str(raw_value))
+        normalized[key] = value
+    return normalized
+
+
 @dataclass(slots=True)
 class RunContext:
     session_id: str
@@ -167,14 +184,20 @@ class MemoryItem:
     tags: list[str]
     created_at: datetime
     source_event_id: str | None
+    scope: str | None = None
+    memory_layer: str | None = None
+    source_kind: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.memory_id = _require_non_empty("memory_id", self.memory_id)
         self.content = _require_non_empty("content", self.content)
-        if self.session_id is not None:
-            self.session_id = _require_non_empty("session_id", self.session_id)
-        if self.source_event_id is not None:
-            self.source_event_id = _require_non_empty("source_event_id", self.source_event_id)
+        self.session_id = _normalize_optional_string("session_id", self.session_id)
+        self.source_event_id = _normalize_optional_string("source_event_id", self.source_event_id)
+        self.scope = _normalize_optional_string("scope", self.scope)
+        self.memory_layer = _normalize_optional_string("memory_layer", self.memory_layer)
+        self.source_kind = _normalize_optional_string("source_kind", self.source_kind)
+        self.metadata = _normalize_string_metadata(self.metadata)
         if not isinstance(self.tags, list):
             raise ValidationError("tags must be a list.")
         normalized_tags: list[str] = []

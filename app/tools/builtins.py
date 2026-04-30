@@ -15,14 +15,13 @@ from app.domain.models import RunContext, SessionFile, ToolDefinition, ToolExecu
 from app.domain.protocols import SessionRepository
 from app.memory.admission import evaluate_memory_admission
 from app.memory.classification import classify_memory
-from app.memory.intake import infer_scope_hint_from_tags
 from app.memory.models import MemoryRecord, MemoryScope
 from app.memory.policies import (
-    infer_confidence_from_tags,
-    infer_memory_type_from_tags,
     memory_lane_for_metadata,
     normalize_memory_tags,
+    source_priority_for_kind,
 )
+from app.memory.write_plan import build_memory_write_plan, infer_write_scope_from_tags
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 from app.state.models import StateRecord
@@ -59,10 +58,10 @@ class MemoryWriteTool:
         return ToolDefinition(
             name="memory_write",
             description=(
-                "Write a memory candidate. Default route is agent_short. "
+                "Write a durable memory fact. Default route is current agent private memory. "
                 "Rejects session working state and raw file/tool output; use state_set for current task notes. "
-                "Use tags like preference/constraint/long_term for agent_long, "
-                "and shared/global/cross_agent for shared_long candidate."
+                "Use tags like preference/constraint/long_term for durable memory; only identity, strong rules, "
+                "and policies are injected by default. Use shared/global/cross_agent only for shared memory."
             ),
             parameters_schema={
                 "type": "object",
@@ -103,7 +102,7 @@ class MemoryWriteTool:
         payload = {
             "memory_id": memory.memory_id,
             "written_records": 1,
-            "scope_hint": "inferred_by_tags",
+            "storage": "memory_v3",
         }
         return ToolExecutionResult(
             tool_name="memory_write",
@@ -125,8 +124,9 @@ class MemorySearchTool:
         return ToolDefinition(
             name="memory_search",
             description=(
-                "Search memory items in current agent scope using plain-text matching. "
-                "Includes agent_short across sessions for the same agent."
+                "Search memory only when relevant memory is not already present in the current context, "
+                "or when the user asks to inspect/manage memory. Uses current agent-visible scopes; "
+                "other agents are isolated by default."
             ),
             parameters_schema={
                 "type": "object",
@@ -177,7 +177,7 @@ class MemorySearchTool:
 
 
 class MemoryInspectTool:
-    """Inspect current agent-visible memory records with structured metadata."""
+    """Inspect current agent-visible memory records with structured schema fields."""
 
     def __init__(self, memory_manager: MemoryManager) -> None:
         self._memory_manager = memory_manager
@@ -186,7 +186,7 @@ class MemoryInspectTool:
         return ToolDefinition(
             name="memory_inspect",
             description=(
-                "Inspect current agent-visible active memory records with scope, lane, canonical metadata, "
+                "Inspect current agent-visible active memory records with scope, lane, canonical schema fields, "
                 "source, timestamps, and status. Use query='*' to list visible memories."
             ),
             parameters_schema={
@@ -266,11 +266,15 @@ class MemoryExplainTool:
         tags = normalize_memory_tags(_normalize_tags(arguments.get("tags", [])))
         source = _optional_string_argument(arguments, "source", default="memory_explain_tool")
         admission = evaluate_memory_admission(content, tags)
-        classification = classify_memory(content=content, tags=tags, source=source)
-        scope_hint = infer_scope_hint_from_tags(tags)
-        memory_type = infer_memory_type_from_tags(tags)
-        confidence = infer_confidence_from_tags(tags)
-        lane = memory_lane_for_metadata(classification.canonical_key, classification.kind)
+        plan = build_memory_write_plan(
+            agent_id=context.agent_id,
+            session_id=context.session_id,
+            content=content,
+            tags=tags,
+            source_event_id=None,
+            source=source,
+        )
+        lane = memory_lane_for_metadata(plan.canonical_key, plan.kind)
         payload = {
             "content": content,
             "tags": tags,
@@ -280,18 +284,20 @@ class MemoryExplainTool:
                 "decision": admission.decision.value,
                 "reason": admission.reason,
             },
-            "candidate": {
-                "scope_hint": scope_hint.value,
-                "memory_type": memory_type.value,
-                "confidence": confidence,
+            "write_plan": {
+                "scope": plan.scope.value,
+                "memory_type": plan.memory_type.value,
+                "category": plan.category,
+                "confidence": plan.confidence,
+                "inject_policy": plan.inject_policy,
             },
             "classification": {
-                "kind": classification.kind,
-                "source_kind": classification.source_kind,
-                "canonical_key": classification.canonical_key,
-                "normalized_value": classification.normalized_value,
-                "subject_kind": classification.subject_kind,
-                "classification_version": classification.classification_version,
+                "kind": plan.kind,
+                "source_kind": plan.source_kind,
+                "canonical_key": plan.canonical_key,
+                "normalized_value": plan.normalized_value,
+                "subject_kind": plan.subject_kind,
+                "classification_version": plan.classification_version,
             },
             "lane": lane,
             "dry_run": True,
@@ -387,7 +393,7 @@ class MemoryForgetTool:
 
 
 class MemoryUpdateTool:
-    """按“先删后写”的顺序替换记忆。"""
+    """Replace one uniquely matched memory by archiving the old record and writing a new one."""
 
     def __init__(self, memory_manager: MemoryManager) -> None:
         self._memory_manager = memory_manager
@@ -396,8 +402,7 @@ class MemoryUpdateTool:
         return ToolDefinition(
             name="memory_update",
             description=(
-                "Update one structured canonical memory by query. "
-                "If multiple targets match or the target lacks canonical metadata, return a non-updating result."
+                "Update one memory by query. If multiple targets match, return candidates without changing memory."
             ),
             parameters_schema={
                 "type": "object",
@@ -474,17 +479,21 @@ class MemoryUpdateTool:
 
         target = hits[0]
         resolved_tags = _resolve_update_tags(new_tags=new_tags, target_scope=target.scope, target_tags=target.tags)
-        target_canonical_key = str(target.metadata.get("canonical_key", "")).strip() or None
-        if target_canonical_key is None:
+        admission = evaluate_memory_admission(new_content, resolved_tags)
+        if not admission.accepted:
             return ToolExecutionResult(
                 tool_name="memory_update",
                 success=True,
                 content=json.dumps(
                     {
                         "updated": False,
-                        "reason": "target_missing_canonical_key",
+                        "reason": admission.reason,
                         "query": query,
                         "match_strategy": match_strategy,
+                        "update_mode": "archive_then_write",
+                        "old_memory_id": target.memory_id,
+                        "old_scope": target.scope.value,
+                        "new_tags": resolved_tags,
                     },
                     ensure_ascii=False,
                 ),
@@ -494,33 +503,7 @@ class MemoryUpdateTool:
             tags=resolved_tags,
             source="memory_update_tool",
         )
-        new_canonical_key = update_classification.canonical_key
-        if new_canonical_key != target_canonical_key:
-            return ToolExecutionResult(
-                tool_name="memory_update",
-                success=True,
-                content=json.dumps(
-                    {
-                        "updated": False,
-                        "reason": "canonical_key_mismatch",
-                        "query": query,
-                        "match_strategy": match_strategy,
-                        "update_mode": "canonical_direct",
-                        "target_canonical_key": target_canonical_key,
-                        "new_canonical_key": new_canonical_key,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-        write_result = self._memory_manager.write_memory_with_result(
-            content=new_content,
-            tags=resolved_tags,
-            context=run_context,
-            source_event_id=None,
-            source="memory_update_tool",
-        )
-        consolidate_result = write_result.consolidate_result
-        if consolidate_result.conflicts > 0:
+        if source_priority_for_kind(update_classification.source_kind) < source_priority_for_kind(target.source_kind):
             return ToolExecutionResult(
                 tool_name="memory_update",
                 success=True,
@@ -530,7 +513,7 @@ class MemoryUpdateTool:
                         "reason": "source_priority_conflict",
                         "query": query,
                         "match_strategy": match_strategy,
-                        "update_mode": "canonical_direct",
+                        "update_mode": "archive_then_write",
                         "old_memory_id": target.memory_id,
                         "old_scope": target.scope.value,
                         "new_tags": resolved_tags,
@@ -538,7 +521,21 @@ class MemoryUpdateTool:
                     ensure_ascii=False,
                 ),
             )
-        if consolidate_result.written_records == 0:
+        forget_result = self._memory_manager.forget_memory_ids(
+            context=run_context,
+            memory_ids=[target.memory_id],
+            scopes=[target.scope],
+            hard_delete=False,
+            reason=f"memory_update_tool:{query[:80]}",
+        )
+        write_result = self._memory_manager.write_memory_with_result(
+            content=new_content,
+            tags=resolved_tags,
+            context=run_context,
+            source_event_id=None,
+            source="memory_update_tool",
+        )
+        if write_result.written_records == 0:
             return ToolExecutionResult(
                 tool_name="memory_update",
                 success=True,
@@ -548,10 +545,15 @@ class MemoryUpdateTool:
                         "reason": "semantic_noop",
                         "query": query,
                         "match_strategy": match_strategy,
-                        "update_mode": "canonical_direct",
+                        "update_mode": "archive_then_write",
                         "old_memory_id": target.memory_id,
                         "old_scope": target.scope.value,
                         "new_tags": resolved_tags,
+                        "forget_result": {
+                            "touched": forget_result.touched_records,
+                            "deleted": forget_result.deleted_records,
+                            "archived": forget_result.archived_records,
+                        },
                     },
                     ensure_ascii=False,
                 ),
@@ -559,15 +561,15 @@ class MemoryUpdateTool:
         payload = {
             "updated": True,
             "match_strategy": match_strategy,
-            "update_mode": "canonical_supersede",
+            "update_mode": "archive_then_write",
             "old_memory_id": target.memory_id,
             "new_memory_id": write_result.memory.memory_id,
             "new_tags": resolved_tags,
             "old_scope": target.scope.value,
             "forget_result": {
-                "touched": 0,
-                "deleted": 0,
-                "archived": 0,
+                "touched": forget_result.touched_records,
+                "deleted": forget_result.deleted_records,
+                "archived": forget_result.archived_records,
             },
         }
         return ToolExecutionResult(
@@ -621,7 +623,7 @@ class StateSetTool:
 
 
 class StatePublishTool:
-    """Publish selected private state records to shared session state."""
+    """Publish selected private state records to main orchestration state."""
 
     def __init__(self, state_manager: StateManager) -> None:
         self._state_manager = state_manager
@@ -630,8 +632,8 @@ class StatePublishTool:
         return ToolDefinition(
             name="state_publish",
             description=(
-                "Publish selected private state keys into shared session state. "
-                "Use this only when another agent in the same session should see the state."
+                "Publish selected private state keys into main orchestration state. "
+                "Use this for session-level progress the main agent should track."
             ),
             parameters_schema={
                 "type": "object",
@@ -669,7 +671,7 @@ class StatePublishTool:
 
 
 class StateListTool:
-    """List private/shared state visible to the current agent."""
+    """List private state and main orchestration state visible in the current session."""
 
     def __init__(self, state_manager: StateManager) -> None:
         self._state_manager = state_manager
@@ -679,7 +681,7 @@ class StateListTool:
             name="state_list",
             description=(
                 "List current session state. Scope can be 'agent', 'shared', or 'all'. "
-                "Private agent state is isolated per agent; shared state is visible within the session."
+                "Private agent state is isolated per agent; shared means main orchestration state."
             ),
             parameters_schema={
                 "type": "object",
@@ -1086,11 +1088,11 @@ def _resolve_update_tags(
     if not tags:
         tags = []
 
-    scope_hint = infer_scope_hint_from_tags(tags)
-    if target_scope == MemoryScope.SHARED_LONG and scope_hint != MemoryScope.SHARED_LONG:
+    write_scope = infer_write_scope_from_tags(tags)
+    if target_scope == MemoryScope.SHARED_LONG and write_scope != MemoryScope.SHARED_LONG:
         if "shared" not in tags:
             tags.append("shared")
-    if target_scope == MemoryScope.AGENT_LONG and scope_hint == MemoryScope.AGENT_SHORT:
+    if target_scope == MemoryScope.AGENT_LONG and write_scope == MemoryScope.AGENT_SHORT:
         if "long_term" not in tags:
             tags.append("long_term")
     return tags
@@ -1319,10 +1321,6 @@ def _serialize_state_record(record: StateRecord) -> dict[str, Any]:
 
 
 def _serialize_memory_record(record: MemoryRecord, *, include_metadata: bool) -> dict[str, Any]:
-    canonical_key = str(record.metadata.get("canonical_key", "")).strip() or None
-    normalized_value = str(record.metadata.get("normalized_value", "")).strip() or None
-    kind = str(record.metadata.get("kind", "")).strip() or None
-    source_kind = str(record.metadata.get("source_kind", "")).strip() or None
     payload: dict[str, Any] = {
         "memory_id": record.memory_id,
         "scope": record.scope.value,
@@ -1334,11 +1332,13 @@ def _serialize_memory_record(record: MemoryRecord, *, include_metadata: bool) ->
         "tags": record.tags,
         "importance": record.importance,
         "confidence": record.confidence,
-        "canonical_key": canonical_key,
-        "normalized_value": normalized_value,
-        "kind": kind,
-        "source_kind": source_kind,
-        "lane": memory_lane_for_metadata(canonical_key, kind),
+        "canonical_key": record.canonical_key,
+        "normalized_value": record.normalized_value,
+        "kind": record.kind,
+        "source_kind": record.source_kind,
+        "subject_kind": record.subject_kind,
+        "classification_version": record.classification_version,
+        "lane": memory_lane_for_metadata(record.canonical_key, record.kind),
         "created_at": record.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "updated_at": record.updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         "expires_at": None

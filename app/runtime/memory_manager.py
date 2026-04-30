@@ -4,33 +4,25 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import ValidationError
 from app.domain.models import MemoryItem, RunContext
 from app.memory.admission import evaluate_memory_admission
-from app.memory.classification import classify_memory
-from app.memory.contracts import MemoryFacade
-from app.memory.intake import build_candidate_request, infer_scope_hint_from_tags
 from app.memory.models import (
-    ConsolidateResult,
     ForgetResult,
-    MemoryConsolidateRequest,
-    MemoryForgetRequest,
     MemoryReadBundle,
-    MemoryReadRequest,
     MemoryRecord,
     MemoryScope,
 )
 from app.memory.policies import (
-    ALWAYS_ON_CONTEXT_CANONICAL_KEYS,
     CONTEXT_LANE_LIMITS,
     CONTEXT_LANE_ORDER,
-    MemoryCanonicalKey,
-    is_name_query,
     memory_lane_for_metadata,
 )
+from app.memory.v3_models import MemoryV3Fact
+from app.memory.v3_store import FileMemoryV3Store
+from app.memory.write_plan import MemoryWritePlan, build_memory_write_plan, infer_write_scope_from_tags
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 
 __all__ = ["MemoryManager", "MemoryWriteResult"]
@@ -40,8 +32,9 @@ _logger = logging.getLogger(__name__)
 @dataclass(slots=True)
 class MemoryWriteResult:
     memory: MemoryItem
-    candidate_id: str
-    consolidate_result: ConsolidateResult
+    write_id: str
+    written_records: int
+    written_memory_ids: list[str]
 
 
 class MemoryManager:
@@ -49,11 +42,11 @@ class MemoryManager:
 
     def __init__(
         self,
-        memory_facade: MemoryFacade,
         capability_registry: AgentCapabilityRegistry,
+        memory_v3_store: FileMemoryV3Store,
     ) -> None:
-        self._memory_facade = memory_facade
         self._capability_registry = capability_registry
+        self._memory_v3_store = memory_v3_store
 
     def write_memory(
         self,
@@ -98,7 +91,7 @@ class MemoryManager:
         if not admission.accepted:
             raise ValidationError(admission.reason)
         requester_capability = self._capability_registry.require(run_context.agent_id)
-        target_scope = infer_scope_hint_from_tags(normalized_tags)
+        target_scope = infer_write_scope_from_tags(normalized_tags)
         if not requester_capability.can_write_scope(target_scope):
             raise ValidationError(f"Memory write scope not allowed for agent '{run_context.agent_id}': {target_scope.value}")
         # 默认写入当前执行 agent；仅在能力矩阵放开时允许跨 agent 写入。
@@ -109,7 +102,7 @@ class MemoryManager:
                 raise ValidationError("Cross-agent write is disabled by agent capability.")
             self._capability_registry.require(normalized_target)
             resolved_agent_id = normalized_target
-        request = build_candidate_request(
+        plan = build_memory_write_plan(
             agent_id=resolved_agent_id,
             session_id=run_context.session_id,
             content=normalized_content,
@@ -117,32 +110,99 @@ class MemoryManager:
             source_event_id=normalized_source_event,
             source=source,
         )
-        candidate = self._memory_facade.write_candidate(request)
-        consolidate_result = self._memory_facade.consolidate(MemoryConsolidateRequest(max_candidates=8))
-        resolved_memory_id = (
-            consolidate_result.written_memory_ids[0]
-            if consolidate_result.written_memory_ids
-            else f"cand_{candidate.candidate_id}"
+        existing_fact = self._memory_v3_store.find_active_fact_by_content(
+            scope=plan.scope,
+            agent_id=None if plan.scope == MemoryScope.SHARED_LONG else resolved_agent_id,
+            content=plan.content,
+        )
+        if existing_fact is not None:
+            memory = _memory_item_from_fact(
+                fact=existing_fact,
+                session_id=run_context.session_id,
+                scope=plan.scope,
+                source_kind=plan.source_kind,
+            )
+            _logger.debug(
+                "跳过重复记忆写入(v3): memory_id=%s session_id=%s agent_id=%s scope=%s",
+                memory.memory_id,
+                memory.session_id,
+                resolved_agent_id,
+                plan.scope.value,
+            )
+            return MemoryWriteResult(
+                memory=memory,
+                write_id=plan.write_key,
+                written_records=0,
+                written_memory_ids=[],
+            )
+        if plan.canonical_key and plan.scope in {MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG}:
+            archived = self._memory_v3_store.archive_active_facts_by_canonical_key(
+                scope=plan.scope,
+                agent_id=None if plan.scope == MemoryScope.SHARED_LONG else resolved_agent_id,
+                canonical_key=plan.canonical_key,
+                reason=f"canonical_replace:{plan.canonical_key}",
+            )
+            if archived.archived_records:
+                _logger.debug(
+                    "归档同 canonical_key 旧记忆(v3): key=%s archived=%s agent_id=%s scope=%s",
+                    plan.canonical_key,
+                    archived.archived_records,
+                    resolved_agent_id,
+                    plan.scope.value,
+                )
+        fact = self._memory_v3_store.append_fact(
+            content=plan.content,
+            category=plan.category,
+            confidence=plan.confidence,
+            scope=plan.scope,
+            owner_agent_id=None if plan.scope == MemoryScope.SHARED_LONG else resolved_agent_id,
+            session_id=run_context.session_id,
+            source_event_id=normalized_source_event,
+            source_type=source,
+            tags=plan.tags,
+            inject_policy=plan.inject_policy,
+            metadata=_v3_metadata_from_plan(
+                plan=plan,
+                source_agent_id=run_context.agent_id,
+                target_agent_id=resolved_agent_id,
+            ),
+        )
+        self._refresh_long_term_summary_best_effort(scope=plan.scope, agent_id=resolved_agent_id)
+        memory_metadata = dict(fact.metadata)
+        memory_metadata.update(
+            {
+                "memory_layer": "facts",
+                "v3_scope": fact.scope,
+                "category": fact.category,
+                "visibility": fact.visibility,
+                "inject_policy": fact.inject_policy,
+            }
         )
         memory = MemoryItem(
-            memory_id=resolved_memory_id,
+            memory_id=fact.id,
             session_id=run_context.session_id,
-            content=normalized_content,
-            tags=normalized_tags,
-            created_at=datetime.now(UTC),
+            content=fact.content,
+            tags=fact.tags,
+            created_at=fact.created_at,
             source_event_id=normalized_source_event,
+            scope=plan.scope.value,
+            memory_layer="facts",
+            source_kind=plan.source_kind,
+            metadata=memory_metadata,
         )
         _logger.debug(
-            "写入记忆成功(v2): memory_id=%s session_id=%s agent_id=%s tag_count=%s",
+            "写入记忆成功(v3): memory_id=%s session_id=%s agent_id=%s scope=%s tag_count=%s",
             memory.memory_id,
             memory.session_id,
             resolved_agent_id,
+            plan.scope.value,
             len(memory.tags),
         )
         return MemoryWriteResult(
             memory=memory,
-            candidate_id=candidate.candidate_id,
-            consolidate_result=consolidate_result,
+            write_id=plan.write_key,
+            written_records=1,
+            written_memory_ids=[fact.id],
         )
 
     def search(self, query: str, limit: int, context: RunContext) -> list[MemoryItem]:
@@ -178,12 +238,16 @@ class MemoryManager:
             session_id=run_context.session_id,
             include_short=False,
         )
-        canonical_records = self._read_context_canonical_records(
-            query=normalized_query,
-            context=run_context,
-            read_plan=read_plan,
+        standing_bundle = self._read_bundle(
+            agent_id=run_context.agent_id,
+            query="*",
+            limit=max(normalized_limit * 3, 12),
+            include_scopes=read_plan.include_scopes,
+            short_session_id=read_plan.short_session_id,
+            standing_only=True,
+            include_long_term_summaries=True,
         )
-        records = _dedupe_records(canonical_records + bundle.items)
+        records = _dedupe_records(bundle.items + standing_bundle.items)
         lanes = _limit_memory_lanes(_group_records_by_context_lane(records), max_total=normalized_limit)
         result = _flatten_memory_lanes(lanes)
         summary = _build_search_summary(
@@ -193,9 +257,11 @@ class MemoryManager:
             bundle=bundle,
             hit_count=len(result),
         )
+        summary["standing_count"] = len(standing_bundle.items)
+        summary["total_scanned"] = bundle.total_scanned + standing_bundle.total_scanned
         summary["lanes"] = {lane: len(items) for lane, items in lanes.items()}
         _logger.debug(
-            "检索上下文长期记忆完成(v2): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s lanes=%s",
+            "检索上下文长期记忆完成(v3): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s lanes=%s",
             normalized_query,
             normalized_limit,
             run_context.agent_id,
@@ -226,7 +292,7 @@ class MemoryManager:
             hit_count=len(result),
         )
         _logger.debug(
-            "检索记忆完成(v2): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s",
+            "检索记忆完成(v3): query=%s limit=%s agent_id=%s hit_count=%s scanned=%s",
             normalized_query,
             normalized_limit,
             run_context.agent_id,
@@ -265,13 +331,6 @@ class MemoryManager:
         run_context = _normalize_context(context)
         normalized_query = _normalize_query(query)
         normalized_limit = _normalize_limit(limit)
-        canonical_hits = self._search_canonical_update_targets(
-            query=normalized_query,
-            limit=normalized_limit,
-            context=run_context,
-        )
-        if canonical_hits is not None:
-            return canonical_hits, "canonical_exact"
         _, _, bundle = self.search_bundle(
             query=normalized_query,
             limit=normalized_limit,
@@ -303,67 +362,6 @@ class MemoryManager:
             short_session_id=read_plan.short_session_id,
         )
         return normalized_query, normalized_limit, bundle
-
-    def _search_canonical_update_targets(
-        self,
-        *,
-        query: str,
-        limit: int,
-        context: RunContext,
-    ) -> list[MemoryRecord] | None:
-        classification = classify_memory(
-            content=query,
-            tags=[],
-            source="memory_update_query",
-        )
-        canonical_key = classification.canonical_key
-        normalized_value = classification.normalized_value
-        if canonical_key is None or normalized_value is None:
-            return None
-
-        requester_capability = self._capability_registry.require(context.agent_id)
-        read_plan = _build_context_read_plan(capability=requester_capability, session_id=context.session_id)
-        records = self._memory_facade.list_active_records_by_canonical_key(
-            agent_id=context.agent_id,
-            session_id=read_plan.short_session_id,
-            include_scopes=read_plan.include_scopes,
-            canonical_key=canonical_key,
-        )
-        matches = [
-            record
-            for record in records
-            if str(record.metadata.get("normalized_value", "")).strip() == normalized_value
-        ]
-        if not matches:
-            return None
-        _logger.debug(
-            "memory_update 命中 canonical 精确匹配: query=%s canonical_key=%s hit_count=%s agent_id=%s",
-            query,
-            canonical_key,
-            len(matches),
-            context.agent_id,
-        )
-        return matches[:limit]
-
-    def _read_context_canonical_records(
-        self,
-        *,
-        query: str,
-        context: RunContext,
-        read_plan: "_ReadPlan",
-    ) -> list[MemoryRecord]:
-        canonical_keys = _context_canonical_keys_for_query(query)
-        records: list[MemoryRecord] = []
-        for canonical_key in canonical_keys:
-            records.extend(
-                self._memory_facade.list_active_records_by_canonical_key(
-                    agent_id=context.agent_id,
-                    session_id=read_plan.short_session_id,
-                    include_scopes=read_plan.include_scopes,
-                    canonical_key=canonical_key,
-                )
-            )
-        return _dedupe_records(records)
 
     def search_for_agent(
         self,
@@ -401,7 +399,7 @@ class MemoryManager:
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
-            "检索记忆完成(v2): query=%s limit=%s request_agent=%s target_agent=%s hit_count=%s",
+            "检索记忆完成(v3): query=%s limit=%s request_agent=%s target_agent=%s hit_count=%s",
             normalized_query,
             normalized_limit,
             normalized_request_agent_id,
@@ -444,7 +442,7 @@ class MemoryManager:
         )
         result = [_to_memory_item(item) for item in bundle.items]
         _logger.debug(
-            "读取记忆列表完成(v2): request_agent=%s target_agent=%s limit=%s count=%s",
+            "读取记忆列表完成(v3): request_agent=%s target_agent=%s limit=%s count=%s",
             normalized_request_agent_id,
             normalized_target_agent_id,
             normalized_limit,
@@ -475,20 +473,18 @@ class MemoryManager:
                     f"Memory forget scope not allowed for agent '{run_context.agent_id}': {scope.value}"
                 )
 
-        # 包含 shared_long 时需允许 owner_agent_id=None 的记录参与匹配。
-        request_agent_id = None if MemoryScope.SHARED_LONG in normalized_scopes else run_context.agent_id
-        request = MemoryForgetRequest(
-            agent_id=request_agent_id,
-            session_id=None,
-            scopes=normalized_scopes,
-            before=None,
+        result = self._memory_v3_store.forget(
+            agent_id=run_context.agent_id,
             memory_ids=normalized_ids,
+            scopes=normalized_scopes,
             hard_delete=hard_delete,
             reason=normalized_reason,
         )
-        result = self._memory_facade.forget(request)
+        if result.touched_records > 0:
+            for scope in normalized_scopes:
+                self._refresh_long_term_summary_best_effort(scope=scope, agent_id=run_context.agent_id)
         _logger.debug(
-            "遗忘记忆完成(v2): agent_id=%s memory_ids=%s scopes=%s touched=%s deleted=%s archived=%s",
+            "遗忘记忆完成(v3): agent_id=%s memory_ids=%s scopes=%s touched=%s deleted=%s archived=%s",
             run_context.agent_id,
             len(normalized_ids),
             [item.value for item in normalized_scopes],
@@ -507,17 +503,45 @@ class MemoryManager:
         limit: int,
         include_scopes: list[MemoryScope],
         short_session_id: str | None,
+        standing_only: bool = False,
+        include_long_term_summaries: bool = False,
     ) -> MemoryReadBundle:
-        return self._memory_facade.read_context(
-            MemoryReadRequest(
-                agent_id=agent_id,
-                session_id=short_session_id,
-                query=query,
-                include_scopes=include_scopes,
-                limit=limit,
-                token_budget=max(600, limit * 280),
-            )
+        _ = short_session_id
+        return self._memory_v3_store.read_bundle(
+            agent_id=agent_id,
+            query=query,
+            limit=limit,
+            include_scopes=include_scopes,
+            short_session_id=short_session_id,
+            standing_only=standing_only,
+            include_long_term_summaries=include_long_term_summaries,
         )
+
+    def _refresh_long_term_summary_best_effort(
+        self,
+        *,
+        scope: MemoryScope,
+        agent_id: str,
+    ) -> None:
+        try:
+            if scope == MemoryScope.SHARED_LONG:
+                self._memory_v3_store.refresh_long_term_summary_from_facts(
+                    scope=MemoryScope.SHARED_LONG,
+                    agent_id=None,
+                )
+                return
+            if scope == MemoryScope.AGENT_LONG:
+                self._memory_v3_store.refresh_long_term_summary_from_facts(
+                    scope=MemoryScope.AGENT_LONG,
+                    agent_id=agent_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "刷新 long-term summary 失败(忽略，不影响主链路): agent_id=%s scope=%s error=%s",
+                agent_id,
+                scope.value,
+                exc,
+            )
 
 
 class _ReadPlan:
@@ -612,20 +636,6 @@ def _build_search_summary(
     }
 
 
-def _context_canonical_keys_for_query(query: str) -> list[str]:
-    classification = classify_memory(
-        content=query,
-        tags=[],
-        source="memory_context_query",
-    )
-    keys: list[str] = list(ALWAYS_ON_CONTEXT_CANONICAL_KEYS)
-    if classification.canonical_key is not None:
-        keys.append(classification.canonical_key)
-    if is_name_query(query):
-        keys.append(MemoryCanonicalKey.PREFERRED_NAME.value)
-    return _dedupe_strings(keys)
-
-
 def _group_records_by_context_lane(records: list[MemoryRecord]) -> dict[str, list[MemoryItem]]:
     lanes: dict[str, list[MemoryItem]] = {lane: [] for lane in CONTEXT_LANE_ORDER}
     for record in records:
@@ -635,9 +645,7 @@ def _group_records_by_context_lane(records: list[MemoryRecord]) -> dict[str, lis
 
 
 def _context_lane_for_record(record: MemoryRecord) -> str:
-    canonical_key = str(record.metadata.get("canonical_key", "")).strip()
-    kind = str(record.metadata.get("kind", "")).strip()
-    return memory_lane_for_metadata(canonical_key, kind)
+    return memory_lane_for_metadata(record.canonical_key, record.kind)
 
 
 def _limit_memory_lanes(
@@ -691,19 +699,45 @@ def _dedupe_memory_items(items: list[MemoryItem]) -> list[MemoryItem]:
     return output
 
 
-def _dedupe_strings(items: list[str]) -> list[str]:
-    output: list[str] = []
-    seen: set[str] = set()
-    for raw in items:
-        item = raw.strip()
-        if not item or item in seen:
-            continue
-        seen.add(item)
-        output.append(item)
-    return output
-
+def _v3_metadata_from_plan(
+    *,
+    plan: MemoryWritePlan,
+    source_agent_id: str,
+    target_agent_id: str,
+) -> dict[str, str]:
+    metadata: dict[str, str] = {
+        "source_agent_id": source_agent_id,
+        "target_agent_id": target_agent_id,
+        "memory_type": plan.memory_type.value,
+        "memory_scope": plan.scope.value,
+        "kind": plan.kind,
+        "source_kind": plan.source_kind,
+        "subject_kind": plan.subject_kind,
+        "classification_version": plan.classification_version,
+        "write_key": plan.write_key,
+    }
+    if plan.canonical_key:
+        metadata["canonical_key"] = plan.canonical_key
+    if plan.normalized_value:
+        metadata["normalized_value"] = plan.normalized_value
+    raw_source = plan.metadata.get("source") if isinstance(plan.metadata, dict) else None
+    if isinstance(raw_source, str) and raw_source.strip():
+        metadata["source"] = raw_source.strip()
+    return metadata
 
 def _to_memory_item(record: Any) -> MemoryItem:
+    raw_scope = getattr(record, "scope", None)
+    if isinstance(raw_scope, MemoryScope):
+        scope = raw_scope.value
+    elif raw_scope is None:
+        scope = None
+    else:
+        scope = str(raw_scope)
+    metadata = getattr(record, "metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    memory_layer = metadata.get("memory_layer")
+    source_kind = getattr(record, "source_kind", None)
     return MemoryItem(
         memory_id=record.memory_id,
         session_id=record.session_id,
@@ -711,6 +745,43 @@ def _to_memory_item(record: Any) -> MemoryItem:
         tags=record.tags,
         created_at=record.created_at,
         source_event_id=record.source_event_id,
+        scope=scope,
+        memory_layer=str(memory_layer) if memory_layer else None,
+        source_kind=str(source_kind) if source_kind else None,
+        metadata={str(key): str(value) for key, value in metadata.items()},
+    )
+
+
+def _memory_item_from_fact(
+    *,
+    fact: MemoryV3Fact,
+    session_id: str,
+    scope: MemoryScope,
+    source_kind: str,
+) -> MemoryItem:
+    metadata = dict(fact.metadata)
+    metadata.update(
+        {
+            "memory_layer": "facts",
+            "v3_scope": fact.scope,
+            "category": fact.category,
+            "visibility": fact.visibility,
+            "inject_policy": fact.inject_policy,
+            "duplicate_write": "true",
+        }
+    )
+    source_event_id = fact.source.event_ids[0] if fact.source.event_ids else None
+    return MemoryItem(
+        memory_id=fact.id,
+        session_id=session_id,
+        content=fact.content,
+        tags=fact.tags,
+        created_at=fact.created_at,
+        source_event_id=source_event_id,
+        scope=scope.value,
+        memory_layer="facts",
+        source_kind=source_kind,
+        metadata={str(key): str(value) for key, value in metadata.items()},
     )
 
 

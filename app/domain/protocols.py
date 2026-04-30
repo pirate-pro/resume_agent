@@ -60,6 +60,16 @@ class SessionRepository(Protocol):
 
     def append_event(self, session_id: str, event: EventRecord) -> None: ...
 
+    def replace_events(self, session_id: str, events: list[EventRecord]) -> None: ...
+
+    def replace_events_if_unchanged(
+        self,
+        session_id: str,
+        events: list[EventRecord],
+        *,
+        expected_last_event_id: str,
+    ) -> bool: ...
+
     def list_events(self, session_id: str) -> list[EventRecord]: ...
 
     def list_recent_events(self, session_id: str, limit: int) -> list[EventRecord]: ...

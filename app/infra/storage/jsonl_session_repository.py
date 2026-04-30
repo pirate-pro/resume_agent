@@ -244,6 +244,74 @@ class JsonlSessionRepository:
             raise StorageError(f"Failed to append event for '{session_id}': {exc}") from exc
         _logger.debug("事件已写入: session_id=%s event_id=%s event_type=%s", session_id, event.event_id, event.type)
 
+    def replace_events(self, session_id: str, events: list[EventRecord]) -> None:
+        session_id = self._validate_session_id(session_id)
+        self._replace_events_validated(session_id=session_id, events=events)
+        _logger.info("会话事件已重写: session_id=%s event_count=%s", session_id, len(events))
+
+    def replace_events_if_unchanged(
+        self,
+        session_id: str,
+        events: list[EventRecord],
+        *,
+        expected_last_event_id: str,
+    ) -> bool:
+        session_id = self._validate_session_id(session_id)
+        normalized_expected = self._validate_event_id(expected_last_event_id)
+        current_events = self.list_events(session_id)
+        current_last_event_id = current_events[-1].event_id if current_events else None
+        if current_last_event_id != normalized_expected:
+            _logger.info(
+                "会话事件重写跳过，events 已变化: session_id=%s expected_last=%s current_last=%s",
+                session_id,
+                normalized_expected,
+                current_last_event_id,
+            )
+            return False
+        self._replace_events_validated(session_id=session_id, events=events)
+        _logger.info("会话事件已条件重写: session_id=%s event_count=%s", session_id, len(events))
+        return True
+
+    def _replace_events_validated(self, *, session_id: str, events: list[EventRecord]) -> None:
+        if self.get_session(session_id) is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        if not isinstance(events, list):
+            raise ValidationError("events must be a list.")
+        lines: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for event in events:
+            if not isinstance(event, EventRecord):
+                raise ValidationError("events entries must be EventRecord.")
+            if event.session_id != session_id:
+                raise ValidationError("event.session_id must match replace target session_id.")
+            if event.event_id in seen_ids:
+                raise ValidationError("event.event_id values must be unique.")
+            seen_ids.add(event.event_id)
+            lines.append(
+                {
+                    "event_id": event.event_id,
+                    "session_id": event.session_id,
+                    "agent_id": event.agent_id,
+                    "run_id": event.run_id,
+                    "parent_run_id": event.parent_run_id,
+                    "event_version": event.event_version,
+                    "type": event.type,
+                    "payload": event.payload,
+                    "created_at": _to_iso(event.created_at),
+                }
+            )
+
+        events_path = self._session_dir(session_id) / "events.jsonl"
+        tmp_path = events_path.with_name(f".{events_path.name}.{uuid4().hex}.tmp")
+        try:
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                for line in lines:
+                    handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+            tmp_path.replace(events_path)
+            self._touch_updated_at(session_id)
+        except OSError as exc:
+            raise StorageError(f"Failed to replace events for '{session_id}': {exc}") from exc
+
     def list_events(self, session_id: str) -> list[EventRecord]:
         session_id = self._validate_session_id(session_id)
         events_path = self._session_dir(session_id) / "events.jsonl"
@@ -475,6 +543,11 @@ class JsonlSessionRepository:
         if not isinstance(session_id, str) or not session_id.strip():
             raise ValidationError("session_id must be a non-empty string.")
         return session_id.strip()
+
+    def _validate_event_id(self, event_id: str) -> str:
+        if not isinstance(event_id, str) or not event_id.strip():
+            raise ValidationError("event_id must be a non-empty string.")
+        return event_id.strip()
 
     def _write_session_metadata(self, session_id: str, meta: SessionMeta) -> None:
         metadata_path = self._session_dir(session_id) / "metadata.json"

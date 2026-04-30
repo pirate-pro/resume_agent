@@ -56,7 +56,7 @@ class ChatService:
         answer_normalizer: AnswerNormalizer | None = None,
         stream_heartbeat_interval_seconds: float = 15.0,
         stream_run_timeout_seconds: float = 300.0,
-        session_title_timeout_seconds: float = 8.0,
+        session_title_timeout_seconds: float = 40.0,
     ) -> None:
         self._runtime = runtime
         self._session_manager = session_manager

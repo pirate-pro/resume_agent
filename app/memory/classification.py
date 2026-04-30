@@ -25,6 +25,22 @@ _PREFERRED_NAME_PATTERNS = (
         flags=re.IGNORECASE,
     ),
     re.compile(
+        r"(?:用户)?(?:希望|要求|偏好)(?:我|助手|系统)?(?:叫|称呼)(?:他|她|用户)?(?:为)?\s*[\"“”']?([^\"“”'\s，。,.!?；;:：]+)",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:请使用|使用)\s*[\"“”']?([^\"“”'\s，。,.!?；;:：]+)[\"“”']?(?:称呼|叫)(?:我|用户|他|她)?",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:已)?(?:更改|更新|改)(?:为|成)\s*[\"“”']?([^\"“”'\s，。,.!?；;:：]+)",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:prefers?|preferred|wants?)\s+(?:me\s+)?to\s+be\s+called\s*[\"“”']?([^\"“”'\s，。,.!?；;:：()]+)",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
         r"^\s*(?:用户)?(?:称呼|名字|姓名)\s*(?:是|为|改为|改成)\s*[\"“”']?([^\"“”'\s，。,.!?；;:：]+)",
         flags=re.IGNORECASE,
     ),
@@ -51,19 +67,6 @@ class MemoryClassification:
     normalized_value: str | None = None
     subject_kind: str = "user"
     classification_version: str = "v1"
-
-    def to_metadata(self) -> dict[str, str]:
-        payload = {
-            "kind": self.kind,
-            "source_kind": self.source_kind,
-            "subject_kind": self.subject_kind,
-            "classification_version": self.classification_version,
-        }
-        if self.canonical_key:
-            payload["canonical_key"] = self.canonical_key
-        if self.normalized_value:
-            payload["normalized_value"] = self.normalized_value
-        return payload
 
 
 def classify_memory(content: str, tags: list[str], source: str) -> MemoryClassification:

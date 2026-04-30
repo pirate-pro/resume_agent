@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -12,8 +14,10 @@ from app.core.errors import AppError, ToolExecutionError, ValidationError
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall, ToolExecutionResult
 from app.domain.protocols import ChatModelClient, ToolExecutor
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.context_compactor import ContextCompactor
 from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
+from app.runtime.mid_term_flusher import MidTermFlusher
 from app.runtime.session_manager import SessionManager
 from app.services.answer_normalizer import AnswerNormalizer
 
@@ -34,6 +38,13 @@ _FINAL_ANSWER_RECOVERY_PROMPT = (
 )
 
 
+@dataclass(slots=True)
+class _PostRunMaintenanceState:
+    active: bool = False
+    pending: bool = False
+    latest_context: RunContext | None = None
+
+
 class AgentRuntime:
     """Execute one complete agent run with optional tool loops."""
 
@@ -44,13 +55,19 @@ class AgentRuntime:
         context_assembler: ContextAssembler,
         model_client: ChatModelClient,
         tool_executor: ToolExecutor,
+        mid_term_flusher: MidTermFlusher | None = None,
+        context_compactor: ContextCompactor | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._event_recorder = event_recorder
         self._context_assembler = context_assembler
         self._model_client = model_client
         self._tool_executor = tool_executor
+        self._mid_term_flusher = mid_term_flusher
+        self._context_compactor = context_compactor
         self._answer_normalizer = AnswerNormalizer()
+        self._post_run_maintenance_lock = threading.Lock()
+        self._post_run_maintenance_states: dict[tuple[str, str], _PostRunMaintenanceState] = {}
 
     def run(self, run_input: AgentRunInput) -> AgentRunOutput:
         if not isinstance(run_input, AgentRunInput):
@@ -206,6 +223,7 @@ class AgentRuntime:
             event_type="run_finished",
             payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls)},
         )
+        self._dispatch_post_run_maintenance_sync(run_context)
         _logger.info(
             "agent run 完成: session_id=%s answer_len=%s tool_calls=%s",
             session_id,
@@ -406,6 +424,7 @@ class AgentRuntime:
             payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls)},
             channel=channel,
         )
+        self._dispatch_post_run_maintenance_async(run_context)
         _logger.info(
             "流式 agent run 完成: session_id=%s answer_len=%s tool_calls=%s",
             session_id,
@@ -456,6 +475,152 @@ class AgentRuntime:
 
     async def _execute_tool_safely_async(self, call: ToolCall, context: RunContext) -> ToolExecutionResult:
         return await asyncio.to_thread(self._execute_tool_safely, call, context)
+
+    def _dispatch_post_run_maintenance_sync(self, context: RunContext) -> None:
+        if self._mid_term_flusher is None and self._context_compactor is None:
+            return
+        if not self._schedule_post_run_maintenance(context):
+            return
+        thread = threading.Thread(
+            target=self._run_post_run_maintenance_worker,
+            args=(context,),
+            daemon=True,
+            name=f"post-run-maintenance:{context.session_id}:{context.agent_id}",
+        )
+        thread.start()
+
+    def _dispatch_post_run_maintenance_async(self, context: RunContext) -> None:
+        if self._mid_term_flusher is None and self._context_compactor is None:
+            return
+        if not self._schedule_post_run_maintenance(context):
+            return
+        try:
+            asyncio.create_task(
+                self._run_post_run_maintenance_async(context),
+                name=f"post-run-maintenance:{context.session_id}:{context.agent_id}",
+            )
+        except RuntimeError:
+            # 没有活动事件循环时回退到后台线程，避免丢失维护任务。
+            thread = threading.Thread(
+                target=self._run_post_run_maintenance_worker,
+                args=(context,),
+                daemon=True,
+                name=f"post-run-maintenance:{context.session_id}:{context.agent_id}",
+            )
+            thread.start()
+
+    def _schedule_post_run_maintenance(self, context: RunContext) -> bool:
+        key = self._post_run_maintenance_key(context)
+        with self._post_run_maintenance_lock:
+            state = self._post_run_maintenance_states.get(key)
+            if state is None:
+                state = _PostRunMaintenanceState()
+                self._post_run_maintenance_states[key] = state
+
+            state.latest_context = context
+            if state.active:
+                state.pending = True
+                return False
+
+            state.active = True
+            state.pending = False
+            return True
+
+    def _post_run_maintenance_key(self, context: RunContext) -> tuple[str, str]:
+        return (context.session_id, context.agent_id)
+
+    def _run_post_run_maintenance_worker(self, initial_context: RunContext) -> None:
+        context = initial_context
+        while True:
+            try:
+                self._run_post_run_maintenance_once(context)
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "post-run maintenance crashed: session_id=%s agent_id=%s",
+                    context.session_id,
+                    context.agent_id,
+                )
+
+            key = self._post_run_maintenance_key(context)
+            with self._post_run_maintenance_lock:
+                state = self._post_run_maintenance_states.get(key)
+                if state is None:
+                    return
+                if state.pending and state.latest_context is not None:
+                    context = state.latest_context
+                    state.pending = False
+                    continue
+                del self._post_run_maintenance_states[key]
+                return
+
+    def _run_post_run_maintenance_once(self, context: RunContext) -> None:
+        flush_allows_compaction = self._flush_mid_term_after_run_finished(context)
+        if not flush_allows_compaction:
+            _logger.debug(
+                "context compaction skipped because mid-term flush is not complete: session_id=%s agent_id=%s",
+                context.session_id,
+                context.agent_id,
+            )
+            return
+        self._compact_context_after_flush(context)
+
+    async def _run_post_run_maintenance_async(self, context: RunContext) -> None:
+        await asyncio.to_thread(self._run_post_run_maintenance_worker, context)
+
+    def _flush_mid_term_after_run_finished(self, context: RunContext) -> bool:
+        if self._mid_term_flusher is None:
+            return True
+        try:
+            result = self._mid_term_flusher.flush_for_run_finished(context)
+            _logger.debug(
+                "mid-term flush: session_id=%s agent_id=%s flushed=%s reason=%s events=%s score=%s path=%s",
+                context.session_id,
+                context.agent_id,
+                result.flushed,
+                result.reason,
+                result.event_count,
+                result.signal_score,
+                result.daily_path,
+            )
+            return result.flushed or result.reason in {
+                "no_agent_events",
+                "no_new_events",
+                "threshold_not_met",
+                "empty_semantic_units",
+                "empty_event_batch",
+            }
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "mid-term flush failed: session_id=%s agent_id=%s error=%s",
+                context.session_id,
+                context.agent_id,
+                exc,
+            )
+            return False
+
+    def _compact_context_after_flush(self, context: RunContext) -> None:
+        if self._context_compactor is None:
+            return
+        try:
+            result = self._context_compactor.compact_after_flush(context)
+            _logger.debug(
+                "context compaction: session_id=%s agent_id=%s compacted=%s reason=%s original_events=%s compressed=%s retained=%s summary=%s",
+                context.session_id,
+                context.agent_id,
+                result.compacted,
+                result.reason,
+                result.original_event_count,
+                result.compressed_event_count,
+                result.retained_event_count,
+                result.summary_event_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "context compaction failed: session_id=%s agent_id=%s error=%s",
+                context.session_id,
+                context.agent_id,
+                exc,
+            )
 
     def _to_model_tool_schema(self, definition: Any) -> dict[str, Any]:
         return {

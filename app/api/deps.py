@@ -11,13 +11,14 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.facade import FileMemoryFacade
-from app.memory.policies import default_memory_policy
-from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.memory.v3_store import FileMemoryV3Store
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.context_compactor import ContextCompactionConfig, ContextCompactor, RetentionStrategy
 from app.runtime.event_recorder import EventRecorder
+from app.runtime.mid_term_flusher import MidTermFlusher
+from app.runtime.mid_term_flush_worker import MidTermFlushWorker
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.state.manager import StateManager
@@ -52,9 +53,10 @@ __all__ = [
     "get_agent_capability_registry",
     "get_lock_manager",
     "get_memory_manager",
+    "get_mid_term_flusher",
+    "get_mid_term_flush_worker",
     "get_model_client",
-    "get_memory_facade",
-    "get_memory_store",
+    "get_memory_v3_store",
     "get_state_manager",
     "get_state_store",
     "get_session_manager",
@@ -78,14 +80,9 @@ def get_session_repository() -> JsonlSessionRepository:
 
 
 @lru_cache(maxsize=1)
-def get_memory_store() -> JsonlFileMemoryStore:
+def get_memory_v3_store() -> FileMemoryV3Store:
     settings = get_settings()
-    return JsonlFileMemoryStore(root_dir=settings.data_dir / "memory_v2")
-
-
-@lru_cache(maxsize=1)
-def get_memory_facade() -> FileMemoryFacade:
-    return FileMemoryFacade(store=get_memory_store(), policy=default_memory_policy())
+    return FileMemoryV3Store(root_dir=settings.data_dir / "memory_v3")
 
 
 @lru_cache(maxsize=1)
@@ -141,8 +138,8 @@ def get_tool_registry() -> ToolRegistry:
 @lru_cache(maxsize=1)
 def get_memory_manager() -> MemoryManager:
     return MemoryManager(
-        memory_facade=get_memory_facade(),
         capability_registry=get_agent_capability_registry(),
+        memory_v3_store=get_memory_v3_store(),
     )
 
 
@@ -154,6 +151,55 @@ def get_session_manager() -> SessionManager:
 @lru_cache(maxsize=1)
 def get_event_recorder() -> EventRecorder:
     return EventRecorder(session_repository=get_session_repository())
+
+
+@lru_cache(maxsize=1)
+def get_mid_term_flusher() -> MidTermFlusher:
+    settings = get_settings()
+    return MidTermFlusher(
+        session_repository=get_session_repository(),
+        memory_v3_store=get_memory_v3_store(),
+        model_client=get_model_client(),
+        model_context_window_tokens=settings.mid_term_flush_model_context_window_tokens,
+        model_input_ratio=settings.mid_term_flush_input_ratio,
+        model_output_reserve_tokens=settings.mid_term_flush_output_reserve_tokens,
+        prompt_overhead_tokens=settings.mid_term_flush_prompt_overhead_tokens,
+        max_input_tokens=settings.mid_term_flush_max_input_tokens,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_mid_term_flush_worker() -> MidTermFlushWorker:
+    settings = get_settings()
+    return MidTermFlushWorker(
+        flusher=get_mid_term_flusher(),
+        poll_interval_seconds=settings.mid_term_flush_worker_poll_interval_seconds,
+        max_agents_per_tick=settings.mid_term_flush_worker_max_agents_per_tick,
+        max_jobs_per_agent=settings.mid_term_flush_worker_max_jobs_per_agent,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_context_compactor() -> ContextCompactor:
+    settings = get_settings()
+    return ContextCompactor(
+        session_repository=get_session_repository(),
+        model_client=get_model_client(),
+        config=ContextCompactionConfig(
+            enabled=settings.context_compaction_enabled,
+            trigger_event_count=settings.context_compaction_trigger_event_count,
+            trigger_token_count=settings.context_compaction_trigger_token_count,
+            trigger_context_window_ratio=settings.context_compaction_trigger_context_window_ratio,
+            model_context_window_tokens=settings.context_compaction_model_context_window_tokens,
+            retention_strategy=RetentionStrategy(settings.context_compaction_retention_strategy),
+            retain_event_count=settings.context_compaction_retain_event_count,
+            retain_token_count=settings.context_compaction_retain_token_count,
+            retain_context_window_ratio=settings.context_compaction_retain_context_window_ratio,
+            model_input_ratio=settings.context_compaction_model_input_ratio,
+            model_output_reserve_tokens=settings.context_compaction_model_output_reserve_tokens,
+            prompt_overhead_tokens=settings.context_compaction_prompt_overhead_tokens,
+        ),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -192,6 +238,8 @@ def get_agent_runtime() -> AgentRuntime:
         context_assembler=get_context_assembler(),
         model_client=get_model_client(),
         tool_executor=get_tool_registry(),
+        mid_term_flusher=get_mid_term_flusher(),
+        context_compactor=get_context_compactor(),
     )
 
 

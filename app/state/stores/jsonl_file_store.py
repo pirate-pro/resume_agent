@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app.core.errors import StorageError, ValidationError
 from app.state.models import StateRecord, StateScope, StateStatus
@@ -199,7 +200,7 @@ def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
 
 def _write_jsonl_rows(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
         with tmp_path.open("w", encoding="utf-8") as handle:
             for row in rows:
