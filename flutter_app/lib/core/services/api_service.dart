@@ -117,18 +117,26 @@ class ApiService {
 
   // ── Health ────────────────────────────────────────────────────────────
 
-  Future<bool> checkHealth() async {
+  Future<HealthView?> fetchHealth() async {
     try {
       final resp =
           await http.get(_uri("/health")).timeout(const Duration(seconds: 3));
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body);
-        return data["status"] == "ok";
+      if (resp.statusCode != 200) {
+        return null;
       }
-      return false;
+      final data = jsonDecode(resp.body);
+      if (data is! Map<String, dynamic>) {
+        return null;
+      }
+      return HealthView.fromJson(data);
     } catch (_) {
-      return false;
+      return null;
     }
+  }
+
+  Future<bool> checkHealth() async {
+    final health = await fetchHealth();
+    return health?.isOnline == true;
   }
 
   // ── Memories ──────────────────────────────────────────────────────────

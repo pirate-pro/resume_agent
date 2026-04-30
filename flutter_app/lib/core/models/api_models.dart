@@ -78,6 +78,104 @@ class MemoryView {
   }
 }
 
+class MidTermFlushQueueView {
+  final int targets;
+  final int total;
+  final int due;
+  final int retry;
+  final int deferred;
+  final int succeeded;
+
+  MidTermFlushQueueView({
+    required this.targets,
+    required this.total,
+    required this.due,
+    required this.retry,
+    required this.deferred,
+    required this.succeeded,
+  });
+
+  factory MidTermFlushQueueView.fromJson(Map<String, dynamic> json) {
+    int _readInt(String key) {
+      final raw = json[key];
+      if (raw is int) return raw;
+      if (raw is num) return raw.toInt();
+      if (raw is String) return int.tryParse(raw.trim()) ?? 0;
+      return 0;
+    }
+
+    return MidTermFlushQueueView(
+      targets: _readInt("targets"),
+      total: _readInt("total"),
+      due: _readInt("due"),
+      retry: _readInt("retry"),
+      deferred: _readInt("deferred"),
+      succeeded: _readInt("succeeded"),
+    );
+  }
+}
+
+class MidTermFlushHealthView {
+  final bool workerEnabled;
+  final MidTermFlushQueueView? queue;
+  final String? error;
+
+  MidTermFlushHealthView({
+    required this.workerEnabled,
+    required this.queue,
+    required this.error,
+  });
+
+  factory MidTermFlushHealthView.fromJson(Map<String, dynamic> json) {
+    final queueRaw = json["queue"];
+    final queue = queueRaw is Map<String, dynamic>
+        ? MidTermFlushQueueView.fromJson(queueRaw)
+        : queueRaw is Map
+            ? MidTermFlushQueueView.fromJson(
+                Map<String, dynamic>.from(queueRaw),
+              )
+            : null;
+    final rawWorkerEnabled = json["worker_enabled"];
+    final workerEnabled = rawWorkerEnabled == true;
+    final rawError = json["error"];
+    final error = rawError is String && rawError.trim().isNotEmpty
+        ? rawError.trim()
+        : null;
+    return MidTermFlushHealthView(
+      workerEnabled: workerEnabled,
+      queue: queue,
+      error: error,
+    );
+  }
+}
+
+class HealthView {
+  final String status;
+  final MidTermFlushHealthView? midTermFlush;
+
+  HealthView({
+    required this.status,
+    required this.midTermFlush,
+  });
+
+  bool get isOnline => status == "ok";
+
+  factory HealthView.fromJson(Map<String, dynamic> json) {
+    final rawMidTerm = json["mid_term_flush"];
+    final midTerm = rawMidTerm is Map<String, dynamic>
+        ? MidTermFlushHealthView.fromJson(rawMidTerm)
+        : rawMidTerm is Map
+            ? MidTermFlushHealthView.fromJson(
+                Map<String, dynamic>.from(rawMidTerm),
+              )
+            : null;
+    return HealthView(
+      status: (json["status"] ?? "").toString(),
+      midTermFlush: midTerm,
+    );
+  }
+}
+
 class SkillOption {
   final String name;
   final String description;

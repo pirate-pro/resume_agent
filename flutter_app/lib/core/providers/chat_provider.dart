@@ -45,6 +45,7 @@ class ChatProvider extends ChangeNotifier {
   List<String> _selectedSkillNames = [];
   int _maxToolRounds = AppConfig.maxToolRounds;
   bool _serverReachable = false;
+  HealthView? _healthView;
 
   // Debug / side panel data
   List<ToolCallView> _lastToolCalls = [];
@@ -73,6 +74,7 @@ class ChatProvider extends ChangeNotifier {
   List<String> get selectedSkillNames => List.unmodifiable(_selectedSkillNames);
   int get maxToolRounds => _maxToolRounds;
   bool get serverReachable => _serverReachable;
+  HealthView? get healthView => _healthView;
   bool get hasActiveSession => _sessionId != null;
   List<ToolCallView> get lastToolCalls => List.unmodifiable(_lastToolCalls);
   List<MemoryView> get lastMemoryHits => List.unmodifiable(_lastMemoryHits);
@@ -99,8 +101,14 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> _checkHealth() async {
-    _serverReachable = await _api.checkHealth();
+    final health = await _api.fetchHealth();
+    _healthView = health;
+    _serverReachable = health?.isOnline == true;
     notifyListeners();
+  }
+
+  Future<void> refreshHealth() async {
+    await _checkHealth();
   }
 
   // ── Session persistence (local) ─────────────────────────────────────
@@ -586,6 +594,7 @@ class ChatProvider extends ChangeNotifier {
       _error = e.toString();
     } finally {
       _isStreaming = false;
+      unawaited(_checkHealth());
       notifyListeners();
     }
   }

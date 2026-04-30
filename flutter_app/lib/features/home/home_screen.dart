@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -284,6 +285,7 @@ class _DebugPanel extends ConsumerWidget {
                 _PanelIconButton(
                   icon: Icons.refresh_rounded,
                   onTap: () {
+                    unawaited(provider.refreshHealth());
                     provider.refreshEvents();
                     provider.refreshSessionFiles();
                   },
@@ -333,6 +335,14 @@ class _DebugPanel extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
               children: [
+                _section(
+                  '系统状态',
+                  _formatSystemHealth(
+                    provider.healthView,
+                    provider.serverReachable,
+                  ),
+                ),
+                const SizedBox(height: 14),
                 _section(
                   '工具调用',
                   provider.lastToolCalls.isEmpty
@@ -425,6 +435,37 @@ class _DebugPanel extends ConsumerWidget {
       final active = provider.activeFileIds.contains(f.fileId) ? '✓' : ' ';
       buf.writeln('[$active] ${f.filename} (${f.status}) ${f.sizeDisplay}');
     }
+    return buf.toString().trim();
+  }
+
+  String _formatSystemHealth(HealthView? health, bool reachable) {
+    final buf = StringBuffer();
+    final status = health?.status ?? (reachable ? 'ok' : 'offline');
+    buf.writeln('后端状态: ${reachable ? '在线' : '离线'} ($status)');
+    final mid = health?.midTermFlush;
+    if (mid == null) {
+      buf.writeln('mid_term_flush: -');
+      return buf.toString().trim();
+    }
+
+    buf.writeln('mid_term_flush.worker_enabled: ${mid.workerEnabled}');
+    if (mid.error != null) {
+      buf.writeln('mid_term_flush.error: ${mid.error}');
+      return buf.toString().trim();
+    }
+
+    final queue = mid.queue;
+    if (queue == null) {
+      buf.writeln('mid_term_flush.queue: -');
+      return buf.toString().trim();
+    }
+
+    buf.writeln('queue.targets: ${queue.targets}');
+    buf.writeln('queue.total: ${queue.total}');
+    buf.writeln('queue.due: ${queue.due}');
+    buf.writeln('queue.retry: ${queue.retry}');
+    buf.writeln('queue.deferred: ${queue.deferred}');
+    buf.writeln('queue.succeeded: ${queue.succeeded}');
     return buf.toString().trim();
   }
 }
