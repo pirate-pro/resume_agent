@@ -16,6 +16,28 @@ from tests.helpers import SequenceModelClient, StaticModelClient, build_chat_ser
 __all__ = []
 
 
+def test_health_endpoint_exposes_mid_term_queue_summary() -> None:
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] in {"ok", "degraded"}
+    assert "mid_term_flush" in payload
+    mid_term = payload["mid_term_flush"]
+    assert isinstance(mid_term.get("worker_enabled"), bool)
+    if "queue" in mid_term:
+        queue = mid_term["queue"]
+        assert queue["targets"] >= 0
+        assert queue["total"] >= 0
+        assert queue["due"] >= 0
+        assert queue["retry"] >= 0
+        assert queue["deferred"] >= 0
+        assert queue["succeeded"] >= 0
+    else:
+        assert isinstance(mid_term.get("error"), str)
+
+
 def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
     return RunContext(
         session_id=session_id,

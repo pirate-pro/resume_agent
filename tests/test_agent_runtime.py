@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -12,15 +14,13 @@ from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.facade import FileMemoryFacade
-from app.memory.models import MemoryReadRequest
-from app.memory.policies import default_memory_policy
-from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.memory.v3_store import FileMemoryV3Store
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
+from app.runtime.mid_term_flusher import MidTermFlusher, MidTermFlushResult
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.state.manager import StateManager
@@ -52,17 +52,19 @@ def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
 def _build_runtime(
     tmp_path: Path,
     model_client: ChatModelClient,
-) -> tuple[AgentRuntime, JsonlSessionRepository, FileMemoryFacade]:
+) -> tuple[AgentRuntime, JsonlSessionRepository, MemoryManager]:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
     state_store = JsonlFileStateStore(root_dir=tmp_path / "state_v1")
     state_manager = StateManager(store=state_store)
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))
     capability_registry = _capability_registry()
+    memory_v3_store = FileMemoryV3Store(root_dir=tmp_path / "memory_v3")
 
-    memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
+    memory_manager = MemoryManager(
+        capability_registry=capability_registry,
+        memory_v3_store=memory_v3_store,
+    )
     tool_registry = ToolRegistry(capability_registry=capability_registry)
     tool_registry.register(MemoryWriteTool(memory_manager=memory_manager))
 
@@ -82,8 +84,13 @@ def _build_runtime(
         context_assembler=context_assembler,
         model_client=model_client,
         tool_executor=tool_registry,
+        mid_term_flusher=MidTermFlusher(
+            session_repository=session_repo,
+            memory_v3_store=memory_v3_store,
+            model_client=model_client,
+        ),
     )
-    return runtime, session_repo, memory_facade
+    return runtime, session_repo, memory_manager
 
 
 
@@ -123,7 +130,7 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
             ModelResponse(content="saved", tool_calls=[]),
         ]
     )
-    runtime, session_repo, memory_facade = _build_runtime(tmp_path, model)
+    runtime, session_repo, memory_manager = _build_runtime(tmp_path, model)
 
     output = runtime.run(
         AgentRunInput(
@@ -136,22 +143,14 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
     )
 
     events = session_repo.list_events("sess_2")
-    memories = memory_facade.read_context(
-        MemoryReadRequest(
-            agent_id="agent_main",
-            session_id="sess_2",
-            query="jsonl",
-            limit=10,
-            token_budget=2400,
-        )
-    ).items
+    memories = memory_manager.search(query="jsonl", limit=10, context=_context("sess_2"))
 
     assert output.answer == "saved"
     assert len(output.tool_calls) == 1
     assert any(event.type == "tool_call" for event in events)
     assert any(event.type == "tool_result" for event in events)
     assert any(event.type == "memory_write" for event in events)
-    assert len(memories) == 1
+    assert any(item.content == "User prefers JSONL" for item in memories)
 
 
 def test_runtime_recovers_when_final_round_returns_empty_answer(tmp_path: Path) -> None:
@@ -355,3 +354,44 @@ def test_runtime_stream_does_not_emit_and_reset_partial_answer_before_tool_call(
     assert answer_deltas == ["已经处理完毕。"]
     assert "answer_reset" not in event_names
     assert "answer_meta_reset" not in event_names
+
+
+def test_runtime_post_run_maintenance_is_single_flight_per_session_agent(tmp_path: Path) -> None:
+    class SlowFlusher(MidTermFlusher):
+        def __init__(self) -> None:
+            self.calls = 0
+            self._lock = threading.Lock()
+
+        def flush_for_run_finished(self, context: RunContext) -> MidTermFlushResult:
+            with self._lock:
+                self.calls += 1
+            time.sleep(0.05)
+            return MidTermFlushResult(
+                flushed=False,
+                reason="threshold_not_met",
+                session_id=context.session_id,
+                agent_id=context.agent_id,
+                event_count=0,
+                signal_score=0,
+            )
+
+    runtime, _, _ = _build_runtime(tmp_path, StaticModelClient(content="ok"))
+    slow_flusher = SlowFlusher()
+    runtime._mid_term_flusher = slow_flusher  # noqa: SLF001
+    runtime._context_compactor = None  # noqa: SLF001
+
+    for index in range(12):
+        context = RunContext(
+            session_id="sess_single_flight",
+            run_id=f"run_{index}",
+            agent_id="agent_main",
+            turn_id=f"turn_{index}",
+            entry_agent_id="agent_main",
+            parent_run_id=None,
+            trace_flags={},
+        )
+        runtime._dispatch_post_run_maintenance_sync(context)  # noqa: SLF001
+
+    time.sleep(0.25)
+
+    assert 1 <= slow_flusher.calls <= 2

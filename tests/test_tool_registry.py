@@ -10,10 +10,8 @@ import pytest
 from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionFile, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
-from app.memory.facade import FileMemoryFacade
-from app.memory.models import MemoryReadRequest, MemoryScope
-from app.memory.policies import default_memory_policy
-from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.memory.models import MemoryScope
+from app.memory.v3_store import FileMemoryV3Store
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
@@ -64,11 +62,14 @@ def _registry(
 
 
 def _memory_manager(
-    memory_facade: FileMemoryFacade,
+    tmp_path: Path,
     capability_registry: AgentCapabilityRegistry | None = None,
 ) -> MemoryManager:
     resolved = capability_registry if capability_registry is not None else _capability_registry()
-    return MemoryManager(memory_facade=memory_facade, capability_registry=resolved)
+    return MemoryManager(
+        capability_registry=resolved,
+        memory_v3_store=FileMemoryV3Store(root_dir=tmp_path / "memory_v3"),
+    )
 
 
 def _state_manager(tmp_path: Path) -> StateManager:
@@ -90,9 +91,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def test_tool_register_success_and_duplicate_error(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
     registry = _registry()
 
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -103,10 +102,8 @@ def test_tool_register_success_and_duplicate_error(tmp_path: Path) -> None:
         registry.register(MemoryWriteTool(memory_manager=memory_manager))
 
 
-def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+def test_memory_write_tool_writes_v3_memory(tmp_path: Path) -> None:
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -117,23 +114,17 @@ def test_memory_write_tool_writes_v2_memory(tmp_path: Path) -> None:
     )
 
     assert result.success is True
-    bundle = memory_facade.read_context(
-        MemoryReadRequest(
-            agent_id="agent_main",
-            session_id="sess_1",
-            query="markdown",
-            limit=5,
-            token_budget=1200,
-        )
+    _, _, bundle = memory_manager.search_bundle(
+        query="markdown",
+        limit=5,
+        context=_context("sess_1"),
     )
     assert len(bundle.items) == 1
     assert bundle.items[0].scope.value == "agent_long"
 
 
 def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -165,9 +156,7 @@ def test_memory_write_tool_without_tags_defaults_to_short_and_is_agent_scoped(tm
 
 
 def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     main_registry = _registry()
     main_registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -196,10 +185,32 @@ def test_memory_search_tool_isolated_by_agent_id(tmp_path: Path) -> None:
     assert json.loads(other_search_result.content) == []
 
 
+def test_memory_search_tool_recalls_assigned_assistant_name_by_name_keyword(tmp_path: Path) -> None:
+    memory_manager = _memory_manager(tmp_path)
+
+    registry = _registry()
+    registry.register(MemoryWriteTool(memory_manager=memory_manager))
+    registry.register(MemorySearchTool(memory_manager=memory_manager))
+
+    registry.execute(
+        ToolCall(
+            name="memory_write",
+            arguments={"content": "用户给我起名为“哈喽”。", "tags": ["preference", "long_term"]},
+        ),
+        context=_context("sess_name_write"),
+    )
+    search_result = registry.execute(
+        ToolCall(name="memory_search", arguments={"query": "名字", "limit": 5}),
+        context=_context("sess_name_read"),
+    )
+
+    payload = json.loads(search_result.content)
+    assert search_result.success is True
+    assert any(item["content"] == "用户给我起名为“哈喽”。" for item in payload)
+
+
 def test_memory_inspect_tool_lists_structured_memory_details(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -250,7 +261,7 @@ def test_memory_explain_tool_dry_runs_admission_and_classification(tmp_path: Pat
     assert preference_result.success is True
     assert preference_payload["dry_run"] is True
     assert preference_payload["admission"]["accepted"] is True
-    assert preference_payload["candidate"]["scope_hint"] == "agent_long"
+    assert preference_payload["write_plan"]["scope"] == "agent_long"
     assert preference_payload["classification"]["canonical_key"] == "response_style"
     assert preference_payload["classification"]["normalized_value"] == "concise"
     assert preference_payload["lane"] == "response_preferences"
@@ -259,9 +270,7 @@ def test_memory_explain_tool_dry_runs_admission_and_classification(tmp_path: Pat
 
 
 def test_memory_write_tool_rejects_working_state_and_points_to_state_set(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -277,9 +286,7 @@ def test_memory_write_tool_rejects_working_state_and_points_to_state_set(tmp_pat
 
 
 def test_memory_forget_tool_forgets_target_memory(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -313,9 +320,7 @@ def test_memory_forget_tool_forgets_target_memory(tmp_path: Path) -> None:
 
 
 def test_memory_update_tool_replaces_single_match(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -353,24 +358,27 @@ def test_memory_update_tool_replaces_single_match(tmp_path: Path) -> None:
     update_payload = json.loads(update_result.content)
     assert update_result.success is True
     assert update_payload["updated"] is True
-    assert update_payload["update_mode"] == "canonical_supersede"
+    assert update_payload["update_mode"] == "archive_then_write"
     assert len(json.loads(new_search.content)) >= 1
     old_payload = json.loads(old_search.content)
     assert all(item.get("content") != "用户称呼是李华" for item in old_payload)
-    rows = _read_jsonl(tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl")
+    rows = _read_jsonl(tmp_path / "memory_v3" / "agents" / "agent_main" / "facts.jsonl")
     active_rows = [row for row in rows if row["status"] == "active"]
     archived_rows = [row for row in rows if row["status"] == "archived"]
     assert len(active_rows) == 1
     assert active_rows[0]["metadata"]["normalized_value"] == "小李"
-    assert active_rows[0]["parent_memory_id"] == update_payload["old_memory_id"]
     assert len(archived_rows) == 1
-    assert archived_rows[0]["metadata"]["superseded_by_normalized_value"] == "小李"
+    assert archived_rows[0]["metadata"]["archivedReason"].startswith("memory_update_tool:")
+    long_term_payload = json.loads(
+        (tmp_path / "memory_v3" / "agents" / "agent_main" / "long_term_overlay.json").read_text(encoding="utf-8")
+    )
+    personal_context = long_term_payload["user"]["personalContext"]["summary"]
+    assert "小李" in personal_context
+    assert "李华" not in personal_context
 
 
 def test_memory_update_tool_returns_ambiguous_when_multi_match(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -409,10 +417,8 @@ def test_memory_update_tool_returns_ambiguous_when_multi_match(tmp_path: Path) -
     assert len(payload["candidates"]) >= 2
 
 
-def test_memory_update_tool_rejects_unkeyed_target_without_rewrite(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+def test_memory_update_tool_replaces_unkeyed_target_when_unique(tmp_path: Path) -> None:
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -439,17 +445,15 @@ def test_memory_update_tool_rejects_unkeyed_target_without_rewrite(tmp_path: Pat
     )
 
     payload = json.loads(update_result.content)
-    rows = _read_jsonl(tmp_path / "memory_v2" / "agents" / "agent_main" / "long.jsonl")
+    rows = _read_jsonl(tmp_path / "memory_v3" / "agents" / "agent_main" / "facts.jsonl")
     assert update_result.success is True
-    assert payload["updated"] is False
-    assert payload["reason"] == "target_missing_canonical_key"
+    assert payload["updated"] is True
+    assert payload["update_mode"] == "archive_then_write"
     assert len([row for row in rows if row["status"] == "active"]) == 1
 
 
-def test_memory_update_tool_prefers_canonical_exact_before_text_search(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+def test_memory_update_tool_returns_ambiguous_for_multiple_text_matches(tmp_path: Path) -> None:
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -500,18 +504,16 @@ def test_memory_update_tool_prefers_canonical_exact_before_text_search(tmp_path:
     ambiguous_payload = json.loads(ambiguous_search.content)
     assert update_result.success is True
     assert len(ambiguous_payload) >= 2
-    assert payload["updated"] is True
-    assert payload["match_strategy"] == "canonical_exact"
-    assert payload["update_mode"] == "canonical_supersede"
-    assert len(json.loads(new_search.content)) >= 1
+    assert payload["updated"] is False
+    assert payload["reason"] == "ambiguous_match"
+    assert payload["match_strategy"] == "text_search"
+    assert all(item.get("content") != "用户称呼改为小李" for item in json.loads(new_search.content))
     old_payload = json.loads(old_search.content)
-    assert all(item.get("content") != "用户称呼是李华" for item in old_payload)
+    assert any(item.get("content") == "用户称呼是李华" for item in old_payload)
 
 
 def test_memory_update_tool_canonical_update_respects_source_priority(tmp_path: Path) -> None:
-    memory_store = JsonlFileMemoryStore(root_dir=tmp_path / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
-    memory_manager = _memory_manager(memory_facade)
+    memory_manager = _memory_manager(tmp_path)
 
     registry = _registry()
     registry.register(MemoryWriteTool(memory_manager=memory_manager))
@@ -551,8 +553,8 @@ def test_memory_update_tool_canonical_update_respects_source_priority(tmp_path: 
     assert update_result.success is True
     assert payload["updated"] is False
     assert payload["reason"] == "source_priority_conflict"
-    assert payload["match_strategy"] == "canonical_exact"
-    assert payload["update_mode"] == "canonical_direct"
+    assert payload["match_strategy"] == "text_search"
+    assert payload["update_mode"] == "archive_then_write"
     assert any(item.get("content") == "用户称呼是李华" for item in json.loads(old_search.content))
     assert all(item.get("content") != "用户称呼改为小李" for item in json.loads(new_search.content))
 

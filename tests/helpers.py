@@ -12,13 +12,12 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
-from app.memory.facade import FileMemoryFacade
-from app.memory.policies import default_memory_policy
-from app.memory.stores.jsonl_file_store import JsonlFileMemoryStore
+from app.memory.v3_store import FileMemoryV3Store
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
+from app.runtime.mid_term_flusher import MidTermFlusher
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.state.manager import StateManager
@@ -124,12 +123,14 @@ def build_chat_service(
     stream_run_timeout_seconds: float = 300.0,
 ) -> tuple[ChatService, MemoryManager]:
     session_repository = JsonlSessionRepository(data_dir=data_dir)
-    memory_store = JsonlFileMemoryStore(root_dir=data_dir / "memory_v2")
-    memory_facade = FileMemoryFacade(store=memory_store, policy=default_memory_policy())
     state_store = JsonlFileStateStore(root_dir=data_dir / "state_v1")
     state_manager = StateManager(store=state_store)
     capability_registry = AgentCapabilityRegistry.for_tests()
-    memory_manager = MemoryManager(memory_facade=memory_facade, capability_registry=capability_registry)
+    memory_v3_store = FileMemoryV3Store(root_dir=data_dir / "memory_v3")
+    memory_manager = MemoryManager(
+        capability_registry=capability_registry,
+        memory_v3_store=memory_v3_store,
+    )
     skill_repository = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))
 
@@ -165,6 +166,11 @@ def build_chat_service(
         context_assembler=context_assembler,
         model_client=model_client,
         tool_executor=tool_registry,
+        mid_term_flusher=MidTermFlusher(
+            session_repository=session_repository,
+            memory_v3_store=memory_v3_store,
+            model_client=model_client,
+        ),
     )
     service = ChatService(
         runtime=runtime,
