@@ -5,13 +5,23 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import SessionNotFoundError, StorageError, ValidationError
 from app.domain.models import EventRecord, SessionFile, SessionMeta
+from app.infra.storage.session_io import utc_now, write_json_atomically
+from app.infra.storage.session_serializers import (
+    event_from_payload,
+    event_to_payload,
+    file_from_payload,
+    file_to_payload,
+    is_activatable_file_status,
+    session_meta_from_payload,
+    session_meta_to_payload,
+    validate_file_id,
+)
 
 __all__ = ["JsonlSessionRepository"]
 _logger = logging.getLogger(__name__)
@@ -41,7 +51,7 @@ class JsonlSessionRepository:
                 raise StorageError(f"Session metadata exists but cannot be read: {session_id}")
             return loaded
 
-        now = _utc_now()
+        now = utc_now()
         meta = SessionMeta(
             session_id=session_id,
             title="New Session",
@@ -56,24 +66,14 @@ class JsonlSessionRepository:
             session_dir.mkdir(parents=True, exist_ok=True)
             workspace_path.mkdir(parents=True, exist_ok=True)
             events_path.touch(exist_ok=True)
-            self._write_json_atomically(
+            write_json_atomically(
                 files_path,
                 {"files": [], "active_file_ids": []},
                 error_prefix=f"Failed to initialize files manifest for '{session_id}'",
             )
-            metadata_payload = {
-                "session_id": meta.session_id,
-                "title": meta.title,
-                "created_at": _to_iso(meta.created_at),
-                "updated_at": _to_iso(meta.updated_at),
-                "is_pinned": meta.is_pinned,
-                "pinned_at": _to_iso(meta.pinned_at) if meta.pinned_at is not None else None,
-                "participants": meta.participants,
-                "entry_agent_id": meta.entry_agent_id,
-            }
-            self._write_json_atomically(
+            write_json_atomically(
                 metadata_path,
-                metadata_payload,
+                session_meta_to_payload(meta),
                 error_prefix=f"Failed to initialize metadata for '{session_id}'",
             )
         except OSError as exc:
@@ -88,16 +88,9 @@ class JsonlSessionRepository:
             return None
         try:
             data = json.loads(metadata_path.read_text(encoding="utf-8"))
-            return SessionMeta(
-                session_id=str(data["session_id"]),
-                title=str(data["title"]),
-                created_at=_from_iso(str(data["created_at"])),
-                updated_at=_from_iso(str(data["updated_at"])),
-                is_pinned=_read_bool_payload(data.get("is_pinned")),
-                pinned_at=_read_optional_datetime(data.get("pinned_at")),
-                participants=_read_participants_payload(data.get("participants")),
-                entry_agent_id=_read_optional_text(data.get("entry_agent_id")),
-            )
+            if not isinstance(data, dict):
+                raise StorageError(f"Invalid session metadata for '{session_id}': root must be object.")
+            return session_meta_from_payload(data)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
             raise StorageError(f"Failed to read session metadata for '{session_id}': {exc}") from exc
 
@@ -130,12 +123,12 @@ class JsonlSessionRepository:
         resolved_is_pinned = meta.is_pinned if is_pinned is None else is_pinned
         resolved_pinned_at = meta.pinned_at
         if is_pinned is not None:
-            resolved_pinned_at = _utc_now() if is_pinned else None
+            resolved_pinned_at = utc_now() if is_pinned else None
         updated = SessionMeta(
             session_id=meta.session_id,
             title=normalized_title,
             created_at=meta.created_at,
-            updated_at=_utc_now(),
+            updated_at=utc_now(),
             is_pinned=resolved_is_pinned,
             pinned_at=resolved_pinned_at,
             participants=meta.participants,
@@ -220,17 +213,7 @@ class JsonlSessionRepository:
             raise ValidationError("event.session_id must match append target session_id.")
         if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
-        line = {
-            "event_id": event.event_id,
-            "session_id": event.session_id,
-            "agent_id": event.agent_id,
-            "run_id": event.run_id,
-            "parent_run_id": event.parent_run_id,
-            "event_version": event.event_version,
-            "type": event.type,
-            "payload": event.payload,
-            "created_at": _to_iso(event.created_at),
-        }
+        line = event_to_payload(event)
         events_path = self._session_dir(session_id) / "events.jsonl"
         try:
             with events_path.open("a", encoding="utf-8") as handle:
@@ -287,19 +270,7 @@ class JsonlSessionRepository:
             if event.event_id in seen_ids:
                 raise ValidationError("event.event_id values must be unique.")
             seen_ids.add(event.event_id)
-            lines.append(
-                {
-                    "event_id": event.event_id,
-                    "session_id": event.session_id,
-                    "agent_id": event.agent_id,
-                    "run_id": event.run_id,
-                    "parent_run_id": event.parent_run_id,
-                    "event_version": event.event_version,
-                    "type": event.type,
-                    "payload": event.payload,
-                    "created_at": _to_iso(event.created_at),
-                }
-            )
+            lines.append(event_to_payload(event))
 
         events_path = self._session_dir(session_id) / "events.jsonl"
         tmp_path = events_path.with_name(f".{events_path.name}.{uuid4().hex}.tmp")
@@ -325,20 +296,7 @@ class JsonlSessionRepository:
                     if not stripped:
                         continue
                     payload: dict[str, Any] = json.loads(stripped)
-                    records.append(
-                        EventRecord(
-                            event_id=str(payload["event_id"]),
-                            session_id=str(payload["session_id"]),
-                            type=str(payload["type"]),
-                            payload=dict(payload["payload"]),
-                            created_at=_from_iso(str(payload["created_at"])),
-                            agent_id=_read_optional_text(payload.get("agent_id")) or "agent_main",
-                            run_id=_read_optional_text(payload.get("run_id"))
-                            or f"run_legacy_{str(payload['session_id'])}",
-                            parent_run_id=_read_optional_text(payload.get("parent_run_id")),
-                            event_version=_read_event_version(payload.get("event_version")),
-                        )
-                    )
+                    records.append(event_from_payload(payload))
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
             raise StorageError(f"Failed to read events for '{session_id}': {exc}") from exc
         _logger.debug("读取会话事件完成: session_id=%s count=%s", session_id, len(records))
@@ -377,7 +335,7 @@ class JsonlSessionRepository:
         if not isinstance(files_payload, list):
             raise StorageError(f"Invalid files manifest for '{session_id}': files must be a list.")
 
-        file_row = _file_to_payload(file_record)
+        file_row = file_to_payload(file_record)
         updated_rows: list[dict[str, Any]] = []
         replaced = False
         for row in files_payload:
@@ -406,12 +364,12 @@ class JsonlSessionRepository:
         for row in files_payload:
             if not isinstance(row, dict):
                 continue
-            output.append(_payload_to_file(session_id, row))
+            output.append(file_from_payload(session_id, row))
         return output
 
     def get_session_file(self, session_id: str, file_id: str) -> SessionFile | None:
         session_id = self._validate_session_id(session_id)
-        normalized_file_id = _validate_file_id(file_id)
+        normalized_file_id = validate_file_id(file_id)
         for item in self.list_session_files(session_id):
             if item.file_id == normalized_file_id:
                 return item
@@ -434,7 +392,7 @@ class JsonlSessionRepository:
             if file_id not in existing_ids:
                 continue
             status = next((item.status for item in existing_files if item.file_id == file_id), "")
-            if not _is_activatable_file_status(status):
+            if not is_activatable_file_status(status):
                 continue
             normalized.append(file_id)
             seen.add(file_id)
@@ -457,14 +415,14 @@ class JsonlSessionRepository:
                 continue
             file_id = raw.strip()
             item = existing.get(file_id)
-            if item is None or not _is_activatable_file_status(item.status):
+            if item is None or not is_activatable_file_status(item.status):
                 continue
             result.append(file_id)
         return result
 
     def read_session_file_text(self, session_id: str, file_id: str) -> str:
         session_id = self._validate_session_id(session_id)
-        normalized_file_id = _validate_file_id(file_id)
+        normalized_file_id = validate_file_id(file_id)
         file_record = self.get_session_file(session_id, normalized_file_id)
         if file_record is None:
             raise SessionNotFoundError(f"Session file not found: session_id={session_id} file_id={normalized_file_id}")
@@ -503,7 +461,7 @@ class JsonlSessionRepository:
 
     def _write_files_state(self, session_id: str, payload: dict[str, Any]) -> None:
         path = self._files_manifest_path(session_id)
-        self._write_json_atomically(
+        write_json_atomically(
             path,
             payload,
             error_prefix=f"Failed to write files manifest for '{session_id}'",
@@ -531,7 +489,7 @@ class JsonlSessionRepository:
             session_id=meta.session_id,
             title=meta.title,
             created_at=meta.created_at,
-            updated_at=_utc_now(),
+            updated_at=utc_now(),
             is_pinned=meta.is_pinned,
             pinned_at=meta.pinned_at,
             participants=participants,
@@ -551,150 +509,8 @@ class JsonlSessionRepository:
 
     def _write_session_metadata(self, session_id: str, meta: SessionMeta) -> None:
         metadata_path = self._session_dir(session_id) / "metadata.json"
-        payload = {
-            "session_id": meta.session_id,
-            "title": meta.title,
-            "created_at": _to_iso(meta.created_at),
-            "updated_at": _to_iso(meta.updated_at),
-            "is_pinned": meta.is_pinned,
-            "pinned_at": _to_iso(meta.pinned_at) if meta.pinned_at is not None else None,
-            "participants": meta.participants,
-            "entry_agent_id": meta.entry_agent_id,
-        }
-        self._write_json_atomically(
+        write_json_atomically(
             metadata_path,
-            payload,
+            session_meta_to_payload(meta),
             error_prefix=f"Failed to update metadata for '{session_id}'",
         )
-
-    def _write_json_atomically(self, path: Path, payload: dict[str, Any], *, error_prefix: str) -> None:
-        temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-        try:
-            temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            temp_path.replace(path)
-        except OSError as exc:
-            try:
-                if temp_path.exists():
-                    temp_path.unlink()
-            except OSError:
-                pass
-            raise StorageError(f"{error_prefix}: {exc}") from exc
-
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-
-def _to_iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
-
-def _from_iso(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value).astimezone(UTC)
-
-
-def _read_optional_datetime(value: Any) -> datetime | None:
-    text = _read_optional_text(value)
-    if text is None:
-        return None
-    return _from_iso(text)
-
-
-def _read_bool_payload(value: Any) -> bool:
-    if value is None:
-        return False
-    if not isinstance(value, bool):
-        raise StorageError("Invalid session metadata: is_pinned must be bool.")
-    return value
-
-
-def _read_optional_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    return normalized or None
-
-
-def _read_participants_payload(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw in value:
-        if not isinstance(raw, str):
-            continue
-        participant = raw.strip()
-        if not participant or participant in seen:
-            continue
-        normalized.append(participant)
-        seen.add(participant)
-    return normalized
-
-
-def _read_event_version(value: Any) -> int:
-    if value is None:
-        return 2
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return 2
-    return parsed if parsed > 0 else 2
-
-
-def _validate_file_id(file_id: str) -> str:
-    if not isinstance(file_id, str) or not file_id.strip():
-        raise ValidationError("file_id must be a non-empty string.")
-    return file_id.strip()
-
-
-def _is_activatable_file_status(status: str) -> bool:
-    return status in {"uploaded", "ready"}
-
-
-def _file_to_payload(item: SessionFile) -> dict[str, Any]:
-    return {
-        "file_id": item.file_id,
-        "filename": item.filename,
-        "media_type": item.media_type,
-        "size_bytes": item.size_bytes,
-        "status": item.status,
-        "uploaded_at": _to_iso(item.uploaded_at),
-        "storage_relpath": item.storage_relpath,
-        "text_relpath": item.text_relpath,
-        "error": item.error,
-        "parsed_char_count": item.parsed_char_count,
-        "parsed_token_estimate": item.parsed_token_estimate,
-        "parsed_at": None if item.parsed_at is None else _to_iso(item.parsed_at),
-    }
-
-
-def _payload_to_file(session_id: str, payload: dict[str, Any]) -> SessionFile:
-    try:
-        return SessionFile(
-            file_id=str(payload["file_id"]),
-            session_id=session_id,
-            filename=str(payload["filename"]),
-            media_type=str(payload["media_type"]),
-            size_bytes=int(payload["size_bytes"]),
-            status=str(payload["status"]),
-            uploaded_at=_from_iso(str(payload["uploaded_at"])),
-            storage_relpath=str(payload["storage_relpath"]),
-            text_relpath=None if payload.get("text_relpath") is None else str(payload["text_relpath"]),
-            error=None if payload.get("error") is None else str(payload["error"]),
-            parsed_char_count=None
-            if payload.get("parsed_char_count") is None
-            else int(payload["parsed_char_count"]),
-            parsed_token_estimate=None
-            if payload.get("parsed_token_estimate") is None
-            else int(payload["parsed_token_estimate"]),
-            parsed_at=None if payload.get("parsed_at") is None else _from_iso(str(payload["parsed_at"])),
-        )
-    except (KeyError, TypeError, ValueError) as exc:
-        raise StorageError(f"Invalid session file payload for '{session_id}': {exc}") from exc

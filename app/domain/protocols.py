@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -24,6 +24,7 @@ __all__ = [
     "ModelResponse",
     "StreamChunk",
     "SessionRepository",
+    "SkillSummaryRecord",
     "SkillRepository",
     "ToolExecutor",
 ]
@@ -91,8 +92,15 @@ class SessionRepository(Protocol):
     def read_session_file_text(self, session_id: str, file_id: str) -> str: ...
 
 
+class SkillSummaryRecord(Protocol):
+    name: str
+    description: str
+
+
 class SkillRepository(Protocol):
     def load_skills(self, skill_names: list[str]) -> dict[str, str]: ...
+
+    def list_skills(self) -> Sequence[SkillSummaryRecord]: ...
 
 
 class AgentDocumentRepository(Protocol):
