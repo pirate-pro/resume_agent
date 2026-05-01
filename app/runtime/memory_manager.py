@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 from app.core.errors import ValidationError
@@ -15,26 +14,34 @@ from app.memory.models import (
     MemoryRecord,
     MemoryScope,
 )
-from app.memory.policies import (
-    CONTEXT_LANE_LIMITS,
-    CONTEXT_LANE_ORDER,
-    memory_lane_for_metadata,
-)
-from app.memory.file_models import MemoryFact
 from app.memory.file_store import FileMemoryStore
-from app.memory.write_plan import MemoryWritePlan, build_memory_write_plan, infer_write_scope_from_tags
-from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
+from app.memory.write_plan import build_memory_write_plan, infer_write_scope_from_tags
+from app.runtime.agent_capability import AgentCapabilityRegistry
+from app.runtime.memory.context_lanes import (
+    dedupe_records,
+    flatten_memory_lanes,
+    group_records_by_context_lane,
+    limit_memory_lanes,
+)
+from app.runtime.memory.models import MemoryWriteResult
+from app.runtime.memory.read_plans import build_agent_read_plan, build_context_read_plan
+from app.runtime.memory.serializers import (
+    build_search_summary,
+    memory_item_from_fact,
+    memory_metadata_from_plan,
+    to_memory_item,
+)
+from app.runtime.memory.validation import (
+    normalize_agent_id,
+    normalize_context,
+    normalize_limit,
+    normalize_memory_ids,
+    normalize_query,
+    normalize_scopes,
+)
 
 __all__ = ["MemoryManager", "MemoryWriteResult"]
 _logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class MemoryWriteResult:
-    memory: MemoryItem
-    write_id: str
-    written_records: int
-    written_memory_ids: list[str]
 
 
 class MemoryManager:
@@ -76,7 +83,7 @@ class MemoryManager:
         source: str = "memory_manager",
         target_agent_id: str | None = None,
     ) -> MemoryWriteResult:
-        run_context = _normalize_context(context)
+        run_context = normalize_context(context)
         if not isinstance(content, str) or not content.strip():
             raise ValidationError("content must be a non-empty string.")
         if not isinstance(tags, list):
@@ -116,7 +123,7 @@ class MemoryManager:
             content=plan.content,
         )
         if existing_fact is not None:
-            memory = _memory_item_from_fact(
+            memory = memory_item_from_fact(
                 fact=existing_fact,
                 session_id=run_context.session_id,
                 scope=plan.scope,
@@ -161,7 +168,7 @@ class MemoryManager:
             source_type=source,
             tags=plan.tags,
             inject_policy=plan.inject_policy,
-            metadata=_memory_metadata_from_plan(
+            metadata=memory_metadata_from_plan(
                 plan=plan,
                 source_agent_id=run_context.agent_id,
                 target_agent_id=resolved_agent_id,
@@ -216,7 +223,7 @@ class MemoryManager:
         context: RunContext,
     ) -> tuple[list[MemoryItem], dict[str, Any]]:
         lanes, summary = self.search_context_memory_lanes(query=query, limit=limit, context=context)
-        result = _flatten_memory_lanes(lanes)
+        result = flatten_memory_lanes(lanes)
         summary["hit_count"] = len(result)
         return result, summary
 
@@ -226,14 +233,14 @@ class MemoryManager:
         limit: int,
         context: RunContext,
     ) -> tuple[dict[str, list[MemoryItem]], dict[str, Any]]:
-        run_context = _normalize_context(context)
+        run_context = normalize_context(context)
         normalized_query, normalized_limit, bundle = self._search_bundle_for_context(
             query=query,
             limit=max(limit * 2, 12),
             context=run_context,
         )
         requester_capability = self._capability_registry.require(run_context.agent_id)
-        read_plan = _build_context_read_plan(
+        read_plan = build_context_read_plan(
             capability=requester_capability,
             session_id=run_context.session_id,
             include_short=False,
@@ -247,10 +254,10 @@ class MemoryManager:
             standing_only=True,
             include_long_term_summaries=True,
         )
-        records = _dedupe_records(bundle.items + standing_bundle.items)
-        lanes = _limit_memory_lanes(_group_records_by_context_lane(records), max_total=normalized_limit)
-        result = _flatten_memory_lanes(lanes)
-        summary = _build_search_summary(
+        records = dedupe_records(bundle.items + standing_bundle.items)
+        lanes = limit_memory_lanes(group_records_by_context_lane(records), max_total=normalized_limit)
+        result = flatten_memory_lanes(lanes)
+        summary = build_search_summary(
             query=normalized_query,
             agent_id=run_context.agent_id,
             session_id=run_context.session_id,
@@ -277,14 +284,14 @@ class MemoryManager:
         limit: int,
         context: RunContext,
     ) -> tuple[list[MemoryItem], dict[str, Any]]:
-        run_context = _normalize_context(context)
+        run_context = normalize_context(context)
         normalized_query, normalized_limit, bundle = self.search_bundle(
             query=query,
             limit=limit,
             context=run_context,
         )
-        result = [_to_memory_item(item) for item in bundle.items]
-        summary = _build_search_summary(
+        result = [to_memory_item(item) for item in bundle.items]
+        summary = build_search_summary(
             query=normalized_query,
             agent_id=run_context.agent_id,
             session_id=run_context.session_id,
@@ -307,11 +314,11 @@ class MemoryManager:
         limit: int,
         context: RunContext,
     ) -> tuple[str, int, MemoryReadBundle]:
-        run_context = _normalize_context(context)
-        normalized_query = _normalize_query(query)
-        normalized_limit = _normalize_limit(limit)
+        run_context = normalize_context(context)
+        normalized_query = normalize_query(query)
+        normalized_limit = normalize_limit(limit)
         requester_capability = self._capability_registry.require(run_context.agent_id)
-        read_plan = _build_context_read_plan(capability=requester_capability, session_id=run_context.session_id)
+        read_plan = build_context_read_plan(capability=requester_capability, session_id=run_context.session_id)
         bundle = self._read_bundle(
             agent_id=run_context.agent_id,
             query=normalized_query,
@@ -328,9 +335,9 @@ class MemoryManager:
         limit: int,
         context: RunContext,
     ) -> tuple[list[MemoryRecord], str]:
-        run_context = _normalize_context(context)
-        normalized_query = _normalize_query(query)
-        normalized_limit = _normalize_limit(limit)
+        run_context = normalize_context(context)
+        normalized_query = normalize_query(query)
+        normalized_limit = normalize_limit(limit)
         _, _, bundle = self.search_bundle(
             query=normalized_query,
             limit=normalized_limit,
@@ -345,11 +352,11 @@ class MemoryManager:
         limit: int,
         context: RunContext,
     ) -> tuple[str, int, MemoryReadBundle]:
-        run_context = _normalize_context(context)
-        normalized_query = _normalize_query(query)
-        normalized_limit = _normalize_limit(limit)
+        run_context = normalize_context(context)
+        normalized_query = normalize_query(query)
+        normalized_limit = normalize_limit(limit)
         requester_capability = self._capability_registry.require(run_context.agent_id)
-        read_plan = _build_context_read_plan(
+        read_plan = build_context_read_plan(
             capability=requester_capability,
             session_id=run_context.session_id,
             include_short=False,
@@ -370,12 +377,12 @@ class MemoryManager:
         request_agent_id: str,
         target_agent_id: str | None = None,
     ) -> list[MemoryItem]:
-        normalized_query = _normalize_query(query)
-        normalized_limit = _normalize_limit(limit)
-        normalized_request_agent_id = _normalize_agent_id(request_agent_id)
+        normalized_query = normalize_query(query)
+        normalized_limit = normalize_limit(limit)
+        normalized_request_agent_id = normalize_agent_id(request_agent_id)
         requester_capability = self._capability_registry.require(normalized_request_agent_id)
         normalized_target_agent_id = (
-            _normalize_agent_id(target_agent_id)
+            normalize_agent_id(target_agent_id)
             if isinstance(target_agent_id, str) and target_agent_id.strip()
             else normalized_request_agent_id
         )
@@ -386,7 +393,7 @@ class MemoryManager:
         ):
             raise ValidationError("Cross-agent read is disabled by agent capability.")
         self._capability_registry.require(normalized_target_agent_id)
-        read_plan = _build_agent_read_plan(
+        read_plan = build_agent_read_plan(
             capability=requester_capability,
             session_id=None,
         )
@@ -397,7 +404,7 @@ class MemoryManager:
             include_scopes=read_plan.include_scopes,
             short_session_id=read_plan.short_session_id,
         )
-        result = [_to_memory_item(item) for item in bundle.items]
+        result = [to_memory_item(item) for item in bundle.items]
         _logger.debug(
             "检索记忆完成: query=%s limit=%s request_agent=%s target_agent=%s hit_count=%s",
             normalized_query,
@@ -414,11 +421,11 @@ class MemoryManager:
         request_agent_id: str,
         target_agent_id: str | None = None,
     ) -> list[MemoryItem]:
-        normalized_limit = _normalize_limit(limit)
-        normalized_request_agent_id = _normalize_agent_id(request_agent_id)
+        normalized_limit = normalize_limit(limit)
+        normalized_request_agent_id = normalize_agent_id(request_agent_id)
         requester_capability = self._capability_registry.require(normalized_request_agent_id)
         normalized_target_agent_id = (
-            _normalize_agent_id(target_agent_id)
+            normalize_agent_id(target_agent_id)
             if isinstance(target_agent_id, str) and target_agent_id.strip()
             else normalized_request_agent_id
         )
@@ -429,7 +436,7 @@ class MemoryManager:
         ):
             raise ValidationError("Cross-agent read is disabled by agent capability.")
         self._capability_registry.require(normalized_target_agent_id)
-        read_plan = _build_agent_read_plan(
+        read_plan = build_agent_read_plan(
             capability=requester_capability,
             session_id=None,
         )
@@ -440,7 +447,7 @@ class MemoryManager:
             include_scopes=read_plan.include_scopes,
             short_session_id=read_plan.short_session_id,
         )
-        result = [_to_memory_item(item) for item in bundle.items]
+        result = [to_memory_item(item) for item in bundle.items]
         _logger.debug(
             "读取记忆列表完成: request_agent=%s target_agent=%s limit=%s count=%s",
             normalized_request_agent_id,
@@ -459,9 +466,9 @@ class MemoryManager:
         hard_delete: bool = False,
         reason: str | None = None,
     ) -> ForgetResult:
-        run_context = _normalize_context(context)
-        normalized_ids = _normalize_memory_ids(memory_ids)
-        normalized_scopes = _normalize_scopes(scopes)
+        run_context = normalize_context(context)
+        normalized_ids = normalize_memory_ids(memory_ids)
+        normalized_scopes = normalize_scopes(scopes)
         if not isinstance(hard_delete, bool):
             raise ValidationError("hard_delete must be bool.")
         normalized_reason = reason.strip() if isinstance(reason, str) and reason.strip() else None
@@ -542,269 +549,3 @@ class MemoryManager:
                 scope.value,
                 exc,
             )
-
-
-class _ReadPlan:
-    def __init__(self, include_scopes: list[MemoryScope], short_session_id: str | None) -> None:
-        self.include_scopes = include_scopes
-        self.short_session_id = short_session_id
-
-
-def _normalize_context(context: RunContext) -> RunContext:
-    if not isinstance(context, RunContext):
-        raise ValidationError("context must be RunContext.")
-    return context
-
-
-def _normalize_query(query: str) -> str:
-    if not isinstance(query, str) or not query.strip():
-        raise ValidationError("query must be a non-empty string.")
-    return query.strip()
-
-
-def _normalize_limit(limit: int) -> int:
-    if limit <= 0:
-        raise ValidationError("limit must be positive.")
-    return limit
-
-
-def _normalize_agent_id(agent_id: str) -> str:
-    if not isinstance(agent_id, str) or not agent_id.strip():
-        raise ValidationError("agent_id must be a non-empty string.")
-    return agent_id.strip()
-
-
-def _normalize_memory_ids(memory_ids: list[str]) -> list[str]:
-    if not isinstance(memory_ids, list) or not memory_ids:
-        raise ValidationError("memory_ids must be a non-empty list.")
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw in memory_ids:
-        if not isinstance(raw, str) or not raw.strip():
-            raise ValidationError("memory_ids entries must be non-empty strings.")
-        item = raw.strip()
-        if item in seen:
-            continue
-        normalized.append(item)
-        seen.add(item)
-    if not normalized:
-        raise ValidationError("memory_ids must contain at least one valid id.")
-    return normalized
-
-
-def _normalize_scopes(scopes: list[MemoryScope]) -> list[MemoryScope]:
-    if not isinstance(scopes, list) or not scopes:
-        raise ValidationError("scopes must be a non-empty list.")
-    output: list[MemoryScope] = []
-    seen: set[MemoryScope] = set()
-    for raw in scopes:
-        if isinstance(raw, MemoryScope):
-            scope = raw
-        elif isinstance(raw, str) and raw.strip():
-            try:
-                scope = MemoryScope(raw.strip())
-            except ValueError as exc:
-                raise ValidationError(f"Unsupported memory scope: {raw}") from exc
-        else:
-            raise ValidationError("scopes entries must be MemoryScope or non-empty string.")
-        if scope in seen:
-            continue
-        output.append(scope)
-        seen.add(scope)
-    if not output:
-        raise ValidationError("scopes cannot be empty after normalization.")
-    return output
-
-
-def _build_search_summary(
-    *,
-    query: str,
-    agent_id: str,
-    session_id: str,
-    bundle: MemoryReadBundle,
-    hit_count: int,
-) -> dict[str, Any]:
-    return {
-        "query": query,
-        "agent_id": agent_id,
-        "session_id": session_id,
-        "hit_count": hit_count,
-        "searched_scopes": [scope.value for scope in bundle.searched_scopes],
-        "total_scanned": bundle.total_scanned,
-        "truncated": bundle.truncated,
-        "notes": bundle.notes,
-    }
-
-
-def _group_records_by_context_lane(records: list[MemoryRecord]) -> dict[str, list[MemoryItem]]:
-    lanes: dict[str, list[MemoryItem]] = {lane: [] for lane in CONTEXT_LANE_ORDER}
-    for record in records:
-        lane = _context_lane_for_record(record)
-        lanes.setdefault(lane, []).append(_to_memory_item(record))
-    return lanes
-
-
-def _context_lane_for_record(record: MemoryRecord) -> str:
-    return memory_lane_for_metadata(record.canonical_key, record.kind)
-
-
-def _limit_memory_lanes(
-    lanes: dict[str, list[MemoryItem]],
-    *,
-    max_total: int,
-) -> dict[str, list[MemoryItem]]:
-    limited: dict[str, list[MemoryItem]] = {}
-    remaining = max(0, max_total)
-    for lane in CONTEXT_LANE_ORDER:
-        if remaining <= 0:
-            break
-        items = lanes.get(lane, [])
-        if not items:
-            continue
-        lane_limit = min(CONTEXT_LANE_LIMITS[lane], remaining)
-        selected = _dedupe_memory_items(items)[:lane_limit]
-        if not selected:
-            continue
-        limited[lane] = selected
-        remaining -= len(selected)
-    return limited
-
-
-def _flatten_memory_lanes(lanes: dict[str, list[MemoryItem]]) -> list[MemoryItem]:
-    flattened: list[MemoryItem] = []
-    for lane in CONTEXT_LANE_ORDER:
-        flattened.extend(lanes.get(lane, []))
-    return _dedupe_memory_items(flattened)
-
-
-def _dedupe_records(records: list[MemoryRecord]) -> list[MemoryRecord]:
-    output: list[MemoryRecord] = []
-    seen: set[str] = set()
-    for record in records:
-        if record.memory_id in seen:
-            continue
-        seen.add(record.memory_id)
-        output.append(record)
-    return output
-
-
-def _dedupe_memory_items(items: list[MemoryItem]) -> list[MemoryItem]:
-    output: list[MemoryItem] = []
-    seen: set[str] = set()
-    for item in items:
-        if item.memory_id in seen:
-            continue
-        seen.add(item.memory_id)
-        output.append(item)
-    return output
-
-
-def _memory_metadata_from_plan(
-    *,
-    plan: MemoryWritePlan,
-    source_agent_id: str,
-    target_agent_id: str,
-) -> dict[str, str]:
-    metadata: dict[str, str] = {
-        "source_agent_id": source_agent_id,
-        "target_agent_id": target_agent_id,
-        "memory_type": plan.memory_type.value,
-        "memory_scope": plan.scope.value,
-        "kind": plan.kind,
-        "source_kind": plan.source_kind,
-        "subject_kind": plan.subject_kind,
-        "classification_version": plan.classification_version,
-        "write_key": plan.write_key,
-    }
-    if plan.canonical_key:
-        metadata["canonical_key"] = plan.canonical_key
-    if plan.normalized_value:
-        metadata["normalized_value"] = plan.normalized_value
-    raw_source = plan.metadata.get("source") if isinstance(plan.metadata, dict) else None
-    if isinstance(raw_source, str) and raw_source.strip():
-        metadata["source"] = raw_source.strip()
-    return metadata
-
-def _to_memory_item(record: Any) -> MemoryItem:
-    raw_scope = getattr(record, "scope", None)
-    if isinstance(raw_scope, MemoryScope):
-        scope = raw_scope.value
-    elif raw_scope is None:
-        scope = None
-    else:
-        scope = str(raw_scope)
-    metadata = getattr(record, "metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
-    memory_layer = metadata.get("memory_layer")
-    source_kind = getattr(record, "source_kind", None)
-    return MemoryItem(
-        memory_id=record.memory_id,
-        session_id=record.session_id,
-        content=record.content,
-        tags=record.tags,
-        created_at=record.created_at,
-        source_event_id=record.source_event_id,
-        scope=scope,
-        memory_layer=str(memory_layer) if memory_layer else None,
-        source_kind=str(source_kind) if source_kind else None,
-        metadata={str(key): str(value) for key, value in metadata.items()},
-    )
-
-
-def _memory_item_from_fact(
-    *,
-    fact: MemoryFact,
-    session_id: str,
-    scope: MemoryScope,
-    source_kind: str,
-) -> MemoryItem:
-    metadata = dict(fact.metadata)
-    metadata.update(
-        {
-            "memory_layer": "facts",
-            "storage_scope": fact.scope,
-            "category": fact.category,
-            "visibility": fact.visibility,
-            "inject_policy": fact.inject_policy,
-            "duplicate_write": "true",
-        }
-    )
-    source_event_id = fact.source.event_ids[0] if fact.source.event_ids else None
-    return MemoryItem(
-        memory_id=fact.id,
-        session_id=session_id,
-        content=fact.content,
-        tags=fact.tags,
-        created_at=fact.created_at,
-        source_event_id=source_event_id,
-        scope=scope.value,
-        memory_layer="facts",
-        source_kind=source_kind,
-        metadata={str(key): str(value) for key, value in metadata.items()},
-    )
-
-
-def _build_context_read_plan(capability: AgentCapability, session_id: str, *, include_short: bool = True) -> _ReadPlan:
-    scopes = list(capability.memory_read_scopes)
-    if not include_short:
-        scopes = [scope for scope in scopes if scope != MemoryScope.AGENT_SHORT]
-    short_session_id = None
-    if MemoryScope.AGENT_SHORT in scopes and not capability.allow_cross_session_short_read:
-        short_session_id = session_id
-    return _ReadPlan(include_scopes=scopes, short_session_id=short_session_id)
-
-
-def _build_agent_read_plan(capability: AgentCapability, session_id: str | None) -> _ReadPlan:
-    scopes = list(capability.memory_read_scopes)
-    short_session_id = None
-    if MemoryScope.AGENT_SHORT in scopes:
-        if capability.allow_cross_session_short_read:
-            short_session_id = None
-        else:
-            # 非会话上下文查询默认不扫描 short，防止在 API/管理接口跨会话泄露短期记忆。
-            if session_id is None:
-                scopes = [scope for scope in scopes if scope != MemoryScope.AGENT_SHORT]
-            else:
-                short_session_id = session_id
-    return _ReadPlan(include_scopes=scopes, short_session_id=short_session_id)
