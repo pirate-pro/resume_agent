@@ -38,7 +38,7 @@ def get_memory_store() -> FileMemoryStore:
 @lru_cache(maxsize=1)
 def get_state_store() -> JsonlFileStateStore:
     settings = get_settings()
-    return JsonlFileStateStore(root_dir=settings.data_dir / "state_v1")
+    return JsonlFileStateStore(root_dir=settings.data_dir / "state")
 
 
 @lru_cache(maxsize=1)

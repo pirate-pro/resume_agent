@@ -54,7 +54,7 @@ def _build_runtime(
     model_client: ChatModelClient,
 ) -> tuple[AgentRuntime, JsonlSessionRepository, MemoryManager]:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    state_store = JsonlFileStateStore(root_dir=tmp_path / "state_v1")
+    state_store = JsonlFileStateStore(root_dir=tmp_path / "state")
     state_manager = StateManager(store=state_store)
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=Path("app/agents"))

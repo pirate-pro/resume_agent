@@ -155,7 +155,7 @@ def build_chat_service_bundle(
     stream_run_timeout_seconds: float = 300.0,
 ) -> ChatServiceBundle:
     session_repository = JsonlSessionRepository(data_dir=data_dir)
-    state_store = JsonlFileStateStore(root_dir=data_dir / "state_v1")
+    state_store = JsonlFileStateStore(root_dir=data_dir / "state")
     state_manager = StateManager(store=state_store)
     capability_registry = AgentCapabilityRegistry.for_tests()
     memory_store = FileMemoryStore(root_dir=data_dir / "memory")

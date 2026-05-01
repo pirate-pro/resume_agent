@@ -73,7 +73,7 @@ def _memory_manager(
 
 
 def _state_manager(tmp_path: Path) -> StateManager:
-    return StateManager(store=JsonlFileStateStore(root_dir=tmp_path / "state_v1"))
+    return StateManager(store=JsonlFileStateStore(root_dir=tmp_path / "state"))
 
 
 def _read_jsonl(path: Path) -> list[dict]:

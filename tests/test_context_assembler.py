@@ -46,7 +46,7 @@ def _context(session_id: str, agent_id: str = "agent_main", entry_agent_id: str 
 
 
 def _state_manager(tmp_path: Path) -> StateManager:
-    return StateManager(store=JsonlFileStateStore(root_dir=tmp_path / "state_v1"))
+    return StateManager(store=JsonlFileStateStore(root_dir=tmp_path / "state"))
 
 
 def _agent_document_repository(root: Path | None = None) -> MarkdownAgentDocumentRepository:
@@ -652,9 +652,10 @@ def test_context_assembler_injects_mid_term_context_separately(tmp_path: Path) -
     session_repo.create_session("sess_mid_term_prompt")
     capability_registry = _capability_registry()
     memory_manager = _memory_manager(tmp_path, capability_registry)
-    rolling_path = tmp_path / "memory" / "shared" / "mid_term" / "rolling.md"
-    rolling_path.write_text(
-        "# Rolling Context\n\n## Current Focus\n\n用户最近在优化后端 ContextAssembler 的 multi-agent 注入边界。",
+    daily_path = tmp_path / "memory" / "shared" / "mid_term" / "daily" / "2026-05-01.md"
+    daily_path.parent.mkdir(parents=True, exist_ok=True)
+    daily_path.write_text(
+        "# 2026-05-01\n\n## Active Context\n\n- 用户最近在优化后端 ContextAssembler 的 multi-agent 注入边界。",
         encoding="utf-8",
     )
 

@@ -163,7 +163,7 @@ def build_assembly_plan(
             ContextSection(
                 name="mid_term_context",
                 content=(
-                    "Mid-term context: use these recent rolling/daily notes as lower-confidence background. "
+                    "Mid-term context: use these recent daily notes as lower-confidence background. "
                     "Prefer long-term memory if they conflict.\n"
                     + "\n".join(format_memory_lines(memory_slices.mid_term_items))
                 ),

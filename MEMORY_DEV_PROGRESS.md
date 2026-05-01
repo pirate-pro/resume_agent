@@ -2048,3 +2048,20 @@
   - `uv run pytest tests/test_memory_pipeline_pressure.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_context_compactor.py tests/test_agent_runtime.py -q`：通过。
   - `uv run mypy`：通过（`Success: no issues found in 155 source files`）
   - `uv run pytest -q`：通过。
+
+91. [完成] 收敛 state 目录命名与 mid-term rolling 占位。
+- 背景：
+  - state 存储目录仍使用 `state_v1`，与当前“不保留旧版本路径”的原则不一致。
+  - `mid_term/rolling.md` 只有初始化和读取检索，没有后台维护逻辑，容易让系统看起来存在一条实际未完成的 rolling 写入链路。
+- 说明：
+  - state 默认路径从 `data/state_v1` 改为 `data/state`。
+  - 测试 helper 和 state 相关测试同步改为 `state`。
+  - 前端静态页 localStorage key 从 `agent_runtime_frontend_state_v1` 改为 `agent_runtime_frontend_state`。
+  - memory layout 不再初始化 `mid_term/rolling.md`。
+  - mid-term 检索只读取已有实际写入逻辑的 `mid_term/daily/*.md`。
+  - context 注入提示从 `rolling/daily notes` 调整为 `daily notes`。
+  - 已删除本地生成的空 `data/memory/shared/mid_term/rolling.md` 占位文件。
+- 验证结果：
+  - `uv run pytest tests/test_state_manager.py tests/test_context_assembler.py tests/test_memory_file_store.py tests/test_mid_term_flusher.py tests/test_tool_registry.py tests/test_agent_runtime.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 155 source files`）
+  - `uv run pytest -q`：通过。

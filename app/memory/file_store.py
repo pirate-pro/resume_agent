@@ -497,7 +497,7 @@ class FileMemoryStore:
         now: datetime,
     ) -> list[MemoryRecord]:
         base_dir = self._layout.mid_term_dir(scope=scope, agent_id=agent_id)
-        candidates = [base_dir / "rolling.md"]
+        candidates: list[Path] = []
         daily_dir = base_dir / "daily"
         if daily_dir.exists():
             candidates.extend(sorted(daily_dir.glob("*.md"), reverse=True)[:MID_TERM_DAILY_LIMIT])
@@ -512,9 +512,7 @@ class FileMemoryStore:
                 raise StorageError(f"Failed to read memory mid_term file '{path}': {exc}") from exc
             if not content:
                 continue
-            if content.strip() == "# Rolling Context":
-                continue
-            tags = ["mid_term", "rolling" if path.name == "rolling.md" else "daily"]
+            tags = ["mid_term", "daily"]
             if not matches_query(content=content, tags=tags, query=query):
                 continue
             clipped = clip_text(content, max_chars=MID_TERM_MAX_CHARS)

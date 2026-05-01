@@ -1,4 +1,4 @@
-const STORAGE_KEY = "agent_runtime_frontend_state_v1";
+const STORAGE_KEY = "agent_runtime_frontend_state";
 const THREAD_BOTTOM_THRESHOLD = 80;
 const MAX_STREAM_EVENTS = 200;
 const MENTION_MAX_ITEMS = 8;

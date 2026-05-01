@@ -15,7 +15,7 @@ __all__ = []
 
 
 def _build_manager(tmp_path: Path) -> StateManager:
-    store = JsonlFileStateStore(root_dir=tmp_path / "state_v1")
+    store = JsonlFileStateStore(root_dir=tmp_path / "state")
     return StateManager(store=store)
 
 

@@ -29,7 +29,6 @@ class MemoryFileLayout:
         (self._root_dir / "shared" / "mid_term" / "daily").mkdir(parents=True, exist_ok=True)
         ensure_file(self._root_dir / "shared" / "facts.jsonl")
         ensure_file(self._root_dir / "shared" / "pending_promotions.jsonl")
-        ensure_file(self._root_dir / "shared" / "mid_term" / "rolling.md", "# Rolling Context\n")
         self._ensure_long_term_file(self._root_dir / "shared" / "long_term.json", scope="shared", agent_id=None)
 
     def ensure_agent_layout(self, agent_id: str) -> None:
@@ -37,7 +36,6 @@ class MemoryFileLayout:
         agent_dir = self._root_dir / "agents" / normalized
         (agent_dir / "mid_term" / "daily").mkdir(parents=True, exist_ok=True)
         ensure_file(agent_dir / "facts.jsonl")
-        ensure_file(agent_dir / "mid_term" / "rolling.md", "# Rolling Context\n")
         self._ensure_long_term_file(agent_dir / "long_term_overlay.json", scope="agent", agent_id=normalized)
 
     def long_term_path(self, *, scope: str, agent_id: str | None) -> Path:
