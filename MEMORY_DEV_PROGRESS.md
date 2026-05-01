@@ -1547,3 +1547,504 @@
   - `uv run pytest -q tests/test_memory_file_store.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py tests/test_mid_term_flusher.py tests/test_agent_runtime.py tests/test_multi_agent_contracts.py tests/test_context_compactor.py tests/test_mid_term_flush_worker.py tests/test_chat_api.py`：通过。
   - `uv run pytest -q`：通过。
   - `uv run mypy app/memory/file_models.py app/memory/file_store.py app/runtime/memory_manager.py app/runtime/mid_term_flusher.py app/api/deps.py tests/test_memory_file_store.py tests/test_memory_manager.py tests/test_tool_registry.py tests/test_context_assembler.py tests/test_agent_runtime.py tests/helpers.py`：通过。
+
+72. [完成] 后端架构第一轮重构：拆分 API 装配、prompt、presenter 与 ChatService 外围职责。
+- 背景：
+  - 原 `app/api/deps.py` 集中了配置、存储、工具、runtime、service 的全部装配逻辑，后续扩展会变成全局工厂。
+  - 原 `app/api/chat.py` 混合了 HTTP 路由、DTO 拼装、异常映射、base64 解码。
+  - 原 `ChatService` 同时承担 chat workflow、会话查询、文件操作、memory 查询，职责过宽。
+  - prompt 模板散落在 runtime/service 文件中，不利于调试和版本化管理。
+- 说明：
+  - 新增 `app/prompts/`：
+    - `agent_runtime.py`
+    - `context_compaction.py`
+    - `mid_term.py`
+    - `session_title.py`
+  - 新增 API 辅助层：
+    - `app/api/errors.py`：统一映射 `AppError` 到 HTTP 响应。
+    - `app/api/presenters.py`：集中处理 domain/service 输出到 API DTO 的转换。
+  - 拆分依赖装配：
+    - `app/api/dependencies/config.py`
+    - `app/api/dependencies/infrastructure.py`
+    - `app/api/dependencies/model.py`
+    - `app/api/dependencies/managers.py`
+    - `app/api/dependencies/tools.py`
+    - `app/api/dependencies/runtime.py`
+    - `app/api/dependencies/services.py`
+    - `app/api/deps.py` 保留为聚合导出，避免一次性改动所有调用点。
+  - 拆分 `ChatService` 外围职责：
+    - `SessionQueryService`：会话列表、会话元数据、历史消息、事件、删除。
+    - `SessionFileService`：文件上传、active files、workspace 预览。
+    - `MemoryQueryService`：memory list/search 查询入口。
+    - `ChatService` 保留 chat / chat_stream workflow facade。
+  - 测试类型债修复：
+    - 修正 stream client 测试 fake response 类型。
+    - 修正 chat service 测试 async stub 类型与 monkeypatch 方式。
+- 验证结果：
+  - `uv run mypy`：通过（`Success: no issues found in 97 source files`）
+  - `uv run pytest -q`：通过。
+
+73. [完成] 统一普通 HTTP API 响应结构。
+- 背景：
+  - Router 已经瘦身，但普通 HTTP 接口仍然直接返回业务 DTO 或 list。
+  - 业务异常、FastAPI `HTTPException`、请求校验错误的响应结构不一致，前端需要按多种形态解析。
+- 说明：
+  - 新增 `app/schemas/common.py`：
+    - `StandardResponse[T]`：`code / msg / data`。
+  - 新增 `app/api/responses.py`：
+    - `ok(data)` 统一生成成功响应。
+  - 普通 HTTP JSON 接口统一返回：
+    - 成功：`{"code":0,"msg":"ok","data":...}`
+    - 失败：`{"code":<http_status>,"msg":"...","data":null}`
+  - `app/api/errors.py` 补齐：
+    - `AppError`
+    - `HTTPException`
+    - `RequestValidationError`
+  - `/api/chat/stream` 的 SSE 事件 payload 不包装，保持流式协议稳定。
+  - Flutter `ApiService` 增加统一 unwrap：
+    - 后端标准响应自动取 `data`。
+    - 错误消息优先读取 `msg`，兼容旧 `detail`。
+- 验证结果：
+  - `uv run mypy`：通过（`Success: no issues found in 99 source files`）
+  - `uv run pytest -q`：通过。
+  - `dart analyze flutter_app/lib/core/services/api_service.dart` 未执行：当前环境没有 `dart` 命令。
+
+74. [完成] API 路由按用例依赖具体 service，移除 ChatService 非 chat facade 职责。
+- 背景：
+  - 第 72 步已经拆出 `SessionQueryService` / `SessionFileService` / `MemoryQueryService`，但 API 路由仍统一依赖 `ChatService` 转发。
+  - 这会让 `ChatService` 继续承担“上帝 facade”的外观，不利于后续拆分和测试。
+- 说明：
+  - `app/api/chat.py`：
+    - chat/chat_stream 只依赖 `ChatService`。
+    - session 列表、消息、事件、更新、删除依赖 `SessionQueryService`。
+    - 文件上传、active files、workspace preview 依赖 `SessionFileService`。
+    - memory 查询依赖 `MemoryQueryService`。
+  - `app/services/chat_service.py`：
+    - 移除非 chat 代理方法：session query/file/memory 相关方法不再挂在 `ChatService` 上。
+    - 构造函数移除 `SessionQueryService` / `SessionFileService` / `MemoryQueryService` 注入。
+  - `tests/helpers.py`：
+    - 新增 `ChatServiceBundle` 和 `build_chat_service_bundle(...)`，让 API 测试可以明确 override 各类 service。
+    - 保留 `build_chat_service(...)` 兼容已有 runtime/chat service 测试。
+- 验证结果：
+  - `uv run mypy`：通过（`Success: no issues found in 99 source files`）
+  - `uv run pytest -q`：通过。
+
+75. [完成] 拆分 mid-term flush 内部实现，保留 MidTermFlusher 门面。
+- 背景：
+  - `app/runtime/mid_term_flusher.py` 接近 1800 行，混合事件打包、模型总结、schema 校验、daily Markdown 渲染、flush job 持久化、cursor、candidate fact 写入等职责。
+  - 该模块直接影响中期记忆质量和后台 flush 稳定性，是 memory 链路继续优化前必须拆开的核心模块。
+- 说明：
+  - 新增 `app/runtime/mid_term/` 内部包：
+    - `models.py`：flush result、job、metrics、event pack、cursor 等数据结构。
+    - `shared.py`：JSON、时间、文本裁剪、token 粗估、evidence 校验等公共工具。
+    - `event_packer.py`：按 agent/session 读取 events，构建语义单元，保持 tool call/result 成对，按 token budget 分批。
+    - `summary.py`：调用模型生成结构化 summary，并校验 active_context/decisions/progress/open_questions/candidate_long_term/artifact_refs。
+    - `daily.py`：渲染并写入 daily Markdown，保证 flush_id 幂等。
+    - `jobs.py`：flush job 的文件持久化与队列查询。
+    - `cursors.py`：每个 session/agent 的 flush cursor。
+    - `materializer.py`：把 candidate_long_term 写入 agent long-term facts，并刷新 long-term summary。
+  - `app/runtime/mid_term_flusher.py` 现在只保留编排职责：
+    - 校验构造参数。
+    - 创建/去重 flush job。
+    - 调用 summarizer/validator/daily writer/materializer。
+    - 管理 retry/deferred/succeeded 状态。
+    - 暴露原有 `flush_for_run_finished`、`process_due_jobs`、`collect_job_metrics` API。
+- 验证结果：
+  - `uv run pytest tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 108 source files`）
+  - `uv run pytest -q`：通过。
+
+76. [完成] 拆分内置工具实现，保留 app.tools.builtins 兼容导出。
+- 背景：
+  - `app/tools/builtins.py` 原本集中 memory/state/workspace/session file 四类工具和大量 helper，超过 1400 行。
+  - 后续 multi-agent 权限会依赖工具分组，如果继续堆在一个文件里，权限边界和测试边界都会变差。
+- 说明：
+  - 新增 `app/tools/builtin_tools/`：
+    - `common.py`：工具参数校验、context 校验、整数解析、tag 标准化。
+    - `memory.py`：`memory_write/search/inspect/explain/forget/update`。
+    - `state.py`：`state_set/publish/list`。
+    - `workspace.py`：`workspace_write_file/read_file`。
+    - `session_files.py`：`session_list_files/read_file/plan_file_access/search_file`。
+  - `app/tools/builtins.py` 改为兼容导出层：
+    - 现有 `from app.tools.builtins import ...` 不需要修改。
+    - 工具注册代码和测试 helper 保持原导入路径可用。
+  - 文件体积变化：
+    - `app/tools/builtins.py` 从大文件变成约 40 行导出层。
+    - 具体实现按职责分散到独立模块。
+- 验证结果：
+  - `uv run pytest tests/test_tool_registry.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 114 source files`）
+  - `uv run pytest -q`：通过。
+
+77. [完成] 拆分 FileMemoryStore 内部 helper，降低文件存储层耦合。
+- 背景：
+  - `app/memory/file_store.py` 同时承担文件布局、JSON/JSONL I/O、facts 读写、long-term summary 生成、record 转换、检索排序等职责。
+  - 该模块是 memory 主存储入口，后续如果继续增加 promote、scope、检索策略，会变成新的阻塞点。
+- 说明：
+  - 新增 `app/memory/file_store_common.py`：
+    - memory store 常量、long-term 空结构、section 更新、scope 归一化、时间/limit/id 校验、稳定 id、文本截断。
+  - 新增 `app/memory/file_store_io.py`：
+    - `ensure_file`
+    - `read_json_payload`
+    - `write_json_payload`
+    - `append_jsonl`
+    - `read_jsonl_payloads`
+    - `rewrite_jsonl`
+  - 新增 `app/memory/file_store_summary.py`：
+    - 从 active long-term facts 派生 DeerFlow 风格 `user/history` summary。
+  - 新增 `app/memory/file_store_records.py`：
+    - `MemoryFact -> MemoryRecord` 转换。
+    - query match / rank / dedupe。
+    - fact scope、canonical key、category 到 memory type/kind 的映射。
+  - `app/memory/file_store.py` 保留：
+    - `FileMemoryStore` 对外 API。
+    - facts append/find/archive/forget。
+    - read_bundle 编排。
+    - shared/agent 路径解析和 layout 初始化。
+  - 文件体积变化：
+    - `app/memory/file_store.py` 从约 1190 行降到约 710 行。
+- 验证结果：
+  - `uv run pytest tests/test_memory_file_store.py tests/test_memory_manager.py tests/test_memory_admission.py tests/test_memory_classification.py tests/test_memory_policies.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 118 source files`）
+  - `uv run pytest -q`：通过。
+
+78. [完成] 拆分 MemoryManager 内部策略 helper，保留运行时 memory facade。
+- 背景：
+  - `app/runtime/memory_manager.py` 同时承担 memory 写入编排、读权限计划、跨 agent 权限检查、context lane 分组、MemoryRecord/MemoryItem 转换、输入归一化等职责。
+  - 该模块是 runtime 与 memory store 之间的策略门面，后续多 agent 权限和 memory 注入策略会继续扩展，必须先把纯 helper 拆出去。
+- 说明：
+  - 新增 `app/runtime/memory/` 内部包：
+    - `models.py`：`MemoryWriteResult`、`ReadPlan`。
+    - `validation.py`：context/query/limit/agent_id/memory_ids/scopes 归一化。
+    - `read_plans.py`：context 读取计划和 agent 管理读取计划。
+    - `serializers.py`：search summary、write metadata、`MemoryRecord -> MemoryItem`、duplicate fact 转 memory item。
+    - `context_lanes.py`：context lane 分组、限额、扁平化、去重。
+  - `app/runtime/memory_manager.py` 保留：
+    - 写入入口：`write_memory` / `write_memory_with_result`。
+    - 查询入口：`search` / `search_with_summary` / `search_bundle`。
+    - context 注入查询：`search_context_memories` / `search_context_memory_lanes`。
+    - 管理查询：`search_for_agent` / `list_memories_for_agent`。
+    - 删除入口：`forget_memory_ids`。
+    - long-term summary best-effort 刷新。
+  - 文件体积变化：
+    - `app/runtime/memory_manager.py` 从约 810 行降到约 550 行。
+- 验证结果：
+  - `uv run pytest tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_multi_agent_contracts.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 124 source files`）
+  - `uv run pytest -q`：通过。
+
+79. [完成] 拆分 ContextAssembler 上下文 section/helper，保留上下文组装 facade。
+- 背景：
+  - `app/runtime/context_assembler.py` 同时承担 agent 身份注入、skill/tool 摘要、short-term 事件过滤、memory lane 分层、section 渲染等职责。
+  - 后续 multi-agent 上下文策略会继续扩展，如果继续堆在同一个类里，主 agent / 子 agent 的注入差异会难以维护。
+- 说明：
+  - 新增 `app/runtime/context/` 内部包：
+    - `models.py`：上下文组装角色、section、plan、short-term plan、memory slices。
+    - `constants.py`：section 限额、memory 标签、输出格式规则、memory access rules。
+    - `catalog.py`：skill/tool catalog 文本摘要 helper。
+    - `memory_sections.py`：memory lane 分层、scope 分组、格式化、去重。
+    - `short_term.py`：context summary 过滤、agent task/result 事件提取、other-agent 事件筛选。
+    - `section_builder.py`：完整 prompt section 组装策略。
+  - `app/runtime/context_assembler.py` 保留：
+    - `assemble` 主入口。
+    - agent role 判定。
+    - AGENT/SOUL 与 skill description 加载。
+    - short-term plan 读取。
+    - memory search 兜底。
+    - event 到 model messages 的转换。
+  - 文件体积变化：
+    - `app/runtime/context_assembler.py` 降到约 300 行。
+- 验证结果：
+  - `uv run pytest tests/test_context_assembler.py tests/test_memory_manager.py tests/test_multi_agent_contracts.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 131 source files`）
+  - `uv run pytest -q`：通过。
+
+80. [完成] 拆分 AgentRuntime 工具协议与 post-run maintenance 调度。
+- 背景：
+  - `app/runtime/agent_runtime.py` 同时承担同步/流式 run 编排、工具调用消息协议、工具执行兜底、run 后 flush/compaction 单飞调度等职责。
+  - 这部分是主 agent 后续扩展 multi-agent 编排的核心入口，需要先把非主流程逻辑拆出去，避免继续膨胀。
+- 说明：
+  - 新增 `app/runtime/agent/` 内部包：
+    - `tool_messages.py`：模型工具 schema、tool_call id 补齐、assistant tool_calls 消息、tool result 消息。
+    - `tool_runner.py`：工具执行异常兜底，统一转为 `ToolExecutionResult`。
+    - `post_run_maintenance.py`：mid-term flush + context compaction 的 per session/agent single-flight 后台调度。
+  - `app/runtime/agent_runtime.py` 保留：
+    - `run` / `run_stream` 主执行入口。
+    - 模型调用循环。
+    - final answer recovery。
+    - stream answer meta emission。
+    - run context 校验。
+  - 兼容性：
+    - 保留 `_dispatch_post_run_maintenance_sync/async` 私有包装，现有测试和外部调试入口不需要改。
+    - `runtime._mid_term_flusher` / `runtime._context_compactor` 仍可被替换，scheduler 通过 provider 读取最新实例。
+  - 文件体积变化：
+    - `app/runtime/agent_runtime.py` 从约 750 行降到约 530 行。
+- 验证结果：
+  - `uv run pytest tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 135 source files`）
+  - `uv run pytest -q`：通过。
+
+81. [完成] 拆分 ContextCompactor 压缩策略 helper，保留上下文压缩门面。
+- 背景：
+  - `app/runtime/context_compactor.py` 同时承担配置/result 模型、语义单元构建、tool/agent pair 原子分组、保留策略、模型输出校验、token 估算和 summary event 构造。
+  - 上下文压缩后续会继续扩展保留策略和语义单元类型，需要先把纯策略和纯转换拆出去。
+- 说明：
+  - 新增 `app/runtime/context_compaction/` 内部包：
+    - `models.py`：`CONTEXT_SUMMARY_EVENT`、`RetentionStrategy`、`ContextCompactionConfig`、`ContextCompactionResult`、`SemanticUnit`。
+    - `event_projection.py`：事件 prompt 投影、tool/agent/generic summary、事件 token 估算。
+    - `semantic_units.py`：按 message turn、tool_call/tool_result、agent task/result 构建语义单元，并保持 tool pair 原子性。
+    - `retention.py`：event count、token count、context ratio 保留策略。
+    - `payload_validation.py`：模型 JSON 输出校验和 evidence event ids 过滤。
+    - `text_utils.py`：JSON 提取、文本截断、token 粗估、ISO 时间格式化。
+  - `app/runtime/context_compactor.py` 保留：
+    - `ContextCompactor.compact_after_flush` / `compact_events` 主流程。
+    - 触发条件判断。
+    - 模型摘要调用。
+    - summary event 构造和 CAS 替换。
+  - 兼容性：
+    - 原 `from app.runtime.context_compactor import ContextCompactor, ContextCompactionConfig, RetentionStrategy, CONTEXT_SUMMARY_EVENT` 路径继续可用。
+  - 文件体积变化：
+    - `app/runtime/context_compactor.py` 从约 700 行降到约 230 行。
+- 验证结果：
+  - `uv run pytest tests/test_context_compactor.py tests/test_agent_runtime.py tests/test_context_assembler.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 142 source files`）
+  - `uv run pytest -q`：通过。
+
+82. [完成] 继续拆分 FileMemoryStore 的 layout 与 facts JSONL 操作。
+- 背景：
+  - `app/memory/file_store.py` 经过上一轮拆分后仍承担路径布局初始化、facts.jsonl 写入/查重/归档、bundle 读取等多类职责。
+  - memory 主存储后续还会扩展 promote、scope、召回策略，如果底层文件操作继续混在 store 门面里，修改风险会偏高。
+- 说明：
+  - 新增 `app/memory/file_store_layout.py`：
+    - `MemoryFileLayout` 统一负责 shared/agent 目录初始化。
+    - 统一解析 `long_term.json`、`long_term_overlay.json`、`facts.jsonl`、`mid_term/` 路径。
+  - 新增 `app/memory/file_store_facts.py`：
+    - `append_fact_to_file`
+    - metadata 查重。
+    - content 查重。
+    - canonical_key 查找。
+    - archived content 检查。
+    - active canonical_key 批量归档。
+    - forget hard delete / archive。
+    - long-term summary refresh 所需 active long-term facts 列表。
+  - `app/memory/file_store.py` 保留：
+    - 对外 API。
+    - 参数归一化。
+    - long-term summary 刷新编排。
+    - read_bundle 与 scope 读取编排。
+    - long-term/facts/mid-term record 转换入口。
+  - 文件体积变化：
+    - `app/memory/file_store.py` 从约 710 行降到约 550 行。
+- 验证结果：
+  - `uv run pytest tests/test_memory_file_store.py tests/test_memory_manager.py tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_multi_agent_contracts.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 144 source files`）
+  - `uv run pytest -q`：通过。
+
+83. [完成] 拆分 JsonlSessionRepository 序列化与 JSON 原子写 helper。
+- 背景：
+  - `app/infra/storage/jsonl_session_repository.py` 同时承担 session metadata、events.jsonl、files manifest、workspace 路径和 payload 序列化。
+  - 这是 runtime、context compression、file tools、API 查询共同依赖的基础设施层，后续压力测试前需要先降低单文件复杂度。
+- 说明：
+  - 新增 `app/infra/storage/session_io.py`：
+    - `utc_now`
+    - `to_iso` / `from_iso`
+    - `write_json_atomically`
+  - 新增 `app/infra/storage/session_serializers.py`：
+    - `SessionMeta <-> payload`
+    - `EventRecord <-> payload`
+    - `SessionFile <-> payload`
+    - file id 校验。
+    - active file status 判断。
+    - metadata/event 兼容字段读取。
+  - `app/infra/storage/jsonl_session_repository.py` 保留：
+    - session CRUD。
+    - events append/list/replace。
+    - session file manifest 编排。
+    - workspace/root path 解析。
+    - updated_at/participants/entry_agent_id 维护。
+  - 文件体积变化：
+    - `app/infra/storage/jsonl_session_repository.py` 从约 700 行降到约 516 行。
+- 验证结果：
+  - `uv run pytest tests/test_storage.py tests/test_context_compactor.py tests/test_context_assembler.py tests/test_chat_service.py tests/test_chat_api.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 146 source files`）
+  - `uv run pytest -q`：通过。
+
+84. [完成] 拆分 memory built-in tools 的公共 helper。
+- 背景：
+  - `app/tools/builtin_tools/memory.py` 同时包含 memory_write/search/inspect/explain/forget/update 六个工具类，以及 limit/bool 参数校验、record 序列化、explain payload、update payload 和 scope/tag 处理。
+  - 这是 agent tool calling 的外部协议层，应该让 Tool 类尽量薄，避免工具入口继续堆业务细节。
+- 说明：
+  - 新增 `app/tools/builtin_tools/memory_helpers.py`：
+    - limit / bool 参数解析。
+    - `memory_explain` dry-run payload。
+    - memory record 结构化序列化。
+    - forget scope 去重。
+    - update tag 继承和 scope 修正。
+    - update source priority 校验。
+    - no_match / ambiguous / rejected / source_priority_conflict / semantic_noop / success payload 构造。
+  - `app/tools/builtin_tools/memory.py` 保留：
+    - 六个工具类。
+    - tool definition。
+    - execute 入口参数读取。
+    - 调用 `MemoryManager`。
+    - 返回 `ToolExecutionResult`。
+  - 文件体积变化：
+    - `app/tools/builtin_tools/memory.py` 从约 620 行降到约 460 行。
+- 验证结果：
+  - `uv run pytest tests/test_tool_registry.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_agent_runtime.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 147 source files`）
+  - `uv run pytest -q`：通过。
+
+85. [完成] 拆分 session file built-in tools 的文件解析与访问策略 helper。
+- 背景：
+  - `session_list_files/read_file/plan_file_access/search_file` 的工具入口已经独立出来，但文件懒解析、文本搜索、访问策略、列表序列化仍适合从 Tool 类中继续抽离。
+  - 这类逻辑属于 session file 工具的内部策略，不应该和 tool definition / execute 编排混在一起。
+- 说明：
+  - 新增 `app/tools/builtin_tools/session_file_helpers.py`：
+    - session file listing 序列化。
+    - file_id 查找与错误转换。
+    - 上传文件懒解析与 parsed text 落盘。
+    - txt/md/json/pdf 文本解析。
+    - keyword hit 搜索。
+    - token 粗估。
+    - file access plan 决策。
+  - `app/tools/builtin_tools/session_files.py` 保留：
+    - 四个 session file 工具类。
+    - tool definition。
+    - execute 参数读取、context 校验和 result 包装。
+  - 文件体积变化：
+    - `app/tools/builtin_tools/session_files.py` 从原大工具文件拆分后继续收敛到约 216 行。
+- 验证结果：
+  - `uv run pytest tests/test_tool_registry.py tests/test_context_assembler.py tests/test_chat_api.py tests/test_chat_service.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 148 source files`）
+  - `uv run pytest -q`：通过。
+
+86. [完成] 拆分 OpenAI-compatible client 的响应解析与流式解析 helper。
+- 背景：
+  - `app/infra/llm/openai_compatible_client.py` 同时包含 client 请求编排、同步响应解析、SSE chunk 解析、tool_call 合并、provider 错误提取和 auto tool choice fallback 判断。
+  - 该模块属于模型基础设施层，后续接入更多 provider 或调整流式协议时，不应该继续在 Client 类文件里堆解析细节。
+- 说明：
+  - 新增 `app/infra/llm/openai_response.py`：
+    - content 归一化。
+    - tool_calls 解析。
+    - base_url 到 chat completions URL 兼容处理。
+    - provider 错误信息提取。
+    - auto tool choice 错误判断。
+    - 基础非空校验。
+  - 新增 `app/infra/llm/openai_streaming.py`：
+    - SSE data block 解析。
+    - 非 SSE 响应兼容解析。
+    - stream tool_call delta 合并与 finalize。
+    - stream error detail 读取。
+  - `app/infra/llm/openai_compatible_client.py` 保留：
+    - `OpenAICompatibleClient` 构造。
+    - `generate` / `generate_stream` 请求编排。
+    - 同步与流式 auto tool choice fallback。
+  - 兼容性：
+    - 原测试依赖的 `_iter_stream_chunks` / `_parse_stream_payload` 仍通过原模块命名空间可访问。
+  - 文件体积变化：
+    - `app/infra/llm/openai_compatible_client.py` 从约 545 行降到约 178 行。
+- 验证结果：
+  - `uv run pytest tests/test_openai_compatible_client_stream.py tests/test_agent_runtime.py tests/test_chat_service.py tests/test_chat_api.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 150 source files`）
+  - `uv run pytest -q`：通过。
+
+87. [完成] 拆分 AnswerNormalizer 的纯格式识别规则。
+- 背景：
+  - `app/services/answer_normalizer.py` 同时承担回答归一化流程、artifact 推断、Markdown/代码块识别、纯文本折行、layout 推断和大文档降级阈值。
+  - 其中格式识别是纯规则，不依赖 service 状态，适合独立出来做单元测试和后续规则迭代。
+- 说明：
+  - 新增 `app/services/answer_formatting.py`：
+    - rich markdown 判断。
+    - markdown source fence 判断。
+    - markdown 文档 wrapper 解包。
+    - 单代码块识别。
+    - plain text 段落归一化。
+    - layout hint 推断。
+    - rich/plain 大内容降级判断。
+  - `app/services/answer_normalizer.py` 保留：
+    - `AnswerArtifact` / `NormalizedAnswer` DTO。
+    - 用户消息与助手消息归一化主流程。
+    - tool_call artifact 推断。
+    - source_kind 推断。
+  - 文件体积变化：
+    - `app/services/answer_normalizer.py` 从约 347 行降到约 201 行。
+- 验证结果：
+  - `uv run pytest tests/test_answer_normalizer.py tests/test_chat_service.py tests/test_agent_runtime.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 151 source files`）
+  - `uv run pytest -q`：通过。
+
+88. [完成] 拆分 ChatService 的响应 DTO 构建职责。
+- 背景：
+  - `app/services/chat_service.py` 作为 chat use-case 编排层，仍包含 runtime output 到 `ChatResponse` 的转换、answer normalizer 调用、artifact/tool/memory view 拼装。
+  - 这部分是 presenter/builder 职责，不应该继续放在会话锁、stream、标题生成编排逻辑旁边。
+- 说明：
+  - 新增 `app/services/chat_response_builder.py`：
+    - 调用 `AnswerNormalizer`。
+    - 构建 `ChatResponse`。
+    - 转换 artifact/tool_call/memory_hit view。
+  - `app/services/chat_service.py` 保留：
+    - chat / chat_stream 用例编排。
+    - session 创建与 run input 构造。
+    - session lock 串行控制。
+    - stream heartbeat / error / done 事件。
+    - 首轮标题后台生成调度。
+  - 文件体积变化：
+    - `app/services/chat_service.py` 从约 365 行降到约 338 行。
+- 验证结果：
+  - `uv run pytest tests/test_chat_service.py tests/test_chat_api.py tests/test_agent_runtime.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 152 source files`）
+  - `uv run pytest -q`：通过。
+
+89. [完成] 拆分 mid-term event packer 的触发规则与语义单元构建。
+- 背景：
+  - `app/runtime/mid_term/event_packer.py` 同时承担 flush 触发判断、cursor delta 切片、事件信号评分、语义单元构建、tool call/result 成对处理、批次切分和 pack DTO 组装。
+  - 这块直接影响中期记忆 flush 质量，后续优化语义保留或触发阈值时，需要让规则和编排分离。
+- 说明：
+  - 新增 `app/runtime/mid_term/flush_rules.py`：
+    - flush 阈值常量。
+    - cursor 后事件切片。
+    - event signal score。
+    - should_flush 判断。
+  - 新增 `app/runtime/mid_term/semantic_units.py`：
+    - `PreparedSemanticUnit`。
+    - message turn 合并。
+    - tool_call/tool_result 成对语义单元。
+    - memory_write / run_finished / orphan tool event 语义单元。
+    - token budget 批次切分。
+    - pack events 去重收集。
+  - `app/runtime/mid_term/event_packer.py` 保留：
+    - `MidTermEventPackBuilder`。
+    - 从 repository 读取 session events。
+    - 过滤当前 agent events。
+    - 调用规则/语义单元 helper。
+    - 组装 `MidTermEventPack`。
+  - 文件体积变化：
+    - `app/runtime/mid_term/event_packer.py` 从约 420 行降到约 119 行。
+- 验证结果：
+  - `uv run pytest tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_agent_runtime.py tests/test_context_compactor.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 154 source files`）
+  - `uv run pytest -q`：通过。
+
+90. [完成] 增加 memory pipeline 压力测试覆盖。
+- 背景：
+  - 当前重构已经覆盖 API/service/runtime/memory/tool/model client 多个层面，需要用压力式测试反证关键链路没有因为拆分退化。
+  - 重点风险点不是单次 happy path，而是：记忆冲突更新、大量 events 分包、context compaction 后 tool call/result 语义完整性。
+- 说明：
+  - 新增 `tests/test_memory_pipeline_pressure.py`：
+    - `test_memory_name_conflict_pressure_keeps_latest_value`
+      - 连续写入多条偏好记忆后写入旧名字和新名字。
+      - 验证 canonical preferred_name 只保留最新值。
+    - `test_mid_term_event_packer_pressure_batches_without_splitting_tool_pairs`
+      - 构造 36 轮 user/tool_call/tool_result/assistant 事件。
+      - 使用较小 input budget 触发多 pack。
+      - 验证每个 tool_pair 单元内部 call/result 成对且同 pack 保留。
+    - `test_context_compactor_pressure_keeps_recent_tool_pair_atomic`
+      - 构造超过触发阈值的 session events。
+      - 压缩后验证首个事件为 context_summary。
+      - 验证最近的 tool_call/tool_result 成对保留。
+- 验证结果：
+  - `uv run pytest tests/test_memory_pipeline_pressure.py -q`：通过。
+  - `uv run pytest tests/test_memory_pipeline_pressure.py tests/test_memory_manager.py tests/test_memory_file_store.py tests/test_mid_term_flusher.py tests/test_mid_term_flush_worker.py tests/test_context_compactor.py tests/test_agent_runtime.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 155 source files`）
+  - `uv run pytest -q`：通过。
