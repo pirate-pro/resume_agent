@@ -14,6 +14,7 @@ __all__ = [
     "ChatResponse",
     "EventView",
     "FileUploadRequest",
+    "MemoryQueryParams",
     "SessionFileView",
     "SessionFilesResponse",
     "MemoryView",
@@ -100,6 +101,29 @@ class MemoryView(BaseModel):
     memory_id: str
     content: str
     tags: list[str]
+
+
+class MemoryQueryParams(BaseModel):
+    q: str | None = None
+    agent_id: str = "agent_main"
+    target_agent_id: str | None = None
+    limit: int = Field(default=20, ge=1, le=200)
+
+    @field_validator("q", "target_agent_id")
+    @classmethod
+    def _normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("agent_id")
+    @classmethod
+    def _validate_agent_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("agent_id cannot be empty.")
+        return normalized
 
 
 class SkillSummaryView(BaseModel):

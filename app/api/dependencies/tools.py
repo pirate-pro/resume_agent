@@ -1,0 +1,49 @@
+"""Tool registry dependency providers."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+
+from app.api.dependencies.infrastructure import get_session_repository
+from app.api.dependencies.managers import get_agent_capability_registry, get_memory_manager, get_state_manager
+from app.tools.builtins import (
+    MemoryExplainTool,
+    MemoryForgetTool,
+    MemoryInspectTool,
+    MemorySearchTool,
+    MemoryUpdateTool,
+    MemoryWriteTool,
+    SessionListFilesTool,
+    SessionPlanFileAccessTool,
+    SessionReadFileTool,
+    SessionSearchFileTool,
+    StateListTool,
+    StatePublishTool,
+    StateSetTool,
+    WorkspaceReadFileTool,
+    WorkspaceWriteFileTool,
+)
+from app.tools.registry import ToolRegistry
+
+__all__ = ["get_tool_registry"]
+
+
+@lru_cache(maxsize=1)
+def get_tool_registry() -> ToolRegistry:
+    registry = ToolRegistry(capability_registry=get_agent_capability_registry())
+    registry.register(MemoryWriteTool(memory_manager=get_memory_manager()))
+    registry.register(MemorySearchTool(memory_manager=get_memory_manager()))
+    registry.register(MemoryInspectTool(memory_manager=get_memory_manager()))
+    registry.register(MemoryExplainTool())
+    registry.register(MemoryForgetTool(memory_manager=get_memory_manager()))
+    registry.register(MemoryUpdateTool(memory_manager=get_memory_manager()))
+    registry.register(StateSetTool(state_manager=get_state_manager()))
+    registry.register(StatePublishTool(state_manager=get_state_manager()))
+    registry.register(StateListTool(state_manager=get_state_manager()))
+    registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
+    registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
+    registry.register(SessionListFilesTool(session_repository=get_session_repository()))
+    registry.register(SessionPlanFileAccessTool(session_repository=get_session_repository()))
+    registry.register(SessionReadFileTool(session_repository=get_session_repository()))
+    registry.register(SessionSearchFileTool(session_repository=get_session_repository()))
+    return registry

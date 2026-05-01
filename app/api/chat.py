@@ -4,42 +4,44 @@ from __future__ import annotations
 
 import json
 import logging
-from base64 import b64decode
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import get_chat_service, get_skill_repository
-from app.core.errors import (
-    AppError,
-    ModelClientError,
-    SessionNotFoundError,
-    StorageError,
-    ToolExecutionError,
-    ValidationError,
+from app.api.deps import (
+    get_chat_service,
+    get_memory_query_service,
+    get_session_file_service,
+    get_session_query_service,
+    get_skill_repository,
 )
+from app.api.presenters import event_view, memory_view, session_item_view, session_message_view, skill_summary_view
+from app.api.responses import ok
+from app.domain.protocols import SkillRepository
 from app.schemas.chat import (
     ActiveFilesRequest,
-    AnswerArtifactView,
     ChatRequest,
     ChatResponse,
     EventView,
     FileUploadRequest,
+    MemoryQueryParams,
     MemoryView,
-    SkillSummaryView,
     SessionDeleteResponse,
     SessionFileView,
     SessionFilesResponse,
     SessionListItem,
     SessionMessage,
     SessionUpdateRequest,
+    SkillSummaryView,
     WorkspaceFilePreviewResponse,
-    ToolCallView,
 )
+from app.schemas.common import StandardResponse
 from app.services.chat_service import ChatService
-from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.services.memory_query_service import MemoryQueryService
+from app.services.session_file_service import SessionFileService
+from app.services.session_query_service import SessionQueryService
 
 __all__ = ["router"]
 
@@ -47,91 +49,36 @@ router = APIRouter(prefix="/api", tags=["chat"])
 _logger = logging.getLogger(__name__)
 
 
-@router.get("/sessions", response_model=list[SessionListItem])
+@router.get("/sessions", response_model=StandardResponse[list[SessionListItem]])
 async def list_sessions(
-    service: ChatService = Depends(get_chat_service),
-) -> list[SessionListItem]:
+    service: SessionQueryService = Depends(get_session_query_service),
+) -> StandardResponse[list[SessionListItem]]:
     _logger.info("查询会话列表")
-    try:
-        sessions = service.list_sessions()
-        return [
-            SessionListItem(
-                session_id=s.session_id,
-                title=s.title,
-                created_at=s.created_at,
-                updated_at=s.updated_at,
-                is_pinned=s.is_pinned,
-                pinned_at=s.pinned_at,
-            )
-            for s in sessions
-        ]
-    except AppError as exc:
-        _logger.exception("查询会话列表失败: %s", exc)
-        raise _map_app_error(exc) from exc
+    return ok([session_item_view(item) for item in service.list_sessions()])
 
 
-@router.get("/skills", response_model=list[SkillSummaryView])
+@router.get("/skills", response_model=StandardResponse[list[SkillSummaryView]])
 async def list_skills(
-    skill_repository: MarkdownSkillRepository = Depends(get_skill_repository),
-) -> list[SkillSummaryView]:
+    skill_repository: SkillRepository = Depends(get_skill_repository),
+) -> StandardResponse[list[SkillSummaryView]]:
     _logger.info("查询技能列表")
-    try:
-        return [
-            SkillSummaryView(name=item.name, description=item.description)
-            for item in skill_repository.list_skills()
-        ]
-    except AppError as exc:
-        _logger.exception("查询技能列表失败: %s", exc)
-        raise _map_app_error(exc) from exc
+    return ok([skill_summary_view(item) for item in skill_repository.list_skills()])
 
 
-@router.get("/sessions/{session_id}/messages", response_model=list[SessionMessage])
+@router.get("/sessions/{session_id}/messages", response_model=StandardResponse[list[SessionMessage]])
 async def get_session_messages(
     session_id: str,
-    service: ChatService = Depends(get_chat_service),
-) -> list[SessionMessage]:
+    service: SessionQueryService = Depends(get_session_query_service),
+) -> StandardResponse[list[SessionMessage]]:
     _logger.info("查询会话消息: session_id=%s", session_id)
-    try:
-        messages = service.list_session_messages(session_id)
-        return [
-            SessionMessage(
-                role=m["role"],
-                content=m["content"],
-                answer_format=m.get("answer_format", "plain_text"),
-                render_hint=m.get("render_hint", "plain"),
-                layout_hint=m.get("layout_hint", "paragraph"),
-                source_kind=m.get("source_kind", "direct_answer"),
-                artifacts=[
-                    AnswerArtifactView(
-                        type=str(item.get("type", "")),
-                        path=str(item.get("path", "")),
-                        role=str(item.get("role", "")),
-                    )
-                    for item in m.get("artifacts", [])
-                    if isinstance(item, dict)
-                ],
-                tool_calls=[
-                    ToolCallView(
-                        name=str(item.get("name", "")),
-                        arguments=item.get("arguments", {}) if isinstance(item.get("arguments"), dict) else {},
-                    )
-                    for item in m.get("tool_calls", [])
-                    if isinstance(item, dict)
-                ],
-                created_at=m.get("created_at"),
-            )
-            for m in messages
-        ]
-    except AppError as exc:
-        _logger.exception("查询会话消息失败: session_id=%s error=%s", session_id, exc)
-        raise _map_app_error(exc) from exc
+    return ok([session_message_view(item) for item in service.list_session_messages(session_id)])
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=StandardResponse[ChatResponse])
 async def post_chat(
     request: ChatRequest,
     service: ChatService = Depends(get_chat_service),
-) -> ChatResponse:
+) -> StandardResponse[ChatResponse]:
     _logger.info(
         "收到聊天请求: session_id=%s message_len=%s skill_count=%s max_tool_rounds=%s",
         request.session_id,
@@ -139,19 +86,15 @@ async def post_chat(
         len(request.skill_names),
         request.max_tool_rounds,
     )
-    try:
-        response = await service.chat(request)
-        _logger.info(
-            "聊天请求处理完成: session_id=%s answer_len=%s tool_calls=%s memory_hits=%s",
-            response.session_id,
-            len(response.answer),
-            len(response.tool_calls),
-            len(response.memory_hits),
-        )
-        return response
-    except AppError as exc:
-        _logger.exception("聊天请求失败: %s", exc)
-        raise _map_app_error(exc) from exc
+    response = await service.chat(request)
+    _logger.info(
+        "聊天请求处理完成: session_id=%s answer_len=%s tool_calls=%s memory_hits=%s",
+        response.session_id,
+        len(response.answer),
+        len(response.tool_calls),
+        len(response.memory_hits),
+    )
+    return ok(response)
 
 
 @router.post("/chat/stream")
@@ -174,6 +117,7 @@ async def post_chat_stream(
                 event_data = item.get("data", {})
                 yield _format_sse(event_name, event_data)
         except Exception as exc:
+            # 流式响应已经开始后，全局异常处理器无法再接管，只能发送 SSE error 事件。
             _logger.exception("流式聊天处理失败: %s", exc)
             yield _format_sse("error", {"detail": str(exc)})
 
@@ -188,135 +132,87 @@ async def post_chat_stream(
     )
 
 
-@router.post("/sessions/{session_id}/files/upload", response_model=SessionFileView)
+@router.post("/sessions/{session_id}/files/upload", response_model=StandardResponse[SessionFileView])
 async def post_session_file_upload(
     session_id: str,
     request: FileUploadRequest,
-    service: ChatService = Depends(get_chat_service),
-) -> SessionFileView:
+    service: SessionFileService = Depends(get_session_file_service),
+) -> StandardResponse[SessionFileView]:
     _logger.info(
         "收到会话文件上传请求: session_id=%s filename=%s auto_activate=%s",
         session_id,
         request.filename,
         request.auto_activate,
     )
-    try:
-        try:
-            file_bytes = b64decode(request.content_base64, validate=True)
-        except Exception as exc:  # noqa: BLE001
-            raise ValidationError(f"Invalid base64 content: {exc}") from exc
-        return await service.upload_session_file(
-            session_id=session_id,
-            filename=request.filename,
-            content_bytes=file_bytes,
-            auto_activate=request.auto_activate,
-        )
-    except AppError as exc:
-        _logger.exception("会话文件上传失败: session_id=%s error=%s", session_id, exc)
-        raise _map_app_error(exc) from exc
+    return ok(await service.upload_session_file_from_request(session_id, request))
 
 
-@router.get("/sessions/{session_id}/files", response_model=SessionFilesResponse)
+@router.get("/sessions/{session_id}/files", response_model=StandardResponse[SessionFilesResponse])
 async def get_session_files(
     session_id: str,
-    service: ChatService = Depends(get_chat_service),
-) -> SessionFilesResponse:
+    service: SessionFileService = Depends(get_session_file_service),
+) -> StandardResponse[SessionFilesResponse]:
     _logger.info("查询会话文件列表: session_id=%s", session_id)
-    try:
-        return service.list_session_files(session_id)
-    except AppError as exc:
-        _logger.exception("查询会话文件列表失败: session_id=%s error=%s", session_id, exc)
-        raise _map_app_error(exc) from exc
+    return ok(service.list_session_files(session_id))
 
 
-@router.post("/sessions/{session_id}/active-files", response_model=SessionFilesResponse)
+@router.post("/sessions/{session_id}/active-files", response_model=StandardResponse[SessionFilesResponse])
 async def post_session_active_files(
     session_id: str,
     request: ActiveFilesRequest,
-    service: ChatService = Depends(get_chat_service),
-) -> SessionFilesResponse:
+    service: SessionFileService = Depends(get_session_file_service),
+) -> StandardResponse[SessionFilesResponse]:
     _logger.info("更新会话 active files: session_id=%s file_count=%s", session_id, len(request.file_ids))
-    try:
-        return service.set_active_files(session_id, request)
-    except AppError as exc:
-        _logger.exception("更新会话 active files 失败: session_id=%s error=%s", session_id, exc)
-        raise _map_app_error(exc) from exc
+    return ok(service.set_active_files(session_id, request))
 
 
-@router.get("/sessions/{session_id}/workspace-files/preview", response_model=WorkspaceFilePreviewResponse)
+@router.get(
+    "/sessions/{session_id}/workspace-files/preview",
+    response_model=StandardResponse[WorkspaceFilePreviewResponse],
+)
 async def get_workspace_file_preview(
     session_id: str,
     path: str = Query(..., min_length=1),
     max_chars: int = Query(default=12000, ge=200, le=24000),
-    service: ChatService = Depends(get_chat_service),
-) -> WorkspaceFilePreviewResponse:
+    service: SessionFileService = Depends(get_session_file_service),
+) -> StandardResponse[WorkspaceFilePreviewResponse]:
     _logger.info(
         "预览会话 workspace 文件: session_id=%s path=%s max_chars=%s",
         session_id,
         path,
         max_chars,
     )
-    try:
-        return service.preview_workspace_file(session_id, path=path, max_chars=max_chars)
-    except AppError as exc:
-        _logger.exception(
-            "预览会话 workspace 文件失败: session_id=%s path=%s error=%s",
-            session_id,
-            path,
-            exc,
-        )
-        raise _map_app_error(exc) from exc
+    return ok(service.preview_workspace_file(session_id, path=path, max_chars=max_chars))
 
 
-@router.get("/sessions/{session_id}/events", response_model=list[EventView])
+@router.get("/sessions/{session_id}/events", response_model=StandardResponse[list[EventView]])
 async def get_session_events(
     session_id: str,
-    service: ChatService = Depends(get_chat_service),
-) -> list[EventView]:
+    service: SessionQueryService = Depends(get_session_query_service),
+) -> StandardResponse[list[EventView]]:
     _logger.info("查询会话事件: session_id=%s", session_id)
-    try:
-        events = service.list_session_events(session_id)
-        _logger.info("会话事件查询完成: session_id=%s event_count=%s", session_id, len(events))
-        return [
-            EventView(
-                event_id=item.event_id,
-                session_id=item.session_id,
-                agent_id=item.agent_id,
-                run_id=item.run_id,
-                parent_run_id=item.parent_run_id,
-                event_version=item.event_version,
-                type=item.type,
-                payload=item.payload,
-                created_at=item.created_at,
-            )
-            for item in events
-        ]
-    except AppError as exc:
-        _logger.exception("查询会话事件失败: session_id=%s error=%s", session_id, exc)
-        raise _map_app_error(exc) from exc
+    events = service.list_session_events(session_id)
+    _logger.info("会话事件查询完成: session_id=%s event_count=%s", session_id, len(events))
+    return ok([event_view(item) for item in events])
 
 
-@router.delete("/sessions/{session_id}", response_model=SessionDeleteResponse)
+@router.delete("/sessions/{session_id}", response_model=StandardResponse[SessionDeleteResponse])
 async def delete_session(
     session_id: str,
-    service: ChatService = Depends(get_chat_service),
-) -> SessionDeleteResponse:
+    service: SessionQueryService = Depends(get_session_query_service),
+) -> StandardResponse[SessionDeleteResponse]:
     normalized = session_id.strip()
     _logger.info("删除会话请求: session_id=%s", normalized)
-    try:
-        await service.delete_session(normalized)
-        return SessionDeleteResponse(session_id=normalized, deleted=True)
-    except AppError as exc:
-        _logger.exception("删除会话失败: session_id=%s error=%s", normalized, exc)
-        raise _map_app_error(exc) from exc
+    await service.delete_session(normalized)
+    return ok(SessionDeleteResponse(session_id=normalized, deleted=True))
 
 
-@router.patch("/sessions/{session_id}", response_model=SessionListItem)
+@router.patch("/sessions/{session_id}", response_model=StandardResponse[SessionListItem])
 async def patch_session(
     session_id: str,
     request: SessionUpdateRequest,
-    service: ChatService = Depends(get_chat_service),
-) -> SessionListItem:
+    service: SessionQueryService = Depends(get_session_query_service),
+) -> StandardResponse[SessionListItem]:
     normalized = session_id.strip()
     _logger.info(
         "更新会话元数据请求: session_id=%s has_title=%s has_pin=%s",
@@ -324,73 +220,38 @@ async def patch_session(
         request.title is not None,
         request.is_pinned is not None,
     )
-    try:
-        updated = await service.update_session(normalized, request)
-        return SessionListItem(
-            session_id=updated.session_id,
-            title=updated.title,
-            created_at=updated.created_at,
-            updated_at=updated.updated_at,
-            is_pinned=updated.is_pinned,
-            pinned_at=updated.pinned_at,
-        )
-    except AppError as exc:
-        _logger.exception("更新会话元数据失败: session_id=%s error=%s", normalized, exc)
-        raise _map_app_error(exc) from exc
+    updated = await service.update_session(normalized, request)
+    return ok(session_item_view(updated))
 
 
-@router.get("/memories", response_model=list[MemoryView])
+@router.get("/memories", response_model=StandardResponse[list[MemoryView]])
 async def get_memories(
-    q: str | None = Query(default=None),
-    agent_id: str = Query(default="agent_main"),
-    target_agent_id: str | None = Query(default=None),
-    limit: int = Query(default=20, ge=1, le=200),
-    service: ChatService = Depends(get_chat_service),
-) -> list[MemoryView]:
+    params: MemoryQueryParams = Depends(),
+    service: MemoryQueryService = Depends(get_memory_query_service),
+) -> StandardResponse[list[MemoryView]]:
     _logger.info(
         "查询记忆: request_agent=%s target_agent=%s query=%s limit=%s",
-        agent_id,
-        target_agent_id,
-        q,
-        limit,
+        params.agent_id,
+        params.target_agent_id,
+        params.q,
+        params.limit,
     )
-    try:
-        items = service.list_memories(
-            q,
-            limit,
-            request_agent_id=agent_id,
-            target_agent_id=target_agent_id,
-        )
-        _logger.info(
-            "记忆查询完成: request_agent=%s target_agent=%s query=%s result_count=%s",
-            agent_id,
-            target_agent_id,
-            q,
-            len(items),
-        )
-        return [MemoryView(memory_id=item.memory_id, content=item.content, tags=item.tags) for item in items]
-    except AppError as exc:
-        _logger.exception(
-            "查询记忆失败: request_agent=%s target_agent=%s query=%s limit=%s error=%s",
-            agent_id,
-            target_agent_id,
-            q,
-            limit,
-            exc,
-        )
-        raise _map_app_error(exc) from exc
+    items = service.list_memories(
+        params.q,
+        params.limit,
+        request_agent_id=params.agent_id,
+        target_agent_id=params.target_agent_id,
+    )
+    _logger.info(
+        "记忆查询完成: request_agent=%s target_agent=%s query=%s result_count=%s",
+        params.agent_id,
+        params.target_agent_id,
+        params.q,
+        len(items),
+    )
+    return ok([memory_view(item) for item in items])
 
 
 def _format_sse(event: str, data: Any) -> str:
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"
-
-
-def _map_app_error(error: AppError) -> HTTPException:
-    if isinstance(error, SessionNotFoundError):
-        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
-    if isinstance(error, ValidationError):
-        return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error))
-    if isinstance(error, (ToolExecutionError, StorageError, ModelClientError)):
-        return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error))
-    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="internal server error")

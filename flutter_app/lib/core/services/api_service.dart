@@ -42,8 +42,9 @@ class ApiService {
       headers: {"Content-Type": "application/json"},
       body: jsonEncode(body),
     );
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    return ChatResponse.fromJson(jsonDecode(resp.body));
+    return ChatResponse.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
   }
 
   // ── Chat (streaming / SSE) ────────────────────────────────────────────
@@ -124,7 +125,7 @@ class ApiService {
       if (resp.statusCode != 200) {
         return null;
       }
-      final data = jsonDecode(resp.body);
+      final data = _decodeResponseData(resp);
       if (data is! Map<String, dynamic>) {
         return null;
       }
@@ -148,15 +149,13 @@ class ApiService {
       AppConfig.memoriesEndpoint,
     ).replace(queryParameters: params);
     final resp = await http.get(uri);
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    final list = jsonDecode(resp.body) as List;
+    final list = _decodeResponseData(resp) as List;
     return list.map((e) => MemoryView.fromJson(e)).toList();
   }
 
   Future<List<SkillOption>> listSkills() async {
     final resp = await http.get(_uri("/api/skills"));
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    final list = jsonDecode(resp.body) as List;
+    final list = _decodeResponseData(resp) as List;
     return list.map((e) => SkillOption.fromJson(e)).toList();
   }
 
@@ -164,8 +163,9 @@ class ApiService {
 
   Future<SessionFilesResponse> listSessionFiles(String sessionId) async {
     final resp = await http.get(_uri("/api/sessions/$sessionId/files"));
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    return SessionFilesResponse.fromJson(jsonDecode(resp.body));
+    return SessionFilesResponse.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
   }
 
   Future<SessionFileView> uploadFile({
@@ -183,8 +183,9 @@ class ApiService {
         "auto_activate": autoActivate,
       }),
     );
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    return SessionFileView.fromJson(jsonDecode(resp.body));
+    return SessionFileView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
   }
 
   Future<SessionFilesResponse> setActiveFiles({
@@ -196,8 +197,9 @@ class ApiService {
       headers: {"Content-Type": "application/json"},
       body: jsonEncode({"file_ids": fileIds}),
     );
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    return SessionFilesResponse.fromJson(jsonDecode(resp.body));
+    return SessionFilesResponse.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
   }
 
   Future<WorkspaceFilePreview> previewWorkspaceFile({
@@ -213,9 +215,8 @@ class ApiService {
       },
     );
     final resp = await http.get(uri);
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
     return WorkspaceFilePreview.fromJson(
-      Map<String, dynamic>.from(jsonDecode(resp.body)),
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
     );
   }
 
@@ -223,8 +224,7 @@ class ApiService {
 
   Future<List<EventView>> listSessionEvents(String sessionId) async {
     final resp = await http.get(_uri("/api/sessions/$sessionId/events"));
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    final list = jsonDecode(resp.body) as List;
+    final list = _decodeResponseData(resp) as List;
     return list.map((e) => EventView.fromJson(e)).toList();
   }
 
@@ -232,8 +232,7 @@ class ApiService {
 
   Future<List<SessionMeta>> listSessions() async {
     final resp = await http.get(_uri("/api/sessions"));
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    final list = jsonDecode(resp.body) as List;
+    final list = _decodeResponseData(resp) as List;
     return list
         .map(
           (e) => SessionMeta(
@@ -265,8 +264,7 @@ class ApiService {
       headers: {"Content-Type": "application/json"},
       body: jsonEncode(body),
     );
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    final data = Map<String, dynamic>.from(_decodeResponseData(resp));
     return SessionMeta(
       id: data["session_id"] ?? "",
       title: data["title"] ?? "",
@@ -282,8 +280,7 @@ class ApiService {
 
   Future<List<ChatMessage>> listSessionMessages(String sessionId) async {
     final resp = await http.get(_uri("/api/sessions/$sessionId/messages"));
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
-    final list = jsonDecode(resp.body) as List;
+    final list = _decodeResponseData(resp) as List;
     return list
         .map(
           (e) => ChatMessage(
@@ -312,7 +309,32 @@ class ApiService {
 
   Future<void> deleteSession(String sessionId) async {
     final resp = await http.delete(_uri("/api/sessions/$sessionId"));
-    if (resp.statusCode != 200) throw ApiException(resp.statusCode, resp.body);
+    _decodeResponseData(resp);
+  }
+
+  dynamic _decodeResponseData(http.Response resp) {
+    if (resp.statusCode != 200) {
+      throw ApiException(resp.statusCode, resp.body);
+    }
+    final decoded = jsonDecode(resp.body);
+    if (decoded is Map) {
+      final map = Map<String, dynamic>.from(decoded);
+      if (map.containsKey("code") &&
+          map.containsKey("msg") &&
+          map.containsKey("data")) {
+        final rawCode = map["code"];
+        final code = rawCode is int
+            ? rawCode
+            : rawCode is num
+                ? rawCode.toInt()
+                : int.tryParse(rawCode.toString()) ?? -1;
+        if (code != 0) {
+          throw ApiException(code, resp.body);
+        }
+        return map["data"];
+      }
+    }
+    return decoded;
   }
 }
 
@@ -343,6 +365,9 @@ class ApiException implements Exception {
       final decoded = jsonDecode(body);
       if (decoded is Map && decoded.containsKey("detail")) {
         return decoded["detail"].toString();
+      }
+      if (decoded is Map && decoded.containsKey("msg")) {
+        return decoded["msg"].toString();
       }
     } catch (_) {}
     return body;

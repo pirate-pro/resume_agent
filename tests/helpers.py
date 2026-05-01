@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,10 @@ from app.runtime.session_manager import SessionManager
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.services.chat_service import ChatService
+from app.services.answer_normalizer import AnswerNormalizer
+from app.services.memory_query_service import MemoryQueryService
+from app.services.session_file_service import SessionFileService
+from app.services.session_query_service import SessionQueryService
 from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
     MemoryExplainTool,
@@ -44,9 +49,11 @@ from app.tools.builtins import (
 from app.tools.registry import ToolRegistry
 
 __all__ = [
+    "ChatServiceBundle",
     "SequenceModelClient",
     "StaticModelClient",
     "build_chat_service",
+    "build_chat_service_bundle",
 ]
 
 
@@ -114,6 +121,15 @@ class SequenceModelClient:
         )
 
 
+@dataclass(slots=True)
+class ChatServiceBundle:
+    chat_service: ChatService
+    memory_manager: MemoryManager
+    session_query_service: SessionQueryService
+    session_file_service: SessionFileService
+    memory_query_service: MemoryQueryService
+
+
 
 def build_chat_service(
     data_dir: Path,
@@ -122,6 +138,22 @@ def build_chat_service(
     stream_heartbeat_interval_seconds: float = 15.0,
     stream_run_timeout_seconds: float = 300.0,
 ) -> tuple[ChatService, MemoryManager]:
+    bundle = build_chat_service_bundle(
+        data_dir=data_dir,
+        model_client=model_client,
+        stream_heartbeat_interval_seconds=stream_heartbeat_interval_seconds,
+        stream_run_timeout_seconds=stream_run_timeout_seconds,
+    )
+    return bundle.chat_service, bundle.memory_manager
+
+
+def build_chat_service_bundle(
+    data_dir: Path,
+    model_client: ChatModelClient,
+    *,
+    stream_heartbeat_interval_seconds: float = 15.0,
+    stream_run_timeout_seconds: float = 300.0,
+) -> ChatServiceBundle:
     session_repository = JsonlSessionRepository(data_dir=data_dir)
     state_store = JsonlFileStateStore(root_dir=data_dir / "state_v1")
     state_manager = StateManager(store=state_store)
@@ -151,6 +183,8 @@ def build_chat_service(
     tool_registry.register(SessionReadFileTool(session_repository=session_repository))
     tool_registry.register(SessionSearchFileTool(session_repository=session_repository))
     session_manager = SessionManager(session_repository=session_repository)
+    lock_manager = SessionLockManager()
+    answer_normalizer = AnswerNormalizer()
     event_recorder = EventRecorder(session_repository=session_repository)
     context_assembler = ContextAssembler(
         session_repository=session_repository,
@@ -172,15 +206,33 @@ def build_chat_service(
             model_client=model_client,
         ),
     )
-    service = ChatService(
+    session_query_service = SessionQueryService(
+        session_repository=session_repository,
+        session_lock_manager=lock_manager,
+        answer_normalizer=answer_normalizer,
+    )
+    session_file_service = SessionFileService(
+        session_manager=session_manager,
+        session_repository=session_repository,
+        session_lock_manager=lock_manager,
+        answer_normalizer=answer_normalizer,
+    )
+    memory_query_service = MemoryQueryService(memory_manager=memory_manager)
+    chat_service = ChatService(
         runtime=runtime,
         session_manager=session_manager,
         session_repository=session_repository,
-        memory_manager=memory_manager,
         capability_registry=capability_registry,
-        session_lock_manager=SessionLockManager(),
+        session_lock_manager=lock_manager,
         session_title_service=SessionTitleService(model_client=model_client),
+        answer_normalizer=answer_normalizer,
         stream_heartbeat_interval_seconds=stream_heartbeat_interval_seconds,
         stream_run_timeout_seconds=stream_run_timeout_seconds,
     )
-    return service, memory_manager
+    return ChatServiceBundle(
+        chat_service=chat_service,
+        memory_manager=memory_manager,
+        session_query_service=session_query_service,
+        session_file_service=session_file_service,
+        memory_query_service=memory_query_service,
+    )

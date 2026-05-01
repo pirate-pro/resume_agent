@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_chat_service
+from app.api.deps import (
+    get_chat_service,
+    get_memory_query_service,
+    get_session_file_service,
+    get_session_query_service,
+)
 from app.domain.models import RunContext, ToolCall
 from app.domain.protocols import ModelResponse
 from app.main import app
-from tests.helpers import SequenceModelClient, StaticModelClient, build_chat_service
+from tests.helpers import ChatServiceBundle, SequenceModelClient, StaticModelClient, build_chat_service_bundle
 
 __all__ = []
 
@@ -21,7 +27,7 @@ def test_health_endpoint_exposes_mid_term_queue_summary() -> None:
         response = client.get("/health")
 
     assert response.status_code == 200
-    payload = response.json()
+    payload = _data(response)
     assert payload["status"] in {"ok", "degraded"}
     assert "mid_term_flush" in payload
     mid_term = payload["mid_term_flush"]
@@ -38,6 +44,17 @@ def test_health_endpoint_exposes_mid_term_queue_summary() -> None:
         assert isinstance(mid_term.get("error"), str)
 
 
+def test_request_validation_error_uses_standard_response() -> None:
+    with TestClient(app) as client:
+        response = client.post("/api/chat", json={"message": ""})
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["code"] == 422
+    assert payload["msg"] == "request validation failed"
+    assert payload["data"] is None
+
+
 def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
     return RunContext(
         session_id=session_id,
@@ -52,7 +69,9 @@ def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
 
 
 def test_chat_and_query_endpoints(tmp_path: Path) -> None:
-    service, memory_manager = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    service = bundle.chat_service
+    memory_manager = bundle.memory_manager
     memory_manager.write_memory(
         content="Use JSONL storage",
         tags=["storage"],
@@ -60,12 +79,12 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
         source_event_id=None,
     )
 
-    app.dependency_overrides[get_chat_service] = lambda: service
+    _override_api_services(bundle)
 
     with TestClient(app) as client:
         skills_resp = client.get("/api/skills")
         assert skills_resp.status_code == 200
-        assert any(item["name"] == "base" for item in skills_resp.json())
+        assert any(item["name"] == "base" for item in _data(skills_resp))
 
         chat_resp = client.post(
             "/api/chat",
@@ -77,25 +96,26 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
             },
         )
         assert chat_resp.status_code == 200
-        session_id = chat_resp.json()["session_id"]
-        assert chat_resp.json()["answer_format"] == "plain_text"
-        assert chat_resp.json()["render_hint"] == "plain"
-        assert chat_resp.json()["layout_hint"] == "brief"
+        chat_payload = _data(chat_resp)
+        session_id = chat_payload["session_id"]
+        assert chat_payload["answer_format"] == "plain_text"
+        assert chat_payload["render_hint"] == "plain"
+        assert chat_payload["layout_hint"] == "brief"
 
         events_resp = client.get(f"/api/sessions/{session_id}/events")
         assert events_resp.status_code == 200
-        assert len(events_resp.json()) >= 2
+        assert len(_data(events_resp)) >= 2
 
         messages_resp = client.get(f"/api/sessions/{session_id}/messages")
         assert messages_resp.status_code == 200
-        assistant_message = next(item for item in messages_resp.json() if item["role"] == "assistant")
+        assistant_message = next(item for item in _data(messages_resp) if item["role"] == "assistant")
         assert assistant_message["answer_format"] == "plain_text"
         assert assistant_message["render_hint"] == "plain"
         assert assistant_message["layout_hint"] == "brief"
 
         memories_resp = client.get("/api/memories", params={"limit": 20})
         assert memories_resp.status_code == 200
-        assert len(memories_resp.json()) >= 1
+        assert len(_data(memories_resp)) >= 1
 
         upload_resp = client.post(
             f"/api/sessions/{session_id}/files/upload",
@@ -106,29 +126,31 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
             },
         )
         assert upload_resp.status_code == 200
-        file_id = upload_resp.json()["file_id"]
-        assert upload_resp.json()["status"] in {"uploaded", "ready", "failed"}
+        upload_payload = _data(upload_resp)
+        file_id = upload_payload["file_id"]
+        assert upload_payload["status"] in {"uploaded", "ready", "failed"}
 
         files_resp = client.get(f"/api/sessions/{session_id}/files")
         assert files_resp.status_code == 200
-        assert any(item["file_id"] == file_id for item in files_resp.json()["files"])
+        files_payload = _data(files_resp)
+        assert any(item["file_id"] == file_id for item in files_payload["files"])
 
         active_resp = client.post(
             f"/api/sessions/{session_id}/active-files",
             json={"file_ids": [file_id]},
         )
         assert active_resp.status_code == 200
-        assert file_id in active_resp.json()["active_file_ids"]
+        assert file_id in _data(active_resp)["active_file_ids"]
 
     app.dependency_overrides.clear()
 
 
 def test_chat_stream_endpoint(tmp_path: Path) -> None:
-    service, _ = build_chat_service(
+    bundle = build_chat_service_bundle(
         data_dir=tmp_path,
         model_client=StaticModelClient(content="```markdown\n# 流式标题\n\n内容\n```"),
     )
-    app.dependency_overrides[get_chat_service] = lambda: service
+    _override_api_services(bundle)
 
     try:
         with TestClient(app) as client:
@@ -166,7 +188,7 @@ def test_chat_stream_endpoint(tmp_path: Path) -> None:
 
 
 def test_chat_stream_answer_meta_contains_artifacts_after_tool_round(tmp_path: Path) -> None:
-    service, _ = build_chat_service(
+    bundle = build_chat_service_bundle(
         data_dir=tmp_path,
         model_client=SequenceModelClient(
             responses=[
@@ -183,7 +205,7 @@ def test_chat_stream_answer_meta_contains_artifacts_after_tool_round(tmp_path: P
             ]
         ),
     )
-    app.dependency_overrides[get_chat_service] = lambda: service
+    _override_api_services(bundle)
 
     try:
         with TestClient(app) as client:
@@ -215,8 +237,9 @@ def test_chat_stream_answer_meta_contains_artifacts_after_tool_round(tmp_path: P
 
 
 def test_workspace_file_preview_endpoint(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="preview-ok"))
-    app.dependency_overrides[get_chat_service] = lambda: service
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="preview-ok"))
+    service = bundle.chat_service
+    _override_api_services(bundle)
 
     try:
         with TestClient(app) as client:
@@ -242,7 +265,7 @@ def test_workspace_file_preview_endpoint(tmp_path: Path) -> None:
                 params={"path": "draft.md", "max_chars": 12000},
             )
             assert preview_resp.status_code == 200
-            payload = preview_resp.json()
+            payload = _data(preview_resp)
             assert payload["path"] == "draft.md"
             assert payload["answer_format"] == "markdown"
             assert payload["render_hint"] == "markdown_document"
@@ -253,11 +276,11 @@ def test_workspace_file_preview_endpoint(tmp_path: Path) -> None:
 
 
 def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> None:
-    service, _ = build_chat_service(
+    bundle = build_chat_service_bundle(
         data_dir=tmp_path,
         model_client=StaticModelClient(content="```markdown\n# 标题\n\n正文\n```"),
     )
-    app.dependency_overrides[get_chat_service] = lambda: service
+    _override_api_services(bundle)
 
     try:
         with TestClient(app) as client:
@@ -271,14 +294,15 @@ def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> No
                 },
             )
             assert chat_resp.status_code == 200
-            assert chat_resp.json()["answer"] == "# 标题\n\n正文"
-            assert chat_resp.json()["answer_format"] == "markdown"
-            assert chat_resp.json()["render_hint"] == "markdown_document"
-            assert chat_resp.json()["layout_hint"] == "paragraph"
+            chat_payload = _data(chat_resp)
+            assert chat_payload["answer"] == "# 标题\n\n正文"
+            assert chat_payload["answer_format"] == "markdown"
+            assert chat_payload["render_hint"] == "markdown_document"
+            assert chat_payload["layout_hint"] == "paragraph"
 
             messages_resp = client.get("/api/sessions/sess_render_protocol/messages")
             assert messages_resp.status_code == 200
-            assistant_message = next(item for item in messages_resp.json() if item["role"] == "assistant")
+            assistant_message = next(item for item in _data(messages_resp) if item["role"] == "assistant")
             assert assistant_message["content"] == "# 标题\n\n正文"
             assert assistant_message["answer_format"] == "markdown"
             assert assistant_message["render_hint"] == "markdown_document"
@@ -288,8 +312,8 @@ def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> No
 
 
 def test_delete_session_endpoint(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="delete-ok"))
-    app.dependency_overrides[get_chat_service] = lambda: service
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="delete-ok"))
+    _override_api_services(bundle)
 
     try:
         with TestClient(app) as client:
@@ -303,21 +327,22 @@ def test_delete_session_endpoint(tmp_path: Path) -> None:
                 },
             )
             assert chat_resp.status_code == 200
-            session_id = chat_resp.json()["session_id"]
+            session_id = _data(chat_resp)["session_id"]
 
             delete_resp = client.delete(f"/api/sessions/{session_id}")
             assert delete_resp.status_code == 200
-            assert delete_resp.json()["deleted"] is True
+            assert _data(delete_resp)["deleted"] is True
 
             events_resp = client.get(f"/api/sessions/{session_id}/events")
             assert events_resp.status_code == 404
+            assert events_resp.json()["code"] == 404
     finally:
         app.dependency_overrides.clear()
 
 
 def test_update_session_endpoint(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="rename-ok"))
-    app.dependency_overrides[get_chat_service] = lambda: service
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="rename-ok"))
+    _override_api_services(bundle)
 
     try:
         with TestClient(app) as client:
@@ -331,23 +356,38 @@ def test_update_session_endpoint(tmp_path: Path) -> None:
                 },
             )
             assert chat_resp.status_code == 200
-            session_id = chat_resp.json()["session_id"]
+            session_id = _data(chat_resp)["session_id"]
 
             patch_resp = client.patch(
                 f"/api/sessions/{session_id}",
                 json={"title": "项目周报", "is_pinned": True},
             )
             assert patch_resp.status_code == 200
-            assert patch_resp.json()["title"] == "项目周报"
-            assert patch_resp.json()["is_pinned"] is True
+            patch_payload = _data(patch_resp)
+            assert patch_payload["title"] == "项目周报"
+            assert patch_payload["is_pinned"] is True
 
             sessions_resp = client.get("/api/sessions")
             assert sessions_resp.status_code == 200
-            target = next(item for item in sessions_resp.json() if item["session_id"] == session_id)
+            target = next(item for item in _data(sessions_resp) if item["session_id"] == session_id)
             assert target["title"] == "项目周报"
             assert target["is_pinned"] is True
     finally:
         app.dependency_overrides.clear()
+
+
+def _data(response: Any) -> Any:
+    payload = response.json()
+    assert payload["code"] == 0
+    assert payload["msg"] == "ok"
+    return payload["data"]
+
+
+def _override_api_services(bundle: ChatServiceBundle) -> None:
+    app.dependency_overrides[get_chat_service] = lambda: bundle.chat_service
+    app.dependency_overrides[get_session_query_service] = lambda: bundle.session_query_service
+    app.dependency_overrides[get_session_file_service] = lambda: bundle.session_file_service
+    app.dependency_overrides[get_memory_query_service] = lambda: bundle.memory_query_service
 
 
 def _parse_sse_events(raw: str) -> list[tuple[str, dict]]:

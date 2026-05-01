@@ -6,12 +6,17 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.chat import router as chat_router
 from app.api.deps import get_chat_service, get_mid_term_flusher, get_mid_term_flush_worker, get_settings
+from app.api.errors import app_error_handler, http_exception_handler, request_validation_error_handler
+from app.api.responses import ok
+from app.core.errors import AppError
 from app.core.logging import configure_logging
+from app.schemas.common import StandardResponse
 from app.web.routes import router as web_router
 
 __all__ = ["app"]
@@ -36,6 +41,9 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=_lifespan)
+app.add_exception_handler(AppError, app_error_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, request_validation_error_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,14 +57,14 @@ app.include_router(web_router)
 app.include_router(chat_router)
 
 
-@app.get("/health")
-def health() -> dict[str, Any]:
+@app.get("/health", response_model=StandardResponse[dict[str, Any]])
+def health() -> StandardResponse[dict[str, Any]]:
     summary = _collect_mid_term_health_summary()
     status = "ok" if "error" not in summary else "degraded"
-    return {
+    return ok({
         "status": status,
         "mid_term_flush": summary,
-    }
+    })
 
 
 def _collect_mid_term_health_summary() -> dict[str, Any]:

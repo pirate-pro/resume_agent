@@ -6,10 +6,11 @@ import asyncio
 import time
 from pathlib import Path
 
-from app.domain.models import AgentRunOutput
+from app.domain.models import AgentRunInput, AgentRunOutput
 from app.domain.protocols import ModelResponse
-from app.schemas.chat import ChatRequest, SessionUpdateRequest
-from tests.helpers import SequenceModelClient, StaticModelClient, build_chat_service
+from app.runtime.event_channel import EventChannel
+from app.schemas.chat import ChatRequest, ChatResponse, SessionUpdateRequest
+from tests.helpers import SequenceModelClient, StaticModelClient, build_chat_service, build_chat_service_bundle
 
 __all__ = []
 
@@ -70,7 +71,7 @@ def test_chat_service_generates_session_title_after_first_turn(tmp_path: Path) -
         ),
     )
 
-    async def _exercise() -> object:
+    async def _exercise() -> ChatResponse:
         response = await service.chat(
             ChatRequest(
                 session_id="sess_title_sync",
@@ -122,7 +123,8 @@ def test_chat_service_does_not_overwrite_existing_title(tmp_path: Path) -> None:
 
 
 def test_chat_service_delete_session(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="result"))
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="result"))
+    service = bundle.chat_service
     created = asyncio.run(
         service.chat(
             ChatRequest(
@@ -134,13 +136,14 @@ def test_chat_service_delete_session(tmp_path: Path) -> None:
         )
     )
 
-    asyncio.run(service.delete_session(created.session_id))
+    asyncio.run(bundle.session_query_service.delete_session(created.session_id))
 
     assert service._session_repository.get_session(created.session_id) is None  # noqa: SLF001
 
 
 def test_chat_service_updates_session_title_and_pin(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    service = bundle.chat_service
     created = asyncio.run(
         service.chat(
             ChatRequest(
@@ -153,7 +156,7 @@ def test_chat_service_updates_session_title_and_pin(tmp_path: Path) -> None:
     )
 
     updated = asyncio.run(
-        service.update_session(
+        bundle.session_query_service.update_session(
             created.session_id,
             request=SessionUpdateRequest(title="手动命名", is_pinned=True),
         )
@@ -165,7 +168,8 @@ def test_chat_service_updates_session_title_and_pin(tmp_path: Path) -> None:
 
 
 def test_chat_service_previews_workspace_file_with_render_protocol(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    service = bundle.chat_service
     created = asyncio.run(
         service.chat(
             ChatRequest(
@@ -182,7 +186,7 @@ def test_chat_service_previews_workspace_file_with_render_protocol(tmp_path: Pat
     target = workspace / "report.md"
     target.write_text("# 标题\n\n- 条目 1\n- 条目 2\n", encoding="utf-8")
 
-    preview = service.preview_workspace_file(
+    preview = bundle.session_file_service.preview_workspace_file(
         "sess_workspace_preview",
         path="report.md",
         max_chars=12000,
@@ -203,7 +207,7 @@ def test_chat_stream_emits_heartbeat_when_idle(tmp_path: Path) -> None:
         stream_run_timeout_seconds=1.0,
     )
 
-    async def _slow_run_stream(run_input, channel):  # noqa: ANN001, ANN202
+    async def _slow_run_stream(run_input: AgentRunInput, channel: EventChannel) -> AgentRunOutput:
         _ = channel
         await asyncio.sleep(0.04)
         return AgentRunOutput(
@@ -213,7 +217,7 @@ def test_chat_stream_emits_heartbeat_when_idle(tmp_path: Path) -> None:
             memory_hits=[],
         )
 
-    service._runtime.run_stream = _slow_run_stream  # noqa: SLF001
+    setattr(service._runtime, "run_stream", _slow_run_stream)
 
     async def _collect_events() -> list[dict[str, object]]:
         output: list[dict[str, object]] = []
@@ -243,7 +247,7 @@ def test_chat_stream_times_out_and_emits_error(tmp_path: Path) -> None:
         stream_run_timeout_seconds=0.03,
     )
 
-    async def _never_finishes(run_input, channel):  # noqa: ANN001, ANN202
+    async def _never_finishes(run_input: AgentRunInput, channel: EventChannel) -> AgentRunOutput:
         _ = (run_input, channel)
         await asyncio.sleep(0.2)
         return AgentRunOutput(
@@ -253,7 +257,7 @@ def test_chat_stream_times_out_and_emits_error(tmp_path: Path) -> None:
             memory_hits=[],
         )
 
-    service._runtime.run_stream = _never_finishes  # noqa: SLF001
+    setattr(service._runtime, "run_stream", _never_finishes)
 
     async def _collect_events() -> list[dict[str, object]]:
         output: list[dict[str, object]] = []
@@ -297,7 +301,7 @@ def test_chat_stream_generates_session_title_after_first_turn(tmp_path: Path) ->
             )
         ):
             if item.get("event") == "done":
-                done_payload = item.get("data")  # type: ignore[assignment]
+                done_payload = item.get("data")
         await service.wait_for_background_tasks()
         return done_payload
 
@@ -318,7 +322,7 @@ def test_chat_service_does_not_block_on_session_title_generation(tmp_path: Path)
     async def _slow_title_generation(*, session_id: str, user_message: str, assistant_answer: str) -> None:  # noqa: ARG001
         await asyncio.sleep(0.08)
 
-    service._generate_and_persist_session_title_async = _slow_title_generation  # type: ignore[method-assign]  # noqa: SLF001
+    setattr(service, "_generate_and_persist_session_title_async", _slow_title_generation)
 
     async def _exercise() -> tuple[str, float]:
         started = time.perf_counter()
@@ -347,7 +351,7 @@ def test_chat_stream_done_does_not_wait_for_session_title_generation(tmp_path: P
     async def _slow_title_generation(*, session_id: str, user_message: str, assistant_answer: str) -> None:  # noqa: ARG001
         await asyncio.sleep(0.08)
 
-    service._generate_and_persist_session_title_async = _slow_title_generation  # type: ignore[method-assign]  # noqa: SLF001
+    setattr(service, "_generate_and_persist_session_title_async", _slow_title_generation)
 
     async def _exercise() -> tuple[dict[str, object] | None, float]:
         started = time.perf_counter()
@@ -361,7 +365,7 @@ def test_chat_stream_done_does_not_wait_for_session_title_generation(tmp_path: P
             )
         ):
             if item.get("event") == "done":
-                done_payload = item.get("data")  # type: ignore[assignment]
+                done_payload = item.get("data")
         elapsed = time.perf_counter() - started
         return done_payload, elapsed
 
