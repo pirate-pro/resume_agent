@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 import pytest
 
 from app.core.errors import ModelClientError
+from app.domain.protocols import StreamChunk
 from app.infra.llm.openai_compatible_client import _iter_stream_chunks, _parse_stream_payload
 
 __all__ = []
@@ -16,7 +19,7 @@ class _FakeStreamResponse:
     def __init__(self, lines: list[str]) -> None:
         self._lines = lines
 
-    async def aiter_lines(self):  # noqa: ANN201
+    async def aiter_lines(self) -> AsyncIterator[str]:
         for line in self._lines:
             yield line
 
@@ -56,9 +59,9 @@ def test_iter_stream_chunks_ignores_non_choice_chunks() -> None:
         ]
     )
 
-    async def _collect() -> list[object]:
-        items: list[object] = []
-        async for chunk in _iter_stream_chunks(response):
+    async def _collect() -> list[StreamChunk]:
+        items: list[StreamChunk] = []
+        async for chunk in _iter_stream_chunks(cast(Any, response)):
             items.append(chunk)
         return items
 
