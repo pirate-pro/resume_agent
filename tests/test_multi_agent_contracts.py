@@ -10,7 +10,7 @@ import pytest
 from app.core.errors import ValidationError
 from app.domain.models import RunContext
 from app.schemas.chat import ChatRequest
-from tests.helpers import StaticModelClient, build_chat_service
+from tests.helpers import StaticModelClient, build_chat_service, build_chat_service_bundle
 
 __all__ = []
 
@@ -28,7 +28,8 @@ def _context(session_id: str, agent_id: str) -> RunContext:
 
 
 def test_single_agent_run_preserves_event_schema_fields_and_participants(tmp_path: Path) -> None:
-    service, _ = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+    service = bundle.chat_service
 
     response = asyncio.run(
         service.chat(
@@ -41,7 +42,7 @@ def test_single_agent_run_preserves_event_schema_fields_and_participants(tmp_pat
             )
         )
     )
-    events = service.list_session_events(response.session_id)
+    events = bundle.session_query_service.list_session_events(response.session_id)
     meta = service._session_repository.get_session(response.session_id)  # noqa: SLF001
 
     assert meta is not None
