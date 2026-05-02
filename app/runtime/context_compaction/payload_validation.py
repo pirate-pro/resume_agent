@@ -23,6 +23,11 @@ def validate_compaction_payload(payload: dict[str, Any], *, compressed_units: li
     evidence = _normalize_top_level_evidence(payload.get("evidence_event_ids"), valid_ids)
     if not evidence:
         evidence = sorted(valid_ids)
+    forbidden_lines = _forbidden_memory_lines(compressed_units)
+    memory_relevant = _string_list(payload.get("memory_relevant"), max_items=12)
+    for line in forbidden_lines:
+        if line not in memory_relevant:
+            memory_relevant.append(line)
     return {
         "summary": summary,
         "timeline": _string_list(payload.get("timeline"), max_items=12),
@@ -30,7 +35,7 @@ def validate_compaction_payload(payload: dict[str, Any], *, compressed_units: li
         "open_threads": _string_list(payload.get("open_threads"), max_items=12),
         "tool_progress": _tool_progress_list(payload.get("tool_progress"), event_index),
         "agent_activity": _string_list(payload.get("agent_activity"), max_items=12),
-        "memory_relevant": _string_list(payload.get("memory_relevant"), max_items=12),
+        "memory_relevant": memory_relevant[:12],
         "evidence_event_ids": evidence,
     }
 
@@ -165,6 +170,21 @@ def _source_text(compressed_units: list[SemanticUnit]) -> str:
         for event in unit.events:
             parts.append(str(event.payload))
     return "\n".join(parts)
+
+
+def _forbidden_memory_lines(compressed_units: list[SemanticUnit]) -> list[str]:
+    output: list[str] = []
+    for unit in compressed_units:
+        for event in unit.events:
+            if event.type != "user_message":
+                continue
+            content = event.payload.get("content")
+            if not isinstance(content, str):
+                continue
+            if "不要记住" not in content and "不要写入 memory" not in content and "不要写入memory" not in content:
+                continue
+            output.append(f"用户明确声明该临时上下文不要记住/不要写入长期 memory：{content[:240]}")
+    return output
 
 
 def _reject_unsupported_terms(*, payload: dict[str, Any], source_text: str) -> None:

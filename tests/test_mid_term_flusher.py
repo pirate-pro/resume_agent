@@ -666,7 +666,7 @@ def test_mid_term_flusher_rejects_progress_with_unpaired_tool_evidence(tmp_path:
     assert Path(result.daily_path).exists() is False
 
 
-def test_mid_term_flusher_rejects_forbidden_long_term_candidate(tmp_path: Path) -> None:
+def test_mid_term_flusher_skips_forbidden_long_term_candidate(tmp_path: Path) -> None:
     session_id = "sess_mid_term_forbidden_candidate"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
@@ -723,15 +723,18 @@ def test_mid_term_flusher_rejects_forbidden_long_term_candidate(tmp_path: Path) 
 
     result = flusher.flush_for_run_finished(_context(session_id))
 
-    assert result.flushed is False
-    assert result.job_status == "retry"
+    assert result.flushed is True
+    assert result.job_status == "succeeded"
     assert result.daily_path is not None
-    assert Path(result.daily_path).exists() is False
+    daily_text = Path(result.daily_path).read_text(encoding="utf-8")
+    assert "临时暗号" in daily_text
+    assert "不要记住" in daily_text
+    assert "### Candidate Long-Term Memories\n- (none)" in daily_text
     facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
     assert facts_path.exists() is False
 
 
-def test_mid_term_flusher_rejects_outdated_name_candidate_in_same_pack(tmp_path: Path) -> None:
+def test_mid_term_flusher_skips_outdated_name_candidate_in_same_pack(tmp_path: Path) -> None:
     session_id = "sess_mid_term_outdated_name"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
@@ -788,10 +791,13 @@ def test_mid_term_flusher_rejects_outdated_name_candidate_in_same_pack(tmp_path:
 
     result = flusher.flush_for_run_finished(_context(session_id))
 
-    assert result.flushed is False
-    assert result.job_status == "retry"
+    assert result.flushed is True
+    assert result.job_status == "succeeded"
     assert result.daily_path is not None
-    assert Path(result.daily_path).exists() is False
+    daily_text = Path(result.daily_path).read_text(encoding="utf-8")
+    assert "### Candidate Long-Term Memories\n- (none)" in daily_text
+    facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
+    assert facts_path.exists() is False
 
 
 def test_mid_term_flusher_repairs_latest_name_candidate_assistant_only_evidence(tmp_path: Path) -> None:

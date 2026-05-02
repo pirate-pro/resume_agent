@@ -2293,3 +2293,35 @@
   - `uv run pytest -q`：通过。
 - 备注：
   - 真实模型 `forbidden_memory` 场景仍可能因为模型输出 forbidden candidate 被 validator 拦截进入 retry；这是当前“不写坏数据”的安全策略，不属于名字冲突复发。后续可在 repair 阶段处理“删除非法 candidate 后继续落 daily”的体验优化。
+
+99. [完成] Mid-term flush：candidate 级局部容错，避免单条坏候选阻塞 daily。
+- 背景：
+  - 真实模型 `forbidden_memory` 场景会输出不应进入长期记忆的 `candidate_long_term`，此前 validator 会让整个 flush 进入 retry。
+  - 这保证了不污染 facts，但 daily 也无法落盘，后台任务体验较差。
+- 说明：
+  - `candidate_long_term` 改为局部容错：
+    - forbidden memory candidate：跳过该 candidate。
+    - outdated name candidate：跳过该 candidate。
+    - temporary/session-state candidate：跳过该 candidate。
+    - assistant-only candidate：若无法通过 latest-name evidence repair 修复，则跳过该 candidate。
+  - 仍保持硬失败：
+    - JSON/schema 缺失。
+    - active_context / decisions / progress / open_questions / artifact_refs 的非法 evidence。
+    - progress 中 tool_call/tool_result 缺半。
+  - 对用户明确说“不要记住/不要写入 memory”的事件，增加确定性保留：
+    - daily active context 会补充该短期约束。
+    - context compaction 的 `memory_relevant` 会补充该短期约束。
+    - facts 仍不会写入这类临时内容。
+- 测试：
+  - `test_mid_term_flusher_skips_forbidden_long_term_candidate`
+  - `test_mid_term_flusher_skips_outdated_name_candidate_in_same_pack`
+  - `test_context_compactor_preserves_forbidden_memory_constraint`
+- 真实模型复测：
+  - `uv run python scripts/eval_memory_pipeline.py --real-model --scenarios forbidden_memory --events 36 --report /tmp/memory_forbidden_real_after_daily_fix.json`
+  - daily/facts/compaction coverage 均为 `1.00`。
+  - forbidden facts：无。
+- 回归验证：
+  - `uv run python scripts/eval_memory_pipeline.py --scenarios all --events 36 120 --report /tmp/memory_repair_fixture_all.json`
+  - 10 个 fixture case 全部通过，min daily/facts/compaction coverage 均为 `1.00`。
+  - `uv run mypy`：通过（`Success: no issues found in 157 source files`）。
+  - `uv run pytest -q`：通过。

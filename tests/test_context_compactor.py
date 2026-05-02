@@ -323,6 +323,41 @@ def test_context_compactor_filters_retained_top_level_evidence(tmp_path: Path) -
     assert events[0].payload["structured"]["evidence_event_ids"] == ["evt_user_1"]
 
 
+def test_context_compactor_preserves_forbidden_memory_constraint(tmp_path: Path) -> None:
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_compact_forbidden_memory"
+    repo.create_session(session_id)
+    for event in [
+        _event(
+            session_id,
+            "evt_user_1",
+            "user_message",
+            {"content": "临时暗号是蓝鲸，只用于当前调试，不要记住，也不要写入 memory。"},
+            1,
+        ),
+        _event(session_id, "evt_assistant_1", "assistant_message", {"content": "不会写入长期记忆。"}, 2),
+        _event(session_id, "evt_recent", "user_message", {"content": "最近消息"}, 3),
+        _event(session_id, "evt_recent_answer", "assistant_message", {"content": "最近回答"}, 4),
+    ]:
+        _append(repo, event)
+    compactor = ContextCompactor(
+        session_repository=repo,
+        model_client=StaticModelClient(
+            '{"summary":"用户说明了一个临时上下文。","timeline":[],"decisions":[],'
+            '"open_threads":[],"tool_progress":[],"agent_activity":[],"memory_relevant":[],'
+            '"evidence_event_ids":["evt_user_1"]}'
+        ),
+        config=ContextCompactionConfig(trigger_event_count=3, retain_event_count=2),
+    )
+
+    result = compactor.compact_after_flush(_context(session_id))
+
+    assert result.compacted is True
+    events = repo.list_events(session_id)
+    memory_relevant = events[0].payload["structured"]["memory_relevant"]
+    assert any("临时暗号" in item and "不要记住" in item for item in memory_relevant)
+
+
 def test_context_compactor_rejects_unsupported_summary_terms(tmp_path: Path) -> None:
     repo = JsonlSessionRepository(data_dir=tmp_path)
     session_id = "sess_compact_unsupported_terms"

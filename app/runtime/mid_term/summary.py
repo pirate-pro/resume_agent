@@ -80,10 +80,15 @@ class MidTermSummaryValidator:
         event_index = _build_event_index(pack)
         valid_event_ids = set(event_index)
         latest_name, latest_name_event_id = _latest_user_name_signal(pack.events)
-        forbidden_memory_event_ids = _forbidden_memory_event_ids(pack.events)
+        forbidden_memory_signals = _forbidden_memory_signals(pack.events)
+        forbidden_memory_event_ids = {item["event_id"] for item in forbidden_memory_signals}
 
         normalized: dict[str, Any] = {}
         normalized["active_context"] = self._normalize_active_context(summary["active_context"], valid_event_ids)
+        normalized["active_context"] = _ensure_forbidden_memory_active_context(
+            normalized["active_context"],
+            forbidden_memory_signals,
+        )
         normalized["decisions"] = self._normalize_decisions(summary["decisions"], valid_event_ids)
         normalized["progress"] = self._normalize_progress(summary["progress"], event_index)
         normalized["open_questions"] = self._normalize_open_questions(summary["open_questions"], valid_event_ids)
@@ -192,11 +197,7 @@ class MidTermSummaryValidator:
                 continue
             content = optional_text(raw.get("content"))
             why = optional_text(raw.get("why_reusable"))
-            evidence = _normalize_required_evidence(
-                raw.get("evidence_event_ids"),
-                valid_event_ids,
-                field=f"candidate_long_term[{index}].evidence_event_ids",
-            )
+            evidence = _normalize_candidate_evidence(raw.get("evidence_event_ids"), valid_event_ids)
             tags_raw = raw.get("tags")
             tags = [tag.strip() for tag in tags_raw if isinstance(tag, str) and tag.strip()] if isinstance(tags_raw, list) else []
             if content is None or why is None or not evidence:
@@ -208,14 +209,18 @@ class MidTermSummaryValidator:
                 latest_name_event_id=latest_name_event_id,
                 valid_event_ids=valid_event_ids,
             )
-            _reject_assistant_only_candidate(content=content, evidence=evidence, event_index=event_index)
-            _reject_forbidden_candidate(
+            if _is_assistant_only_candidate(evidence=evidence, event_index=event_index):
+                continue
+            if _is_forbidden_candidate(
                 content=content,
                 evidence=evidence,
                 forbidden_memory_event_ids=forbidden_memory_event_ids,
-            )
-            _reject_outdated_name_candidate(content=content, latest_name=latest_name)
-            _reject_temporary_state_candidate(content=content, tags=tags)
+            ):
+                continue
+            if _is_outdated_name_candidate(content=content, latest_name=latest_name):
+                continue
+            if _is_temporary_state_candidate(content=content, tags=tags):
+                continue
             confidence = normalize_score(raw.get("confidence"), default=0.7)
             output.append(
                 {
@@ -282,6 +287,12 @@ def _normalize_required_evidence(raw: Any, valid_event_ids: set[str], *, field: 
     return normalize_evidence(raw_event_ids, valid_event_ids)
 
 
+def _normalize_candidate_evidence(raw: Any, valid_event_ids: set[str]) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return normalize_evidence(raw, valid_event_ids)
+
+
 def _require_tool_pair_evidence(evidence: list[str], event_index: dict[str, dict[str, Any]], *, field: str) -> None:
     observed: dict[str, set[str]] = {}
     for event_id in evidence:
@@ -312,44 +323,37 @@ def _event_tool_call_id(event: dict[str, Any]) -> str:
     return ""
 
 
-def _reject_assistant_only_candidate(
-    *,
-    content: str,
-    evidence: list[str],
-    event_index: dict[str, dict[str, Any]],
-) -> None:
+def _is_assistant_only_candidate(*, evidence: list[str], event_index: dict[str, dict[str, Any]]) -> bool:
     evidence_types = {str(event_index[event_id].get("type", "")).strip() for event_id in evidence if event_id in event_index}
-    if evidence_types and evidence_types.issubset({"assistant_message", "assistant_thinking", "run_finished"}):
-        raise ValidationError(f"candidate_long_term has assistant-only evidence: {content}")
+    return bool(evidence_types) and evidence_types.issubset({"assistant_message", "assistant_thinking", "run_finished"})
 
 
-def _reject_forbidden_candidate(
+def _is_forbidden_candidate(
     *,
     content: str,
     evidence: list[str],
     forbidden_memory_event_ids: set[str],
-) -> None:
+) -> bool:
     if not forbidden_memory_event_ids:
-        return
+        return "临时暗号" in content or "不要记住" in content
     if forbidden_memory_event_ids.intersection(evidence):
-        raise ValidationError(f"candidate_long_term references explicitly forbidden memory: {content}")
-    if "临时暗号" in content or "不要记住" in content:
-        raise ValidationError(f"candidate_long_term contains forbidden memory content: {content}")
+        return True
+    return "临时暗号" in content or "不要记住" in content
 
 
-def _reject_outdated_name_candidate(*, content: str, latest_name: str | None) -> None:
+def _is_outdated_name_candidate(*, content: str, latest_name: str | None) -> bool:
     if latest_name is None or latest_name not in content:
         extracted = _extract_name(content)
         if extracted is not None and latest_name is not None:
-            raise ValidationError(f"candidate_long_term contains outdated name '{extracted}', latest is '{latest_name}'.")
+            return True
+    return False
 
 
-def _reject_temporary_state_candidate(*, content: str, tags: list[str]) -> None:
+def _is_temporary_state_candidate(*, content: str, tags: list[str]) -> bool:
     lowered_tags = {tag.lower() for tag in tags}
     if lowered_tags.intersection({"short", "session_state", "working_state", "task_state", "temporary"}):
-        raise ValidationError(f"candidate_long_term contains temporary-state tags: {','.join(sorted(lowered_tags))}")
-    if any(term in content for term in _TEMPORARY_STATE_TERMS):
-        raise ValidationError(f"candidate_long_term looks like temporary task state: {content}")
+        return True
+    return any(term in content for term in _TEMPORARY_STATE_TERMS)
 
 
 def _repair_latest_name_candidate_evidence(
@@ -397,8 +401,40 @@ def _extract_name(text: str) -> str | None:
     return None
 
 
-def _forbidden_memory_event_ids(events: list[dict[str, Any]]) -> set[str]:
-    output: set[str] = set()
+def _ensure_forbidden_memory_active_context(
+    active_context: list[dict[str, Any]],
+    forbidden_memory_signals: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    if not forbidden_memory_signals:
+        return active_context
+    output = list(active_context)
+    if any("临时暗号" in str(item.get("summary", "")) and "不要记住" in str(item.get("summary", "")) for item in output):
+        return output
+    seen_evidence = {
+        event_id
+        for item in output
+        for event_id in item.get("evidence_event_ids", [])
+        if isinstance(event_id, str)
+    }
+    for signal in forbidden_memory_signals[:2]:
+        event_id = signal["event_id"]
+        if event_id in seen_evidence and "不要记住" in signal["text"]:
+            pass
+        elif event_id in seen_evidence:
+            continue
+        output.append(
+            {
+                "summary": f"用户明确声明该临时上下文不要记住/不要写入长期 memory：{signal['text']}",
+                "evidence_event_ids": [event_id],
+                "confidence": 0.95,
+            }
+        )
+        seen_evidence.add(event_id)
+    return output
+
+
+def _forbidden_memory_signals(events: list[dict[str, Any]]) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
     for event in events:
         if str(event.get("type", "")).strip() != "user_message":
             continue
@@ -406,7 +442,7 @@ def _forbidden_memory_event_ids(events: list[dict[str, Any]]) -> set[str]:
         if "不要记住" in text or "不要写入 memory" in text or "不要写入memory" in text:
             event_id = str(event.get("event_id", "")).strip()
             if event_id:
-                output.add(event_id)
+                output.append({"event_id": event_id, "text": text[:240]})
     return output
 
 

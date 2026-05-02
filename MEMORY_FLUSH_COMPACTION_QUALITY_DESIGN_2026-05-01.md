@@ -529,9 +529,18 @@ context_summary
 - tool_progress 引用 tool event 时必须 tool_call/tool_result 成对
 - summary 不允许引入源事件中不存在的关键实体/结论
 
+已完成 candidate 级局部容错：
+- forbidden memory / outdated name / temporary state / unrepaired assistant-only candidate 会被跳过
+- 跳过坏 candidate 不影响 daily 落盘
+- facts 只 materialize 通过校验的 candidate
+
+已完成禁止记忆短期约束保留：
+- 用户明确说“不要记住/不要写入 memory”的事件必须进入 daily active context
+- context compaction 必须在 memory_relevant 中保留该短期约束
+
 未完成：
 - 结构化 validation issue 对象
-- repair prompt / repair model call
+- repair prompt / repair model call（当前仅做 deterministic local repair / candidate drop）
 ```
 
 ### Phase 3：Repair
