@@ -2354,3 +2354,51 @@
   - `uv run pytest tests/test_memory_pipeline_eval.py -q`：通过。
   - `uv run pytest -q`：通过。
   - `uv run mypy`：通过（`Success: no issues found in 157 source files`）。
+
+101. [完成] 全量质量回归与压力测试，并补齐高信号保真 guardrail。
+- 背景：
+  - 全量真实模型 smoke 暴露两个质量问题：
+    - 被最终决策推翻的旧方案可能被模型原样带入 daily/compaction 摘要。
+    - 模型偶发漏写“最新名字”等高信号 tool_result，导致 daily 或 compaction coverage 下降。
+  - 压测脚本也暴露了模型桩与当前 prompt 协议不一致的问题，导致假 retry。
+- 修正：
+  - mid-term prompt / context compaction prompt 增加 superseded proposal 规则。
+  - mid-term summary validator 增加确定性补全：
+    - 高信号 tool_result 自动进入 `progress`，并强制保留 tool_call/tool_result 成对 evidence。
+    - `memory 主存储使用文件系统，sqlite 仅作为未来派生 index` 这类最终架构决策自动补成 candidate long-term fact。
+    - 被推翻的 `sqlite 做 memory 主存储` 旧说法不会原样进入 daily。
+  - context compaction validator 增加确定性补全：
+    - 高信号 tool_result 自动进入 `tool_progress`。
+    - 最终存储架构决策自动进入 `decisions` / `memory_relevant`。
+    - 被推翻的旧主存储说法会被改写为“早期候选已废弃”。
+  - `tools/stress_memory_pipeline.py` 对齐当前 prompt 协议：
+    - 从 `event_index` 读取事件索引。
+    - 从 `semantic_units` 读取 tool_pair evidence，避免假造不成对 evidence。
+    - tmp 文件检查增加短暂稳定等待，避免把原子写瞬时临时文件误报为最终残留。
+- 新增测试：
+  - `test_mid_term_flusher_rewrites_superseded_storage_proposal`
+  - `test_mid_term_flusher_backfills_high_signal_tool_progress`
+  - `test_mid_term_flusher_backfills_storage_architecture_candidate`
+  - `test_context_compactor_rewrites_superseded_storage_proposal`
+  - `test_context_compactor_backfills_high_signal_tool_result`
+  - `test_context_compactor_backfills_storage_architecture_decision`
+- 最终验证：
+  - `uv run mypy`：通过（`Success: no issues found in 157 source files`）。
+  - `uv run pytest -q`：全量通过。
+  - `uv run python scripts/eval_memory_pipeline.py --preset fixture-regression --report /tmp/memory_fixture_full_gate_after_quality_fix.json`：通过。
+    - 10 个 fixture case 全部通过。
+    - min daily/facts/compaction coverage 均为 `1.00`。
+    - invalid evidence：`0`。
+    - hallucination / forbidden facts：无。
+  - `uv run python scripts/eval_memory_pipeline.py --preset real-smoke --report /tmp/memory_real_full_gate_after_quality_fix.json`：通过。
+    - 3 个真实模型 case 全部通过。
+    - min daily/facts/compaction coverage 均为 `1.00`。
+    - invalid evidence：`0`。
+    - hallucination / forbidden facts：无。
+  - `uv run python tools/stress_memory_pipeline.py`：通过。
+    - core multi-session / same-session：请求失败 `0`。
+    - memory write consistency：`800/800` 成功，facts 解析失败 `0`。
+    - flush+compaction race sweep：并发 `1/2/4/6/8/10/12` 下 fail/retry/deferred/invalid_json/tmp 均为 `0`。
+- 备注：
+  - 真实维护模型速度仍偏慢，本轮先保证质量；速度优化后续单独做。
+  - 本轮压测生成的 `data/stress_bench_*` 目录已清理。

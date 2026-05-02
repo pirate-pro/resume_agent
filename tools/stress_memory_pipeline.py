@@ -156,12 +156,16 @@ class StressModelClient:
 
     def _build_mid_term_payload(self, prompt: str) -> dict[str, Any]:
         pack = self._parse_json_from_marker(prompt, "Event pack:\n")
-        events = [row for row in pack.get("events", []) if isinstance(row, dict)]
+        raw_events = pack.get("events")
+        if not isinstance(raw_events, list):
+            raw_events = pack.get("event_index")
+        events = [row for row in raw_events if isinstance(row, dict)] if isinstance(raw_events, list) else []
         event_ids = [str(row.get("event_id", "")).strip() for row in events if str(row.get("event_id", "")).strip()] or ["evt_missing"]
         user_event = self._first_by_type(events, "user_message") or event_ids[0]
         assistant_event = self._first_by_type(events, "assistant_message") or event_ids[-1]
-        call_event = self._first_by_type(events, "tool_call") or event_ids[0]
-        result_event = self._first_by_type(events, "tool_result") or event_ids[-1]
+        call_event, result_event = self._first_tool_pair_from_pack(pack)
+        call_event = call_event or self._first_by_type(events, "tool_call") or event_ids[0]
+        result_event = result_event or self._first_by_type(events, "tool_result") or event_ids[-1]
         finish_event = self._first_by_type(events, "run_finished") or event_ids[-1]
         return {
             "active_context": [{"summary": "用户要求系统记忆一致", "evidence_event_ids": [user_event], "confidence": 0.82}],
@@ -187,6 +191,25 @@ class StressModelClient:
             ],
             "artifact_refs": [{"path_or_file_id": "session://events", "reason": "追溯执行", "evidence_event_ids": [finish_event]}],
         }
+
+    @staticmethod
+    def _first_tool_pair_from_pack(pack: dict[str, Any]) -> tuple[str | None, str | None]:
+        raw_units = pack.get("semantic_units")
+        if not isinstance(raw_units, list):
+            return (None, None)
+        for unit in raw_units:
+            if not isinstance(unit, dict):
+                continue
+            if str(unit.get("unit_type", "")).strip() != "tool_pair":
+                continue
+            event_ids = unit.get("event_ids")
+            if not isinstance(event_ids, list) or len(event_ids) < 2:
+                continue
+            call_event = str(event_ids[0]).strip() if isinstance(event_ids[0], str) else ""
+            result_event = str(event_ids[1]).strip() if isinstance(event_ids[1], str) else ""
+            if call_event and result_event:
+                return (call_event, result_event)
+        return (None, None)
 
     def _build_compaction_payload(self, prompt: str) -> dict[str, Any]:
         start = prompt.find("{")
@@ -237,7 +260,7 @@ def build_chat_stack(
     enable_compaction: bool,
 ) -> tuple[ChatService, MemoryManager, JsonlSessionRepository, MidTermFlusher | None]:
     session_repository = JsonlSessionRepository(data_dir=data_dir)
-    state_store = JsonlFileStateStore(root_dir=data_dir / "state_v1")
+    state_store = JsonlFileStateStore(root_dir=data_dir / "state")
     state_manager = StateManager(store=state_store)
     capability_registry = AgentCapabilityRegistry.for_tests()
     memory_store = FileMemoryStore(root_dir=data_dir / "memory")
@@ -257,6 +280,7 @@ def build_chat_stack(
     tool_registry.register(StateListTool(state_manager=state_manager))
 
     session_manager = SessionManager(session_repository=session_repository)
+    session_lock_manager = SessionLockManager()
     event_recorder = EventRecorder(session_repository=session_repository)
     context_assembler = ContextAssembler(
         session_repository=session_repository,
@@ -300,9 +324,8 @@ def build_chat_stack(
         runtime=runtime,
         session_manager=session_manager,
         session_repository=session_repository,
-        memory_manager=memory_manager,
         capability_registry=capability_registry,
-        session_lock_manager=SessionLockManager(),
+        session_lock_manager=session_lock_manager,
         session_title_service=SessionTitleService(model_client=model_client),
     )
     return service, memory_manager, session_repository, flusher
@@ -455,11 +478,23 @@ def inspect_mid_term_files(data_dir: Path) -> dict[str, int]:
                 invalid_json_files += 1
         except Exception:
             invalid_json_files += 1
+    tmp_files = _settled_tmp_file_count(base)
     return {
         "mid_term_json_files": total_json_files,
         "mid_term_invalid_json_files": invalid_json_files,
-        "mid_term_tmp_files": len(list(base.rglob("*.tmp"))),
+        "mid_term_tmp_files": tmp_files,
     }
+
+
+def _settled_tmp_file_count(base: Path) -> int:
+    """Avoid flagging atomic-write temp files that disappear immediately after replace()."""
+    tmp_files: list[Path] = []
+    for _ in range(5):
+        tmp_files = list(base.rglob("*.tmp"))
+        if not tmp_files:
+            return 0
+        time.sleep(0.05)
+    return len(tmp_files)
 
 
 async def run_memory_write_consistency_stress(

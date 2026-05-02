@@ -800,6 +800,192 @@ def test_mid_term_flusher_skips_outdated_name_candidate_in_same_pack(tmp_path: P
     assert facts_path.exists() is False
 
 
+def test_mid_term_flusher_rewrites_superseded_storage_proposal(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_superseded_storage"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    payload["active_context"] = [
+        {
+            "summary": "先讨论 sqlite 做 memory 主存储，后续继续观察。",
+            "evidence_event_ids": ["evt_s01"],
+            "confidence": 0.8,
+        }
+    ]
+    payload["decisions"] = [
+        {
+            "summary": "最终架构决策：文件系统主存储，sqlite 做主存储的方案废弃。",
+            "evidence_event_ids": ["evt_s03"],
+            "stability": "stable",
+        }
+    ]
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 12, 0, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_s01",
+        event_type="user_message",
+        payload={"content": "先讨论一个方案：sqlite 做 memory 主存储。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_s02",
+        event_type="assistant_message",
+        payload={"content": "已记录 sqlite 主存储作为早期候选方案。"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_s03",
+        event_type="user_message",
+        payload={"content": "最终架构决策：memory 主存储使用文件系统，sqlite 暂不接入，以后最多只考虑作为派生 index。"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_s04",
+        event_type="run_finished",
+        payload={"answer_length": 16, "tool_calls": 0},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is True
+    assert result.daily_path is not None
+    daily_text = Path(result.daily_path).read_text(encoding="utf-8")
+    assert "sqlite 做 memory 主存储" not in daily_text
+    assert "sqlite 做主存储" not in daily_text
+    assert "sqlite 主存储早期候选已被后续文件系统主存储决策废弃" in daily_text
+
+
+def test_mid_term_flusher_backfills_high_signal_tool_progress(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_high_signal_tool"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 12, 20, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_h01",
+        event_type="user_message",
+        payload={"content": "查一下我的名字。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_h02",
+        event_type="tool_call",
+        payload={"name": "memory_search", "arguments": {"query": "名字"}, "tool_call_id": "call_name"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_h03",
+        event_type="tool_result",
+        payload={
+            "tool_name": "memory_search",
+            "success": True,
+            "content": "查询结果：最新名字是小王，小猪和小明都已过期。",
+            "tool_call_id": "call_name",
+        },
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_h04",
+        event_type="run_finished",
+        payload={"answer_length": 16, "tool_calls": 1},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is True
+    assert result.daily_path is not None
+    daily_text = Path(result.daily_path).read_text(encoding="utf-8")
+    assert "[CALL] memory_search" in daily_text
+    assert "最新名字是小王" in daily_text
+    assert "evidence=evt_h02,evt_h03" in daily_text
+
+
+def test_mid_term_flusher_backfills_storage_architecture_candidate(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_storage_candidate"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 12, 40, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_a01",
+        event_type="user_message",
+        payload={"content": "先讨论一个方案：sqlite 做 memory 主存储。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_a02",
+        event_type="user_message",
+        payload={"content": "最终架构决策：memory 主存储使用文件系统，sqlite 暂不接入，以后最多只考虑作为派生 index。"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_a03",
+        event_type="assistant_message",
+        payload={"content": "已确认文件系统主存储决策。"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_a04",
+        event_type="run_finished",
+        payload={"answer_length": 16, "tool_calls": 0},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is True
+    facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
+    rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any("文件系统为主存储" in row.get("content", "") for row in rows)
+    assert all("sqlite 做 memory 主存储" not in row.get("content", "") for row in rows)
+
+
 def test_mid_term_flusher_repairs_latest_name_candidate_assistant_only_evidence(tmp_path: Path) -> None:
     session_id = "sess_mid_term_latest_name_evidence_repair"
     repo = JsonlSessionRepository(data_dir=tmp_path)

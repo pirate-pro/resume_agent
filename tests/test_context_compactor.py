@@ -358,6 +358,135 @@ def test_context_compactor_preserves_forbidden_memory_constraint(tmp_path: Path)
     assert any("临时暗号" in item and "不要记住" in item for item in memory_relevant)
 
 
+def test_context_compactor_rewrites_superseded_storage_proposal(tmp_path: Path) -> None:
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_compact_superseded_storage"
+    repo.create_session(session_id)
+    for event in [
+        _event(session_id, "evt_user_1", "user_message", {"content": "先讨论一个方案：sqlite 做 memory 主存储。"}, 1),
+        _event(session_id, "evt_assistant_1", "assistant_message", {"content": "已记录 sqlite 主存储作为早期候选方案。"}, 2),
+        _event(
+            session_id,
+            "evt_user_2",
+            "user_message",
+            {"content": "最终架构决策：memory 主存储使用文件系统，sqlite 暂不接入，以后最多只考虑作为派生 index。"},
+            3,
+        ),
+        _event(session_id, "evt_recent", "user_message", {"content": "最近消息"}, 4),
+        _event(session_id, "evt_recent_answer", "assistant_message", {"content": "最近回答"}, 5),
+    ]:
+        _append(repo, event)
+    compactor = ContextCompactor(
+        session_repository=repo,
+        model_client=StaticModelClient(
+            '{"summary":"早期讨论 sqlite 做 memory 主存储，后续改为文件系统。",'
+            '"timeline":["用户提出 sqlite 做 memory 主存储。","用户最终改为文件系统主存储。"],'
+            '"decisions":["sqlite 做主存储已被推翻，文件系统是主存储。"],'
+            '"open_threads":[],"tool_progress":[],"agent_activity":[],"memory_relevant":["sqlite 做 memory 主存储"],'
+            '"evidence_event_ids":["evt_user_1","evt_user_2"]}'
+        ),
+        config=ContextCompactionConfig(trigger_event_count=3, retain_event_count=2),
+    )
+
+    result = compactor.compact_after_flush(_context(session_id))
+
+    assert result.compacted is True
+    events = repo.list_events(session_id)
+    structured_text = str(events[0].payload["structured"])
+    assert "sqlite 做 memory 主存储" not in structured_text
+    assert "sqlite 做主存储" not in structured_text
+    assert "sqlite 主存储早期候选已被后续文件系统主存储决策废弃" in structured_text
+
+
+def test_context_compactor_backfills_high_signal_tool_result(tmp_path: Path) -> None:
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_compact_high_signal_tool"
+    repo.create_session(session_id)
+    for event in [
+        _event(session_id, "evt_user_1", "user_message", {"content": "先叫我小猪。"}, 1),
+        _event(session_id, "evt_user_2", "user_message", {"content": "最终确认：叫我小王。"}, 2),
+        _event(
+            session_id,
+            "evt_tool_call",
+            "tool_call",
+            {"name": "memory_search", "arguments": {"query": "名字"}, "tool_call_id": "call_name"},
+            3,
+        ),
+        _event(
+            session_id,
+            "evt_tool_result",
+            "tool_result",
+            {
+                "tool_name": "memory_search",
+                "success": True,
+                "content": "查询结果：最新名字是小王，小猪和小明都已过期。",
+                "tool_call_id": "call_name",
+            },
+            4,
+        ),
+        _event(session_id, "evt_recent", "user_message", {"content": "最近消息"}, 5),
+        _event(session_id, "evt_recent_answer", "assistant_message", {"content": "最近回答"}, 6),
+    ]:
+        _append(repo, event)
+    compactor = ContextCompactor(
+        session_repository=repo,
+        model_client=StaticModelClient(
+            '{"summary":"用户纠正了名字。","timeline":[],"decisions":["以小王为准"],'
+            '"open_threads":[],"tool_progress":[],"agent_activity":[],"memory_relevant":[],'
+            '"evidence_event_ids":["evt_user_1","evt_user_2"]}'
+        ),
+        config=ContextCompactionConfig(trigger_event_count=3, retain_event_count=2),
+    )
+
+    result = compactor.compact_after_flush(_context(session_id))
+
+    assert result.compacted is True
+    events = repo.list_events(session_id)
+    tool_progress = events[0].payload["structured"]["tool_progress"]
+    assert any(
+        item["evidence_event_ids"] == ["evt_tool_call", "evt_tool_result"]
+        and "最新名字是小王" in item["result_summary"]
+        for item in tool_progress
+    )
+
+
+def test_context_compactor_backfills_storage_architecture_decision(tmp_path: Path) -> None:
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_compact_storage_decision"
+    repo.create_session(session_id)
+    for event in [
+        _event(session_id, "evt_user_1", "user_message", {"content": "先讨论一个方案：sqlite 做 memory 主存储。"}, 1),
+        _event(
+            session_id,
+            "evt_user_2",
+            "user_message",
+            {"content": "最终架构决策：memory 主存储使用文件系统，sqlite 暂不接入，以后最多只考虑作为派生 index。"},
+            2,
+        ),
+        _event(session_id, "evt_filler", "assistant_message", {"content": "已确认。"}, 3),
+        _event(session_id, "evt_recent", "user_message", {"content": "最近消息"}, 4),
+        _event(session_id, "evt_recent_answer", "assistant_message", {"content": "最近回答"}, 5),
+    ]:
+        _append(repo, event)
+    compactor = ContextCompactor(
+        session_repository=repo,
+        model_client=StaticModelClient(
+            '{"summary":"讨论了架构方向。","timeline":[],"decisions":[],'
+            '"open_threads":[],"tool_progress":[],"agent_activity":[],"memory_relevant":[],'
+            '"evidence_event_ids":["evt_user_1","evt_user_2"]}'
+        ),
+        config=ContextCompactionConfig(trigger_event_count=3, retain_event_count=2),
+    )
+
+    result = compactor.compact_after_flush(_context(session_id))
+
+    assert result.compacted is True
+    events = repo.list_events(session_id)
+    structured = events[0].payload["structured"]
+    assert any("文件系统为主存储" in item for item in structured["decisions"])
+    assert any("文件系统为主存储" in item for item in structured["memory_relevant"])
+
+
 def test_context_compactor_rejects_unsupported_summary_terms(tmp_path: Path) -> None:
     repo = JsonlSessionRepository(data_dir=tmp_path)
     session_id = "sess_compact_unsupported_terms"

@@ -633,6 +633,49 @@ compaction 与 flush 并行，但不失帧。
 - 已存在的 context_summary 不要求再次进入 flush job，因为它本身已经是压缩后的短期摘要。
 ```
 
+### Phase 5 补充：高信号保真 guardrail
+
+2026-05-02 全量测试后补充：
+
+```text
+问题：
+1. 模型可能把已经被最终决策推翻的旧方案原样写入 daily/compaction。
+2. 模型可能漏掉“最新名字/最终称呼/已过期”等高信号 tool_result。
+3. 模型可能漏掉已经明确的长期架构决策 candidate fact。
+
+处理：
+1. prompt 明确 superseded proposal 规则。
+2. validator 对 superseded storage proposal 做确定性改写。
+3. validator 对高信号 tool_result 做确定性 progress/tool_progress 补全。
+4. validator 对最终 storage architecture 决策做 candidate fact 与 compaction memory_relevant 补全。
+```
+
+质量门禁：
+
+```text
+fixture-regression:
+- all scenarios
+- 36/120 events
+- min daily/facts/compaction coverage = 1.00
+- invalid evidence = 0
+- hallucination / forbidden facts = none
+
+real-smoke:
+- preference_conflict
+- architecture_override
+- forbidden_memory
+- 36 events
+- min daily/facts/compaction coverage = 1.00
+- invalid evidence = 0
+- hallucination / forbidden facts = none
+
+stress:
+- chat core multi-session / same-session fail = 0
+- memory write 800/800 success
+- facts parse fail = 0
+- flush+compaction race retry/deferred/invalid_json/tmp = 0
+```
+
 ---
 
 ## 11. 暂不做

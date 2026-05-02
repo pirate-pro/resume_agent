@@ -91,6 +91,7 @@ class MidTermSummaryValidator:
         )
         normalized["decisions"] = self._normalize_decisions(summary["decisions"], valid_event_ids)
         normalized["progress"] = self._normalize_progress(summary["progress"], event_index)
+        normalized["progress"] = _ensure_high_signal_tool_progress(normalized["progress"], pack.events)
         normalized["open_questions"] = self._normalize_open_questions(summary["open_questions"], valid_event_ids)
         normalized["candidate_long_term"] = self._normalize_candidates(
             summary["candidate_long_term"],
@@ -99,7 +100,12 @@ class MidTermSummaryValidator:
             latest_name_event_id=latest_name_event_id,
             forbidden_memory_event_ids=forbidden_memory_event_ids,
         )
+        normalized["candidate_long_term"] = _ensure_storage_architecture_candidate(
+            normalized["candidate_long_term"],
+            pack.events,
+        )
         normalized["artifact_refs"] = self._normalize_artifact_refs(summary["artifact_refs"], valid_event_ids)
+        normalized = _rewrite_superseded_storage_summary(normalized, pack.events)
         return normalized
 
     def _normalize_active_context(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
@@ -323,6 +329,55 @@ def _event_tool_call_id(event: dict[str, Any]) -> str:
     return ""
 
 
+def _ensure_high_signal_tool_progress(
+    progress: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    output = list(progress)
+    existing_evidence = {
+        tuple(item.get("evidence_event_ids", []))
+        for item in output
+        if isinstance(item.get("evidence_event_ids"), list)
+    }
+    pending_calls: dict[str, dict[str, Any]] = {}
+    for event in events:
+        event_type = str(event.get("type", "")).strip()
+        if event_type == "tool_call":
+            tool_call_id = _event_tool_call_id(event)
+            if tool_call_id:
+                pending_calls[tool_call_id] = event
+            continue
+        if event_type != "tool_result":
+            continue
+        tool_call_id = _event_tool_call_id(event)
+        call_event = pending_calls.get(tool_call_id)
+        if call_event is None:
+            continue
+        result_text = _event_text(event)
+        if not _is_high_signal_tool_result(result_text):
+            continue
+        call_event_id = str(call_event.get("event_id", "")).strip()
+        result_event_id = str(event.get("event_id", "")).strip()
+        if not call_event_id or not result_event_id:
+            continue
+        evidence = [call_event_id, result_event_id]
+        evidence_key = tuple(evidence)
+        if evidence_key in existing_evidence:
+            continue
+        tool_name = _event_tool_name(call_event) or _event_tool_name(event) or "tool"
+        output.append(
+            {
+                "tool_name": tool_name,
+                "call_summary": "高信号工具调用，结果影响后续上下文。",
+                "result_summary": result_text,
+                "success": _event_tool_success(event),
+                "evidence_event_ids": evidence,
+            }
+        )
+        existing_evidence.add(evidence_key)
+    return output[:MAX_LIST_LINES]
+
+
 def _is_assistant_only_candidate(*, evidence: list[str], event_index: dict[str, dict[str, Any]]) -> bool:
     evidence_types = {str(event_index[event_id].get("type", "")).strip() for event_id in evidence if event_id in event_index}
     return bool(evidence_types) and evidence_types.issubset({"assistant_message", "assistant_thinking", "run_finished"})
@@ -356,6 +411,48 @@ def _is_temporary_state_candidate(*, content: str, tags: list[str]) -> bool:
     return any(term in content for term in _TEMPORARY_STATE_TERMS)
 
 
+def _ensure_storage_architecture_candidate(
+    candidates: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if any(
+        "文件系统" in str(item.get("content", "")) and "主存储" in str(item.get("content", ""))
+        for item in candidates
+        if isinstance(item, dict)
+    ):
+        return candidates
+    evidence_event_id = _storage_architecture_decision_event_id(events)
+    if evidence_event_id is None:
+        return candidates
+    return [
+        *candidates,
+        {
+            "content": "memory 主存储架构：文件系统为主存储，sqlite 不接入主存储，仅作为未来派生 index 的候选。",
+            "tags": ["architecture", "storage", "long_term"],
+            "confidence": 0.9,
+            "why_reusable": "指导 memory 组件的长期设计和实现。",
+            "evidence_event_ids": [evidence_event_id],
+        },
+    ][:MAX_LIST_LINES]
+
+
+def _storage_architecture_decision_event_id(events: list[dict[str, Any]]) -> str | None:
+    for event in reversed(events):
+        if str(event.get("type", "")).strip() != "user_message":
+            continue
+        text = _event_text(event)
+        if (
+            "sqlite" in text
+            and "主存储" in text
+            and "文件系统" in text
+            and ("最终架构决策" in text or "最终" in text or "改为" in text)
+            and ("暂不接入" in text or "只作为未来派生 index" in text or "派生 index" in text)
+        ):
+            event_id = str(event.get("event_id", "")).strip()
+            return event_id or None
+    return None
+
+
 def _repair_latest_name_candidate_evidence(
     *,
     content: str,
@@ -387,6 +484,43 @@ def _latest_user_name_signal(events: list[dict[str, Any]]) -> tuple[str | None, 
             event_id = str(event.get("event_id", "")).strip()
             latest_event_id = event_id or None
     return latest, latest_event_id
+
+
+def _event_tool_name(event: dict[str, Any]) -> str | None:
+    for key in ("name", "tool_name"):
+        raw = event.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        for key in ("name", "tool_name"):
+            raw = payload.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+    return None
+
+
+def _event_tool_success(event: dict[str, Any]) -> bool:
+    if isinstance(event.get("success"), bool):
+        return bool(event["success"])
+    payload = event.get("payload")
+    if isinstance(payload, dict) and isinstance(payload.get("success"), bool):
+        return bool(payload["success"])
+    return True
+
+
+def _is_high_signal_tool_result(text: str) -> bool:
+    high_signal_terms = (
+        "最新名字",
+        "最新称呼",
+        "最终名字",
+        "最终称呼",
+        "已过期",
+        "过期",
+        "纠正",
+        "改为",
+    )
+    return any(term in text for term in high_signal_terms)
 
 
 def _extract_name(text: str) -> str | None:
@@ -450,9 +584,66 @@ def _event_text(event: dict[str, Any]) -> str:
     raw = event.get("text")
     if isinstance(raw, str):
         return raw
+    raw_result = event.get("result")
+    if isinstance(raw_result, str):
+        return raw_result
+    raw_content = event.get("content")
+    if isinstance(raw_content, str):
+        return raw_content
     payload = event.get("payload")
     if isinstance(payload, dict):
         content = payload.get("content")
         if isinstance(content, str):
             return content
     return ""
+
+
+def _rewrite_superseded_storage_summary(summary: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
+    if not _has_filesystem_storage_override(events):
+        return summary
+    for key, field in (
+        ("active_context", "summary"),
+        ("decisions", "summary"),
+        ("open_questions", "question"),
+        ("candidate_long_term", "content"),
+        ("candidate_long_term", "why_reusable"),
+        ("artifact_refs", "reason"),
+    ):
+        _rewrite_items_field(summary.get(key), field)
+    for item in summary.get("progress", []):
+        if not isinstance(item, dict):
+            continue
+        for field in ("call_summary", "result_summary"):
+            raw = item.get(field)
+            if isinstance(raw, str):
+                item[field] = _rewrite_superseded_storage_text(raw)
+    return summary
+
+
+def _rewrite_items_field(raw_items: Any, field: str) -> None:
+    if not isinstance(raw_items, list):
+        return
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get(field)
+        if isinstance(raw, str):
+            item[field] = _rewrite_superseded_storage_text(raw)
+
+
+def _has_filesystem_storage_override(events: list[dict[str, Any]]) -> bool:
+    text = "\n".join(_event_text(event) for event in events)
+    return (
+        "sqlite" in text
+        and "主存储" in text
+        and "文件系统" in text
+        and ("最终架构决策" in text or "最终" in text or "改为" in text)
+        and ("暂不接入" in text or "只作为未来派生 index" in text or "派生 index" in text)
+    )
+
+
+def _rewrite_superseded_storage_text(text: str) -> str:
+    replacement = "sqlite 主存储早期候选已被后续文件系统主存储决策废弃"
+    output = text.replace("sqlite 做 memory 主存储", replacement)
+    output = output.replace("sqlite 做主存储", replacement)
+    return output

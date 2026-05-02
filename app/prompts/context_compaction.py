@@ -21,7 +21,8 @@ Rules:
 6. Preserve the user's language and exact technical terms, file paths, tool names, variable names, and quoted values.
 7. If source events are Chinese, output Chinese.
 8. evidence_event_ids must come only from compressed_units, never from retained_units_preview.
-9. Output strict JSON only, with no Markdown fence.
+9. If an earlier proposal is later rejected or superseded, do not quote the obsolete proposal as an active fact. Summarize it as an abandoned/superseded candidate and foreground the latest decision.
+10. Output strict JSON only, with no Markdown fence.
 """
 
 
@@ -72,6 +73,7 @@ def build_context_compaction_prompt(
         "The summary will be prepended before retained raw events, so avoid duplicating recent retained details.\n"
         "Use evidence_event_ids only from allowed_evidence_event_ids; never cite forbidden_retained_preview_event_ids.\n"
         "Preserve key terms verbatim, especially tool_call, tool_result, file names, user names, and Chinese phrases.\n"
+        "For superseded proposals, avoid repeating obsolete wording verbatim; keep the correction and latest decision.\n"
         f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
     )
 
