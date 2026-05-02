@@ -2035,10 +2035,10 @@
     - `test_memory_name_conflict_pressure_keeps_latest_value`
       - 连续写入多条偏好记忆后写入旧名字和新名字。
       - 验证 canonical preferred_name 只保留最新值。
-    - `test_mid_term_event_packer_pressure_batches_without_splitting_tool_pairs`
+    - `test_mid_term_event_packer_pressure_keeps_single_flush_pack_without_splitting_tool_pairs`
       - 构造 36 轮 user/tool_call/tool_result/assistant 事件。
-      - 使用较小 input budget 触发多 pack。
-      - 验证每个 tool_pair 单元内部 call/result 成对且同 pack 保留。
+      - 验证单次 flush 只生成一个 pack。
+      - 验证每个 tool_pair 单元内部 call/result 成对且保留在同一个原子 flush job 中。
     - `test_context_compactor_pressure_keeps_recent_tool_pair_atomic`
       - 构造超过触发阈值的 session events。
       - 压缩后验证首个事件为 context_summary。
@@ -2065,3 +2065,231 @@
   - `uv run pytest tests/test_state_manager.py tests/test_context_assembler.py tests/test_memory_file_store.py tests/test_mid_term_flusher.py tests/test_tool_registry.py tests/test_agent_runtime.py -q`：通过。
   - `uv run mypy`：通过（`Success: no issues found in 155 source files`）
   - `uv run pytest -q`：通过。
+
+92. [完成] 增加 memory pipeline 评测脚本并优化 flush/compaction 提示词输入。
+- 背景：
+  - 需要验证 mid-term flush 速度、daily 保真率、context compaction 关键内容保留率，而不是只依赖单元测试。
+  - 初始真实模型评测暴露两个问题：
+    - 评测脚本错误使用 8192 context window，导致 50 events 被拆成 3 个 pack，和生产默认 32768 不一致。
+    - mid-term / compaction prompt 同时携带 semantic summary 和原始 event 明细，输入重复且模型容易翻译中文术语。
+- 说明：
+  - 新增 `scripts/eval_memory_pipeline.py`：
+    - 构造包含名字纠正、tool_call/tool_result 成对规则、rolling.md 开放问题、文件引用、最新 tool_result 的 synthetic session。
+    - 同时评测 flush 和 context compaction。
+    - 输出耗时、pack 数、prompt 字符数、daily/compaction 覆盖率、非法 evidence、最新 tool_pair 是否成对保留。
+    - 支持 fixture model 和真实模型两种模式。
+  - mid-term prompt 调整：
+    - `semantic_units` 只保留 `summary + event_ids + unit metadata`，不再重复携带完整 `events`。
+    - 增加 `event_index` 用于 evidence id/type 校验。
+    - 明确保留用户原语言、中文术语、文件名、tool 名、变量名和引用值。
+    - Progress 优先保留高信号、最新、纠正相关、失败或决策支撑的 tool_pair，避免噪声流水账。
+  - context compaction prompt 调整：
+    - semantic unit prompt payload 不再重复携带完整 `events`。
+    - 明确保留原语言和 `tool_call` / `tool_result` 等技术词。
+- 评测结果：
+  - fixture 完整链路：
+    - `uv run python scripts/eval_memory_pipeline.py --events 50 120 --report /tmp/memory_pipeline_eval_fixture_full_slim_all.json`
+    - 50/120 events 的 daily 覆盖率均为 `1.00`。
+    - 50/120 events 的 compaction 覆盖率均为 `1.00`。
+    - 最新 tool_pair 均成对保留。
+  - 真实模型 50 events 完整链路：
+    - `uv run python scripts/eval_memory_pipeline.py --real-model --events 50 --keep-data --output-dir /tmp/memory_pipeline_eval_inspect --report /tmp/memory_pipeline_eval_real_full_50_slim_all.json`
+    - pack 数：`1`。
+    - flush：约 `51.3s`，daily 覆盖率 `1.00`。
+    - compaction：约 `67.7s`，compaction 覆盖率 `1.00`。
+    - 非法 evidence：`0`。
+    - 最新 tool_pair 成对保留：`true`。
+- 结论：
+  - 语义保真率已经达到当前 synthetic case 的通过线。
+  - 真实模型耗时仍高，flush/compaction 必须继续作为后台任务处理，不应阻塞用户主链路。
+- 验证结果：
+  - `uv run pytest tests/test_mid_term_flusher.py tests/test_memory_pipeline_pressure.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 155 source files`）
+  - `uv run pytest -q`：通过。
+
+93. [完成] 收敛 mid-term flush 为单 stream 单原子 job，并拆分维护模型配置。
+- 背景：
+  - mid-term memory 是从 cursor 后的 events 抽取并写入 daily/facts，本质上应该是同一 `session_id + agent_id` 的一次原子提交。
+  - 旧实现会在一次 flush 内按 token budget 拆成多个 pack/job，容易引入同一 stream 内的顺序提交风险。
+  - flush/compaction 耗时主要在模型调用，维护链路需要能使用更快的专用模型，避免和主对话模型耦合。
+- 说明：
+  - `MidTermEventPackBuilder` 不再把一次 flush 拆成多个 batch，当前一次 build 只返回一个 `MidTermEventPack`。
+  - `MidTermFlusher` 增加未完成 job 检查：
+    - 同一 `session_id + agent_id` 已有 pending/running/retry/deferred job 时，不再创建新的重叠 range。
+    - 已有 job 会被标记 `dirty=true`，表示 active/retry 期间又有新 events 需要后续检查。
+    - 旧 job 成功后先推进 cursor，再从 cursor 后重新判断是否需要创建下一轮 pending job。
+    - 旧 job 失败时不推进 cursor，仍重试原 range。
+  - `MidTermFlushJob` 增加 `dirty` 字段，用于记录同一 stream 的后续待检查信号。
+  - 新增维护模型配置，默认回退主模型：
+    - `MAINTENANCE_LLM_BASE_URL`
+    - `MAINTENANCE_LLM_API_KEY`
+    - `MAINTENANCE_LLM_MODEL`
+    - `MAINTENANCE_LLM_TIMEOUT_SECONDS`
+  - `get_mid_term_flusher()` 和 `get_context_compactor()` 改用 `get_maintenance_model_client()`。
+- 设计边界：
+  - 同一 stream：严格串行，单 job 提交，失败重试原 range。
+  - 不同 stream：仍可并发，后续可以继续加全局 maintenance limiter。
+  - 当前阶段不维护多个 pending ranges，只保留 `dirty` 信号，成功后重新从 cursor 计算下一批。
+- 评测结果：
+  - `uv run python scripts/eval_memory_pipeline.py --events 50 120 --report /tmp/memory_pipeline_eval_fixture_single_job.json`
+  - 50/120 events 的 pack 数均为 `1`。
+  - 50/120 events 的 daily 覆盖率均为 `1.00`。
+  - 50/120 events 的 compaction 覆盖率均为 `1.00`。
+- 验证结果：
+  - `uv run pytest tests/test_mid_term_flusher.py tests/test_memory_pipeline_pressure.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 155 source files`）
+  - `uv run pytest -q`：通过。
+
+94. [完成] 扩展 memory pipeline 质量评估场景。
+- 背景：
+  - 单一 baseline synthetic case 只能验证 happy path，无法覆盖名字冲突、决策覆盖、工具失败重试、禁止入长期记忆等高风险场景。
+  - 后续优化 prompt、validator、repair 前，需要先有可重复的质量评估入口。
+- 说明：
+  - `scripts/eval_memory_pipeline.py` 增加 scenario 机制：
+    - `baseline`
+    - `preference_conflict`
+    - `architecture_override`
+    - `tool_failure_retry`
+    - `forbidden_memory`
+  - 评估指标扩展：
+    - daily 覆盖率。
+    - facts 覆盖率，仅检查应进入长期 facts 的稳定信息。
+    - compaction 覆盖率。
+    - forbidden fact 检查。
+    - tool_call/tool_result 压缩后语义成对检查。
+  - fixture model 同步覆盖新场景，确保评估脚本本身可被单测验证。
+  - 新增 `tests/test_memory_pipeline_eval.py`，防止评估脚本退化。
+- 评测结果：
+  - `uv run python scripts/eval_memory_pipeline.py --scenarios all --events 36 --report /tmp/memory_pipeline_eval_quality_all.json`
+  - 场景数：`5`。
+  - min daily 覆盖率：`1.00`。
+  - min facts 覆盖率：`1.00`。
+  - min compaction 覆盖率：`1.00`。
+  - forbidden fact：无。
+  - tool pair 成对：全部通过。
+- 验证结果：
+  - `uv run pytest tests/test_mid_term_flusher.py tests/test_memory_pipeline_pressure.py tests/test_memory_pipeline_eval.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 156 source files`）
+
+95. [完成] 增强 mid-term flush 输出 validator，坏输出不落盘。
+- 背景：
+  - 模型驱动的 flush 不能只依赖 JSON schema；如果 evidence 错、tool pair 缺半、临时信息被提升为长期候选，会直接污染 daily/facts。
+  - 当前阶段先做硬门禁：失败进入 retry，不写 daily/facts，不推进 cursor。
+- 说明：
+  - `MidTermSummaryValidator` 增加硬校验：
+    - `evidence_event_ids` 必须存在，且全部属于当前 job 的 event pack。
+    - `progress` 中引用 tool event 时，必须同时包含同一 `tool_call_id` 的 `tool_call` 和 `tool_result`。
+    - `candidate_long_term` 不允许只有 assistant/run_finished 证据。
+    - 用户明确说“不要记住/不要写入 memory”时，不允许对应内容进入 long-term candidate。
+    - 同一 pack 内出现名字纠正时，旧名字 candidate 会被拒绝。
+    - 临时任务状态、短期状态标签不允许进入 long-term candidate。
+  - 新增 validator 回归测试：
+    - 缺半 tool evidence 进入 retry，daily 不写入。
+    - 禁止记忆 candidate 进入 retry，facts 不写入。
+    - 同一批旧名字 candidate 进入 retry，daily 不写入。
+  - 修正评估 fixture：
+    - 非名字场景不再伪造默认“小明”候选。
+    - tool failure/retry 场景的 progress evidence 改为完整成对引用。
+    - facts 验收收敛到稳定长期事实；当前阶段目标只要求进入 daily/active context，不强制进入 facts。
+- 评测结果：
+  - `uv run python scripts/eval_memory_pipeline.py --scenarios all --events 36 --report /tmp/memory_pipeline_eval_quality_validator_all.json`
+  - 场景数：`5`。
+  - min daily/facts/compaction 覆盖率：均为 `1.00`。
+  - forbidden fact：无。
+  - tool pair 成对：全部通过。
+- 验证结果：
+  - `uv run pytest tests/test_mid_term_flusher.py tests/test_memory_pipeline_eval.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 156 source files`）
+  - `uv run pytest -q`：通过。
+
+96. [完成] 增强 context compaction validator，防止压缩摘要污染短期上下文。
+- 背景：
+  - context compaction 会重写 session events，一旦 summary 引入幻觉或 tool_pair 缺半，后续上下文会持续被污染。
+  - compaction 的摘要只能覆盖被压缩区间，不能引用 retained raw events 或不存在的实体。
+- 说明：
+  - `validate_compaction_payload(...)` 增加硬校验：
+    - 顶层 `evidence_event_ids` 如果提供，必须全部属于 compressed units。
+    - `tool_progress` 的 evidence 必须存在且属于 compressed units。
+    - `tool_progress` 引用 tool event 时，必须同时包含同一 `tool_call_id` 的 `tool_call` 和 `tool_result`。
+    - 拒绝摘要引入源事件中不存在的关键实体/结论，例如 `张三`、`火星`、`Redis 缓存`、`已经上线生产`、未出现过的名字或关键技术词。
+  - 新增 compaction 回归测试：
+    - retained tool pair 不允许被 summary evidence 引用。
+    - 缺半 tool evidence 不重写 events。
+    - unsupported summary terms 不重写 events。
+- 评测结果：
+  - `uv run python scripts/eval_memory_pipeline.py --scenarios all --events 36 --report /tmp/memory_pipeline_eval_quality_compaction_validator_all.json`
+  - 场景数：`5`。
+  - min daily/facts/compaction 覆盖率：均为 `1.00`。
+  - forbidden fact：无。
+  - tool pair 成对：全部通过。
+- 验证结果：
+  - `uv run pytest tests/test_context_compactor.py tests/test_memory_pipeline_eval.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 156 source files`）
+  - `uv run pytest -q`：通过。
+
+97. [完成] 将 context compaction 改为基于 flush snapshot 覆盖关系放行。
+- 背景：
+  - 之前 post-run maintenance 使用 `flush_for_run_finished` 的成功结果决定是否执行 compaction。
+  - 新设计要求 compaction 不必等待 daily/facts 写入成功；只要待压缩 raw events 已进入 durable flush job snapshot，就不会失帧。
+- 说明：
+  - 新增 `app/runtime/context_compaction/coverage.py`：
+    - `CompactionCoverageChecker`
+    - `CompactionCoverageResult`
+    - `AllowAllCompactionCoverage`
+  - `ContextCompactor` 新增 `coverage_checker` 依赖：
+    - 在模型调用前检查 `compressed_events` 是否已被 flush cursor 或 job snapshot 覆盖。
+    - 未覆盖时返回 `reason=flush_not_covered`，不调用模型、不重写 events。
+  - `MidTermFlusher` 实现 coverage checker：
+    - cursor 覆盖：当前 event stream 中位于 `last_event_id` 之前及其自身的 events。
+    - snapshot 覆盖：所有持久化 flush job 的 `event_pack.events`。
+    - `context_summary` 不要求再次覆盖，因为它已经不是 raw event。
+  - `PostRunMaintenanceScheduler` 不再用 `flush succeeded` 硬挡 compaction：
+    - 先触发/处理 flush。
+    - 再调用 compactor，由 coverage checker 决定是否跳过。
+  - DI 中 `ContextCompactor` 使用同一个 `MidTermFlusher` 实例作为 coverage checker。
+- 测试：
+  - 新增 `test_context_compactor_skips_when_flush_coverage_is_incomplete`。
+  - 新增 `test_context_compactor_allows_retry_flush_job_snapshot_coverage`。
+- 验证结果：
+  - `uv run pytest tests/test_context_compactor.py tests/test_mid_term_flusher.py tests/test_agent_runtime.py -q`：通过（`27 passed`）。
+  - `uv run mypy app/runtime/context_compactor.py app/runtime/context_compaction/coverage.py app/runtime/mid_term_flusher.py app/runtime/agent/post_run_maintenance.py app/api/dependencies/runtime.py tests/test_context_compactor.py`：通过。
+  - `uv run pytest tests/test_memory_pipeline_pressure.py tests/test_memory_pipeline_eval.py tests/test_mid_term_flush_worker.py tests/test_context_assembler.py -q`：通过（`24 passed`）。
+  - `uv run mypy`：通过（`Success: no issues found in 157 source files`）。
+  - `uv run pytest -q`：通过。
+
+98. [完成] 复测并加固 memory 写入冲突治理。
+- 背景：
+  - 用户指出名字冲突治理此前已做过，需要先压测确认，不要重复重构。
+  - 本轮重点复测“小猪 -> 小明 -> 小王”这类 preferred_name 冲突，以及架构决策推翻、禁止记忆场景。
+- 压测结果：
+  - fixture 模型：
+    - `uv run python scripts/eval_memory_pipeline.py --scenarios preference_conflict architecture_override forbidden_memory --events 36 120 --report /tmp/memory_conflict_fixture_eval_after_fix.json`
+    - 6 个 case 全部通过。
+    - min daily/facts/compaction coverage 均为 `1.00`。
+    - forbidden fact terms 为空。
+  - 真实维护模型：
+    - `preference_conflict@36` 通过。
+    - `preference_conflict@120` 初次暴露：模型把“小王”候选 evidence 只指向 assistant 事件，validator 拒绝后进入 retry。
+- 修复：
+  - `MidTermSummaryValidator` 增加保守 evidence repair：
+    - 仅当 candidate 内容包含 latest user name，且 pack 中存在明确用户改名事件时，把该用户事件补到 evidence 首位。
+    - 旧名字 candidate 仍按原规则拒绝。
+    - forbidden memory candidate 仍按原规则拒绝。
+  - 新增 `test_mid_term_flusher_repairs_latest_name_candidate_assistant_only_evidence`。
+- 顺手修复：
+  - 真实 `preference_conflict@120` 后续暴露 compaction 顶层 `evidence_event_ids` 引用了 retained event。
+  - `context_compaction` 顶层 evidence 现在过滤非法 id，不因可选 provenance 小错阻塞压缩；`tool_progress` evidence 仍保持硬校验。
+  - compaction prompt 增加 `allowed_evidence_event_ids` 与 `forbidden_retained_preview_event_ids`，明确 evidence 只能来自 compressed units。
+  - 新增 `test_context_compactor_filters_retained_top_level_evidence`。
+- 复测结果：
+  - `uv run python scripts/eval_memory_pipeline.py --real-model --scenarios preference_conflict --events 120 --report /tmp/memory_conflict_real_preference_120_full_after_fix.json`
+  - 真实模型 `preference_conflict@120` 全链路通过：
+    - daily coverage：`1.00`
+    - facts coverage：`1.00`
+    - compaction coverage：`1.00`
+    - invalid evidence：`0`
+    - forbidden facts：无
+  - `uv run mypy`：通过（`Success: no issues found in 157 source files`）。
+  - `uv run pytest -q`：通过。
+- 备注：
+  - 真实模型 `forbidden_memory` 场景仍可能因为模型输出 forbidden candidate 被 validator 拦截进入 retry；这是当前“不写坏数据”的安全策略，不属于名字冲突复发。后续可在 repair 阶段处理“删除非法 candidate 后继续落 daily”的体验优化。
