@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.core.errors import ValidationError
@@ -76,26 +77,37 @@ class MidTermSummaryValidator:
             if not isinstance(summary[key], list):
                 raise ValidationError(f"summarizer key '{key}' must be list.")
 
-        valid_event_ids = {str(item.get("event_id", "")).strip() for item in pack.events}
-        if "" in valid_event_ids:
-            valid_event_ids.remove("")
+        event_index = _build_event_index(pack)
+        valid_event_ids = set(event_index)
+        latest_name, latest_name_event_id = _latest_user_name_signal(pack.events)
+        forbidden_memory_event_ids = _forbidden_memory_event_ids(pack.events)
 
         normalized: dict[str, Any] = {}
         normalized["active_context"] = self._normalize_active_context(summary["active_context"], valid_event_ids)
         normalized["decisions"] = self._normalize_decisions(summary["decisions"], valid_event_ids)
-        normalized["progress"] = self._normalize_progress(summary["progress"], valid_event_ids)
+        normalized["progress"] = self._normalize_progress(summary["progress"], event_index)
         normalized["open_questions"] = self._normalize_open_questions(summary["open_questions"], valid_event_ids)
-        normalized["candidate_long_term"] = self._normalize_candidates(summary["candidate_long_term"], valid_event_ids)
+        normalized["candidate_long_term"] = self._normalize_candidates(
+            summary["candidate_long_term"],
+            event_index,
+            latest_name=latest_name,
+            latest_name_event_id=latest_name_event_id,
+            forbidden_memory_event_ids=forbidden_memory_event_ids,
+        )
         normalized["artifact_refs"] = self._normalize_artifact_refs(summary["artifact_refs"], valid_event_ids)
         return normalized
 
     def _normalize_active_context(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
-        for raw in items[:MAX_LIST_LINES]:
+        for index, raw in enumerate(items[:MAX_LIST_LINES]):
             if not isinstance(raw, dict):
                 continue
             summary = optional_text(raw.get("summary"))
-            evidence = normalize_evidence(raw.get("evidence_event_ids"), valid_event_ids)
+            evidence = _normalize_required_evidence(
+                raw.get("evidence_event_ids"),
+                valid_event_ids,
+                field=f"active_context[{index}].evidence_event_ids",
+            )
             if summary is None or not evidence:
                 continue
             confidence = normalize_score(raw.get("confidence"), default=0.7)
@@ -104,28 +116,38 @@ class MidTermSummaryValidator:
 
     def _normalize_decisions(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
-        for raw in items[:MAX_LIST_LINES]:
+        for index, raw in enumerate(items[:MAX_LIST_LINES]):
             if not isinstance(raw, dict):
                 continue
             summary = optional_text(raw.get("summary"))
-            evidence = normalize_evidence(raw.get("evidence_event_ids"), valid_event_ids)
+            evidence = _normalize_required_evidence(
+                raw.get("evidence_event_ids"),
+                valid_event_ids,
+                field=f"decisions[{index}].evidence_event_ids",
+            )
             if summary is None or not evidence:
                 continue
             stability = optional_text(raw.get("stability")) or "tentative"
             output.append({"summary": summary, "evidence_event_ids": evidence, "stability": stability})
         return output
 
-    def _normalize_progress(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
+    def _normalize_progress(self, items: list[Any], event_index: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
-        for raw in items[:MAX_LIST_LINES]:
+        valid_event_ids = set(event_index)
+        for index, raw in enumerate(items[:MAX_LIST_LINES]):
             if not isinstance(raw, dict):
                 continue
             tool_name = optional_text(raw.get("tool_name"))
             call_summary = optional_text(raw.get("call_summary"))
             result_summary = optional_text(raw.get("result_summary"))
-            evidence = normalize_evidence(raw.get("evidence_event_ids"), valid_event_ids)
+            evidence = _normalize_required_evidence(
+                raw.get("evidence_event_ids"),
+                valid_event_ids,
+                field=f"progress[{index}].evidence_event_ids",
+            )
             if tool_name is None or call_summary is None or result_summary is None or not evidence:
                 continue
+            _require_tool_pair_evidence(evidence, event_index, field=f"progress[{index}].evidence_event_ids")
             success = bool(raw.get("success"))
             output.append(
                 {
@@ -140,28 +162,60 @@ class MidTermSummaryValidator:
 
     def _normalize_open_questions(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
-        for raw in items[:MAX_LIST_LINES]:
+        for index, raw in enumerate(items[:MAX_LIST_LINES]):
             if not isinstance(raw, dict):
                 continue
             question = optional_text(raw.get("question"))
-            evidence = normalize_evidence(raw.get("evidence_event_ids"), valid_event_ids)
+            evidence = _normalize_required_evidence(
+                raw.get("evidence_event_ids"),
+                valid_event_ids,
+                field=f"open_questions[{index}].evidence_event_ids",
+            )
             if question is None or not evidence:
                 continue
             output.append({"question": question, "evidence_event_ids": evidence})
         return output
 
-    def _normalize_candidates(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
+    def _normalize_candidates(
+        self,
+        items: list[Any],
+        event_index: dict[str, dict[str, Any]],
+        *,
+        latest_name: str | None,
+        latest_name_event_id: str | None,
+        forbidden_memory_event_ids: set[str],
+    ) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
-        for raw in items[:MAX_LIST_LINES]:
+        valid_event_ids = set(event_index)
+        for index, raw in enumerate(items[:MAX_LIST_LINES]):
             if not isinstance(raw, dict):
                 continue
             content = optional_text(raw.get("content"))
             why = optional_text(raw.get("why_reusable"))
-            evidence = normalize_evidence(raw.get("evidence_event_ids"), valid_event_ids)
+            evidence = _normalize_required_evidence(
+                raw.get("evidence_event_ids"),
+                valid_event_ids,
+                field=f"candidate_long_term[{index}].evidence_event_ids",
+            )
             tags_raw = raw.get("tags")
             tags = [tag.strip() for tag in tags_raw if isinstance(tag, str) and tag.strip()] if isinstance(tags_raw, list) else []
             if content is None or why is None or not evidence:
                 continue
+            evidence = _repair_latest_name_candidate_evidence(
+                content=content,
+                evidence=evidence,
+                latest_name=latest_name,
+                latest_name_event_id=latest_name_event_id,
+                valid_event_ids=valid_event_ids,
+            )
+            _reject_assistant_only_candidate(content=content, evidence=evidence, event_index=event_index)
+            _reject_forbidden_candidate(
+                content=content,
+                evidence=evidence,
+                forbidden_memory_event_ids=forbidden_memory_event_ids,
+            )
+            _reject_outdated_name_candidate(content=content, latest_name=latest_name)
+            _reject_temporary_state_candidate(content=content, tags=tags)
             confidence = normalize_score(raw.get("confidence"), default=0.7)
             output.append(
                 {
@@ -176,13 +230,193 @@ class MidTermSummaryValidator:
 
     def _normalize_artifact_refs(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
-        for raw in items[:MAX_LIST_LINES]:
+        for index, raw in enumerate(items[:MAX_LIST_LINES]):
             if not isinstance(raw, dict):
                 continue
             path_or_file_id = optional_text(raw.get("path_or_file_id"))
             reason = optional_text(raw.get("reason"))
-            evidence = normalize_evidence(raw.get("evidence_event_ids"), valid_event_ids)
+            evidence = _normalize_required_evidence(
+                raw.get("evidence_event_ids"),
+                valid_event_ids,
+                field=f"artifact_refs[{index}].evidence_event_ids",
+            )
             if path_or_file_id is None or reason is None or not evidence:
                 continue
             output.append({"path_or_file_id": path_or_file_id, "reason": reason, "evidence_event_ids": evidence})
         return output
+
+
+_NAME_PATTERNS = (
+    re.compile(r"(?:名字叫|名字是|最新名字是|叫我|称呼我|改名为|叫)(?P<name>[\u4e00-\u9fffA-Za-z0-9_-]{1,24})"),
+    re.compile(r"(?P<name>[\u4e00-\u9fffA-Za-z0-9_-]{1,24})(?:才是最新名字|是最新名字)"),
+)
+_TEMPORARY_STATE_TERMS = (
+    "下一步",
+    "待办",
+    "临时任务",
+    "当前任务",
+    "本轮",
+    "这个 session",
+    "这次会话",
+)
+
+
+def _build_event_index(pack: MidTermEventPack) -> dict[str, dict[str, Any]]:
+    event_index: dict[str, dict[str, Any]] = {}
+    for item in pack.events:
+        event_id = str(item.get("event_id", "")).strip()
+        if event_id:
+            event_index[event_id] = item
+    return event_index
+
+
+def _normalize_required_evidence(raw: Any, valid_event_ids: set[str], *, field: str) -> list[str]:
+    if not isinstance(raw, list) or not raw:
+        raise ValidationError(f"{field} must contain at least one valid event id.")
+    raw_event_ids = [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+    if not raw_event_ids:
+        raise ValidationError(f"{field} must contain at least one valid event id.")
+    invalid = sorted({event_id for event_id in raw_event_ids if event_id not in valid_event_ids})
+    if invalid:
+        raise ValidationError(f"{field} contains invalid event ids: {','.join(invalid)}")
+    return normalize_evidence(raw_event_ids, valid_event_ids)
+
+
+def _require_tool_pair_evidence(evidence: list[str], event_index: dict[str, dict[str, Any]], *, field: str) -> None:
+    observed: dict[str, set[str]] = {}
+    for event_id in evidence:
+        event = event_index.get(event_id)
+        if event is None:
+            continue
+        event_type = str(event.get("type", "")).strip()
+        if event_type not in {"tool_call", "tool_result"}:
+            continue
+        call_id = _event_tool_call_id(event)
+        if not call_id:
+            raise ValidationError(f"{field} references tool event without tool_call_id: {event_id}")
+        observed.setdefault(call_id, set()).add(event_type)
+    for call_id, types in observed.items():
+        if types != {"tool_call", "tool_result"}:
+            raise ValidationError(f"{field} must include paired tool_call/tool_result for {call_id}.")
+
+
+def _event_tool_call_id(event: dict[str, Any]) -> str:
+    raw = event.get("tool_call_id")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        raw_payload = payload.get("tool_call_id")
+        if isinstance(raw_payload, str) and raw_payload.strip():
+            return raw_payload.strip()
+    return ""
+
+
+def _reject_assistant_only_candidate(
+    *,
+    content: str,
+    evidence: list[str],
+    event_index: dict[str, dict[str, Any]],
+) -> None:
+    evidence_types = {str(event_index[event_id].get("type", "")).strip() for event_id in evidence if event_id in event_index}
+    if evidence_types and evidence_types.issubset({"assistant_message", "assistant_thinking", "run_finished"}):
+        raise ValidationError(f"candidate_long_term has assistant-only evidence: {content}")
+
+
+def _reject_forbidden_candidate(
+    *,
+    content: str,
+    evidence: list[str],
+    forbidden_memory_event_ids: set[str],
+) -> None:
+    if not forbidden_memory_event_ids:
+        return
+    if forbidden_memory_event_ids.intersection(evidence):
+        raise ValidationError(f"candidate_long_term references explicitly forbidden memory: {content}")
+    if "临时暗号" in content or "不要记住" in content:
+        raise ValidationError(f"candidate_long_term contains forbidden memory content: {content}")
+
+
+def _reject_outdated_name_candidate(*, content: str, latest_name: str | None) -> None:
+    if latest_name is None or latest_name not in content:
+        extracted = _extract_name(content)
+        if extracted is not None and latest_name is not None:
+            raise ValidationError(f"candidate_long_term contains outdated name '{extracted}', latest is '{latest_name}'.")
+
+
+def _reject_temporary_state_candidate(*, content: str, tags: list[str]) -> None:
+    lowered_tags = {tag.lower() for tag in tags}
+    if lowered_tags.intersection({"short", "session_state", "working_state", "task_state", "temporary"}):
+        raise ValidationError(f"candidate_long_term contains temporary-state tags: {','.join(sorted(lowered_tags))}")
+    if any(term in content for term in _TEMPORARY_STATE_TERMS):
+        raise ValidationError(f"candidate_long_term looks like temporary task state: {content}")
+
+
+def _repair_latest_name_candidate_evidence(
+    *,
+    content: str,
+    evidence: list[str],
+    latest_name: str | None,
+    latest_name_event_id: str | None,
+    valid_event_ids: set[str],
+) -> list[str]:
+    if latest_name is None or latest_name_event_id is None:
+        return evidence
+    if latest_name not in content:
+        return evidence
+    if latest_name_event_id not in valid_event_ids:
+        return evidence
+    if latest_name_event_id in evidence:
+        return evidence
+    return normalize_evidence([latest_name_event_id, *evidence], valid_event_ids)
+
+
+def _latest_user_name_signal(events: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    latest: str | None = None
+    latest_event_id: str | None = None
+    for event in events:
+        if str(event.get("type", "")).strip() != "user_message":
+            continue
+        name = _extract_name(_event_text(event))
+        if name:
+            latest = name
+            event_id = str(event.get("event_id", "")).strip()
+            latest_event_id = event_id or None
+    return latest, latest_event_id
+
+
+def _extract_name(text: str) -> str | None:
+    normalized = text.replace("，", ",").replace("。", ".").replace("：", ":")
+    for pattern in _NAME_PATTERNS:
+        matched = pattern.search(normalized)
+        if matched is None:
+            continue
+        name = matched.group("name").strip(" ,.:;，。；：")
+        if name:
+            return name
+    return None
+
+
+def _forbidden_memory_event_ids(events: list[dict[str, Any]]) -> set[str]:
+    output: set[str] = set()
+    for event in events:
+        if str(event.get("type", "")).strip() != "user_message":
+            continue
+        text = _event_text(event)
+        if "不要记住" in text or "不要写入 memory" in text or "不要写入memory" in text:
+            event_id = str(event.get("event_id", "")).strip()
+            if event_id:
+                output.add(event_id)
+    return output
+
+
+def _event_text(event: dict[str, Any]) -> str:
+    raw = event.get("text")
+    if isinstance(raw, str):
+        return raw
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        content = payload.get("content")
+        if isinstance(content, str):
+            return content
+    return ""

@@ -18,7 +18,6 @@ from app.runtime.mid_term.models import FlushCursor, MidTermEventPack
 from app.runtime.mid_term.semantic_units import (
     build_semantic_units,
     collect_unique_events_from_units,
-    split_units_into_batches,
 )
 from app.runtime.mid_term.shared import MIN_INPUT_BUDGET_TOKENS
 
@@ -73,41 +72,31 @@ class MidTermEventPackBuilder:
         if not semantic_units:
             return None, "empty_semantic_units"
 
-        unit_batches = split_units_into_batches(semantic_units, budget_tokens=budget_tokens)
-        packs: list[MidTermEventPack] = []
-        total_batches = len(unit_batches)
-        for index, batch_units in enumerate(unit_batches, start=1):
-            normalized_events = collect_unique_events_from_units(batch_units)
-            if not normalized_events:
-                continue
-            input_estimated_tokens = sum(unit.estimated_tokens for unit in batch_units)
-            raw_event_count = len(normalized_events)
-            first_event_id = str(normalized_events[0].get("event_id", "")).strip()
-            last_event_id = str(normalized_events[-1].get("event_id", "")).strip()
-            if not first_event_id or not last_event_id:
-                continue
-            packs.append(
-                MidTermEventPack(
-                    session_id=context.session_id,
-                    agent_id=context.agent_id,
-                    batch_index=index,
-                    batch_total=total_batches,
-                    first_event_id=first_event_id,
-                    last_event_id=last_event_id,
-                    delta_event_count=len(delta_events),
-                    event_count=raw_event_count,
-                    selected_unit_count=len(batch_units),
-                    signal_score=score_flush_signals(delta_events),
-                    input_estimated_tokens=max(1, input_estimated_tokens),
-                    input_budget_tokens=budget_tokens,
-                    events=normalized_events,
-                    semantic_units=[unit.to_payload() for unit in batch_units],
-                    created_at=now,
-                )
-            )
-        if not packs:
+        normalized_events = collect_unique_events_from_units(semantic_units)
+        if not normalized_events:
             return None, "empty_event_batch"
-        return packs, "ready"
+        first_event_id = str(normalized_events[0].get("event_id", "")).strip()
+        last_event_id = str(normalized_events[-1].get("event_id", "")).strip()
+        if not first_event_id or not last_event_id:
+            return None, "empty_event_batch"
+        pack = MidTermEventPack(
+            session_id=context.session_id,
+            agent_id=context.agent_id,
+            batch_index=1,
+            batch_total=1,
+            first_event_id=first_event_id,
+            last_event_id=last_event_id,
+            delta_event_count=len(delta_events),
+            event_count=len(normalized_events),
+            selected_unit_count=len(semantic_units),
+            signal_score=signal_score,
+            input_estimated_tokens=max(1, sum(unit.estimated_tokens for unit in semantic_units)),
+            input_budget_tokens=budget_tokens,
+            events=normalized_events,
+            semantic_units=[unit.to_payload() for unit in semantic_units],
+            created_at=now,
+        )
+        return [pack], "ready"
 
     def _compute_input_budget_tokens(self) -> int:
         dynamic_budget = int(self._model_context_window_tokens * self._model_input_ratio)

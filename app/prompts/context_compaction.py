@@ -18,7 +18,10 @@ Rules:
 3. Preserve user intent, agent decisions, unresolved questions, tool outcomes, file/artifact references, and memory-relevant facts.
 4. Do not invent facts. If evidence is unclear, omit it.
 5. Keep the summary concise but operationally useful for continuing the same session.
-6. Output strict JSON only, with no Markdown fence.
+6. Preserve the user's language and exact technical terms, file paths, tool names, variable names, and quoted values.
+7. If source events are Chinese, output Chinese.
+8. evidence_event_ids must come only from compressed_units, never from retained_units_preview.
+9. Output strict JSON only, with no Markdown fence.
 """
 
 
@@ -58,6 +61,8 @@ def build_context_compaction_prompt(
         "original_estimated_tokens": original_estimated_tokens,
         "input_budget_tokens": input_budget_tokens,
         "required_schema": schema,
+        "allowed_evidence_event_ids": _event_ids_from_units(compressed_units),
+        "forbidden_retained_preview_event_ids": _event_ids_from_units(retained_units_preview),
         "compressed_units": compressed_units,
         "retained_units_preview": retained_units_preview,
     }
@@ -65,5 +70,25 @@ def build_context_compaction_prompt(
         "Compress these old session events into one structured context summary.\n"
         "Think through the timeline internally, but output only the required JSON object.\n"
         "The summary will be prepended before retained raw events, so avoid duplicating recent retained details.\n"
+        "Use evidence_event_ids only from allowed_evidence_event_ids; never cite forbidden_retained_preview_event_ids.\n"
+        "Preserve key terms verbatim, especially tool_call, tool_result, file names, user names, and Chinese phrases.\n"
         f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
     )
+
+
+def _event_ids_from_units(units: list[dict[str, Any]]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for unit in units:
+        raw_ids = unit.get("event_ids")
+        if not isinstance(raw_ids, list):
+            continue
+        for raw in raw_ids:
+            if not isinstance(raw, str):
+                continue
+            event_id = raw.strip()
+            if not event_id or event_id in seen:
+                continue
+            output.append(event_id)
+            seen.add(event_id)
+    return output

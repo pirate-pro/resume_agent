@@ -95,13 +95,10 @@ class SemanticUnit:
     estimated_tokens: int
 
     def to_prompt_payload(self) -> dict[str, Any]:
-        from app.runtime.context_compaction.event_projection import normalize_event_for_prompt
-
         return {
             "unit_id": self.unit_id,
             "unit_type": self.unit_type,
             "event_ids": self.event_ids,
             "summary": self.summary,
-            "events": [normalize_event_for_prompt(event) for event in self.events],
             "estimated_tokens": self.estimated_tokens,
         }

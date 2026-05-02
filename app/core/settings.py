@@ -44,6 +44,22 @@ class Settings(BaseSettings):
         default=120.0,
         validation_alias=AliasChoices("LLM_TIMEOUT_SECONDS", "VL_MODEL_TIMEOUT_SECONDS"),
     )
+    maintenance_llm_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MAINTENANCE_LLM_BASE_URL"),
+    )
+    maintenance_llm_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MAINTENANCE_LLM_API_KEY"),
+    )
+    maintenance_llm_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MAINTENANCE_LLM_MODEL"),
+    )
+    maintenance_llm_timeout_seconds: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MAINTENANCE_LLM_TIMEOUT_SECONDS"),
+    )
     chat_stream_heartbeat_interval_seconds: float = Field(
         default=15.0,
         validation_alias=AliasChoices("CHAT_STREAM_HEARTBEAT_INTERVAL_SECONDS"),
@@ -144,6 +160,14 @@ class Settings(BaseSettings):
             raise ValidationError("Configuration string value cannot be empty.")
         return value.strip()
 
+    @field_validator("maintenance_llm_base_url", "maintenance_llm_api_key", "maintenance_llm_model")
+    @classmethod
+    def _validate_optional_non_empty_string(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
     @field_validator("debug", mode="before")
     @classmethod
     def _validate_debug_bool(cls, value: bool | str) -> bool:
@@ -170,6 +194,15 @@ class Settings(BaseSettings):
     def _validate_timeout(cls, value: float) -> float:
         if value <= 0:
             raise ValidationError("LLM timeout must be positive.")
+        return value
+
+    @field_validator("maintenance_llm_timeout_seconds")
+    @classmethod
+    def _validate_optional_timeout(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
+        if value <= 0:
+            raise ValidationError("MAINTENANCE_LLM_TIMEOUT_SECONDS must be positive.")
         return value
 
     @field_validator("chat_stream_heartbeat_interval_seconds")

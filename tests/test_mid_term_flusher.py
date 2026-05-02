@@ -98,7 +98,7 @@ class _OldNameCandidateModel:
     ) -> ModelResponse:
         _ = (system_prompt, tools)
         pack = _extract_pack_from_prompt(messages)
-        events = [item for item in pack.get("events", []) if isinstance(item, dict)]
+        events = _event_index_from_pack(pack)
         event_ids = [str(item.get("event_id", "")).strip() for item in events if str(item.get("event_id", "")).strip()]
         evidence = event_ids[:1] or ["evt_missing"]
         payload = {
@@ -129,6 +129,29 @@ class _OldNameCandidateModel:
         yield StreamChunk(delta=response.content, finished=True, has_tool_call_delta=False)
 
 
+class _StaticSummaryModel:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        _ = (system_prompt, messages, tools)
+        return ModelResponse(content=json.dumps(self._payload, ensure_ascii=False), tool_calls=[])
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        response = self.generate(system_prompt=system_prompt, messages=messages, tools=tools)
+        yield StreamChunk(delta=response.content, finished=True, has_tool_call_delta=False)
+
+
 def _extract_pack_from_prompt(messages: list[dict[str, Any]]) -> dict[str, Any]:
     if not messages:
         raise AssertionError("summarizer message is empty")
@@ -145,7 +168,7 @@ def _extract_pack_from_prompt(messages: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _build_summary_payload(pack: dict[str, Any]) -> dict[str, Any]:
-    events = [item for item in pack.get("events", []) if isinstance(item, dict)]
+    events = _event_index_from_pack(pack)
     event_ids = [str(item.get("event_id", "")).strip() for item in events if str(item.get("event_id", "")).strip()]
     event_types: dict[str, str] = {
         str(item.get("event_id", "")).strip(): str(item.get("type", "")).strip() for item in events
@@ -208,11 +231,31 @@ def _build_summary_payload(pack: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _empty_summary_payload() -> dict[str, Any]:
+    return {
+        "active_context": [],
+        "decisions": [],
+        "progress": [],
+        "open_questions": [],
+        "candidate_long_term": [],
+        "artifact_refs": [],
+    }
+
+
 def _first_event_id_by_type(event_types: dict[str, str], event_type: str) -> str | None:
     for event_id, observed_type in event_types.items():
         if observed_type == event_type:
             return event_id
     return None
+
+
+def _event_index_from_pack(pack: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = pack.get("event_index")
+    if raw is None:
+        raw = pack.get("events")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
 
 
 def _context(session_id: str, agent_id: str = "agent_main", run_id: str = "run_mid_term") -> RunContext:
@@ -560,7 +603,268 @@ def test_mid_term_flusher_model_failure_enters_retry_without_cursor_commit(tmp_p
     assert cursor_path.exists() is False
 
 
-def test_mid_term_flusher_splits_batches_by_budget_and_keeps_tool_pairs_atomic(tmp_path: Path) -> None:
+def test_mid_term_flusher_rejects_progress_with_unpaired_tool_evidence(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_unpaired_tool"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    payload["progress"] = [
+        {
+            "tool_name": "memory_search",
+            "call_summary": "查询用户名字",
+            "result_summary": "缺少结果 evidence",
+            "success": True,
+            "evidence_event_ids": ["evt_t02"],
+        }
+    ]
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 10, 30, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_t01",
+        event_type="user_message",
+        payload={"content": "查一下我的名字。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_t02",
+        event_type="tool_call",
+        payload={"name": "memory_search", "arguments": {"query": "名字"}, "tool_call_id": "call_name"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_t03",
+        event_type="tool_result",
+        payload={"tool_name": "memory_search", "success": True, "content": "名字是小明", "tool_call_id": "call_name"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_t04",
+        event_type="run_finished",
+        payload={"answer_length": 10, "tool_calls": 1},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is False
+    assert result.job_status == "retry"
+    assert result.daily_path is not None
+    assert Path(result.daily_path).exists() is False
+
+
+def test_mid_term_flusher_rejects_forbidden_long_term_candidate(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_forbidden_candidate"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    payload["candidate_long_term"] = [
+        {
+            "content": "临时暗号是蓝鲸。",
+            "tags": ["preference", "long_term"],
+            "confidence": 0.9,
+            "why_reusable": "用户提到暗号",
+            "evidence_event_ids": ["evt_f01"],
+        }
+    ]
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 10, 45, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_f01",
+        event_type="user_message",
+        payload={"content": "临时暗号是蓝鲸，只用于这次调试，不要记住。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_f02",
+        event_type="assistant_message",
+        payload={"content": "知道了，不会写入长期记忆。"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_f03",
+        event_type="assistant_message",
+        payload={"content": "这只是临时上下文。"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_f04",
+        event_type="run_finished",
+        payload={"answer_length": 16, "tool_calls": 0},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is False
+    assert result.job_status == "retry"
+    assert result.daily_path is not None
+    assert Path(result.daily_path).exists() is False
+    facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
+    assert facts_path.exists() is False
+
+
+def test_mid_term_flusher_rejects_outdated_name_candidate_in_same_pack(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_outdated_name"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    payload["candidate_long_term"] = [
+        {
+            "content": "用户最新名字是小猪。",
+            "tags": ["preference", "long_term"],
+            "confidence": 0.9,
+            "why_reusable": "用户提到名字",
+            "evidence_event_ids": ["evt_o01"],
+        }
+    ]
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 11, 15, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_o01",
+        event_type="user_message",
+        payload={"content": "先记一下，名字叫小猪。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_o02",
+        event_type="user_message",
+        payload={"content": "最终确认：以后叫我小王，小猪不是最新名字。"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_o03",
+        event_type="assistant_message",
+        payload={"content": "已按最新名字小王处理。"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_o04",
+        event_type="run_finished",
+        payload={"answer_length": 12, "tool_calls": 0},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is False
+    assert result.job_status == "retry"
+    assert result.daily_path is not None
+    assert Path(result.daily_path).exists() is False
+
+
+def test_mid_term_flusher_repairs_latest_name_candidate_assistant_only_evidence(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_latest_name_evidence_repair"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    payload["candidate_long_term"] = [
+        {
+            "content": "用户最新名字是小王。",
+            "tags": ["preference", "long_term"],
+            "confidence": 0.9,
+            "why_reusable": "用户明确纠正名字，后续跨会话可复用。",
+            "evidence_event_ids": ["evt_r03"],
+        }
+    ]
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 11, 30, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_r01",
+        event_type="user_message",
+        payload={"content": "先记一下，名字叫小猪。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_r02",
+        event_type="user_message",
+        payload={"content": "最终确认：以后叫我小王，小猪不是最新名字。"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_r03",
+        event_type="assistant_message",
+        payload={"content": "后续应以小王作为用户最新名字。"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_r04",
+        event_type="run_finished",
+        payload={"answer_length": 12, "tool_calls": 0},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is True
+    facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
+    rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    matched = [row for row in rows if row.get("content") == "用户最新名字是小王。"]
+    assert len(matched) == 1
+    source = matched[0].get("source")
+    assert isinstance(source, dict)
+    assert source.get("eventIds") == ["evt_r02"]
+    metadata = matched[0].get("metadata")
+    assert isinstance(metadata, dict)
+    assert metadata.get("evidence_event_ids") == "evt_r02,evt_r03"
+
+
+def test_mid_term_flusher_keeps_one_atomic_job_and_tool_pairs(tmp_path: Path) -> None:
     session_id = "sess_mid_term_budget"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
@@ -640,17 +944,18 @@ def test_mid_term_flusher_splits_batches_by_budget_and_keeps_tool_pairs_atomic(t
 
     result = flusher.flush_for_run_finished(_context(session_id))
     assert result.flushed is True
-    assert len(model.captured_packs) >= 2
+    assert len(model.captured_packs) == 1
 
     captured_event_ids: set[str] = set()
     for pack in model.captured_packs:
-        events = [item for item in pack.get("events", []) if isinstance(item, dict)]
+        events = _event_index_from_pack(pack)
         for event in events:
             event_id = str(event.get("event_id", "")).strip()
             if event_id:
                 captured_event_ids.add(event_id)
         semantic_units = [item for item in pack.get("semantic_units", []) if isinstance(item, dict)]
         for unit in semantic_units:
+            assert "events" not in unit
             if str(unit.get("unit_type", "")) != "tool_pair":
                 continue
             event_ids = [str(item).strip() for item in unit.get("event_ids", []) if str(item).strip()]
@@ -707,3 +1012,69 @@ def test_mid_term_flusher_caps_model_input_budget(tmp_path: Path) -> None:
     assert result.flushed is True
     assert model.captured_packs
     assert {pack.get("budget", {}).get("input_budget_tokens") for pack in model.captured_packs} == {1536}
+
+
+def test_mid_term_flusher_retries_active_range_before_new_dirty_events(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_dirty_retry"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    failing = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_InvalidSummaryModel(),
+    )
+
+    base = datetime(2026, 4, 30, 13, 0, tzinfo=UTC)
+    for idx, event_type in enumerate(["user_message", "assistant_message", "user_message", "run_finished"], start=1):
+        _append_event(
+            repo,
+            session_id=session_id,
+            event_id=f"evt_d{idx:02d}",
+            event_type=event_type,
+            payload={"content": f"旧范围事件 {idx}"} if event_type != "run_finished" else {"answer_length": 10},
+            created_at=base + timedelta(seconds=idx),
+        )
+
+    first = failing.flush_for_run_finished(_context(session_id))
+    assert first.flushed is False
+    assert first.reason == "retry"
+    jobs_root = store.root_dir / "agents" / "agent_main" / "mid_term" / "flush_jobs" / session_id
+    retry_job_path = next(jobs_root.glob("*.json"))
+    retry_payload = json.loads(retry_job_path.read_text(encoding="utf-8"))
+    retry_payload["next_attempt_at"] = "2026-04-30T13:00:00Z"
+    retry_job_path.write_text(json.dumps(retry_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    for idx in range(5, 16):
+        _append_event(
+            repo,
+            session_id=session_id,
+            event_id=f"evt_d{idx:02d}",
+            event_type="user_message" if idx < 15 else "run_finished",
+            payload={"content": f"新范围事件 {idx}"} if idx < 15 else {"answer_length": 20},
+            created_at=base + timedelta(seconds=idx),
+        )
+
+    retrying = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_ValidSummaryModel(),
+    )
+    retried = retrying.flush_for_run_finished(_context(session_id))
+
+    assert retried.flushed is False
+    assert retried.reason == "active_job_exists"
+
+    rows = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(jobs_root.glob("*.json"))]
+    succeeded = [row for row in rows if row["status"] == "succeeded"]
+    pending = [row for row in rows if row["status"] == "pending"]
+    assert len(succeeded) == 1
+    assert len(pending) == 1
+    assert succeeded[0]["event_pack"]["first_event_id"] == "evt_d01"
+    assert succeeded[0]["event_pack"]["last_event_id"] == "evt_d04"
+    assert pending[0]["event_pack"]["first_event_id"] == "evt_d05"
+    assert pending[0]["event_pack"]["last_event_id"] == "evt_d15"
+
+    cursor_path = store.root_dir / "agents" / "agent_main" / "mid_term" / "flush_cursors" / f"{session_id}.json"
+    cursor = json.loads(cursor_path.read_text(encoding="utf-8"))
+    assert cursor["last_event_id"] == "evt_d04"

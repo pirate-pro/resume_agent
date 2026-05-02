@@ -116,23 +116,16 @@ class PostRunMaintenanceScheduler:
                 return
 
     def _run_once(self, context: RunContext) -> None:
-        flush_allows_compaction = self._flush_mid_term_after_run_finished(context)
-        if not flush_allows_compaction:
-            _logger.debug(
-                "context compaction skipped because mid-term flush is not complete: session_id=%s agent_id=%s",
-                context.session_id,
-                context.agent_id,
-            )
-            return
+        self._flush_mid_term_after_run_finished(context)
         self._compact_context_after_flush(context)
 
     async def _run_async(self, context: RunContext) -> None:
         await asyncio.to_thread(self._run_worker, context)
 
-    def _flush_mid_term_after_run_finished(self, context: RunContext) -> bool:
+    def _flush_mid_term_after_run_finished(self, context: RunContext) -> None:
         flusher = self._mid_term_flusher_provider()
         if flusher is None:
-            return True
+            return
         try:
             result = flusher.flush_for_run_finished(context)
             _logger.debug(
@@ -145,13 +138,6 @@ class PostRunMaintenanceScheduler:
                 result.signal_score,
                 result.daily_path,
             )
-            return result.flushed or result.reason in {
-                "no_agent_events",
-                "no_new_events",
-                "threshold_not_met",
-                "empty_semantic_units",
-                "empty_event_batch",
-            }
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "mid-term flush failed: session_id=%s agent_id=%s error=%s",
@@ -159,7 +145,6 @@ class PostRunMaintenanceScheduler:
                 context.agent_id,
                 exc,
             )
-            return False
 
     def _compact_context_after_flush(self, context: RunContext) -> None:
         compactor = self._context_compactor_provider()

@@ -170,6 +170,7 @@ class MidTermFlushJob:
     event_pack: MidTermEventPack
     daily_path: str
     last_error: str | None = None
+    dirty: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -184,6 +185,7 @@ class MidTermFlushJob:
             "event_pack": self.event_pack.to_payload(),
             "daily_path": self.daily_path,
             "last_error": self.last_error,
+            "dirty": self.dirty,
         }
 
     @classmethod
@@ -208,6 +210,7 @@ class MidTermFlushJob:
             event_pack=MidTermEventPack.from_payload(event_pack_raw),
             daily_path=require_non_empty("daily_path", payload.get("daily_path")),
             last_error=optional_text(payload.get("last_error")),
+            dirty=bool(payload.get("dirty", False)),
         )
 
 

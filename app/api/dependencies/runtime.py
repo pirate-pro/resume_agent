@@ -17,7 +17,7 @@ from app.api.dependencies.managers import (
     get_session_manager,
     get_state_manager,
 )
-from app.api.dependencies.model import get_model_client
+from app.api.dependencies.model import get_maintenance_model_client, get_model_client
 from app.api.dependencies.tools import get_tool_registry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
@@ -40,7 +40,7 @@ def get_mid_term_flusher() -> MidTermFlusher:
     return MidTermFlusher(
         session_repository=get_session_repository(),
         memory_store=get_memory_store(),
-        model_client=get_model_client(),
+        model_client=get_maintenance_model_client(),
         model_context_window_tokens=settings.mid_term_flush_model_context_window_tokens,
         model_input_ratio=settings.mid_term_flush_input_ratio,
         model_output_reserve_tokens=settings.mid_term_flush_output_reserve_tokens,
@@ -65,7 +65,8 @@ def get_context_compactor() -> ContextCompactor:
     settings = get_settings()
     return ContextCompactor(
         session_repository=get_session_repository(),
-        model_client=get_model_client(),
+        model_client=get_maintenance_model_client(),
+        coverage_checker=get_mid_term_flusher(),
         config=ContextCompactionConfig(
             enabled=settings.context_compaction_enabled,
             trigger_event_count=settings.context_compaction_trigger_event_count,

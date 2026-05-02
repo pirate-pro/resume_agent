@@ -18,7 +18,7 @@ from app.api.dependencies.managers import (
     get_session_manager,
     get_state_manager,
 )
-from app.api.dependencies.model import get_model_client
+from app.api.dependencies.model import get_maintenance_model_client, get_model_client
 from app.api.dependencies.runtime import (
     get_agent_runtime,
     get_context_assembler,
@@ -51,6 +51,7 @@ __all__ = [
     "get_memory_store",
     "get_mid_term_flusher",
     "get_mid_term_flush_worker",
+    "get_maintenance_model_client",
     "get_model_client",
     "get_session_manager",
     "get_session_file_service",

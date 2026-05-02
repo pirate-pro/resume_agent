@@ -33,6 +33,7 @@ class _CompactionSummaryModel:
         compressed_units = [item for item in payload.get("compressed_units", []) if isinstance(item, dict)]
         evidence: list[str] = []
         for unit in compressed_units[:4]:
+            assert "events" not in unit
             raw_ids = unit.get("event_ids")
             if isinstance(raw_ids, list):
                 evidence.extend(str(item) for item in raw_ids if isinstance(item, str))
@@ -108,7 +109,7 @@ def test_memory_name_conflict_pressure_keeps_latest_value(tmp_path: Path) -> Non
     assert "小猪" not in "\n".join(item.content for item in hits)
 
 
-def test_mid_term_event_packer_pressure_batches_without_splitting_tool_pairs(tmp_path: Path) -> None:
+def test_mid_term_event_packer_pressure_keeps_single_flush_pack_without_splitting_tool_pairs(tmp_path: Path) -> None:
     session_id = "sess_mid_term_pressure"
     repo = JsonlSessionRepository(data_dir=tmp_path)
     repo.create_session(session_id)
@@ -168,7 +169,7 @@ def test_mid_term_event_packer_pressure_batches_without_splitting_tool_pairs(tmp
 
     assert reason == "ready"
     assert packs is not None
-    assert len(packs) > 1
+    assert len(packs) == 1
     for pack in packs:
         event_ids = {str(item.get("event_id")) for item in pack.events}
         for unit in pack.semantic_units:

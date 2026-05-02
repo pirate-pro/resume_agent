@@ -17,7 +17,9 @@ from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import ChatModelClient, ModelResponse, SessionRepository
 from app.prompts.context_compaction import CONTEXT_COMPACTOR_SYSTEM_PROMPT, build_context_compaction_prompt
 from app.runtime.context_compaction import (
+    AllowAllCompactionCoverage,
     CONTEXT_SUMMARY_EVENT,
+    CompactionCoverageChecker,
     ContextCompactionConfig,
     ContextCompactionResult,
     RetentionStrategy,
@@ -49,10 +51,12 @@ class ContextCompactor:
         session_repository: SessionRepository,
         model_client: ChatModelClient,
         config: ContextCompactionConfig | None = None,
+        coverage_checker: CompactionCoverageChecker | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._model_client = model_client
         self._config = config or ContextCompactionConfig()
+        self._coverage_checker = coverage_checker or AllowAllCompactionCoverage()
 
     def compact_after_flush(self, context: RunContext) -> ContextCompactionResult:
         if not isinstance(context, RunContext):
@@ -91,6 +95,21 @@ class ContextCompactor:
         retained_events = collect_unique_events(retained_units)
         if not compressed_events or not retained_events:
             return self._result(context=context, events=events, reason="invalid_compaction_split", compacted=False)
+
+        coverage = self._coverage_checker.check_compaction_coverage(
+            context=context,
+            all_events=events,
+            compressed_events=compressed_events,
+        )
+        if not coverage.covered:
+            _logger.debug(
+                "context compaction skipped because flush coverage is incomplete: session_id=%s agent_id=%s reason=%s missing=%s",
+                context.session_id,
+                context.agent_id,
+                coverage.reason,
+                coverage.missing_event_ids[:8],
+            )
+            return self._result(context=context, events=events, reason="flush_not_covered", compacted=False)
 
         summary_payload = self._summarize(
             context=context,

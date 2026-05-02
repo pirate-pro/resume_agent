@@ -8,9 +8,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.errors import ValidationError
-from app.domain.models import RunContext
+from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import ChatModelClient, SessionRepository
 from app.memory.file_store import FileMemoryStore
+from app.runtime.context_compaction.models import CONTEXT_SUMMARY_EVENT
+from app.runtime.context_compaction.coverage import CompactionCoverageResult
 from app.runtime.mid_term.cursors import MidTermFlushCursorStore
 from app.runtime.mid_term.daily import MidTermDailyRenderer, MidTermDailyWriter
 from app.runtime.mid_term.event_packer import MidTermEventPackBuilder
@@ -87,6 +89,32 @@ class MidTermFlusher:
     def flush_for_run_finished(self, context: RunContext) -> MidTermFlushResult:
         if not isinstance(context, RunContext):
             raise ValidationError("context must be RunContext.")
+        unfinished = self._find_unfinished_job(session_id=context.session_id, agent_id=context.agent_id)
+        if unfinished is not None:
+            dirty_job = self._mark_job_dirty(unfinished)
+            processed = self._process_due_jobs(
+                session_id=context.session_id,
+                agent_id=context.agent_id,
+                max_jobs=1,
+            )
+            focus_job = processed[-1] if processed else self._refresh_job(dirty_job)
+            remaining = self._find_unfinished_job(session_id=context.session_id, agent_id=context.agent_id)
+            if remaining is not None:
+                focus_job = remaining
+            return MidTermFlushResult(
+                flushed=remaining is None and focus_job.status == MidTermFlushJobStatus.SUCCEEDED,
+                reason=focus_job.status.value if remaining is None else "active_job_exists",
+                session_id=context.session_id,
+                agent_id=context.agent_id,
+                event_count=focus_job.event_pack.event_count,
+                signal_score=focus_job.event_pack.signal_score,
+                daily_path=focus_job.daily_path,
+                last_event_id=focus_job.event_pack.last_event_id,
+                job_id=focus_job.job_id,
+                job_status=focus_job.status.value,
+                retry_count=focus_job.retry_count,
+            )
+
         cursor = self._cursor_store.load_cursor(session_id=context.session_id, agent_id=context.agent_id)
         packs, reason = self._event_pack_builder.build(context=context, cursor=cursor)
         if not packs:
@@ -105,7 +133,7 @@ class MidTermFlusher:
         processed = self._process_due_jobs(
             session_id=context.session_id,
             agent_id=context.agent_id,
-            max_jobs=max(3, len(packs) + 2),
+            max_jobs=1,
         )
         processed_by_id = {item.job_id: item for item in processed}
         if focus_job.job_id in processed_by_id:
@@ -227,9 +255,37 @@ class MidTermFlusher:
             target_count=len(self._job_store.list_job_targets()),
         )
 
+    def check_compaction_coverage(
+        self,
+        *,
+        context: RunContext,
+        all_events: list[EventRecord],
+        compressed_events: list[EventRecord],
+    ) -> CompactionCoverageResult:
+        """Check whether compressed events are covered by cursor or job snapshots."""
+        required_ids: list[str] = []
+        for event in compressed_events:
+            event_id = self._event_id(event)
+            if event_id is not None and self._requires_coverage(event, event_id):
+                required_ids.append(event_id)
+        if not required_ids:
+            return CompactionCoverageResult(covered=True, reason="no_raw_events_to_cover")
+
+        covered_ids = self._cursor_covered_event_ids(context=context, all_events=all_events)
+        covered_ids.update(self._snapshot_covered_event_ids(session_id=context.session_id, agent_id=context.agent_id))
+
+        missing = [event_id for event_id in required_ids if event_id not in covered_ids]
+        if missing:
+            return CompactionCoverageResult(
+                covered=False,
+                reason="missing_flush_snapshot",
+                missing_event_ids=missing,
+            )
+        return CompactionCoverageResult(covered=True, reason="covered_by_cursor_or_snapshot")
+
     def _ensure_jobs(self, *, context: RunContext, packs: list[MidTermEventPack]) -> list[MidTermFlushJob]:
         jobs: list[MidTermFlushJob] = []
-        for pack in packs:
+        for pack in packs[:1]:
             duplicate = self._job_store.find_duplicate_job(
                 session_id=context.session_id,
                 agent_id=context.agent_id,
@@ -243,6 +299,33 @@ class MidTermFlusher:
                 job = duplicate
             jobs.append(job)
         return jobs
+
+    def _find_unfinished_job(self, *, session_id: str, agent_id: str) -> MidTermFlushJob | None:
+        for job in self._job_store.list_jobs(session_id=session_id, agent_id=agent_id):
+            if job.status != MidTermFlushJobStatus.SUCCEEDED:
+                return job
+        return None
+
+    def _mark_job_dirty(self, job: MidTermFlushJob) -> MidTermFlushJob:
+        refreshed = self._refresh_job(job)
+        if refreshed.status == MidTermFlushJobStatus.SUCCEEDED or refreshed.dirty:
+            return refreshed
+        dirty = MidTermFlushJob(
+            job_id=refreshed.job_id,
+            session_id=refreshed.session_id,
+            agent_id=refreshed.agent_id,
+            status=refreshed.status,
+            retry_count=refreshed.retry_count,
+            next_attempt_at=refreshed.next_attempt_at,
+            created_at=refreshed.created_at,
+            updated_at=datetime.now(UTC),
+            event_pack=refreshed.event_pack,
+            daily_path=refreshed.daily_path,
+            last_error=refreshed.last_error,
+            dirty=True,
+        )
+        self._job_store.update_job(dirty)
+        return dirty
 
     def _refresh_job(self, job: MidTermFlushJob) -> MidTermFlushJob:
         refreshed = self._job_store.get_job(
@@ -314,6 +397,8 @@ class MidTermFlusher:
             )
             self._job_store.update_job(succeeded)
             self._log_materialized_facts(running, facts_written=facts_written, facts_skipped=facts_skipped)
+            if running.dirty:
+                self._create_next_job_if_ready(running)
             return succeeded
         except Exception as exc:  # noqa: BLE001
             retried = self._mark_retry_or_deferred(running, error=str(exc))
@@ -355,6 +440,7 @@ class MidTermFlusher:
             event_pack=job.event_pack,
             daily_path=job.daily_path,
             last_error=resolved_last_error,
+            dirty=job.dirty if status != MidTermFlushJobStatus.SUCCEEDED else False,
         )
 
     def _mark_retry_or_deferred(self, job: MidTermFlushJob, *, error: str) -> MidTermFlushJob:
@@ -379,7 +465,30 @@ class MidTermFlusher:
             event_pack=job.event_pack,
             daily_path=job.daily_path,
             last_error=safe_text(error, max_len=400),
+            dirty=job.dirty,
         )
+
+    def _create_next_job_if_ready(self, job: MidTermFlushJob) -> None:
+        context = RunContext(
+            session_id=job.session_id,
+            run_id=f"flush_{job.job_id}",
+            agent_id=job.agent_id,
+            turn_id=f"flush_{job.job_id}",
+            entry_agent_id=job.agent_id,
+            parent_run_id=None,
+            trace_flags={},
+        )
+        cursor = self._cursor_store.load_cursor(session_id=job.session_id, agent_id=job.agent_id)
+        packs, reason = self._event_pack_builder.build(context=context, cursor=cursor)
+        if not packs:
+            _logger.debug(
+                "mid-term dirty stream recheck produced no new job: session_id=%s agent_id=%s reason=%s",
+                job.session_id,
+                job.agent_id,
+                reason,
+            )
+            return
+        self._ensure_jobs(context=context, packs=packs)
 
     def _log_materialized_facts(
         self,
@@ -398,3 +507,35 @@ class MidTermFlusher:
             facts_written,
             facts_skipped,
         )
+
+    def _cursor_covered_event_ids(self, *, context: RunContext, all_events: list[EventRecord]) -> set[str]:
+        cursor = self._cursor_store.load_cursor(session_id=context.session_id, agent_id=context.agent_id)
+        if cursor.last_event_id is None:
+            return set()
+
+        covered: set[str] = set()
+        for event in all_events:
+            event_id = self._event_id(event)
+            if not event_id:
+                continue
+            covered.add(event_id)
+            if event_id == cursor.last_event_id:
+                return covered
+        return set()
+
+    def _snapshot_covered_event_ids(self, *, session_id: str, agent_id: str) -> set[str]:
+        covered: set[str] = set()
+        for job in self._job_store.list_jobs(session_id=session_id, agent_id=agent_id):
+            for row in job.event_pack.events:
+                event_id = str(row.get("event_id", "")).strip() if isinstance(row, dict) else ""
+                if event_id:
+                    covered.add(event_id)
+        return covered
+
+    def _requires_coverage(self, event: EventRecord, event_id: str) -> bool:
+        event_type = getattr(event, "type", None)
+        return event_type != CONTEXT_SUMMARY_EVENT
+
+    def _event_id(self, event: EventRecord) -> str | None:
+        normalized = event.event_id.strip()
+        return normalized or None
