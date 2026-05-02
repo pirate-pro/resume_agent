@@ -2325,3 +2325,32 @@
   - 10 个 fixture case 全部通过，min daily/facts/compaction coverage 均为 `1.00`。
   - `uv run mypy`：通过（`Success: no issues found in 157 source files`）。
   - `uv run pytest -q`：通过。
+
+100. [完成] 固化 memory pipeline 质量评测 preset。
+- 背景：
+  - 之前真实模型评测依赖手动命令和人工看 summary，后续改 prompt/validator 时容易漏跑或误判。
+  - 需要把关键评测变成固定入口，并在指标不达标时非 0 退出。
+- 说明：
+  - `scripts/eval_memory_pipeline.py` 新增 `--preset`：
+    - `fixture-regression`：fixture 模型，`all` 场景，`36/120 events`。
+    - `real-smoke`：真实维护模型，`preference_conflict / architecture_override / forbidden_memory`，`36 events`。
+  - 新增 `--quality-gate` 与 `--min-coverage`：
+    - daily/facts/compaction coverage 低于阈值会失败。
+    - invalid evidence 不为 0 会失败。
+    - latest tool pair 未保留/摘要会失败。
+    - hallucination terms 或 forbidden fact terms 非空会失败。
+  - preset 默认开启 quality gate。
+- 固定命令：
+  - fixture 回归：
+    - `uv run python scripts/eval_memory_pipeline.py --preset fixture-regression --report /tmp/memory_fixture_preset_gate.json`
+  - 真实模型 smoke：
+    - `uv run python scripts/eval_memory_pipeline.py --preset real-smoke --report /tmp/memory_real_smoke_gate.json`
+- 真实模型复测结果：
+  - `real-smoke` 3 个 case 全部通过。
+  - min daily/facts/compaction coverage 均为 `1.00`。
+  - invalid evidence：`0`。
+  - forbidden facts：无。
+- 验证结果：
+  - `uv run pytest tests/test_memory_pipeline_eval.py -q`：通过。
+  - `uv run pytest -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 157 source files`）。

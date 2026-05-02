@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import shutil
+import sys
 import tempfile
 import time
 from collections.abc import AsyncIterator, Callable
@@ -55,6 +56,14 @@ class EvalScenario:
     forbidden_fact_terms: list[str]
     latest_tool_call_id: str | None
     append_events: Callable[[JsonlSessionRepository, str, int], None]
+
+
+@dataclass(frozen=True, slots=True)
+class EvalPreset:
+    scenarios: list[str]
+    events: list[int]
+    real_model: bool
+    quality_gate: bool
 
 
 @dataclass(slots=True)
@@ -257,9 +266,24 @@ SCENARIOS: dict[str, EvalScenario] = {
     ),
 }
 
+EVAL_PRESETS: dict[str, EvalPreset] = {
+    "fixture-regression": EvalPreset(
+        scenarios=["all"],
+        events=[36, 120],
+        real_model=False,
+        quality_gate=True,
+    ),
+    "real-smoke": EvalPreset(
+        scenarios=["preference_conflict", "architecture_override", "forbidden_memory"],
+        events=[36],
+        real_model=True,
+        quality_gate=True,
+    ),
+}
+
 
 def main() -> None:
-    args = _parse_args()
+    args = _apply_preset(_parse_args())
     reports: list[CaseReport] = []
     root_dir = Path(args.output_dir).resolve() if args.output_dir else None
     if root_dir is not None:
@@ -294,6 +318,17 @@ def main() -> None:
     report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"\nreport_path={report_path}")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.quality_gate:
+        failures = _quality_gate_failures(
+            reports=reports,
+            summary=summary,
+            min_coverage=args.min_coverage,
+            skip_compaction=args.skip_compaction,
+        )
+        if failures:
+            for failure in failures:
+                print(f"quality_gate_failed: {failure}", file=sys.stderr)
+            raise SystemExit(2)
 
 
 def run_case(
@@ -1137,6 +1172,12 @@ def _print_case_summary(report: CaseReport) -> None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate memory flush and context compaction quality.")
     parser.add_argument(
+        "--preset",
+        choices=["custom", *sorted(EVAL_PRESETS)],
+        default="custom",
+        help="Use a maintained evaluation preset. Presets override scenarios/events/model mode.",
+    )
+    parser.add_argument(
         "--scenarios",
         nargs="+",
         default=["baseline"],
@@ -1161,7 +1202,47 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", default=None, help="Parent directory for generated case data.")
     parser.add_argument("--report", default=None, help="JSON report output path.")
+    parser.add_argument("--quality-gate", action="store_true", help="Exit non-zero when quality metrics miss thresholds.")
+    parser.add_argument("--min-coverage", type=float, default=1.0, help="Minimum daily/facts/compaction coverage.")
     return parser.parse_args()
+
+
+def _apply_preset(args: argparse.Namespace) -> argparse.Namespace:
+    if args.preset == "custom":
+        return args
+    preset = EVAL_PRESETS[args.preset]
+    args.scenarios = list(preset.scenarios)
+    args.events = list(preset.events)
+    args.real_model = preset.real_model
+    args.quality_gate = preset.quality_gate
+    return args
+
+
+def _quality_gate_failures(
+    *,
+    reports: list[CaseReport],
+    summary: dict[str, Any],
+    min_coverage: float,
+    skip_compaction: bool,
+) -> list[str]:
+    failures: list[str] = []
+    if not reports:
+        return ["no reports produced"]
+    if summary.get("min_daily_coverage", 0.0) < min_coverage:
+        failures.append(f"min_daily_coverage < {min_coverage}")
+    if summary.get("min_facts_coverage", 0.0) < min_coverage:
+        failures.append(f"min_facts_coverage < {min_coverage}")
+    if not skip_compaction and summary.get("min_compaction_coverage", 0.0) < min_coverage:
+        failures.append(f"min_compaction_coverage < {min_coverage}")
+    if summary.get("total_invalid_evidence", 0) != 0:
+        failures.append("daily contains invalid evidence ids")
+    if summary.get("retained_latest_tool_pair_all") is not True:
+        failures.append("latest tool_call/tool_result pair was not retained or summarized")
+    if summary.get("hallucination_terms"):
+        failures.append(f"hallucination terms present: {summary['hallucination_terms']}")
+    if summary.get("forbidden_fact_terms"):
+        failures.append(f"forbidden fact terms present: {summary['forbidden_fact_terms']}")
+    return failures
 
 
 def _select_scenarios(raw_names: list[str]) -> list[EvalScenario]:

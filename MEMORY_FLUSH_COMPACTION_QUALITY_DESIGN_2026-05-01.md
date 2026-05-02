@@ -248,6 +248,30 @@ compaction 同时压缩已经被 job snapshot 覆盖的 old events
 6. 最新 tool_result 保留。
 ```
 
+固定评测入口：
+
+```bash
+# 本地快速质量回归，不调用真实模型。
+uv run python scripts/eval_memory_pipeline.py --preset fixture-regression --report /tmp/memory_fixture_preset_gate.json
+
+# 真实维护模型 smoke，覆盖冲突、决策推翻、禁止记忆三类高风险场景。
+uv run python scripts/eval_memory_pipeline.py --preset real-smoke --report /tmp/memory_real_smoke_gate.json
+```
+
+质量门槛：
+
+```text
+1. daily coverage >= 1.00
+2. facts coverage >= 1.00
+3. compaction coverage >= 1.00
+4. invalid evidence == 0
+5. latest tool pair 必须保留或进入 context_summary.tool_progress
+6. hallucination terms 为空
+7. forbidden fact terms 为空
+```
+
+`--preset fixture-regression` 和 `--preset real-smoke` 默认开启 quality gate，任意门槛不满足会非 0 退出。
+
 下一阶段需要扩充以下场景。
 
 ### 6.1 用户偏好冲突
