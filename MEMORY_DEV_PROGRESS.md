@@ -2402,3 +2402,45 @@
 - 备注：
   - 真实维护模型速度仍偏慢，本轮先保证质量；速度优化后续单独做。
   - 本轮压测生成的 `data/stress_bench_*` 目录已清理。
+
+102. [完成] 清理测试样例特化逻辑，改为通用 signal/evidence guardrail。
+- 背景：
+  - 第 101 步为快速堵住质量问题时引入了面向压测样例的专项处理，例如围绕具体存储方案文本做补全/改写。
+  - 这种写法会让生产代码被测试数据牵着走，后续换一个业务主题就失效，不符合 memory 系统需要的可持续优化边界。
+- 修正：
+  - 新增通用 `memory_signal_guardrails`：
+    - 从事件时间线中识别 correction/final decision 信号。
+    - 从早期候选、暂定方案、已记录内容中提取可被后续更正覆盖的短语。
+    - 对被后续更正推翻的旧表述做通用改写，而不是识别某个具体业务词。
+    - 对“最终/改为/过期/覆盖/纠正”等高信号工具结果做通用 progress 补全。
+  - mid-term summary validator：
+    - 不再包含具体 `sqlite / 文件系统` 分支。
+    - 最新用户称呼/名字由确定性 canonical candidate 补齐，避免真实模型漏写长期 fact。
+    - 名字 correction 不再把同时包含旧名和新名的原句直接写入 facts。
+  - context compaction validator：
+    - 不再包含具体存储架构改写分支。
+    - `tool_progress.tool_name` 按 evidence 中真实 tool_call 归一化。
+    - 没有工具 evidence 的 `tool_progress` 会被丢弃；有工具 evidence 但不成对才报错。
+    - ASCII 幻觉门禁收窄为高风险实体/路径/状态，避免把真实模型输出的普通英文标签误判为新增事实。
+- 新增/更新测试：
+  - 覆盖通用 superseded rewrite，而不是断言某个业务词的专属结果。
+  - 覆盖 latest-name deterministic candidate backfill。
+  - 覆盖 tool name evidence normalization。
+  - 覆盖低风险英文/snake_case 格式标签不触发幻觉门禁。
+- 验证结果：
+  - `uv run pytest tests/test_context_compactor.py tests/test_mid_term_flusher.py tests/test_memory_pipeline_pressure.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 158 source files`）。
+  - `uv run python scripts/eval_memory_pipeline.py --preset fixture-regression --report /tmp/memory_fixture_generic_guardrail.json`：通过。
+    - 10 个 fixture case 全部通过。
+    - min daily/facts/compaction coverage 均为 `1.00`。
+    - invalid evidence：`0`。
+    - hallucination / forbidden facts：无。
+  - `uv run python scripts/eval_memory_pipeline.py --preset real-smoke --report /tmp/memory_real_generic_guardrail_current.json`：通过。
+    - 3 个真实模型 case 全部通过。
+    - min daily/facts/compaction coverage 均为 `1.00`。
+    - invalid evidence：`0`。
+    - hallucination / forbidden facts：无。
+  - `uv run python tools/stress_memory_pipeline.py`：通过。
+    - core multi-session / same-session：请求失败 `0`。
+    - memory write consistency：`800/800` 成功，facts 解析失败 `0`。
+    - flush+compaction race sweep：并发 `1/2/4/6/8/10/12` 下 fail/retry/deferred/invalid_json/tmp 均为 `0`。

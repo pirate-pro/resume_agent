@@ -394,8 +394,8 @@ def test_context_compactor_rewrites_superseded_storage_proposal(tmp_path: Path) 
     events = repo.list_events(session_id)
     structured_text = str(events[0].payload["structured"])
     assert "sqlite 做 memory 主存储" not in structured_text
-    assert "sqlite 做主存储" not in structured_text
-    assert "sqlite 主存储早期候选已被后续文件系统主存储决策废弃" in structured_text
+    assert "早期候选内容已被后续更正/最终决策取代" in structured_text
+    assert "最终架构决策" in structured_text
 
 
 def test_context_compactor_backfills_high_signal_tool_result(tmp_path: Path) -> None:
@@ -483,8 +483,8 @@ def test_context_compactor_backfills_storage_architecture_decision(tmp_path: Pat
     assert result.compacted is True
     events = repo.list_events(session_id)
     structured = events[0].payload["structured"]
-    assert any("文件系统为主存储" in item for item in structured["decisions"])
-    assert any("文件系统为主存储" in item for item in structured["memory_relevant"])
+    assert any("文件系统" in item and "主存储" in item for item in structured["decisions"])
+    assert any("文件系统" in item and "主存储" in item for item in structured["memory_relevant"])
 
 
 def test_context_compactor_rejects_unsupported_summary_terms(tmp_path: Path) -> None:
@@ -514,6 +514,80 @@ def test_context_compactor_rejects_unsupported_summary_terms(tmp_path: Path) -> 
 
     events = repo.list_events(session_id)
     assert [event.event_id for event in events] == [event.event_id for event in original_events]
+
+
+def test_context_compactor_allows_low_risk_english_scaffolding(tmp_path: Path) -> None:
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_compact_english_scaffolding"
+    repo.create_session(session_id)
+    for event in [
+        _event(session_id, "evt_user_1", "user_message", {"content": "讨论上下文压缩"}, 1),
+        _event(session_id, "evt_user_2", "user_message", {"content": "补充压缩规则"}, 2),
+        _event(session_id, "evt_recent", "user_message", {"content": "最近消息"}, 3),
+        _event(session_id, "evt_recent_answer", "assistant_message", {"content": "最近回答"}, 4),
+    ]:
+        _append(repo, event)
+    compactor = ContextCompactor(
+        session_repository=repo,
+        model_client=StaticModelClient(
+            '{"summary":"Acknowledged Initial Instruction; architecture_decision context_batches_added。讨论上下文压缩。",'
+            '"timeline":[],"decisions":[],"open_threads":[],"tool_progress":[],'
+            '"agent_activity":[],"memory_relevant":[],"evidence_event_ids":["evt_user_1","evt_user_2"]}'
+        ),
+        config=ContextCompactionConfig(trigger_event_count=3, retain_event_count=2),
+    )
+
+    result = compactor.compact_after_flush(_context(session_id))
+
+    assert result.compacted is True
+
+
+def test_context_compactor_normalizes_tool_name_from_evidence(tmp_path: Path) -> None:
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_compact_tool_name_normalize"
+    repo.create_session(session_id)
+    for event in [
+        _event(session_id, "evt_user_1", "user_message", {"content": "读取进展文档"}, 1),
+        _event(
+            session_id,
+            "evt_tool_call",
+            "tool_call",
+            {"name": "session_read_file", "arguments": {"path": "MEMORY_DEV_PROGRESS.md"}, "tool_call_id": "call_read"},
+            2,
+        ),
+        _event(
+            session_id,
+            "evt_tool_result",
+            "tool_result",
+            {
+                "tool_name": "session_read_file",
+                "success": True,
+                "content": "成功读取 MEMORY_DEV_PROGRESS.md。",
+                "tool_call_id": "call_read",
+            },
+            3,
+        ),
+        _event(session_id, "evt_recent", "user_message", {"content": "最近消息"}, 4),
+    ]:
+        _append(repo, event)
+    compactor = ContextCompactor(
+        session_repository=repo,
+        model_client=StaticModelClient(
+            '{"summary":"成功读取 MEMORY_DEV_PROGRESS.md。","timeline":[],"decisions":[],'
+            '"open_threads":[],"tool_progress":[{"tool_name":"memory_search","call_summary":"读取进展文档",'
+            '"result_summary":"成功读取 MEMORY_DEV_PROGRESS.md。","success":true,'
+            '"evidence_event_ids":["evt_tool_call","evt_tool_result"]}],'
+            '"agent_activity":[],"memory_relevant":[],"evidence_event_ids":["evt_user_1","evt_tool_call","evt_tool_result"]}'
+        ),
+        config=ContextCompactionConfig(trigger_event_count=3, retain_event_count=1),
+    )
+
+    result = compactor.compact_after_flush(_context(session_id))
+
+    assert result.compacted is True
+    events = repo.list_events(session_id)
+    structured = events[0].payload["structured"]
+    assert structured["tool_progress"][0]["tool_name"] == "session_read_file"
 
 
 def test_context_compactor_skips_rewrite_when_events_change_during_model_call(tmp_path: Path) -> None:

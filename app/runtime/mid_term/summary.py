@@ -16,6 +16,14 @@ from app.runtime.mid_term.shared import (
     optional_text,
     parse_json_object,
 )
+from app.runtime.memory_signal_guardrails import (
+    CorrectionSignal,
+    SignalEvent,
+    build_correction_signals,
+    candidate_from_correction,
+    is_high_signal_tool_result,
+    rewrite_superseded_text,
+)
 
 
 class MidTermSummarizer:
@@ -82,6 +90,7 @@ class MidTermSummaryValidator:
         latest_name, latest_name_event_id = _latest_user_name_signal(pack.events)
         forbidden_memory_signals = _forbidden_memory_signals(pack.events)
         forbidden_memory_event_ids = {item["event_id"] for item in forbidden_memory_signals}
+        correction_signals = build_correction_signals(_signal_events_from_pack(pack.events))
 
         normalized: dict[str, Any] = {}
         normalized["active_context"] = self._normalize_active_context(summary["active_context"], valid_event_ids)
@@ -90,6 +99,7 @@ class MidTermSummaryValidator:
             forbidden_memory_signals,
         )
         normalized["decisions"] = self._normalize_decisions(summary["decisions"], valid_event_ids)
+        normalized["decisions"] = _ensure_correction_decisions(normalized["decisions"], correction_signals)
         normalized["progress"] = self._normalize_progress(summary["progress"], event_index)
         normalized["progress"] = _ensure_high_signal_tool_progress(normalized["progress"], pack.events)
         normalized["open_questions"] = self._normalize_open_questions(summary["open_questions"], valid_event_ids)
@@ -100,12 +110,17 @@ class MidTermSummaryValidator:
             latest_name_event_id=latest_name_event_id,
             forbidden_memory_event_ids=forbidden_memory_event_ids,
         )
-        normalized["candidate_long_term"] = _ensure_storage_architecture_candidate(
+        normalized["candidate_long_term"] = _ensure_latest_name_candidate(
             normalized["candidate_long_term"],
-            pack.events,
+            latest_name=latest_name,
+            latest_name_event_id=latest_name_event_id,
+        )
+        normalized["candidate_long_term"] = _ensure_correction_candidates(
+            normalized["candidate_long_term"],
+            correction_signals,
         )
         normalized["artifact_refs"] = self._normalize_artifact_refs(summary["artifact_refs"], valid_event_ids)
-        normalized = _rewrite_superseded_storage_summary(normalized, pack.events)
+        normalized = _rewrite_superseded_summary(normalized, correction_signals)
         return normalized
 
     def _normalize_active_context(self, items: list[Any], valid_event_ids: set[str]) -> list[dict[str, Any]]:
@@ -354,7 +369,7 @@ def _ensure_high_signal_tool_progress(
         if call_event is None:
             continue
         result_text = _event_text(event)
-        if not _is_high_signal_tool_result(result_text):
+        if not is_high_signal_tool_result(result_text):
             continue
         call_event_id = str(call_event.get("event_id", "")).strip()
         result_event_id = str(event.get("event_id", "")).strip()
@@ -411,46 +426,50 @@ def _is_temporary_state_candidate(*, content: str, tags: list[str]) -> bool:
     return any(term in content for term in _TEMPORARY_STATE_TERMS)
 
 
-def _ensure_storage_architecture_candidate(
+def _ensure_correction_candidates(
     candidates: list[dict[str, Any]],
-    events: list[dict[str, Any]],
+    correction_signals: list[CorrectionSignal],
 ) -> list[dict[str, Any]]:
-    if any(
-        "文件系统" in str(item.get("content", "")) and "主存储" in str(item.get("content", ""))
-        for item in candidates
-        if isinstance(item, dict)
-    ):
-        return candidates
-    evidence_event_id = _storage_architecture_decision_event_id(events)
-    if evidence_event_id is None:
-        return candidates
-    return [
-        *candidates,
-        {
-            "content": "memory 主存储架构：文件系统为主存储，sqlite 不接入主存储，仅作为未来派生 index 的候选。",
-            "tags": ["architecture", "storage", "long_term"],
-            "confidence": 0.9,
-            "why_reusable": "指导 memory 组件的长期设计和实现。",
-            "evidence_event_ids": [evidence_event_id],
-        },
-    ][:MAX_LIST_LINES]
-
-
-def _storage_architecture_decision_event_id(events: list[dict[str, Any]]) -> str | None:
-    for event in reversed(events):
-        if str(event.get("type", "")).strip() != "user_message":
+    output = list(candidates)
+    existing_evidence = {
+        tuple(item.get("evidence_event_ids", []))
+        for item in output
+        if isinstance(item, dict) and isinstance(item.get("evidence_event_ids"), list)
+    }
+    for signal in correction_signals:
+        candidate = candidate_from_correction(signal)
+        if candidate is None:
             continue
-        text = _event_text(event)
-        if (
-            "sqlite" in text
-            and "主存储" in text
-            and "文件系统" in text
-            and ("最终架构决策" in text or "最终" in text or "改为" in text)
-            and ("暂不接入" in text or "只作为未来派生 index" in text or "派生 index" in text)
-        ):
-            event_id = str(event.get("event_id", "")).strip()
-            return event_id or None
-    return None
+        evidence_key = tuple(candidate["evidence_event_ids"])
+        if evidence_key in existing_evidence:
+            continue
+        output.append(candidate)
+        existing_evidence.add(evidence_key)
+        if len(output) >= MAX_LIST_LINES:
+            break
+    return output
+
+
+def _ensure_latest_name_candidate(
+    candidates: list[dict[str, Any]],
+    *,
+    latest_name: str | None,
+    latest_name_event_id: str | None,
+) -> list[dict[str, Any]]:
+    if latest_name is None or latest_name_event_id is None:
+        return candidates
+    canonical_content = f"用户最新名字是{latest_name}。"
+    for candidate in candidates:
+        if str(candidate.get("content", "")).strip() == canonical_content:
+            return candidates
+    canonical = {
+        "content": canonical_content,
+        "tags": ["preference", "name", "long_term"],
+        "confidence": 0.95,
+        "why_reusable": "用户明确给出后续称呼，跨会话回答用户身份相关问题时需要优先使用。",
+        "evidence_event_ids": [latest_name_event_id],
+    }
+    return [canonical, *candidates][:MAX_LIST_LINES]
 
 
 def _repair_latest_name_candidate_evidence(
@@ -507,20 +526,6 @@ def _event_tool_success(event: dict[str, Any]) -> bool:
     if isinstance(payload, dict) and isinstance(payload.get("success"), bool):
         return bool(payload["success"])
     return True
-
-
-def _is_high_signal_tool_result(text: str) -> bool:
-    high_signal_terms = (
-        "最新名字",
-        "最新称呼",
-        "最终名字",
-        "最终称呼",
-        "已过期",
-        "过期",
-        "纠正",
-        "改为",
-    )
-    return any(term in text for term in high_signal_terms)
 
 
 def _extract_name(text: str) -> str | None:
@@ -598,8 +603,44 @@ def _event_text(event: dict[str, Any]) -> str:
     return ""
 
 
-def _rewrite_superseded_storage_summary(summary: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
-    if not _has_filesystem_storage_override(events):
+def _signal_events_from_pack(events: list[dict[str, Any]]) -> list[SignalEvent]:
+    output: list[SignalEvent] = []
+    for event in events:
+        event_id = str(event.get("event_id", "")).strip()
+        event_type = str(event.get("type", "")).strip()
+        text = _event_text(event)
+        if event_id and event_type:
+            output.append(SignalEvent(event_id=event_id, event_type=event_type, text=text))
+    return output
+
+
+def _ensure_correction_decisions(
+    decisions: list[dict[str, Any]],
+    correction_signals: list[CorrectionSignal],
+) -> list[dict[str, Any]]:
+    output = list(decisions)
+    seen_evidence = {
+        tuple(item.get("evidence_event_ids", []))
+        for item in output
+        if isinstance(item.get("evidence_event_ids"), list)
+    }
+    for signal in correction_signals:
+        evidence = [signal.event_id]
+        evidence_key = tuple(evidence)
+        if evidence_key in seen_evidence:
+            continue
+        output.append({"summary": signal.summary, "evidence_event_ids": evidence, "stability": "stable"})
+        seen_evidence.add(evidence_key)
+        if len(output) >= MAX_LIST_LINES:
+            break
+    return output
+
+
+def _rewrite_superseded_summary(
+    summary: dict[str, Any],
+    correction_signals: list[CorrectionSignal],
+) -> dict[str, Any]:
+    if not correction_signals:
         return summary
     for key, field in (
         ("active_context", "summary"),
@@ -609,18 +650,18 @@ def _rewrite_superseded_storage_summary(summary: dict[str, Any], events: list[di
         ("candidate_long_term", "why_reusable"),
         ("artifact_refs", "reason"),
     ):
-        _rewrite_items_field(summary.get(key), field)
+        _rewrite_items_field(summary.get(key), field, correction_signals)
     for item in summary.get("progress", []):
         if not isinstance(item, dict):
             continue
         for field in ("call_summary", "result_summary"):
             raw = item.get(field)
             if isinstance(raw, str):
-                item[field] = _rewrite_superseded_storage_text(raw)
+                item[field] = rewrite_superseded_text(raw, correction_signals)
     return summary
 
 
-def _rewrite_items_field(raw_items: Any, field: str) -> None:
+def _rewrite_items_field(raw_items: Any, field: str, correction_signals: list[CorrectionSignal]) -> None:
     if not isinstance(raw_items, list):
         return
     for item in raw_items:
@@ -628,22 +669,4 @@ def _rewrite_items_field(raw_items: Any, field: str) -> None:
             continue
         raw = item.get(field)
         if isinstance(raw, str):
-            item[field] = _rewrite_superseded_storage_text(raw)
-
-
-def _has_filesystem_storage_override(events: list[dict[str, Any]]) -> bool:
-    text = "\n".join(_event_text(event) for event in events)
-    return (
-        "sqlite" in text
-        and "主存储" in text
-        and "文件系统" in text
-        and ("最终架构决策" in text or "最终" in text or "改为" in text)
-        and ("暂不接入" in text or "只作为未来派生 index" in text or "派生 index" in text)
-    )
-
-
-def _rewrite_superseded_storage_text(text: str) -> str:
-    replacement = "sqlite 主存储早期候选已被后续文件系统主存储决策废弃"
-    output = text.replace("sqlite 做 memory 主存储", replacement)
-    output = output.replace("sqlite 做主存储", replacement)
-    return output
+            item[field] = rewrite_superseded_text(raw, correction_signals)

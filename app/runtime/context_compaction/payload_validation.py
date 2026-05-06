@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.core.errors import ValidationError
 from app.domain.models import EventRecord
 from app.runtime.context_compaction.models import SemanticUnit
 from app.runtime.context_compaction.text_utils import SUMMARY_MAX_CHARS, optional_text
+from app.runtime.memory_signal_guardrails import (
+    CorrectionSignal,
+    SignalEvent,
+    build_correction_signals,
+    is_high_signal_tool_result,
+    rewrite_superseded_text,
+)
 
 __all__ = ["validate_compaction_payload"]
 
@@ -16,9 +24,8 @@ def validate_compaction_payload(payload: dict[str, Any], *, compressed_units: li
     event_index = _build_event_index(compressed_units)
     valid_ids = {event_id for unit in compressed_units for event_id in unit.event_ids}
     source_text = _source_text(compressed_units)
-    _reject_unsupported_terms(payload=payload, source_text=source_text)
-    if _has_filesystem_storage_override(source_text):
-        payload = _rewrite_superseded_storage_payload(payload)
+    correction_signals = build_correction_signals(_signal_events_from_units(compressed_units))
+    payload = _rewrite_superseded_payload(payload, correction_signals)
     summary = optional_text(payload.get("summary"), max_len=SUMMARY_MAX_CHARS)
     if summary is None:
         raise ValidationError("compaction output missing summary.")
@@ -30,17 +37,13 @@ def validate_compaction_payload(payload: dict[str, Any], *, compressed_units: li
     for line in forbidden_lines:
         if line not in memory_relevant:
             memory_relevant.append(line)
-    storage_fact = _storage_architecture_fact(source_text)
     timeline = _string_list(payload.get("timeline"), max_items=12)
     decisions = _string_list(payload.get("decisions"), max_items=12)
-    if storage_fact is not None:
-        if not any("文件系统" in item and "主存储" in item for item in decisions):
-            decisions.append(storage_fact)
-        if not any("文件系统" in item and "主存储" in item for item in memory_relevant):
-            memory_relevant.append(storage_fact)
+    decisions = _ensure_correction_lines(decisions, correction_signals)
+    memory_relevant = _ensure_correction_lines(memory_relevant, correction_signals)
     tool_progress = _tool_progress_list(payload.get("tool_progress"), event_index)
     tool_progress = _ensure_high_signal_tool_progress(tool_progress, compressed_units)
-    return {
+    normalized = {
         "summary": summary,
         "timeline": timeline[:12],
         "decisions": decisions[:12],
@@ -50,6 +53,8 @@ def validate_compaction_payload(payload: dict[str, Any], *, compressed_units: li
         "memory_relevant": memory_relevant[:12],
         "evidence_event_ids": evidence,
     }
+    _reject_unsupported_terms(payload=normalized, source_text=source_text)
+    return normalized
 
 
 def _tool_progress_list(raw: Any, event_index: dict[str, EventRecord]) -> list[dict[str, Any]]:
@@ -70,7 +75,10 @@ def _tool_progress_list(raw: Any, event_index: dict[str, EventRecord]) -> list[d
         )
         if tool_name is None or call_summary is None or result_summary is None or not evidence:
             continue
+        if not _has_tool_event_evidence(evidence, event_index):
+            continue
         _require_tool_pair_evidence(evidence, event_index, field=f"tool_progress[{index}].evidence_event_ids")
+        tool_name = _tool_name_from_evidence(evidence, event_index) or tool_name
         output.append(
             {
                 "tool_name": tool_name,
@@ -99,7 +107,7 @@ def _ensure_high_signal_tool_progress(
         summary = unit.summary
         result_content = summary.get("result_content") if isinstance(summary, dict) else None
         result_text = result_content.strip() if isinstance(result_content, str) else ""
-        if not _is_high_signal_tool_result(result_text):
+        if not is_high_signal_tool_result(result_text):
             continue
         evidence = list(unit.event_ids)
         evidence_key = tuple(evidence)
@@ -117,22 +125,6 @@ def _ensure_high_signal_tool_progress(
         )
         existing_evidence.add(evidence_key)
     return output[:12]
-
-
-def _is_high_signal_tool_result(text: str) -> bool:
-    if not text:
-        return False
-    high_signal_terms = (
-        "最新名字",
-        "最新称呼",
-        "最终名字",
-        "最终称呼",
-        "已过期",
-        "过期",
-        "纠正",
-        "改为",
-    )
-    return any(term in text for term in high_signal_terms)
 
 
 def _string_list(raw: Any, *, max_items: int) -> list[str]:
@@ -227,6 +219,21 @@ def _require_tool_pair_evidence(evidence: list[str], event_index: dict[str, Even
             raise ValidationError(f"{field} must include paired tool_call/tool_result for {call_id}.")
 
 
+def _has_tool_event_evidence(evidence: list[str], event_index: dict[str, EventRecord]) -> bool:
+    return any((event := event_index.get(event_id)) is not None and event.type in {"tool_call", "tool_result"} for event_id in evidence)
+
+
+def _tool_name_from_evidence(evidence: list[str], event_index: dict[str, EventRecord]) -> str | None:
+    for event_id in evidence:
+        event = event_index.get(event_id)
+        if event is None or event.type != "tool_call":
+            continue
+        raw_name = event.payload.get("name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            return raw_name.strip()
+    return None
+
+
 def _source_text(compressed_units: list[SemanticUnit]) -> str:
     parts: list[str] = []
     for unit in compressed_units:
@@ -252,51 +259,64 @@ def _forbidden_memory_lines(compressed_units: list[SemanticUnit]) -> list[str]:
 
 
 def _reject_unsupported_terms(*, payload: dict[str, Any], source_text: str) -> None:
-    output_text = str(payload)
-    guarded_terms = (
-        "小猪",
-        "小明",
-        "小王",
-        "张三",
-        "火星",
-        "Redis 缓存",
-        "已经上线生产",
-        "sqlite",
-        "文件系统",
-        "MEMORY_DEV_PROGRESS.md",
-        "蓝鲸",
+    output_text = _payload_string_values(payload)
+    unsupported = sorted(
+        {
+            *(_ascii_terms(output_text) - _ascii_terms(source_text) - _COMMON_OUTPUT_TERMS),
+            *(_name_claims(output_text) - _name_claims(source_text)),
+            *(_unsupported_status_phrases(output_text, source_text)),
+        }
     )
-    unsupported = sorted({term for term in guarded_terms if term in output_text and term not in source_text})
     if unsupported:
         raise ValidationError(f"compaction output contains unsupported terms: {','.join(unsupported)}")
 
 
-def _has_filesystem_storage_override(source_text: str) -> bool:
-    return (
-        "sqlite" in source_text
-        and "主存储" in source_text
-        and "文件系统" in source_text
-        and ("最终架构决策" in source_text or "最终" in source_text or "改为" in source_text)
-        and ("暂不接入" in source_text or "只作为未来派生 index" in source_text or "派生 index" in source_text)
-    )
+def _signal_events_from_units(compressed_units: list[SemanticUnit]) -> list[SignalEvent]:
+    output: list[SignalEvent] = []
+    for unit in compressed_units:
+        for event in unit.events:
+            output.append(SignalEvent(event_id=event.event_id, event_type=event.type, text=_event_text(event)))
+    return output
 
 
-def _storage_architecture_fact(source_text: str) -> str | None:
-    if not _has_filesystem_storage_override(source_text):
-        return None
-    return "memory 主存储架构：文件系统为主存储，sqlite 不接入主存储，仅作为未来派生 index 的候选。"
+def _event_text(event: EventRecord) -> str:
+    content = event.payload.get("content")
+    if isinstance(content, str):
+        return content
+    result = event.payload.get("result")
+    if isinstance(result, str):
+        return result
+    summary = event.payload.get("summary")
+    if isinstance(summary, str):
+        return summary
+    return ""
 
 
-def _rewrite_superseded_storage_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _ensure_correction_lines(lines: list[str], correction_signals: list[CorrectionSignal]) -> list[str]:
+    output = list(lines)
+    for signal in correction_signals:
+        if signal.summary not in output:
+            output.append(signal.summary)
+        if len(output) >= 12:
+            break
+    return output[:12]
+
+
+def _rewrite_superseded_payload(payload: dict[str, Any], correction_signals: list[CorrectionSignal]) -> dict[str, Any]:
+    if not correction_signals:
+        return payload
     output = dict(payload)
     for key in ("summary",):
         raw = output.get(key)
         if isinstance(raw, str):
-            output[key] = _rewrite_superseded_storage_text(raw)
+            output[key] = rewrite_superseded_text(raw, correction_signals)
     for key in ("timeline", "decisions", "open_threads", "agent_activity", "memory_relevant"):
         raw_list = output.get(key)
         if isinstance(raw_list, list):
-            output[key] = [_rewrite_superseded_storage_text(item) if isinstance(item, str) else item for item in raw_list]
+            output[key] = [
+                rewrite_superseded_text(item, correction_signals) if isinstance(item, str) else item
+                for item in raw_list
+            ]
     raw_progress = output.get("tool_progress")
     if isinstance(raw_progress, list):
         rewritten_progress: list[Any] = []
@@ -308,14 +328,73 @@ def _rewrite_superseded_storage_payload(payload: dict[str, Any]) -> dict[str, An
             for field in ("call_summary", "result_summary"):
                 raw = rewritten_item.get(field)
                 if isinstance(raw, str):
-                    rewritten_item[field] = _rewrite_superseded_storage_text(raw)
+                    rewritten_item[field] = rewrite_superseded_text(raw, correction_signals)
             rewritten_progress.append(rewritten_item)
         output["tool_progress"] = rewritten_progress
     return output
 
 
-def _rewrite_superseded_storage_text(text: str) -> str:
-    replacement = "sqlite 主存储早期候选已被后续文件系统主存储决策废弃"
-    output = text.replace("sqlite 做 memory 主存储", replacement)
-    output = output.replace("sqlite 做主存储", replacement)
+def _payload_string_values(value: Any) -> str:
+    parts: list[str] = []
+
+    def visit(raw: Any) -> None:
+        if isinstance(raw, str):
+            parts.append(raw)
+        elif isinstance(raw, dict):
+            for child in raw.values():
+                visit(child)
+        elif isinstance(raw, list):
+            for child in raw:
+                visit(child)
+
+    visit(value)
+    return "\n".join(parts)
+
+
+_ASCII_TERM_RE = re.compile(r"[A-Za-z][A-Za-z0-9_./-]{2,}")
+_NAME_CLAIM_RE = re.compile(
+    r"(?:用户叫|名字是|名字叫|称呼为|叫我)"
+    r"(?P<name>[\u4e00-\u9fffA-Za-z0-9_-]{1,24}?)"
+    r"(?=$|[\s，,。.!！?？；;、]|才是|是|并|但|且|或|和)"
+)
+_COMMON_OUTPUT_TERMS = {
+    "true",
+    "false",
+    "string",
+    "summary",
+    "recent",
+    "events",
+    "session",
+}
+
+
+def _ascii_terms(text: str) -> set[str]:
+    output: set[str] = set()
+    for match in _ASCII_TERM_RE.finditer(text):
+        term = match.group(0).strip(".,;:!?")
+        if term.startswith(("evt_", "call_", "run_", "sess_")):
+            continue
+        if _is_high_risk_ascii_term(term):
+            output.add(term)
     return output
+
+
+def _is_high_risk_ascii_term(term: str) -> bool:
+    if not term:
+        return False
+    if re.search(r"\.[A-Za-z0-9]{1,8}$", term):
+        return True
+    if any(char.isdigit() for char in term) and any(char.isalpha() for char in term):
+        return True
+    if term.isupper() and len(term) >= 2:
+        return True
+    return False
+
+
+def _name_claims(text: str) -> set[str]:
+    return {match.group("name") for match in _NAME_CLAIM_RE.finditer(text)}
+
+
+def _unsupported_status_phrases(output_text: str, source_text: str) -> set[str]:
+    guarded_status_phrases = {"上线生产", "已经上线", "生产环境"}
+    return {phrase for phrase in guarded_status_phrases if phrase in output_text and phrase not in source_text}

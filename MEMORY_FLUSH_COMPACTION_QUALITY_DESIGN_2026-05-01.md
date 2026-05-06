@@ -641,13 +641,28 @@ compaction 与 flush 并行，但不失帧。
 问题：
 1. 模型可能把已经被最终决策推翻的旧方案原样写入 daily/compaction。
 2. 模型可能漏掉“最新名字/最终称呼/已过期”等高信号 tool_result。
-3. 模型可能漏掉已经明确的长期架构决策 candidate fact。
+3. 模型可能漏掉已经明确的长期稳定事实 candidate fact。
 
 处理：
 1. prompt 明确 superseded proposal 规则。
-2. validator 对 superseded storage proposal 做确定性改写。
-3. validator 对高信号 tool_result 做确定性 progress/tool_progress 补全。
-4. validator 对最终 storage architecture 决策做 candidate fact 与 compaction memory_relevant 补全。
+2. validator 从事件时间线抽取 correction/final decision signal。
+3. validator 用通用 signal 改写被后续更正推翻的早期候选，不写业务样例专属分支。
+4. validator 对高信号 tool_result 做确定性 progress/tool_progress 补全。
+5. 最新用户称呼/名字由 canonical candidate 确定性补齐，避免真实模型漏写 facts。
+6. context compaction 的 tool_progress 必须由真实 tool evidence 支撑；工具名按 evidence 归一化。
+```
+
+实现约束：
+
+```text
+生产代码不得为了通过某个压测场景识别具体业务词。
+测试可以使用 sqlite/文件系统/名字冲突等场景，但 runtime 只能依赖通用规则：
+- 时间顺序
+- evidence_event_ids
+- correction/final decision signal
+- tool_call/tool_result 成对关系
+- canonical memory key
+- source trace
 ```
 
 质量门禁：

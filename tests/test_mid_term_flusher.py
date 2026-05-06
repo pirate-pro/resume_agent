@@ -795,9 +795,12 @@ def test_mid_term_flusher_skips_outdated_name_candidate_in_same_pack(tmp_path: P
     assert result.job_status == "succeeded"
     assert result.daily_path is not None
     daily_text = Path(result.daily_path).read_text(encoding="utf-8")
-    assert "### Candidate Long-Term Memories\n- (none)" in daily_text
+    assert "用户最新名字是小王。" in daily_text
+    assert "用户最新名字是小猪。" not in daily_text
     facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
-    assert facts_path.exists() is False
+    rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(row.get("content") == "用户最新名字是小王。" for row in rows)
+    assert all(row.get("content") != "用户最新名字是小猪。" for row in rows)
 
 
 def test_mid_term_flusher_rewrites_superseded_storage_proposal(tmp_path: Path) -> None:
@@ -866,8 +869,8 @@ def test_mid_term_flusher_rewrites_superseded_storage_proposal(tmp_path: Path) -
     assert result.daily_path is not None
     daily_text = Path(result.daily_path).read_text(encoding="utf-8")
     assert "sqlite 做 memory 主存储" not in daily_text
-    assert "sqlite 做主存储" not in daily_text
-    assert "sqlite 主存储早期候选已被后续文件系统主存储决策废弃" in daily_text
+    assert "早期候选内容已被后续更正/最终决策取代" in daily_text
+    assert "最终架构决策" in daily_text
 
 
 def test_mid_term_flusher_backfills_high_signal_tool_progress(tmp_path: Path) -> None:
@@ -982,7 +985,7 @@ def test_mid_term_flusher_backfills_storage_architecture_candidate(tmp_path: Pat
     assert result.flushed is True
     facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
     rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert any("文件系统为主存储" in row.get("content", "") for row in rows)
+    assert any("文件系统" in row.get("content", "") and "主存储" in row.get("content", "") for row in rows)
     assert all("sqlite 做 memory 主存储" not in row.get("content", "") for row in rows)
 
 
@@ -1054,6 +1057,64 @@ def test_mid_term_flusher_repairs_latest_name_candidate_assistant_only_evidence(
     metadata = matched[0].get("metadata")
     assert isinstance(metadata, dict)
     assert metadata.get("evidence_event_ids") == "evt_r02,evt_r03"
+
+
+def test_mid_term_flusher_backfills_latest_name_candidate_when_model_omits_it(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_latest_name_candidate_backfill"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    payload = _empty_summary_payload()
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_StaticSummaryModel(payload),
+    )
+
+    base = datetime(2026, 4, 30, 11, 50, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_n01",
+        event_type="user_message",
+        payload={"content": "名字叫小猪。"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_n02",
+        event_type="user_message",
+        payload={"content": "最终确认：以后叫我小王，小猪不是最新名字。"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_n03",
+        event_type="assistant_message",
+        payload={"content": "后续按小王称呼。"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_n04",
+        event_type="run_finished",
+        payload={"answer_length": 8, "tool_calls": 0},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    result = flusher.flush_for_run_finished(_context(session_id))
+
+    assert result.flushed is True
+    facts_path = store.root_dir / "agents" / "agent_main" / "facts.jsonl"
+    rows = [json.loads(line) for line in facts_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    matched = [row for row in rows if row.get("content") == "用户最新名字是小王。"]
+    assert len(matched) == 1
+    source = matched[0].get("source")
+    assert isinstance(source, dict)
+    assert source.get("eventIds") == ["evt_n02"]
 
 
 def test_mid_term_flusher_keeps_one_atomic_job_and_tool_pairs(tmp_path: Path) -> None:
