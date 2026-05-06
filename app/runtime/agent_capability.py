@@ -93,6 +93,7 @@ class AgentCapabilityRegistry:
                 _default_agent_payload("agent_alpha"),
                 _default_agent_payload("agent_beta"),
                 _default_agent_payload("agent_other"),
+                _default_agent_payload("resume_agent"),
             ],
         }
         return cls.from_payload(payload)

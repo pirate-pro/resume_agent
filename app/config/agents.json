@@ -1,0 +1,29 @@
+{
+  "schema": "agents",
+  "agents": [
+    {
+      "agent_id": "agent_main",
+      "display_name": "MainCareerAgent",
+      "description": "负责用户对话、任务理解、子 agent 编排和最终结果整合。",
+      "role": "main_orchestrator",
+      "enabled": true,
+      "is_main_agent": true,
+      "document_agent_id": "default",
+      "can_invoke_agents": true,
+      "invokable_agent_ids": [
+        "resume_agent"
+      ]
+    },
+    {
+      "agent_id": "resume_agent",
+      "display_name": "ResumeAgent",
+      "description": "负责简历解析、结构化和简历信息诊断。",
+      "role": "resume_parser",
+      "enabled": true,
+      "is_main_agent": false,
+      "document_agent_id": "resume_agent",
+      "can_invoke_agents": false,
+      "invokable_agent_ids": []
+    }
+  ]
+}

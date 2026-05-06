@@ -19,6 +19,26 @@
       "allow_cross_session_short_read": true,
       "allow_cross_agent_memory_read": false,
       "allow_cross_agent_memory_write": false
+    },
+    {
+      "agent_id": "resume_agent",
+      "allowed_tools": [
+        "session_list_files",
+        "session_plan_file_access",
+        "session_read_file",
+        "session_search_file",
+        "memory_search"
+      ],
+      "memory_read_scopes": [
+        "agent_long",
+        "shared_long"
+      ],
+      "memory_write_scopes": [
+        "agent_long"
+      ],
+      "allow_cross_session_short_read": false,
+      "allow_cross_agent_memory_read": false,
+      "allow_cross_agent_memory_write": false
     }
   ]
 }
