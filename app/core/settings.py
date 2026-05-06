@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default=Path("app/config/agent_capabilities.json"),
         validation_alias=AliasChoices("AGENT_CAPABILITIES_PATH"),
     )
+    agent_registry_path: Path = Field(
+        default=Path("app/config/agents.json"),
+        validation_alias=AliasChoices("AGENT_REGISTRY_PATH"),
+    )
     llm_base_url: str = Field(
         default="http://localhost:8000/v1",
         validation_alias=AliasChoices("LLM_BASE_URL", "VL_MODEL_API_URL"),
@@ -67,6 +71,10 @@ class Settings(BaseSettings):
     chat_stream_run_timeout_seconds: float = Field(
         default=300.0,
         validation_alias=AliasChoices("CHAT_STREAM_RUN_TIMEOUT_SECONDS"),
+    )
+    agent_task_max_concurrency: int = Field(
+        default=3,
+        validation_alias=AliasChoices("AGENT_TASK_MAX_CONCURRENCY"),
     )
     mid_term_flush_worker_enabled: bool = Field(
         default=True,
@@ -181,7 +189,7 @@ class Settings(BaseSettings):
                 return False
         raise ValidationError("DEBUG must be a boolean-like value.")
 
-    @field_validator("data_dir", "agent_capabilities_path")
+    @field_validator("data_dir", "agent_capabilities_path", "agent_registry_path")
     @classmethod
     def _validate_path_value(cls, value: Path) -> Path:
         raw_value = str(value).strip()
@@ -276,6 +284,13 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValidationError("MID_TERM_FLUSH_WORKER_* values must be positive.")
         return value
+
+    @field_validator("agent_task_max_concurrency")
+    @classmethod
+    def _validate_agent_task_max_concurrency(cls, value: int) -> int:
+        if value <= 0:
+            raise ValidationError("AGENT_TASK_MAX_CONCURRENCY must be positive.")
+        return min(value, 8)
 
     @field_validator(
         "mid_term_flush_model_context_window_tokens",

@@ -30,6 +30,14 @@ class ToolRegistry:
     def list_definitions(self) -> list[ToolDefinition]:
         return [tool.definition() for tool in self._tools.values()]
 
+    def list_definitions_for_agent(self, agent_id: str) -> list[ToolDefinition]:
+        capability = self._capability_registry.require(agent_id)
+        return [
+            tool.definition()
+            for tool in self._tools.values()
+            if capability.allows_tool(tool.definition().name)
+        ]
+
     def execute(self, call: ToolCall, context: RunContext) -> ToolExecutionResult:
         if not isinstance(call, ToolCall):
             raise ValidationError("call must be a ToolCall instance.")

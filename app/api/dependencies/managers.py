@@ -5,8 +5,14 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.api.dependencies.config import get_settings
-from app.api.dependencies.infrastructure import get_memory_store, get_session_repository, get_state_store
+from app.api.dependencies.infrastructure import (
+    get_agent_document_repository,
+    get_memory_store,
+    get_session_repository,
+    get_state_store,
+)
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
+from app.runtime.agent_registry import AgentRegistry, load_agent_registry
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
@@ -14,6 +20,7 @@ from app.state.manager import StateManager
 
 __all__ = [
     "get_agent_capability_registry",
+    "get_agent_registry",
     "get_event_recorder",
     "get_memory_manager",
     "get_session_manager",
@@ -30,6 +37,16 @@ def get_state_manager() -> StateManager:
 def get_agent_capability_registry() -> AgentCapabilityRegistry:
     settings = get_settings()
     return load_agent_capability_registry(settings.agent_capabilities_path)
+
+
+@lru_cache(maxsize=1)
+def get_agent_registry() -> AgentRegistry:
+    settings = get_settings()
+    return load_agent_registry(
+        settings.agent_registry_path,
+        capability_registry=get_agent_capability_registry(),
+        document_repository=get_agent_document_repository(),
+    )
 
 
 @lru_cache(maxsize=1)

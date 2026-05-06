@@ -13,6 +13,7 @@ from app.api.dependencies.infrastructure import (
 )
 from app.api.dependencies.managers import (
     get_agent_capability_registry,
+    get_agent_registry,
     get_event_recorder,
     get_memory_manager,
     get_session_manager,
@@ -27,6 +28,9 @@ from app.api.dependencies.runtime import (
     get_mid_term_flush_worker,
 )
 from app.api.dependencies.services import (
+    get_agent_invocation_service,
+    get_agent_task_runtime,
+    get_agent_task_store,
     get_answer_normalizer,
     get_chat_service,
     get_memory_query_service,
@@ -39,7 +43,11 @@ from app.api.dependencies.tools import get_tool_registry
 __all__ = [
     "get_agent_capability_registry",
     "get_agent_document_repository",
+    "get_agent_invocation_service",
+    "get_agent_registry",
     "get_agent_runtime",
+    "get_agent_task_runtime",
+    "get_agent_task_store",
     "get_answer_normalizer",
     "get_chat_service",
     "get_context_assembler",

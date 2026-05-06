@@ -6,9 +6,17 @@ from functools import lru_cache
 
 from app.api.dependencies.config import get_settings
 from app.api.dependencies.infrastructure import get_lock_manager, get_session_repository
-from app.api.dependencies.managers import get_agent_capability_registry, get_memory_manager, get_session_manager
+from app.api.dependencies.managers import (
+    get_agent_capability_registry,
+    get_agent_registry,
+    get_event_recorder,
+    get_memory_manager,
+    get_session_manager,
+)
 from app.api.dependencies.model import get_model_client
 from app.api.dependencies.runtime import get_agent_runtime
+from app.services.agent_invocation_service import AgentInvocationService
+from app.services.agent_task_runtime import AgentTaskRuntime, InMemoryAgentTaskStore
 from app.services.answer_normalizer import AnswerNormalizer
 from app.services.chat_service import ChatService
 from app.services.memory_query_service import MemoryQueryService
@@ -17,6 +25,9 @@ from app.services.session_query_service import SessionQueryService
 from app.services.session_title_service import SessionTitleService
 
 __all__ = [
+    "get_agent_invocation_service",
+    "get_agent_task_runtime",
+    "get_agent_task_store",
     "get_answer_normalizer",
     "get_chat_service",
     "get_memory_query_service",
@@ -24,6 +35,29 @@ __all__ = [
     "get_session_query_service",
     "get_session_title_service",
 ]
+
+
+@lru_cache(maxsize=1)
+def get_agent_task_store() -> InMemoryAgentTaskStore:
+    return InMemoryAgentTaskStore()
+
+
+@lru_cache(maxsize=1)
+def get_agent_task_runtime() -> AgentTaskRuntime:
+    return AgentTaskRuntime(
+        invocation_service=get_agent_invocation_service(),
+        task_store=get_agent_task_store(),
+        default_max_concurrency=get_settings().agent_task_max_concurrency,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_agent_invocation_service() -> AgentInvocationService:
+    return AgentInvocationService(
+        agent_registry=get_agent_registry(),
+        runtime=get_agent_runtime(),
+        event_recorder=get_event_recorder(),
+    )
 
 
 @lru_cache(maxsize=1)

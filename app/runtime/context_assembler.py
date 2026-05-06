@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from app.core.errors import StorageError
 from app.core.errors import ValidationError
@@ -13,6 +14,7 @@ from app.domain.models import (
     MemoryItem,
     RunContext,
     SessionFile,
+    ToolDefinition,
 )
 from app.domain.protocols import AgentDocumentRepository, SessionRepository, SkillRepository, ToolExecutor
 from app.runtime.context.catalog import fallback_skill_description
@@ -110,7 +112,7 @@ class ContextAssembler:
         if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != normalized_message:
             messages.append({"role": "user", "content": normalized_message})
 
-        tool_definitions = self._tool_executor.list_definitions()
+        tool_definitions = self._list_tool_definitions(context.agent_id)
         assembly_plan = build_assembly_plan(
             role=assembly_role,
             skill_descriptions=skill_descriptions,
@@ -179,7 +181,16 @@ class ContextAssembler:
                 context.agent_id,
                 exc,
             )
-            return AgentIdentityDocuments()
+        return AgentIdentityDocuments()
+
+    def _list_tool_definitions(self, agent_id: str) -> list[ToolDefinition]:
+        list_for_agent = getattr(self._tool_executor, "list_definitions_for_agent", None)
+        if callable(list_for_agent):
+            try:
+                return cast(list[ToolDefinition], list_for_agent(agent_id))
+            except ValidationError as exc:
+                _logger.warning("工具目录按 agent 过滤失败，回退到完整目录: agent_id=%s error=%s", agent_id, exc)
+        return self._tool_executor.list_definitions()
 
     def _build_short_term_context_plan(
         self,

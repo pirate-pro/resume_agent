@@ -2444,3 +2444,94 @@
     - core multi-session / same-session：请求失败 `0`。
     - memory write consistency：`800/800` 成功，facts 解析失败 `0`。
     - flush+compaction race sweep：并发 `1/2/4/6/8/10/12` 下 fail/retry/deferred/invalid_json/tmp 均为 `0`。
+
+103. [完成] Multi-agent F1：新增 AgentRegistry 定义中心。
+- 背景：
+  - 进入 multi-agent 前，需要先有统一的 agent 定义入口。
+  - 现有系统已有 `AgentCapabilityRegistry` 和 `MarkdownAgentDocumentRepository`，本阶段不重造，而是向上聚合。
+- 说明：
+  - 新增 `app/runtime/agent_registry.py`：
+    - `AgentDefinition` 保存 agent 元信息、主 agent 标记、文档映射和可调用目标。
+    - `AgentRegistry` 聚合 agent definition、capability registry、agent document repository。
+    - 支持 `list_agents()`、`require()`、`get_main_agent()`、`can_invoke()`、`documents_for()`、`capability_for()`、`can_use_tool()`、`can_read_memory()`、`can_write_memory()`。
+  - 新增 `app/config/agents.json`：
+    - 注册 `agent_main` 作为 main orchestrator。
+    - 注册 `resume_agent` 作为第一条 child-agent 验证线。
+  - 扩展 `app/config/agent_capabilities.json`：
+    - `resume_agent` 只开放简历读取相关文件工具和 `memory_search`。
+    - `resume_agent` 只能写 agent 私有长期 memory，不能写 shared memory。
+  - 新增 `app/agents/resume_agent/AGENT.md` 与 `SOUL.md`。
+  - 新增 DI：
+    - `get_agent_registry()`。
+    - `AGENT_REGISTRY_PATH` 配置项。
+- 边界：
+  - 本阶段只做定义中心，不做 child run 调度。
+  - `AgentRegistry` 不替代 `AgentCapabilityRegistry`；权限判断仍复用现有能力矩阵。
+  - `resume_agent` 目前只是可被发现、可校验、可读取文档的 agent，不接实际调用链路。
+- 验证结果：
+  - `uv run pytest tests/test_agent_registry.py tests/test_multi_agent_contracts.py tests/test_tool_registry.py tests/test_context_assembler.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 160 source files`）。
+
+104. [完成] Multi-agent F2：新增 AgentInvocationService 最小调用闭环。
+- 背景：
+  - `AgentRegistry` 已能描述“谁存在、谁能调用谁”，下一步需要一条不复杂化的 child-agent 调用链路。
+  - 本阶段目标是搭架子，不做任务队列、不做自动调度、不暴露前端 API。
+- 说明：
+  - 新增 `app/services/agent_invocation_service.py`：
+    - `AgentInvocationRequest` 定义一次委派输入：source context、target agent、instruction、constraints、artifact refs、skills、tool rounds。
+    - `AgentInvocationService.invoke()` 负责权限校验、任务分配事件写入、child `RunContext` 创建、调用现有 `AgentRuntime`、结果摘要事件写入。
+    - child run 复用现有 runtime/context/tool/memory 链路，不新开一套执行器。
+  - 扩展事件白名单：
+    - `agent_task_assigned`
+    - `agent_result_summary`
+  - 新增 DI：
+    - `get_agent_invocation_service()`。
+- 上下文边界：
+  - main-agent 通过 `agent_result_summary` 看到 child-agent 的结果摘要。
+  - child-agent 通过 `agent_task_assigned` 看到分配给自己的任务。
+  - child-agent 的 `entry_agent_id` 保留主入口，`parent_run_id` 指向 source run，用于事件追踪和后续压缩配对。
+- 新增测试：
+  - 验证调用链事件顺序：assignment -> child run -> result summary。
+  - 验证反向调用被 AgentRegistry 拒绝。
+  - 验证 child prompt 注入 assigned task，且不注入 main orchestration state。
+  - 验证 main prompt 能看到 child result summary。
+- 验证结果：
+  - `uv run pytest tests/test_agent_invocation_service.py tests/test_agent_registry.py tests/test_multi_agent_contracts.py tests/test_context_assembler.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 162 source files`）。
+  - `uv run pytest -q`：全量通过。
+
+105. [完成] Multi-agent F3：新增并发 child-agent task group 与 delegate_agents 工具。
+- 背景：
+  - 单 child 同步调用只能验证父子 run 链路，不能支撑多个独立 other-agent 并行处理。
+  - 本阶段先做 `wait=true` 的并发等待聚合，不做后台队列和轮询状态 API，避免过早复杂化。
+- 说明：
+  - 新增 `app/services/agent_task_runtime.py`：
+    - `AgentTaskSpec` 描述一个 child task。
+    - `AgentTaskGroupRequest` 描述一组独立任务。
+    - `AgentTaskRuntime` 使用 `asyncio.Semaphore` 控制并发，内部通过 `asyncio.to_thread()` 执行现有 `AgentInvocationService.invoke()`。
+    - `InMemoryAgentTaskStore` 保存当前进程内 task group / task status，后续可扩展为持久化 store。
+  - 新增 `delegate_agents` 工具：
+    - main-agent 可一次委派多个独立任务。
+    - 当前只支持 `wait=true`。
+    - 当前拒绝 `depends_on`，避免把有逻辑依赖的任务伪装成并行任务。
+  - 修正上下文隔离：
+    - `agent_task_assigned` payload 增加 `child_run_id`。
+    - other-agent 只注入属于当前 child run 的 assigned task，避免同一个 target agent 的并发兄弟任务互相污染。
+  - 工具目录按 agent capability 过滤：
+    - main-agent 能看到 `delegate_agents`。
+    - child-agent 如果 capability 未授权，不会在 prompt/tool schema 中看到该工具。
+  - `EventRecorder` 增加写入锁：
+    - 保护同进程内并发 child runs 写 `events.jsonl` 时的行级一致性。
+- 边界：
+  - 本阶段不是后台队列；main-agent 调用 `delegate_agents` 后会等待聚合结果。
+  - 任务进度 store 目前是 in-memory，只服务当前进程。
+  - 多任务仅支持无依赖并行；有依赖 DAG 后续单独设计。
+- 新增测试：
+  - 验证多个 child tasks 真实并发执行。
+  - 验证同 target agent 的兄弟任务不会互相进入 child prompt。
+  - 验证 `delegate_agents` 工具返回聚合结果。
+  - 验证工具目录按 agent capability 过滤。
+- 验证结果：
+  - `uv run pytest tests/test_agent_task_runtime.py tests/test_agent_invocation_service.py tests/test_agent_registry.py tests/test_multi_agent_contracts.py tests/test_context_assembler.py tests/test_tool_registry.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 165 source files`）。
+  - `uv run pytest -q`：全量通过。

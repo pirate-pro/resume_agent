@@ -59,6 +59,8 @@ def extract_assigned_tasks(events: list[EventRecord], context: RunContext) -> li
             continue
         if payload.target_agent_id != context.agent_id:
             continue
+        if payload.child_run_id is not None and payload.child_run_id != context.run_id:
+            continue
         output.append(payload)
     return output
 

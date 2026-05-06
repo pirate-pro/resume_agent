@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -11,6 +12,7 @@ from uuid import uuid4
 from app.core.errors import ValidationError
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import SessionRepository
+from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT, AGENT_TASK_ASSIGNED_EVENT
 from app.runtime.event_channel import EventChannel
 
 __all__ = ["EventRecorder"]
@@ -25,6 +27,8 @@ _ALLOWED_EVENT_TYPES = {
     "assistant_message",
     "memory_write",
     "memory_retrieval",
+    AGENT_TASK_ASSIGNED_EVENT,
+    AGENT_RESULT_SUMMARY_EVENT,
     "run_finished",
 }
 
@@ -34,6 +38,7 @@ class EventRecorder:
 
     def __init__(self, session_repository: SessionRepository) -> None:
         self._session_repository = session_repository
+        self._write_lock = threading.Lock()
 
     def record(
         self,
@@ -63,7 +68,8 @@ class EventRecorder:
             parent_run_id=context.parent_run_id,
             event_version=event_version,
         )
-        self._session_repository.append_event(context.session_id, event)
+        with self._write_lock:
+            self._session_repository.append_event(context.session_id, event)
         _logger.debug(
             "记录事件成功: session_id=%s agent_id=%s run_id=%s event_type=%s event_id=%s",
             context.session_id,
