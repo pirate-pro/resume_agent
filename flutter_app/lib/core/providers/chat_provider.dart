@@ -34,13 +34,13 @@ class ChatProvider extends ChangeNotifier {
   List<AnswerArtifactView> _streamArtifacts = [];
   String _pendingStreamDelta = "";
   Timer? _streamFlushTimer;
-  Timer? _recentActivatedFileTimer;
+  Timer? _recentActivatedArtifactTimer;
   final Map<String, Future<void>> _pendingTitleRefreshes = {};
   String? _error;
   String? _skillsError;
-  String? _recentActivatedFileId;
+  String? _recentActivatedArtifactId;
   final List<SessionMeta> _sessions = [];
-  List<String> _activeFileIds = [];
+  List<String> _activeArtifactIds = [];
   List<SkillOption> _availableSkills = [];
   List<String> _selectedSkillNames = [];
   int _maxToolRounds = AppConfig.maxToolRounds;
@@ -51,7 +51,7 @@ class ChatProvider extends ChangeNotifier {
   List<ToolCallView> _lastToolCalls = [];
   List<MemoryView> _lastMemoryHits = [];
   List<EventView> _streamEvents = [];
-  List<SessionFileView> _sessionFiles = [];
+  List<SessionArtifactView> _sessionArtifacts = [];
 
   // ── Getters ─────────────────────────────────────────────────────────
   String? get sessionId => _sessionId;
@@ -69,7 +69,7 @@ class ChatProvider extends ChangeNotifier {
   String? get error => _error;
   String? get skillsError => _skillsError;
   List<SessionMeta> get sessions => List.unmodifiable(_sessions);
-  List<String> get activeFileIds => List.unmodifiable(_activeFileIds);
+  List<String> get activeArtifactIds => List.unmodifiable(_activeArtifactIds);
   List<SkillOption> get availableSkills => List.unmodifiable(_availableSkills);
   List<String> get selectedSkillNames => List.unmodifiable(_selectedSkillNames);
   int get maxToolRounds => _maxToolRounds;
@@ -79,8 +79,8 @@ class ChatProvider extends ChangeNotifier {
   List<ToolCallView> get lastToolCalls => List.unmodifiable(_lastToolCalls);
   List<MemoryView> get lastMemoryHits => List.unmodifiable(_lastMemoryHits);
   List<EventView> get streamEvents => List.unmodifiable(_streamEvents);
-  List<SessionFileView> get sessionFiles => List.unmodifiable(_sessionFiles);
-  String? get recentActivatedFileId => _recentActivatedFileId;
+  List<SessionArtifactView> get sessionArtifacts => List.unmodifiable(_sessionArtifacts);
+  String? get recentActivatedArtifactId => _recentActivatedArtifactId;
 
   ChatProvider(this._api) {
     _init();
@@ -89,7 +89,7 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _streamFlushTimer?.cancel();
-    _recentActivatedFileTimer?.cancel();
+    _recentActivatedArtifactTimer?.cancel();
     super.dispose();
   }
 
@@ -227,8 +227,8 @@ class ChatProvider extends ChangeNotifier {
     _sessions.removeWhere((s) => s.id == sessionId);
     if (_sessionId == sessionId) {
       _sessionId = null;
-      _sessionFiles = [];
-      _activeFileIds = [];
+      _sessionArtifacts = [];
+      _activeArtifactIds = [];
     }
     await _saveSessions();
   }
@@ -286,13 +286,13 @@ class ChatProvider extends ChangeNotifier {
     _sessionId = null;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
-    _clearRecentActivatedFile(notify: false);
+    _clearRecentActivatedArtifact(notify: false);
     _error = null;
-    _activeFileIds = [];
+    _activeArtifactIds = [];
     _lastToolCalls = [];
     _lastMemoryHits = [];
     _streamEvents = [];
-    _sessionFiles = [];
+    _sessionArtifacts = [];
     notifyListeners();
   }
 
@@ -354,7 +354,7 @@ class ChatProvider extends ChangeNotifier {
     _sessionId = sessionId;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
-    _clearRecentActivatedFile(notify: false);
+    _clearRecentActivatedArtifact(notify: false);
     _error = null;
     _streamEvents = [];
     notifyListeners();
@@ -366,7 +366,7 @@ class ChatProvider extends ChangeNotifier {
       notifyListeners();
     } catch (_) {}
 
-    await refreshSessionFiles();
+    await refreshSessionArtifacts();
   }
 
   Future<void> deleteSession(String sessionId) async {
@@ -512,7 +512,7 @@ class ChatProvider extends ChangeNotifier {
           sessionId: _sessionId,
           skillNames: _selectedSkillNames,
           maxToolRounds: _maxToolRounds,
-          activeFileIds: _activeFileIds.isEmpty ? null : _activeFileIds,
+          activeArtifactIds: _activeArtifactIds.isEmpty ? null : _activeArtifactIds,
         )) {
           gotEvents = true;
           doneResponse = _handleStreamEvent(event);
@@ -530,7 +530,7 @@ class ChatProvider extends ChangeNotifier {
           sessionId: _sessionId,
           skillNames: _selectedSkillNames,
           maxToolRounds: _maxToolRounds,
-          activeFileIds: _activeFileIds.isEmpty ? null : _activeFileIds,
+          activeArtifactIds: _activeArtifactIds.isEmpty ? null : _activeArtifactIds,
         );
         doneResponse = resp;
       }
@@ -581,9 +581,9 @@ class ChatProvider extends ChangeNotifier {
         }
       }
 
-      // Refresh files after completion
+      // Refresh active artifacts after completion.
       if (_sessionId != null) {
-        await refreshSessionFiles();
+        await refreshSessionArtifacts();
         await refreshSessions();
       }
     } on ApiException catch (e) {
@@ -683,61 +683,61 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  // ── Session files ───────────────────────────────────────────────────
+  // ── Session artifacts ───────────────────────────────────────────────────
 
-  Future<void> refreshSessionFiles() async {
+  Future<void> refreshSessionArtifacts() async {
     if (_sessionId == null) {
-      _sessionFiles = [];
-      _activeFileIds = [];
-      _clearRecentActivatedFile(notify: false);
+      _sessionArtifacts = [];
+      _activeArtifactIds = [];
+      _clearRecentActivatedArtifact(notify: false);
       notifyListeners();
       return;
     }
     try {
-      final resp = await _api.listSessionFiles(_sessionId!);
-      _sessionFiles = resp.files;
-      _activeFileIds = resp.activeFileIds;
+      final resp = await _api.listSessionArtifacts(_sessionId!);
+      _sessionArtifacts = resp.artifacts;
+      _activeArtifactIds = resp.activeArtifactIds;
     } catch (_) {}
     notifyListeners();
   }
 
-  Future<void> toggleFileActive(String fileId, bool active) async {
+  Future<void> toggleArtifactActive(String artifactId, bool active) async {
     if (_sessionId == null) return;
-    final current = Set<String>.from(_activeFileIds);
+    final current = Set<String>.from(_activeArtifactIds);
     if (active) {
-      current.add(fileId);
+      current.add(artifactId);
     } else {
-      current.remove(fileId);
+      current.remove(artifactId);
     }
     try {
-      final resp = await _api.setActiveFiles(
+      final resp = await _api.setActiveArtifacts(
         sessionId: _sessionId!,
-        fileIds: current.toList(),
+        artifactIds: current.toList(),
       );
-      _sessionFiles = resp.files;
-      _activeFileIds = resp.activeFileIds;
-      if (active && _activeFileIds.contains(fileId)) {
-        _markRecentActivatedFile(fileId, notify: false);
-      } else if (!active && _recentActivatedFileId == fileId) {
-        _clearRecentActivatedFile(notify: false);
+      _sessionArtifacts = resp.artifacts;
+      _activeArtifactIds = resp.activeArtifactIds;
+      if (active && _activeArtifactIds.contains(artifactId)) {
+        _markRecentActivatedArtifact(artifactId, notify: false);
+      } else if (!active && _recentActivatedArtifactId == artifactId) {
+        _clearRecentActivatedArtifact(notify: false);
       }
     } catch (_) {}
     notifyListeners();
   }
 
-  Future<bool> activateFileFromArtifact(String fileId) async {
+  Future<bool> activateArtifact(String artifactId) async {
     if (_sessionId == null) return false;
-    final current = Set<String>.from(_activeFileIds)..add(fileId);
+    final current = Set<String>.from(_activeArtifactIds)..add(artifactId);
     try {
-      final resp = await _api.setActiveFiles(
+      final resp = await _api.setActiveArtifacts(
         sessionId: _sessionId!,
-        fileIds: current.toList(),
+        artifactIds: current.toList(),
       );
-      _sessionFiles = resp.files;
-      _activeFileIds = resp.activeFileIds;
-      final activated = _activeFileIds.contains(fileId);
+      _sessionArtifacts = resp.artifacts;
+      _activeArtifactIds = resp.activeArtifactIds;
+      final activated = _activeArtifactIds.contains(artifactId);
       if (activated) {
-        _markRecentActivatedFile(fileId, notify: false);
+        _markRecentActivatedArtifact(artifactId, notify: false);
       }
       notifyListeners();
       return activated;
@@ -765,7 +765,7 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
-  Future<void> uploadSessionFile({
+  Future<void> uploadSessionArtifact({
     required String filename,
     required Uint8List bytes,
     bool autoActivate = true,
@@ -789,13 +789,13 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _api.uploadFile(
+      await _api.uploadArtifact(
         sessionId: sessionId,
         filename: trimmed,
         contentBase64: base64Encode(bytes),
         autoActivate: autoActivate,
       );
-      await refreshSessionFiles();
+      await refreshSessionArtifacts();
     } on ApiException catch (e) {
       _error = e.message;
       if (!hadSession && _messages.isEmpty) {
@@ -880,11 +880,11 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  void _markRecentActivatedFile(String fileId, {required bool notify}) {
-    _recentActivatedFileTimer?.cancel();
-    _recentActivatedFileId = fileId;
-    _recentActivatedFileTimer = Timer(const Duration(seconds: 3), () {
-      _recentActivatedFileId = null;
+  void _markRecentActivatedArtifact(String artifactId, {required bool notify}) {
+    _recentActivatedArtifactTimer?.cancel();
+    _recentActivatedArtifactId = artifactId;
+    _recentActivatedArtifactTimer = Timer(const Duration(seconds: 3), () {
+      _recentActivatedArtifactId = null;
       notifyListeners();
     });
     if (notify) {
@@ -892,10 +892,10 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  void _clearRecentActivatedFile({required bool notify}) {
-    _recentActivatedFileTimer?.cancel();
-    _recentActivatedFileTimer = null;
-    _recentActivatedFileId = null;
+  void _clearRecentActivatedArtifact({required bool notify}) {
+    _recentActivatedArtifactTimer?.cancel();
+    _recentActivatedArtifactTimer = null;
+    _recentActivatedArtifactId = null;
     if (notify) {
       notifyListeners();
     }

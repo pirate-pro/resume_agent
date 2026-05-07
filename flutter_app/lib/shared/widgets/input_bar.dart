@@ -8,13 +8,13 @@ import '../../core/constants/app_config.dart';
 import '../../core/models/api_models.dart';
 import '../theme/app_theme.dart';
 
-typedef UploadSessionFileCallback = Future<void> Function({
+typedef UploadSessionArtifactCallback = Future<void> Function({
   required String filename,
   required Uint8List bytes,
 });
 
-typedef ToggleSessionFileCallback = Future<void> Function(
-  SessionFileView file,
+typedef ToggleSessionArtifactCallback = Future<void> Function(
+  SessionArtifactView file,
   bool active,
 );
 
@@ -37,15 +37,15 @@ BoxDecoration _trayDecoration({double radius = 22, double alpha = 0.92}) {
 
 class InputBar extends StatefulWidget {
   final Future<void> Function(String) onSend;
-  final UploadSessionFileCallback onUpload;
-  final ToggleSessionFileCallback onToggleFileActive;
+  final UploadSessionArtifactCallback onUpload;
+  final ToggleSessionArtifactCallback onToggleArtifactActive;
   final Future<void> Function() onRefreshSkills;
   final void Function(String skillName) onToggleSkill;
   final void Function(int value) onMaxToolRoundsChanged;
   final void Function() onResetRuntimeOptions;
-  final List<SessionFileView> sessionFiles;
-  final List<String> activeFileIds;
-  final String? highlightedFileId;
+  final List<SessionArtifactView> sessionArtifacts;
+  final List<String> activeArtifactIds;
+  final String? highlightedArtifactId;
   final List<SkillOption> availableSkills;
   final List<String> selectedSkillNames;
   final int maxToolRounds;
@@ -59,14 +59,14 @@ class InputBar extends StatefulWidget {
     super.key,
     required this.onSend,
     required this.onUpload,
-    required this.onToggleFileActive,
+    required this.onToggleArtifactActive,
     required this.onRefreshSkills,
     required this.onToggleSkill,
     required this.onMaxToolRoundsChanged,
     required this.onResetRuntimeOptions,
-    required this.sessionFiles,
-    required this.activeFileIds,
-    this.highlightedFileId,
+    required this.sessionArtifacts,
+    required this.activeArtifactIds,
+    this.highlightedArtifactId,
     required this.availableSkills,
     required this.selectedSkillNames,
     required this.maxToolRounds,
@@ -175,41 +175,41 @@ class _InputBarState extends State<InputBar> {
 
   bool get _inSlashMode => _slashQuery != null;
 
-  bool _isFileActive(SessionFileView file) {
-    return widget.activeFileIds.contains(file.fileId);
+  bool _isArtifactActive(SessionArtifactView file) {
+    return widget.activeArtifactIds.contains(file.artifactId);
   }
 
-  bool _isImage(SessionFileView file) {
+  bool _isImage(SessionArtifactView file) {
     return file.mediaType.toLowerCase().startsWith("image/");
   }
 
-  IconData _fileIcon(SessionFileView file) {
+  IconData _artifactIcon(SessionArtifactView file) {
     if (_isImage(file)) return Icons.image_outlined;
-    final lower = file.filename.toLowerCase();
+    final lower = file.title.toLowerCase();
     if (lower.endsWith(".pdf")) return Icons.picture_as_pdf_outlined;
     if (lower.endsWith(".json")) return Icons.data_object_rounded;
     return Icons.insert_drive_file_outlined;
   }
 
-  List<SessionFileView> get _activeFiles {
-    final activeIds = widget.activeFileIds.toSet();
-    return widget.sessionFiles
-        .where((file) => activeIds.contains(file.fileId))
+  List<SessionArtifactView> get _activeArtifacts {
+    final activeIds = widget.activeArtifactIds.toSet();
+    return widget.sessionArtifacts
+        .where((file) => activeIds.contains(file.artifactId))
         .toList()
-      ..sort((a, b) => b.uploadedAt.compareTo(a.uploadedAt));
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 
-  List<SessionFileView> get _slashCandidates {
+  List<SessionArtifactView> get _slashCandidates {
     final query = (_slashQuery ?? "").trim().toLowerCase();
-    final files = widget.sessionFiles.where((file) {
+    final files = widget.sessionArtifacts.where((file) {
       if (query.isEmpty) return true;
-      return file.filename.toLowerCase().contains(query);
+      return file.title.toLowerCase().contains(query);
     }).toList();
     files.sort((a, b) {
-      final aActive = _isFileActive(a);
-      final bActive = _isFileActive(b);
+      final aActive = _isArtifactActive(a);
+      final bActive = _isArtifactActive(b);
       if (aActive != bActive) return aActive ? 1 : -1;
-      return b.uploadedAt.compareTo(a.uploadedAt);
+      return b.createdAt.compareTo(a.createdAt);
     });
     return files;
   }
@@ -319,9 +319,9 @@ class _InputBarState extends State<InputBar> {
     }
   }
 
-  Future<void> _activateFromSlash(SessionFileView file) async {
-    if (!_isFileActive(file)) {
-      await widget.onToggleFileActive(file, true);
+  Future<void> _activateFromSlash(SessionArtifactView file) async {
+    if (!_isArtifactActive(file)) {
+      await widget.onToggleArtifactActive(file, true);
     }
     if (!mounted) return;
     _ctrl.clear();
@@ -408,9 +408,9 @@ class _InputBarState extends State<InputBar> {
       return _SlashCommandTray(
         key: ValueKey("slash-${_slashQuery ?? ""}"),
         files: _slashCandidates,
-        hasUploadedFiles: widget.sessionFiles.isNotEmpty,
-        isFileActive: _isFileActive,
-        iconForFile: _fileIcon,
+        hasUploadedArtifacts: widget.sessionArtifacts.isNotEmpty,
+        isFileActive: _isArtifactActive,
+        iconForFile: _artifactIcon,
         onSelect: (file) {
           _activateFromSlash(file);
         },
@@ -472,7 +472,7 @@ class _InputBarState extends State<InputBar> {
     final hasInteractiveFocus = _focus.hasFocus || panelVisible;
     final borderColor = hasInteractiveFocus ? AppTheme.accent : AppTheme.border;
     final borderWidth = hasInteractiveFocus ? 1.5 : 1.0;
-    final activeFiles = _activeFiles;
+    final activeArtifacts = _activeArtifacts;
 
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
@@ -504,13 +504,13 @@ class _InputBarState extends State<InputBar> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (activeFiles.isNotEmpty) ...[
-                      _ActiveFilesTray(
-                        files: activeFiles,
-                        highlightedFileId: widget.highlightedFileId,
-                        iconForFile: _fileIcon,
+                    if (activeArtifacts.isNotEmpty) ...[
+                      _ActiveArtifactsTray(
+                        files: activeArtifacts,
+                        highlightedArtifactId: widget.highlightedArtifactId,
+                        iconForFile: _artifactIcon,
                         onRemove: (file) {
-                          widget.onToggleFileActive(file, false);
+                          widget.onToggleArtifactActive(file, false);
                         },
                       ),
                       const SizedBox(height: 10),
@@ -1390,15 +1390,15 @@ class _RuntimeStatusBanner extends StatelessWidget {
   }
 }
 
-class _ActiveFilesTray extends StatelessWidget {
-  final List<SessionFileView> files;
-  final String? highlightedFileId;
-  final IconData Function(SessionFileView file) iconForFile;
-  final void Function(SessionFileView file) onRemove;
+class _ActiveArtifactsTray extends StatelessWidget {
+  final List<SessionArtifactView> files;
+  final String? highlightedArtifactId;
+  final IconData Function(SessionArtifactView file) iconForFile;
+  final void Function(SessionArtifactView file) onRemove;
 
-  const _ActiveFilesTray({
+  const _ActiveArtifactsTray({
     required this.files,
-    this.highlightedFileId,
+    this.highlightedArtifactId,
     required this.iconForFile,
     required this.onRemove,
   });
@@ -1450,7 +1450,7 @@ class _ActiveFilesTray extends StatelessWidget {
           ...files.map(
             (file) => _ActiveFileChip(
               file: file,
-              highlighted: highlightedFileId == file.fileId,
+              highlighted: highlightedArtifactId == file.artifactId,
               icon: iconForFile(file),
               onRemove: () => onRemove(file),
             ),
@@ -1462,7 +1462,7 @@ class _ActiveFilesTray extends StatelessWidget {
 }
 
 class _ActiveFileChip extends StatelessWidget {
-  final SessionFileView file;
+  final SessionArtifactView file;
   final bool highlighted;
   final IconData icon;
   final VoidCallback onRemove;
@@ -1506,7 +1506,7 @@ class _ActiveFileChip extends StatelessWidget {
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              file.filename,
+              file.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: AppTheme.ts(
@@ -1535,16 +1535,16 @@ class _ActiveFileChip extends StatelessWidget {
 }
 
 class _SlashCommandTray extends StatelessWidget {
-  final List<SessionFileView> files;
-  final bool hasUploadedFiles;
-  final bool Function(SessionFileView file) isFileActive;
-  final IconData Function(SessionFileView file) iconForFile;
-  final void Function(SessionFileView file) onSelect;
+  final List<SessionArtifactView> files;
+  final bool hasUploadedArtifacts;
+  final bool Function(SessionArtifactView file) isFileActive;
+  final IconData Function(SessionArtifactView file) iconForFile;
+  final void Function(SessionArtifactView file) onSelect;
 
   const _SlashCommandTray({
     super.key,
     required this.files,
-    required this.hasUploadedFiles,
+    required this.hasUploadedArtifacts,
     required this.isFileActive,
     required this.iconForFile,
     required this.onSelect,
@@ -1565,7 +1565,7 @@ class _SlashCommandTray extends StatelessWidget {
             subtitle: "从当前会话里快速选择上下文。",
           ),
           const SizedBox(height: 8),
-          if (!hasUploadedFiles)
+          if (!hasUploadedArtifacts)
             const _PanelHint(
               icon: Icons.info_outline_rounded,
               message: "暂无可激活内容，先用 + 上传文件或图片。",
@@ -1600,7 +1600,7 @@ class _SlashCommandTray extends StatelessWidget {
 }
 
 class _SlashFileOption extends StatelessWidget {
-  final SessionFileView file;
+  final SessionArtifactView file;
   final IconData icon;
   final bool active;
   final VoidCallback onTap;
@@ -1651,7 +1651,7 @@ class _SlashFileOption extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      file.filename,
+                      file.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(

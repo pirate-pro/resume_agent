@@ -287,7 +287,7 @@ class _DebugPanel extends ConsumerWidget {
                   onTap: () {
                     unawaited(provider.refreshHealth());
                     provider.refreshEvents();
-                    provider.refreshSessionFiles();
+                    provider.refreshSessionArtifacts();
                   },
                 ),
                 const SizedBox(width: 6),
@@ -359,7 +359,7 @@ class _DebugPanel extends ConsumerWidget {
                 const SizedBox(height: 14),
                 _section('执行事件', _formatEvents(provider.streamEvents)),
                 const SizedBox(height: 14),
-                _section('会话文件', _formatFiles(provider.sessionFiles)),
+                _section('会话资料', _formatArtifacts(provider.sessionArtifacts)),
               ],
             ),
           ),
@@ -428,12 +428,12 @@ class _DebugPanel extends ConsumerWidget {
     return buf.toString().trim();
   }
 
-  String _formatFiles(List<SessionFileView> files) {
-    if (files.isEmpty) return '当前会话暂无文件';
+  String _formatArtifacts(List<SessionArtifactView> files) {
+    if (files.isEmpty) return '当前会话暂无资料';
     final buf = StringBuffer();
     for (final f in files) {
-      final active = provider.activeFileIds.contains(f.fileId) ? '✓' : ' ';
-      buf.writeln('[$active] ${f.filename} (${f.status}) ${f.sizeDisplay}');
+      final active = provider.activeArtifactIds.contains(f.artifactId) ? '✓' : ' ';
+      buf.writeln('[$active] ${f.title} (${f.status}) ${f.sizeDisplay}');
     }
     return buf.toString().trim();
   }

@@ -25,13 +25,13 @@ class ApiService {
     String? sessionId,
     List<String> skillNames = const [],
     int maxToolRounds = AppConfig.maxToolRounds,
-    List<String>? activeFileIds,
+    List<String>? activeArtifactIds,
   }) async {
     final body = <String, dynamic>{
       "message": message,
       "skill_names": skillNames,
       "max_tool_rounds": maxToolRounds,
-      "active_file_ids": activeFileIds ?? [],
+      "active_artifact_ids": activeArtifactIds ?? [],
     };
     if (sessionId != null && sessionId.isNotEmpty) {
       body["session_id"] = sessionId;
@@ -54,13 +54,13 @@ class ApiService {
     String? sessionId,
     List<String> skillNames = const [],
     int maxToolRounds = AppConfig.maxToolRounds,
-    List<String>? activeFileIds,
+    List<String>? activeArtifactIds,
   }) async* {
     final body = <String, dynamic>{
       "message": message,
       "skill_names": skillNames,
       "max_tool_rounds": maxToolRounds,
-      "active_file_ids": activeFileIds ?? [],
+      "active_artifact_ids": activeArtifactIds ?? [],
     };
     if (sessionId != null && sessionId.isNotEmpty) {
       body["session_id"] = sessionId;
@@ -159,23 +159,23 @@ class ApiService {
     return list.map((e) => SkillOption.fromJson(e)).toList();
   }
 
-  // ── Session Files ─────────────────────────────────────────────────────
+  // ── Session Artifacts ─────────────────────────────────────────────────────
 
-  Future<SessionFilesResponse> listSessionFiles(String sessionId) async {
-    final resp = await http.get(_uri("/api/sessions/$sessionId/files"));
-    return SessionFilesResponse.fromJson(
+  Future<SessionArtifactsResponse> listSessionArtifacts(String sessionId) async {
+    final resp = await http.get(_uri("/api/sessions/$sessionId/artifacts"));
+    return SessionArtifactsResponse.fromJson(
       Map<String, dynamic>.from(_decodeResponseData(resp)),
     );
   }
 
-  Future<SessionFileView> uploadFile({
+  Future<SessionArtifactView> uploadArtifact({
     required String sessionId,
     required String filename,
     required String contentBase64,
     bool autoActivate = true,
   }) async {
     final resp = await http.post(
-      _uri("/api/sessions/$sessionId/files/upload"),
+      _uri("/api/sessions/$sessionId/artifacts/upload"),
       headers: {"Content-Type": "application/json"},
       body: jsonEncode({
         "filename": filename,
@@ -183,21 +183,21 @@ class ApiService {
         "auto_activate": autoActivate,
       }),
     );
-    return SessionFileView.fromJson(
+    return SessionArtifactView.fromJson(
       Map<String, dynamic>.from(_decodeResponseData(resp)),
     );
   }
 
-  Future<SessionFilesResponse> setActiveFiles({
+  Future<SessionArtifactsResponse> setActiveArtifacts({
     required String sessionId,
-    required List<String> fileIds,
+    required List<String> artifactIds,
   }) async {
     final resp = await http.post(
-      _uri("/api/sessions/$sessionId/active-files"),
+      _uri("/api/sessions/$sessionId/active-artifacts"),
       headers: {"Content-Type": "application/json"},
-      body: jsonEncode({"file_ids": fileIds}),
+      body: jsonEncode({"artifact_ids": artifactIds}),
     );
-    return SessionFilesResponse.fromJson(
+    return SessionArtifactsResponse.fromJson(
       Map<String, dynamic>.from(_decodeResponseData(resp)),
     );
   }

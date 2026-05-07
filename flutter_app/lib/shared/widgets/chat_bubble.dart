@@ -2955,21 +2955,21 @@ class _ArtifactCard extends ConsumerWidget {
       "reference" => Icons.bookmark_outline_rounded,
       _ => Icons.insert_drive_file_rounded,
     };
-    final fileId = _artifactFileId(artifact);
-    SessionFileView? sessionFile;
-    if (fileId != null) {
-      for (final item in provider.sessionFiles) {
-        if (item.fileId == fileId) {
-          sessionFile = item;
+    final artifactId = _artifactIdFromPath(artifact);
+    SessionArtifactView? sessionArtifact;
+    if (artifactId != null) {
+      for (final item in provider.sessionArtifacts) {
+        if (item.artifactId == artifactId) {
+          sessionArtifact = item;
           break;
         }
       }
     }
-    final displayPath = sessionFile == null
+    final displayPath = sessionArtifact == null
         ? artifact.path
-        : "${sessionFile.filename} (${sessionFile.fileId})";
-    final isActiveFile =
-        fileId != null && provider.activeFileIds.contains(fileId);
+        : "${sessionArtifact.title} (${sessionArtifact.artifactId})";
+    final isActiveArtifact =
+        artifactId != null && provider.activeArtifactIds.contains(artifactId);
 
     return Container(
       constraints: const BoxConstraints(maxWidth: 320),
@@ -3022,22 +3022,22 @@ class _ArtifactCard extends ConsumerWidget {
                   spacing: 4,
                   runSpacing: 4,
                   children: [
-                    if (fileId != null)
+                    if (artifactId != null)
                       _ArtifactActionButton(
-                        label: isActiveFile ? "已激活" : "激活文件",
-                        icon: isActiveFile
+                        label: isActiveArtifact ? "已激活" : "激活资料",
+                        icon: isActiveArtifact
                             ? Icons.check_circle_outline_rounded
                             : Icons.push_pin_outlined,
-                        enabled: !isActiveFile,
+                        enabled: !isActiveArtifact,
                         onPressed: () async {
                           final activated = await ref
                               .read(chatProvider)
-                              .activateFileFromArtifact(fileId);
+                              .activateArtifact(artifactId);
                           if (!context.mounted) return;
                           if (!activated) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text("激活文件失败"),
+                                content: Text("激活资料失败"),
                                 duration: Duration(seconds: 1),
                               ),
                             );
@@ -3046,9 +3046,9 @@ class _ArtifactCard extends ConsumerWidget {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text(
-                                sessionFile == null
-                                    ? "已激活文件 $fileId"
-                                    : "已激活文件 ${sessionFile.filename}",
+                                sessionArtifact == null
+                                    ? "已激活资料 $artifactId"
+                                    : "已激活资料 ${sessionArtifact.title}",
                               ),
                               duration: const Duration(seconds: 1),
                             ),
@@ -3324,8 +3324,8 @@ String _formatBytes(int value) {
   return "${(value / 1024 / 1024).toStringAsFixed(1)} MB";
 }
 
-String? _artifactFileId(AnswerArtifactView artifact) {
-  const prefix = "file_id:";
+String? _artifactIdFromPath(AnswerArtifactView artifact) {
+  const prefix = "artifact_id:";
   if (!artifact.path.startsWith(prefix)) {
     return null;
   }

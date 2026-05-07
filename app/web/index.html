@@ -79,7 +79,7 @@
             <textarea
               id="messageInput"
               rows="1"
-              placeholder="输入消息后回车发送，Shift+Enter 换行；输入 @ 可引用会话文件"
+              placeholder="输入消息后回车发送，Shift+Enter 换行；输入 @ 可引用会话资料"
               aria-label="message input"
             ></textarea>
             <div id="mentionMenu" class="mention-menu" role="listbox" aria-hidden="true"></div>
@@ -105,16 +105,16 @@
         <div class="card">
           <div class="card-title">调试查询</div>
           <div class="stack-actions">
-            <button id="refreshFilesBtn" class="btn" type="button">刷新 Files</button>
+            <button id="refreshArtifactsBtn" class="btn" type="button">刷新 Artifacts</button>
             <button id="refreshEventsBtn" class="btn" type="button">刷新 Events</button>
             <button id="refreshMemoriesBtn" class="btn" type="button">刷新 Memories</button>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-title">会话文件</div>
+          <div class="card-title">会话资料</div>
           <div id="uploadStatusText" class="tiny-text"></div>
-          <ul id="sessionFilesList" class="file-list"></ul>
+          <ul id="sessionArtifactsList" class="file-list"></ul>
         </div>
 
         <div class="card grow">

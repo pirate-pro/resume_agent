@@ -241,42 +241,64 @@ class ChatResponse {
   }
 }
 
-class SessionFileView {
-  final String fileId;
-  final String filename;
+class SessionArtifactView {
+  final String artifactId;
+  final String title;
+  final String kind;
   final String mediaType;
   final int sizeBytes;
   final String status;
-  final DateTime uploadedAt;
+  final String visibility;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final String? ownerAgentId;
+  final String? description;
   final String? error;
-  final int? parsedCharCount;
-  final int? parsedTokenEstimate;
+  final int? textCharCount;
+  final int? tokenEstimate;
+  final DateTime? parsedAt;
 
-  SessionFileView({
-    required this.fileId,
-    required this.filename,
+  SessionArtifactView({
+    required this.artifactId,
+    required this.title,
+    required this.kind,
     required this.mediaType,
     required this.sizeBytes,
     required this.status,
-    required this.uploadedAt,
+    required this.visibility,
+    required this.createdAt,
+    required this.updatedAt,
+    this.ownerAgentId,
+    this.description,
     this.error,
-    this.parsedCharCount,
-    this.parsedTokenEstimate,
+    this.textCharCount,
+    this.tokenEstimate,
+    this.parsedAt,
   });
 
-  factory SessionFileView.fromJson(Map<String, dynamic> json) {
-    return SessionFileView(
-      fileId: json["file_id"] ?? "",
-      filename: json["filename"] ?? "",
+  factory SessionArtifactView.fromJson(Map<String, dynamic> json) {
+    return SessionArtifactView(
+      artifactId: json["artifact_id"] ?? "",
+      title: json["title"] ?? "",
+      kind: json["kind"] ?? "",
       mediaType: json["media_type"] ?? "",
       sizeBytes: json["size_bytes"] ?? 0,
       status: json["status"] ?? "",
-      uploadedAt: DateTime.parse(
-        json["uploaded_at"] ?? DateTime.now().toIso8601String(),
+      visibility: json["visibility"] ?? "",
+      createdAt: DateTime.parse(
+        json["created_at"] ?? DateTime.now().toIso8601String(),
       ),
+      updatedAt: DateTime.parse(
+        json["updated_at"] ?? DateTime.now().toIso8601String(),
+      ),
+      ownerAgentId: json["owner_agent_id"],
+      description: json["description"],
       error: json["error"],
-      parsedCharCount: json["parsed_char_count"],
-      parsedTokenEstimate: json["parsed_token_estimate"],
+      textCharCount: json["text_char_count"],
+      tokenEstimate: json["token_estimate"],
+      parsedAt: json["parsed_at"] == null
+          ? null
+          : DateTime.tryParse(json["parsed_at"].toString()),
     );
   }
 
@@ -289,23 +311,23 @@ class SessionFileView {
   }
 }
 
-class SessionFilesResponse {
+class SessionArtifactsResponse {
   final String sessionId;
-  final List<String> activeFileIds;
-  final List<SessionFileView> files;
+  final List<String> activeArtifactIds;
+  final List<SessionArtifactView> artifacts;
 
-  SessionFilesResponse({
+  SessionArtifactsResponse({
     required this.sessionId,
-    required this.activeFileIds,
-    required this.files,
+    required this.activeArtifactIds,
+    required this.artifacts,
   });
 
-  factory SessionFilesResponse.fromJson(Map<String, dynamic> json) {
-    return SessionFilesResponse(
+  factory SessionArtifactsResponse.fromJson(Map<String, dynamic> json) {
+    return SessionArtifactsResponse(
       sessionId: json["session_id"] ?? "",
-      activeFileIds: List<String>.from(json["active_file_ids"] ?? []),
-      files: (json["files"] as List?)
-              ?.map((e) => SessionFileView.fromJson(e))
+      activeArtifactIds: List<String>.from(json["active_artifact_ids"] ?? []),
+      artifacts: (json["artifacts"] as List?)
+              ?.map((e) => SessionArtifactView.fromJson(e))
               .toList() ??
           [],
     );

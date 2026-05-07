@@ -26,8 +26,8 @@ const state = {
   lastToolCalls: [],
   lastMemoryHits: [],
   streamEvents: [],
-  sessionFiles: [],
-  activeFileIds: [],
+  sessionArtifacts: [],
+  activeArtifactIds: [],
   shouldAutoFollow: true,
   uploadMenuOpen: false,
   pendingUploadActionId: "upload_file",
@@ -48,7 +48,7 @@ const elements = {
   sessionList: document.getElementById("sessionList"),
   healthBadge: document.getElementById("healthBadge"),
   maxRoundsInput: document.getElementById("maxRoundsInput"),
-  refreshFilesBtn: document.getElementById("refreshFilesBtn"),
+  refreshArtifactsBtn: document.getElementById("refreshArtifactsBtn"),
   refreshEventsBtn: document.getElementById("refreshEventsBtn"),
   refreshMemoriesBtn: document.getElementById("refreshMemoriesBtn"),
   composerUploadBtn: document.getElementById("composerUploadBtn"),
@@ -57,7 +57,7 @@ const elements = {
   composerInputWrap: document.getElementById("composerInputWrap"),
   mentionMenu: document.getElementById("mentionMenu"),
   uploadStatusText: document.getElementById("uploadStatusText"),
-  sessionFilesList: document.getElementById("sessionFilesList"),
+  sessionArtifactsList: document.getElementById("sessionArtifactsList"),
   toolCallsView: document.getElementById("toolCallsView"),
   memoryHitsView: document.getElementById("memoryHitsView"),
   eventsView: document.getElementById("eventsView"),
@@ -75,7 +75,7 @@ function init() {
   setUploading(false);
   hideMentionMenu();
   void checkHealth();
-  void refreshSessionFiles();
+  void refreshSessionArtifacts();
 }
 
 function bindEvents() {
@@ -151,8 +151,8 @@ function bindEvents() {
     void refreshEvents();
   });
 
-  elements.refreshFilesBtn.addEventListener("click", () => {
-    void refreshSessionFiles();
+  elements.refreshArtifactsBtn.addEventListener("click", () => {
+    void refreshSessionArtifacts();
   });
 
   elements.refreshMemoriesBtn.addEventListener("click", () => {
@@ -320,28 +320,28 @@ function extractMentionContext(text, cursor) {
 
 function buildMentionCandidates(rawQuery) {
   const query = String(rawQuery ?? "").trim().toLowerCase();
-  const activeSet = new Set(state.activeFileIds);
-  const items = Array.isArray(state.sessionFiles) ? state.sessionFiles : [];
+  const activeSet = new Set(state.activeArtifactIds);
+  const items = Array.isArray(state.sessionArtifacts) ? state.sessionArtifacts : [];
   const filtered = items.filter((item) => {
-    const filename = String(item?.filename ?? "");
-    const fileId = String(item?.file_id ?? "");
-    if (!filename || !fileId) {
+    const title = String(item?.title ?? "");
+    const artifactId = String(item?.artifact_id ?? "");
+    if (!title || !artifactId) {
       return false;
     }
     if (!query) {
       return true;
     }
-    return filename.toLowerCase().includes(query) || fileId.toLowerCase().includes(query);
+    return title.toLowerCase().includes(query) || artifactId.toLowerCase().includes(query);
   });
 
   filtered.sort((left, right) => {
-    const leftActive = activeSet.has(left.file_id) ? 1 : 0;
-    const rightActive = activeSet.has(right.file_id) ? 1 : 0;
+    const leftActive = activeSet.has(left.artifact_id) ? 1 : 0;
+    const rightActive = activeSet.has(right.artifact_id) ? 1 : 0;
     if (leftActive !== rightActive) {
       return rightActive - leftActive;
     }
-    const leftTime = Date.parse(String(left.uploaded_at ?? "")) || 0;
-    const rightTime = Date.parse(String(right.uploaded_at ?? "")) || 0;
+    const leftTime = Date.parse(String(left.created_at ?? "")) || 0;
+    const rightTime = Date.parse(String(right.created_at ?? "")) || 0;
     return rightTime - leftTime;
   });
 
@@ -368,12 +368,12 @@ function renderMentionMenu() {
 
     const title = document.createElement("span");
     title.className = "mention-item-title";
-    title.textContent = candidate.filename;
+    title.textContent = candidate.title;
 
     const meta = document.createElement("span");
     meta.className = "mention-item-meta";
-    const mediaTag = String(candidate.media_type ?? "").startsWith("image/") ? "图片" : "文件";
-    meta.textContent = `${mediaTag} · ${candidate.file_id} · ${candidate.status}`;
+    const mediaTag = String(candidate.media_type ?? "").startsWith("image/") ? "图片" : "资料";
+    meta.textContent = `${mediaTag} · ${candidate.artifact_id} · ${candidate.status}`;
 
     item.appendChild(title);
     item.appendChild(meta);
@@ -409,7 +409,7 @@ async function selectMentionCandidate(index) {
   const currentValue = area.value;
   const selectionStart = area.selectionStart ?? currentValue.length;
   const start = state.mentionTriggerIndex >= 0 ? state.mentionTriggerIndex : selectionStart;
-  const mentionToken = `@[${candidate.filename}] `;
+  const mentionToken = `@[${candidate.title}] `;
   area.value = `${currentValue.slice(0, start)}${mentionToken}${currentValue.slice(selectionStart)}`;
   const cursor = start + mentionToken.length;
   area.focus();
@@ -417,8 +417,8 @@ async function selectMentionCandidate(index) {
   autoResizeTextarea();
   hideMentionMenu();
 
-  if (state.currentSessionId && !state.activeFileIds.includes(candidate.file_id)) {
-    await updateActiveFiles(candidate.file_id, true);
+  if (state.currentSessionId && !state.activeArtifactIds.includes(candidate.artifact_id)) {
+    await updateActiveArtifacts(candidate.artifact_id, true);
   }
 }
 
@@ -443,8 +443,8 @@ function createNewSession() {
   state.lastToolCalls = [];
   state.lastMemoryHits = [];
   state.streamEvents = [];
-  state.sessionFiles = [];
-  state.activeFileIds = [];
+  state.sessionArtifacts = [];
+  state.activeArtifactIds = [];
   state.shouldAutoFollow = true;
   elements.uploadStatusText.textContent = "";
   renderAll();
@@ -485,8 +485,8 @@ async function deleteSession(sessionId) {
         state.lastToolCalls = [];
         state.lastMemoryHits = [];
         state.streamEvents = [];
-        state.sessionFiles = [];
-        state.activeFileIds = [];
+        state.sessionArtifacts = [];
+        state.activeArtifactIds = [];
         state.shouldAutoFollow = true;
         renderAll();
         persistState();
@@ -532,7 +532,7 @@ async function sendMessage() {
     message,
     skill_names: getSelectedSkills(),
     max_tool_rounds: clampInt(elements.maxRoundsInput.value, 0, 10, 3),
-    active_file_ids: state.activeFileIds,
+    active_artifact_ids: state.activeArtifactIds,
   };
 
   try {
@@ -551,7 +551,7 @@ async function sendMessage() {
     state.currentSessionId = typeof data?.session_id === "string" ? data.session_id : state.currentSessionId;
     state.lastToolCalls = Array.isArray(data?.tool_calls) ? data.tool_calls : [];
     state.lastMemoryHits = Array.isArray(data?.memory_hits) ? data.memory_hits : [];
-    await refreshSessionFiles();
+    await refreshSessionArtifacts();
 
     const assistantMessage = state.messages[assistantIndex];
     if (assistantMessage) {
@@ -685,7 +685,7 @@ function handleStreamEvent(item, assistantIndex, donePayload) {
         state.currentSessionId = payload.session_id;
         renderSessionHeader();
         if (changed) {
-          void refreshSessionFiles();
+          void refreshSessionArtifacts();
         }
       }
       return donePayload;
@@ -854,7 +854,7 @@ function renderAll() {
   renderSessionHeader();
   renderThread();
   renderSessionList();
-  renderSessionFiles();
+  renderSessionArtifacts();
   setJson(elements.toolCallsView, state.lastToolCalls);
   setJson(elements.memoryHitsView, state.lastMemoryHits);
   setJson(elements.eventsView, state.streamEvents);
@@ -991,12 +991,12 @@ function switchToSession(sessionId) {
   state.currentSessionId = snapshot.sessionId;
   state.messages = normalizeMessages(snapshot.messages);
   state.streamEvents = [];
-  state.sessionFiles = [];
-  state.activeFileIds = [];
+  state.sessionArtifacts = [];
+  state.activeArtifactIds = [];
   state.shouldAutoFollow = true;
   renderAll();
   persistState();
-  void refreshSessionFiles();
+  void refreshSessionArtifacts();
 }
 
 function removeSessionSnapshot(sessionId) {
@@ -1041,8 +1041,8 @@ function hydrateState() {
       state.sessions = normalizeSessions(parsed.sessions);
       state.lastToolCalls = Array.isArray(parsed.lastToolCalls) ? parsed.lastToolCalls : [];
       state.lastMemoryHits = Array.isArray(parsed.lastMemoryHits) ? parsed.lastMemoryHits : [];
-      state.sessionFiles = Array.isArray(parsed.sessionFiles) ? parsed.sessionFiles : [];
-      state.activeFileIds = Array.isArray(parsed.activeFileIds) ? parsed.activeFileIds : [];
+      state.sessionArtifacts = Array.isArray(parsed.sessionArtifacts) ? parsed.sessionArtifacts : [];
+      state.activeArtifactIds = Array.isArray(parsed.activeArtifactIds) ? parsed.activeArtifactIds : [];
     }
   } catch (error) {
     console.warn("Failed to restore local state", error);
@@ -1056,8 +1056,8 @@ function persistState() {
     sessions: state.sessions,
     lastToolCalls: state.lastToolCalls,
     lastMemoryHits: state.lastMemoryHits,
-    sessionFiles: state.sessionFiles,
-    activeFileIds: state.activeFileIds,
+    sessionArtifacts: state.sessionArtifacts,
+    activeArtifactIds: state.activeArtifactIds,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
@@ -1106,7 +1106,7 @@ async function uploadSelectedFile(selectedFile) {
   try {
     const fileBuffer = await selected.arrayBuffer();
     const base64Payload = arrayBufferToBase64(fileBuffer);
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/upload`, {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/artifacts/upload`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1120,8 +1120,8 @@ async function uploadSelectedFile(selectedFile) {
       throw new Error(data?.detail ?? `HTTP ${response.status}`);
     }
     elements.composerFileInput.value = "";
-    elements.uploadStatusText.textContent = `上传完成: ${data.filename} (${data.status})`;
-    await refreshSessionFiles();
+    elements.uploadStatusText.textContent = `上传完成: ${data.title} (${data.status})`;
+    await refreshSessionArtifacts();
   } catch (error) {
     elements.uploadStatusText.textContent = `上传失败: ${String(error)}`;
   } finally {
@@ -1131,48 +1131,48 @@ async function uploadSelectedFile(selectedFile) {
   }
 }
 
-async function refreshSessionFiles() {
+async function refreshSessionArtifacts() {
   if (!state.currentSessionId) {
-    state.sessionFiles = [];
-    state.activeFileIds = [];
-    renderSessionFiles();
+    state.sessionArtifacts = [];
+    state.activeArtifactIds = [];
+    renderSessionArtifacts();
     return;
   }
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(state.currentSessionId)}/files`);
+    const response = await fetch(`/api/sessions/${encodeURIComponent(state.currentSessionId)}/artifacts`);
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data?.detail ?? `HTTP ${response.status}`);
     }
-    applySessionFilesResponse(data);
+    applySessionArtifactsResponse(data);
   } catch (error) {
-    elements.uploadStatusText.textContent = `读取会话文件失败: ${String(error)}`;
+    elements.uploadStatusText.textContent = `读取会话资料失败: ${String(error)}`;
   }
 }
 
-function applySessionFilesResponse(data) {
-  state.sessionFiles = Array.isArray(data?.files) ? data.files : [];
-  state.activeFileIds = Array.isArray(data?.active_file_ids) ? data.active_file_ids : [];
-  renderSessionFiles();
+function applySessionArtifactsResponse(data) {
+  state.sessionArtifacts = Array.isArray(data?.artifacts) ? data.artifacts : [];
+  state.activeArtifactIds = Array.isArray(data?.active_artifact_ids) ? data.active_artifact_ids : [];
+  renderSessionArtifacts();
   updateMentionMenuFromInput();
   persistState();
 }
 
-function renderSessionFiles() {
-  elements.sessionFilesList.innerHTML = "";
+function renderSessionArtifacts() {
+  elements.sessionArtifactsList.innerHTML = "";
   if (!state.currentSessionId) {
-    elements.uploadStatusText.textContent = "请先发送一条消息或上传文件创建会话。";
+    elements.uploadStatusText.textContent = "请先发送一条消息或上传资料创建会话。";
     return;
   }
-  if (state.sessionFiles.length === 0) {
+  if (state.sessionArtifacts.length === 0) {
     const empty = document.createElement("li");
     empty.className = "file-item";
-    empty.textContent = "当前会话暂无文件。";
-    elements.sessionFilesList.appendChild(empty);
+    empty.textContent = "当前会话暂无资料。";
+    elements.sessionArtifactsList.appendChild(empty);
     return;
   }
 
-  for (const file of state.sessionFiles) {
+  for (const artifact of state.sessionArtifacts) {
     const li = document.createElement("li");
     li.className = "file-item";
 
@@ -1181,52 +1181,52 @@ function renderSessionFiles() {
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = state.activeFileIds.includes(file.file_id);
-    checkbox.disabled = file.status !== "ready" || state.isSending || state.isUploading;
+    checkbox.checked = state.activeArtifactIds.includes(artifact.artifact_id);
+    checkbox.disabled = artifact.status !== "ready" || state.isSending || state.isUploading;
     checkbox.addEventListener("change", () => {
-      void updateActiveFiles(file.file_id, checkbox.checked);
+      void updateActiveArtifacts(artifact.artifact_id, checkbox.checked);
     });
 
     const name = document.createElement("span");
-    name.textContent = `${file.filename} (${file.status})`;
+    name.textContent = `${artifact.title} (${artifact.status})`;
     head.appendChild(checkbox);
     head.appendChild(name);
 
     const meta = document.createElement("div");
     meta.className = "file-item-meta";
-    meta.textContent = `${file.media_type} · ${file.size_bytes} bytes${file.error ? ` · ${file.error}` : ""}`;
+    meta.textContent = `${artifact.media_type} · ${artifact.size_bytes} bytes${artifact.error ? ` · ${artifact.error}` : ""}`;
 
     li.appendChild(head);
     li.appendChild(meta);
-    elements.sessionFilesList.appendChild(li);
+    elements.sessionArtifactsList.appendChild(li);
   }
 }
 
-async function updateActiveFiles(fileId, checked) {
+async function updateActiveArtifacts(artifactId, checked) {
   if (!state.currentSessionId) {
     return;
   }
-  const current = new Set(state.activeFileIds);
+  const current = new Set(state.activeArtifactIds);
   if (checked) {
-    current.add(fileId);
+    current.add(artifactId);
   } else {
-    current.delete(fileId);
+    current.delete(artifactId);
   }
 
   try {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(state.currentSessionId)}/active-files`, {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(state.currentSessionId)}/active-artifacts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ file_ids: [...current] }),
+      body: JSON.stringify({ artifact_ids: [...current] }),
     });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data?.detail ?? `HTTP ${response.status}`);
     }
-    applySessionFilesResponse(data);
+    applySessionArtifactsResponse(data);
   } catch (error) {
-    elements.uploadStatusText.textContent = `更新 active 文件失败: ${String(error)}`;
-    await refreshSessionFiles();
+    elements.uploadStatusText.textContent = `更新 active 资料失败: ${String(error)}`;
+    await refreshSessionArtifacts();
   }
 }
 
@@ -1267,7 +1267,7 @@ function setSending(isSending) {
   if (isSending) {
     closeComposerUploadMenu();
   }
-  renderSessionFiles();
+  renderSessionArtifacts();
 }
 
 function setUploading(isUploading, text = "") {
@@ -1281,7 +1281,7 @@ function setUploading(isUploading, text = "") {
   if (text) {
     elements.uploadStatusText.textContent = text;
   }
-  renderSessionFiles();
+  renderSessionArtifacts();
 }
 
 function ensureSessionIdForUpload() {

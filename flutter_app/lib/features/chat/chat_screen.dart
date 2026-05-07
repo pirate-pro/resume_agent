@@ -326,18 +326,18 @@ class _ChatComposerLayer extends ConsumerWidget {
         enabled: viewModel.enabled,
         isUploading: viewModel.isUploading,
         isLoadingSkills: viewModel.isLoadingSkills,
-        sessionFiles: viewModel.sessionFiles,
-        activeFileIds: viewModel.activeFileIds,
-        highlightedFileId: viewModel.highlightedFileId,
+        sessionArtifacts: viewModel.sessionArtifacts,
+        activeArtifactIds: viewModel.activeArtifactIds,
+        highlightedArtifactId: viewModel.highlightedArtifactId,
         availableSkills: viewModel.availableSkills,
         selectedSkillNames: viewModel.selectedSkillNames,
         maxToolRounds: viewModel.maxToolRounds,
         skillsError: viewModel.skillsError,
         onSend: (text) => provider.sendMessage(text),
         onUpload: ({required filename, required bytes}) =>
-            provider.uploadSessionFile(filename: filename, bytes: bytes),
-        onToggleFileActive: (file, active) =>
-            provider.toggleFileActive(file.fileId, active),
+            provider.uploadSessionArtifact(filename: filename, bytes: bytes),
+        onToggleArtifactActive: (file, active) =>
+            provider.toggleArtifactActive(file.artifactId, active),
         onRefreshSkills: provider.refreshSkills,
         onToggleSkill: provider.toggleSkill,
         onMaxToolRoundsChanged: provider.setMaxToolRounds,
@@ -433,9 +433,9 @@ class _ComposerViewModel {
   final bool enabled;
   final bool isUploading;
   final bool isLoadingSkills;
-  final List<SessionFileView> sessionFiles;
-  final List<String> activeFileIds;
-  final String? highlightedFileId;
+  final List<SessionArtifactView> sessionArtifacts;
+  final List<String> activeArtifactIds;
+  final String? highlightedArtifactId;
   final List<SkillOption> availableSkills;
   final List<String> selectedSkillNames;
   final int maxToolRounds;
@@ -445,9 +445,9 @@ class _ComposerViewModel {
     required this.enabled,
     required this.isUploading,
     required this.isLoadingSkills,
-    required this.sessionFiles,
-    required this.activeFileIds,
-    required this.highlightedFileId,
+    required this.sessionArtifacts,
+    required this.activeArtifactIds,
+    required this.highlightedArtifactId,
     required this.availableSkills,
     required this.selectedSkillNames,
     required this.maxToolRounds,
@@ -459,9 +459,9 @@ class _ComposerViewModel {
       enabled: !provider.isStreaming,
       isUploading: provider.isUploadingFile,
       isLoadingSkills: provider.isLoadingSkills,
-      sessionFiles: provider.sessionFiles,
-      activeFileIds: provider.activeFileIds,
-      highlightedFileId: provider.recentActivatedFileId,
+      sessionArtifacts: provider.sessionArtifacts,
+      activeArtifactIds: provider.activeArtifactIds,
+      highlightedArtifactId: provider.recentActivatedArtifactId,
       availableSkills: provider.availableSkills,
       selectedSkillNames: provider.selectedSkillNames,
       maxToolRounds: provider.maxToolRounds,
@@ -475,11 +475,11 @@ class _ComposerViewModel {
         other.enabled == enabled &&
         other.isUploading == isUploading &&
         other.isLoadingSkills == isLoadingSkills &&
-        other.highlightedFileId == highlightedFileId &&
+        other.highlightedArtifactId == highlightedArtifactId &&
         other.maxToolRounds == maxToolRounds &&
         other.skillsError == skillsError &&
-        _stringListEquals(other.activeFileIds, activeFileIds) &&
-        _sessionFileListEquals(other.sessionFiles, sessionFiles) &&
+        _stringListEquals(other.activeArtifactIds, activeArtifactIds) &&
+        _sessionArtifactListEquals(other.sessionArtifacts, sessionArtifacts) &&
         _skillOptionListEquals(other.availableSkills, availableSkills) &&
         _stringListEquals(other.selectedSkillNames, selectedSkillNames);
   }
@@ -489,11 +489,11 @@ class _ComposerViewModel {
         enabled,
         isUploading,
         isLoadingSkills,
-        highlightedFileId,
+        highlightedArtifactId,
         maxToolRounds,
         skillsError,
-        activeFileIds.length,
-        sessionFiles.length,
+        activeArtifactIds.length,
+        sessionArtifacts.length,
         availableSkills.length,
         selectedSkillNames.length,
       );
@@ -941,9 +941,9 @@ bool _skillOptionListEquals(List<SkillOption> left, List<SkillOption> right) {
   return true;
 }
 
-bool _sessionFileListEquals(
-  List<SessionFileView> left,
-  List<SessionFileView> right,
+bool _sessionArtifactListEquals(
+  List<SessionArtifactView> left,
+  List<SessionArtifactView> right,
 ) {
   if (identical(left, right)) {
     return true;
@@ -954,15 +954,15 @@ bool _sessionFileListEquals(
   for (var index = 0; index < left.length; index++) {
     final leftItem = left[index];
     final rightItem = right[index];
-    if (leftItem.fileId != rightItem.fileId ||
-        leftItem.filename != rightItem.filename ||
+    if (leftItem.artifactId != rightItem.artifactId ||
+        leftItem.title != rightItem.title ||
         leftItem.mediaType != rightItem.mediaType ||
         leftItem.sizeBytes != rightItem.sizeBytes ||
         leftItem.status != rightItem.status ||
         leftItem.error != rightItem.error ||
-        leftItem.parsedCharCount != rightItem.parsedCharCount ||
-        leftItem.parsedTokenEstimate != rightItem.parsedTokenEstimate ||
-        leftItem.uploadedAt != rightItem.uploadedAt) {
+        leftItem.textCharCount != rightItem.textCharCount ||
+        leftItem.tokenEstimate != rightItem.tokenEstimate ||
+        leftItem.createdAt != rightItem.createdAt) {
       return false;
     }
   }
