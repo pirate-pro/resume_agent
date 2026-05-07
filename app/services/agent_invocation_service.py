@@ -37,6 +37,7 @@ class AgentInvocationRequest:
     skill_names: list[str] = field(default_factory=list)
     max_tool_rounds: int = 2
     task_id: str | None = None
+    child_run_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_context, RunContext):
@@ -50,6 +51,8 @@ class AgentInvocationRequest:
             raise ValidationError("max_tool_rounds must be in range 0..10.")
         if self.task_id is not None:
             self.task_id = _require_non_empty("task_id", self.task_id)
+        if self.child_run_id is not None:
+            self.child_run_id = _require_non_empty("child_run_id", self.child_run_id)
 
 
 @dataclass(slots=True)
@@ -109,6 +112,7 @@ class AgentInvocationService:
         child_context = self._build_child_context(
             source_context=request.source_context,
             target_agent_id=target_agent_id,
+            child_run_id=request.child_run_id,
         )
         self._record_task_assignment(task_id=task_id, request=request, child_context=child_context)
 
@@ -176,10 +180,16 @@ class AgentInvocationService:
             request.skill_names or None
         )
 
-    def _build_child_context(self, *, source_context: RunContext, target_agent_id: str) -> RunContext:
+    def _build_child_context(
+        self,
+        *,
+        source_context: RunContext,
+        target_agent_id: str,
+        child_run_id: str | None,
+    ) -> RunContext:
         return RunContext(
             session_id=source_context.session_id,
-            run_id=f"run_{uuid4().hex[:12]}",
+            run_id=child_run_id or f"run_{uuid4().hex[:12]}",
             agent_id=target_agent_id,
             turn_id=f"turn_{uuid4().hex[:12]}",
             entry_agent_id=source_context.entry_agent_id,

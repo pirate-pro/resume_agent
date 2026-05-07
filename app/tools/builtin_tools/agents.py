@@ -7,11 +7,12 @@ from collections.abc import Callable
 from typing import Any
 
 from app.core.errors import ToolExecutionError, ValidationError
+from app.domain.agent_task_protocols import AgentTaskStore
 from app.domain.models import RunContext, ToolDefinition, ToolExecutionResult
 from app.services.agent_task_runtime import AgentTaskGroupRequest, AgentTaskRuntime, AgentTaskSpec
 from app.tools.builtin_tools.common import parse_positive_int, validate_context
 
-__all__ = ["DelegateAgentsTool"]
+__all__ = ["AgentTaskStatusTool", "DelegateAgentsTool"]
 
 
 class DelegateAgentsTool:
@@ -85,6 +86,72 @@ class DelegateAgentsTool:
             tool_name="delegate_agents",
             success=True,
             content=json.dumps(result.to_payload(), ensure_ascii=False),
+        )
+
+
+class AgentTaskStatusTool:
+    """Read durable child-agent task group status for the current session."""
+
+    def __init__(self, agent_task_store_provider: Callable[[], AgentTaskStore]) -> None:
+        self._agent_task_store_provider = agent_task_store_provider
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="agent_task_status",
+            description=(
+                "Inspect a delegated child-agent task group in the current session. "
+                "Use this to check durable task status, child_run_id, summaries, artifact refs, and errors."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "task_group_id": {
+                        "type": "string",
+                        "description": "Task group id returned by delegate_agents.",
+                    }
+                },
+                "required": ["task_group_id"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = validate_context(context)
+        if run_context.agent_id != run_context.entry_agent_id:
+            raise ToolExecutionError("agent_task_status is only available to the orchestrating main agent.")
+        if not isinstance(arguments, dict):
+            raise ToolExecutionError("Tool arguments must be an object.")
+        task_group_id = _required_string(arguments.get("task_group_id"), field_name="task_group_id")
+        store = self._agent_task_store_provider()
+        group = store.get_group(run_context.session_id, task_group_id)
+        if group is None:
+            raise ToolExecutionError(f"Unknown task_group_id: {task_group_id}")
+        tasks = store.list_group_tasks(run_context.session_id, task_group_id)
+        return ToolExecutionResult(
+            tool_name="agent_task_status",
+            success=True,
+            content=json.dumps(
+                {
+                    "task_group_id": group.task_group_id,
+                    "status": group.status,
+                    "max_concurrency": group.max_concurrency,
+                    "source_agent_id": group.source_agent_id,
+                    "source_run_id": group.source_run_id,
+                    "tasks": [
+                        {
+                            "task_id": task.task_id,
+                            "target_agent_id": task.target_agent_id,
+                            "status": task.status,
+                            "summary": task.summary,
+                            "answer": task.answer,
+                            "child_run_id": task.child_run_id,
+                            "artifact_refs": task.artifact_refs,
+                            "error": task.error,
+                        }
+                        for task in tasks
+                    ],
+                },
+                ensure_ascii=False,
+            ),
         )
 
 

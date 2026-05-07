@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.tools.builtin_tools import (
+    AgentTaskStatusTool,
     DelegateAgentsTool,
     MemoryExplainTool,
     MemoryForgetTool,
@@ -24,6 +25,7 @@ from app.tools.builtin_tools import (
 
 __all__ = [
     "DelegateAgentsTool",
+    "AgentTaskStatusTool",
     "MemoryForgetTool",
     "MemoryExplainTool",
     "MemoryInspectTool",

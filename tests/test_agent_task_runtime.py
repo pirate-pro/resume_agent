@@ -17,6 +17,7 @@ from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import RunContext, SessionArtifact, ToolCall
 from app.domain.protocols import ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.jsonl_agent_task_store import JsonlAgentTaskStore
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.file_store import FileMemoryStore
@@ -33,11 +34,10 @@ from app.services.agent_task_runtime import (
     AgentTaskGroupRequest,
     AgentTaskRuntime,
     AgentTaskSpec,
-    InMemoryAgentTaskStore,
 )
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
-from app.tools.builtin_tools.agents import DelegateAgentsTool
+from app.tools.builtin_tools.agents import AgentTaskStatusTool, DelegateAgentsTool
 from app.tools.builtin_tools.memory import MemorySearchTool
 from app.tools.registry import ToolRegistry
 
@@ -123,6 +123,7 @@ class RuntimeBundle:
     task_runtime: AgentTaskRuntime
     tool_registry: ToolRegistry
     session_repository: JsonlSessionRepository
+    task_store: JsonlAgentTaskStore
     model_client: ConcurrentCaptureModelClient
 
 
@@ -138,7 +139,7 @@ def _capability_registry() -> AgentCapabilityRegistry:
         {
             "agent_main": AgentCapability(
                 agent_id="agent_main",
-                allowed_tools=["delegate_agents", "memory_search"],
+                allowed_tools=["delegate_agents", "agent_task_status", "memory_search"],
                 allowed_skills=["*"],
                 default_skills=["base", "memory", "tools"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
@@ -258,17 +259,20 @@ def _build_bundle(tmp_path: Path) -> RuntimeBundle:
         event_recorder=event_recorder,
         session_repository=session_repository,
     )
+    task_store = JsonlAgentTaskStore(data_dir=tmp_path / "sessions")
     task_runtime = AgentTaskRuntime(
         invocation_service=invocation_service,
-        task_store=InMemoryAgentTaskStore(),
+        task_store=task_store,
         default_max_concurrency=2,
     )
     tool_registry.register(DelegateAgentsTool(agent_task_runtime_provider=lambda: task_runtime))
+    tool_registry.register(AgentTaskStatusTool(agent_task_store_provider=lambda: task_store))
     tool_registry.register(MemorySearchTool(memory_manager=memory_manager))
     return RuntimeBundle(
         task_runtime=task_runtime,
         tool_registry=tool_registry,
         session_repository=session_repository,
+        task_store=task_store,
         model_client=model_client,
     )
 
@@ -383,9 +387,46 @@ def test_delegate_agents_tool_returns_aggregated_results(tmp_path: Path) -> None
     assert all(item["target_agent_id"] == "resume_agent" for item in payload["results"])
 
 
+def test_agent_task_status_tool_returns_persisted_task_group(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    delegated = bundle.tool_registry.execute(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "wait": True,
+                "tasks": [
+                    {"target_agent_id": "resume_agent", "instruction": "解析简历文件", "max_tool_rounds": 0},
+                    {"target_agent_id": "job_agent", "instruction": "分析岗位文件", "max_tool_rounds": 0},
+                ],
+            },
+        ),
+        _source_context(),
+    )
+    delegated_payload = json.loads(delegated.content)
+
+    status_result = bundle.tool_registry.execute(
+        ToolCall(
+            name="agent_task_status",
+            arguments={"task_group_id": delegated_payload["task_group_id"]},
+        ),
+        _source_context(),
+    )
+    status_payload = json.loads(status_result.content)
+
+    assert status_result.success is True
+    assert status_payload["task_group_id"] == delegated_payload["task_group_id"]
+    assert status_payload["status"] == "completed"
+    assert {task["target_agent_id"] for task in status_payload["tasks"]} == {"resume_agent", "job_agent"}
+    assert all(task["child_run_id"] for task in status_payload["tasks"])
+    assert all(task["summary"] for task in status_payload["tasks"])
+
+
 def test_delegate_agents_tool_accepts_session_artifact_refs(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_delegate")
+    _add_shared_artifact(bundle.session_repository, "sess_delegate", "artifact_resume_001")
 
     result = bundle.tool_registry.execute(
         ToolCall(
@@ -396,7 +437,7 @@ def test_delegate_agents_tool_accepts_session_artifact_refs(tmp_path: Path) -> N
                     {
                         "target_agent_id": "resume_agent",
                         "instruction": "解析已上传简历文件",
-                            "artifact_refs": ["artifact_resume_001"],
+                        "artifact_refs": ["artifact_resume_001"],
                         "max_tool_rounds": 0,
                     }
                 ],
@@ -466,6 +507,93 @@ def test_agent_task_runtime_returns_partial_failed_when_one_child_fails(tmp_path
     assert "Unknown agent_id" in failed[0].error
 
 
+def test_agent_task_runtime_pressure_keeps_persisted_status_and_event_isolation(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    requests = [
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=2,
+            tasks=[
+                AgentTaskSpec(target_agent_id="resume_agent", instruction="压力测试 A: 解析简历", max_tool_rounds=0),
+                AgentTaskSpec(target_agent_id="job_agent", instruction="压力测试 A: 分析岗位", max_tool_rounds=0),
+            ],
+        ),
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=2,
+            tasks=[
+                AgentTaskSpec(target_agent_id="resume_agent", instruction="压力测试 B: 提取亮点", max_tool_rounds=0),
+                AgentTaskSpec(target_agent_id="missing_agent", instruction="压力测试 B: 不存在 agent", max_tool_rounds=0),
+            ],
+        ),
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=3,
+            tasks=[
+                AgentTaskSpec(target_agent_id="resume_agent", instruction="压力测试 C: 项目经历", max_tool_rounds=0),
+                AgentTaskSpec(target_agent_id="job_agent", instruction="压力测试 C: 岗位要求", max_tool_rounds=0),
+                AgentTaskSpec(target_agent_id="resume_agent", instruction="压力测试 C: 教育经历", max_tool_rounds=0),
+            ],
+        ),
+    ]
+
+    results = [bundle.task_runtime.run_group(request) for request in requests]
+
+    assert [result.status for result in results] == ["completed", "partial_failed", "completed"]
+    assert bundle.model_client.max_active >= 2
+
+    reloaded_store = JsonlAgentTaskStore(data_dir=tmp_path / "sessions")
+    for result, expected_count in zip(results, [2, 2, 3], strict=True):
+        group = reloaded_store.get_group("sess_delegate", result.task_group_id)
+        tasks = reloaded_store.list_group_tasks("sess_delegate", result.task_group_id)
+
+        assert group is not None
+        assert group.status == result.status
+        assert len(tasks) == expected_count
+        assert [task.task_id for task in tasks] == [item.task_id for item in result.results]
+        assert all(task.child_run_id for task in tasks)
+        for task in tasks:
+            assert task.created_at is not None
+            assert task.updated_at is not None
+            assert task.updated_at >= task.created_at
+
+    first_status = bundle.tool_registry.execute(
+        ToolCall(
+            name="agent_task_status",
+            arguments={"task_group_id": results[0].task_group_id},
+        ),
+        _source_context(),
+    )
+    first_status_payload = json.loads(first_status.content)
+    assert first_status.success is True
+    assert first_status_payload["status"] == "completed"
+    assert len(first_status_payload["tasks"]) == 2
+
+    visible_event_types = [event.type for event in bundle.session_repository.list_events("sess_delegate")]
+    orchestration_event_types = [
+        event.type for event in bundle.session_repository.list_orchestration_events("sess_delegate")
+    ]
+    resume_event_types = [
+        event.type for event in bundle.session_repository.list_agent_events("sess_delegate", "resume_agent")
+    ]
+    job_event_types = [
+        event.type for event in bundle.session_repository.list_agent_events("sess_delegate", "job_agent")
+    ]
+
+    assert "agent_task_assigned" in visible_event_types
+    assert "agent_result_summary" in visible_event_types
+    assert "agent_task_assigned" in orchestration_event_types
+    assert "agent_result_summary" in orchestration_event_types
+    assert "run_started" not in visible_event_types
+    assert "assistant_message" not in visible_event_types
+    assert "run_started" in resume_event_types
+    assert "assistant_message" in resume_event_types
+    assert "run_started" in job_event_types
+    assert "assistant_message" in job_event_types
+
+
 def test_context_assembler_filters_tool_catalog_by_agent_capability(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_delegate")
@@ -474,4 +602,6 @@ def test_context_assembler_filters_tool_catalog_by_agent_capability(tmp_path: Pa
     child_definitions = bundle.tool_registry.list_definitions_for_agent("resume_agent")
 
     assert any(item.name == "delegate_agents" for item in main_definitions)
+    assert any(item.name == "agent_task_status" for item in main_definitions)
     assert not any(item.name == "delegate_agents" for item in child_definitions)
+    assert not any(item.name == "agent_task_status" for item in child_definitions)

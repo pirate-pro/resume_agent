@@ -15,8 +15,9 @@ from app.api.dependencies.managers import (
 )
 from app.api.dependencies.model import get_model_client
 from app.api.dependencies.runtime import get_agent_runtime
+from app.infra.storage.jsonl_agent_task_store import JsonlAgentTaskStore
 from app.services.agent_invocation_service import AgentInvocationService
-from app.services.agent_task_runtime import AgentTaskRuntime, InMemoryAgentTaskStore
+from app.services.agent_task_runtime import AgentTaskRuntime
 from app.services.answer_normalizer import AnswerNormalizer
 from app.services.chat_service import ChatService
 from app.services.memory_query_service import MemoryQueryService
@@ -38,8 +39,8 @@ __all__ = [
 
 
 @lru_cache(maxsize=1)
-def get_agent_task_store() -> InMemoryAgentTaskStore:
-    return InMemoryAgentTaskStore()
+def get_agent_task_store() -> JsonlAgentTaskStore:
+    return JsonlAgentTaskStore(data_dir=get_settings().data_dir)
 
 
 @lru_cache(maxsize=1)

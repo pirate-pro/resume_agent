@@ -6,13 +6,12 @@ import asyncio
 import threading
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import Self
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.domain.agent_task_protocols import AgentTaskStore
+from app.domain.agent_tasks import AgentTaskRecord, AgentTaskSpec
 from app.domain.models import RunContext
-from app.services.agent_artifact_refs import normalize_agent_artifact_refs
 from app.services.agent_invocation_service import AgentInvocationRequest, AgentInvocationService
 
 __all__ = [
@@ -22,34 +21,10 @@ __all__ = [
     "AgentTaskResult",
     "AgentTaskRuntime",
     "AgentTaskSpec",
-    "InMemoryAgentTaskStore",
 ]
 
 _DEFAULT_MAX_CONCURRENCY = 3
 _MAX_TASKS_PER_GROUP = 8
-
-
-@dataclass(slots=True)
-class AgentTaskSpec:
-    """One independent child-agent task."""
-
-    target_agent_id: str
-    instruction: str
-    constraints: list[str] = field(default_factory=list)
-    artifact_refs: list[str] = field(default_factory=list)
-    skill_names: list[str] = field(default_factory=lambda: ["base", "tools", "file-reader"])
-    max_tool_rounds: int = 2
-    depends_on: list[str] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        self.target_agent_id = _require_non_empty("target_agent_id", self.target_agent_id)
-        self.instruction = _require_non_empty("instruction", self.instruction)
-        self.constraints = _normalize_string_list("constraints", self.constraints)
-        self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
-        self.skill_names = _normalize_string_list("skill_names", self.skill_names)
-        self.depends_on = _normalize_string_list("depends_on", self.depends_on)
-        if self.max_tool_rounds < 0 or self.max_tool_rounds > 10:
-            raise ValidationError("max_tool_rounds must be in range 0..10.")
 
 
 @dataclass(slots=True)
@@ -79,46 +54,6 @@ class AgentTaskGroupRequest:
 
 
 @dataclass(slots=True)
-class AgentTaskRecord:
-    """Mutable task status snapshot held by the task store."""
-
-    task_id: str
-    task_group_id: str
-    target_agent_id: str
-    instruction: str
-    status: str
-    child_run_id: str | None = None
-    summary: str | None = None
-    error: str | None = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-
-    def __post_init__(self) -> None:
-        self.task_id = _require_non_empty("task_id", self.task_id)
-        self.task_group_id = _require_non_empty("task_group_id", self.task_group_id)
-        self.target_agent_id = _require_non_empty("target_agent_id", self.target_agent_id)
-        self.instruction = _require_non_empty("instruction", self.instruction)
-        self.status = _require_non_empty("status", self.status)
-        self.child_run_id = _normalize_optional_string("child_run_id", self.child_run_id)
-        self.summary = _normalize_optional_string("summary", self.summary)
-        self.error = _normalize_optional_string("error", self.error)
-
-    def copy(self) -> Self:
-        return type(self)(
-            task_id=self.task_id,
-            task_group_id=self.task_group_id,
-            target_agent_id=self.target_agent_id,
-            instruction=self.instruction,
-            status=self.status,
-            child_run_id=self.child_run_id,
-            summary=self.summary,
-            error=self.error,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-        )
-
-
-@dataclass(slots=True)
 class AgentTaskResult:
     """Completed task result returned to main-agent tooling."""
 
@@ -138,7 +73,7 @@ class AgentTaskResult:
         self.summary = _require_non_empty("summary", self.summary)
         self.answer = _require_non_empty("answer", self.answer)
         self.child_run_id = _normalize_optional_string("child_run_id", self.child_run_id)
-        self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
+        self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
         self.error = _normalize_optional_string("error", self.error)
 
     def to_payload(self) -> dict[str, object]:
@@ -180,78 +115,6 @@ class AgentTaskGroupResult:
         }
 
 
-class InMemoryAgentTaskStore:
-    """Thread-safe in-process task status store for the current runtime process."""
-
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._groups: dict[str, list[str]] = {}
-        self._tasks: dict[str, AgentTaskRecord] = {}
-
-    def create_group(self, specs: list[AgentTaskSpec]) -> list[AgentTaskRecord]:
-        if not isinstance(specs, list) or not specs:
-            raise ValidationError("specs must be a non-empty list.")
-        task_group_id = f"task_group_{uuid4().hex[:12]}"
-        records: list[AgentTaskRecord] = []
-        with self._lock:
-            self._groups[task_group_id] = []
-            for spec in specs:
-                task_id = f"task_{uuid4().hex[:12]}"
-                record = AgentTaskRecord(
-                    task_id=task_id,
-                    task_group_id=task_group_id,
-                    target_agent_id=spec.target_agent_id,
-                    instruction=spec.instruction,
-                    status="queued",
-                )
-                self._groups[task_group_id].append(task_id)
-                self._tasks[task_id] = record
-                records.append(record.copy())
-        return records
-
-    def mark_running(self, task_id: str) -> None:
-        self._update(task_id, status="running")
-
-    def mark_completed(self, task_id: str, *, child_run_id: str, summary: str) -> None:
-        self._update(task_id, status="completed", child_run_id=child_run_id, summary=summary, error=None)
-
-    def mark_failed(self, task_id: str, *, error: str) -> None:
-        self._update(task_id, status="failed", error=error)
-
-    def get_group(self, task_group_id: str) -> list[AgentTaskRecord]:
-        normalized = _require_non_empty("task_group_id", task_group_id)
-        with self._lock:
-            task_ids = self._groups.get(normalized)
-            if task_ids is None:
-                raise ValidationError(f"Unknown task_group_id: {normalized}")
-            return [self._tasks[task_id].copy() for task_id in task_ids]
-
-    def _update(
-        self,
-        task_id: str,
-        *,
-        status: str,
-        child_run_id: str | None = None,
-        summary: str | None = None,
-        error: str | None = None,
-    ) -> None:
-        normalized = _require_non_empty("task_id", task_id)
-        with self._lock:
-            record = self._tasks.get(normalized)
-            if record is None:
-                raise ValidationError(f"Unknown task_id: {normalized}")
-            record.status = _require_non_empty("status", status)
-            if child_run_id is not None:
-                record.child_run_id = _require_non_empty("child_run_id", child_run_id)
-            if summary is not None:
-                record.summary = _require_non_empty("summary", summary)
-            if error is not None:
-                record.error = _require_non_empty("error", error)
-            elif status == "completed":
-                record.error = None
-            record.updated_at = datetime.now(UTC)
-
-
 class AgentTaskRuntime:
     """Run independent child-agent tasks concurrently and aggregate results."""
 
@@ -259,7 +122,7 @@ class AgentTaskRuntime:
         self,
         *,
         invocation_service: AgentInvocationService,
-        task_store: InMemoryAgentTaskStore,
+        task_store: AgentTaskStore,
         default_max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
     ) -> None:
         if default_max_concurrency <= 0:
@@ -281,12 +144,24 @@ class AgentTaskRuntime:
             raise ValidationError("depends_on is reserved for later; v1 only supports independent tasks.")
 
         max_concurrency = request.max_concurrency or self._default_max_concurrency
-        task_records = self._task_store.create_group(request.tasks)
+        group = self._task_store.create_group(
+            session_id=request.source_context.session_id,
+            source_agent_id=request.source_context.agent_id,
+            source_run_id=request.source_context.run_id,
+            max_concurrency=max_concurrency,
+            specs=request.tasks,
+        )
+        task_records = self._task_store.list_group_tasks(request.source_context.session_id, group.task_group_id)
         semaphore = asyncio.Semaphore(max_concurrency)
 
         async def _run_one(spec: AgentTaskSpec, record: AgentTaskRecord) -> AgentTaskResult:
             async with semaphore:
-                self._task_store.mark_running(record.task_id)
+                child_run_id = f"run_{uuid4().hex[:12]}"
+                self._task_store.mark_running(
+                    request.source_context.session_id,
+                    record.task_id,
+                    child_run_id=child_run_id,
+                )
                 try:
                     result = await asyncio.to_thread(
                         self._invocation_service.invoke,
@@ -299,24 +174,28 @@ class AgentTaskRuntime:
                             skill_names=spec.skill_names,
                             max_tool_rounds=spec.max_tool_rounds,
                             task_id=record.task_id,
+                            child_run_id=child_run_id,
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001
                     error = _safe_error_message(exc)
-                    self._task_store.mark_failed(record.task_id, error=error)
+                    self._task_store.mark_failed(request.source_context.session_id, record.task_id, error=error)
                     return AgentTaskResult(
                         task_id=record.task_id,
                         target_agent_id=spec.target_agent_id,
                         status="failed",
                         summary=error,
                         answer=error,
+                        child_run_id=child_run_id,
                         artifact_refs=spec.artifact_refs,
                         error=error,
                     )
                 self._task_store.mark_completed(
+                    request.source_context.session_id,
                     record.task_id,
-                    child_run_id=result.child_run_id,
                     summary=result.summary,
+                    answer=result.answer,
+                    artifact_refs=result.artifact_refs,
                 )
                 return AgentTaskResult(
                     task_id=record.task_id,
@@ -331,9 +210,10 @@ class AgentTaskRuntime:
         results = await asyncio.gather(
             *[_run_one(spec, record) for spec, record in zip(request.tasks, task_records, strict=True)]
         )
-        group_status = "completed" if all(result.status == "completed" for result in results) else "partial_failed"
+        final_group = self._task_store.get_group(request.source_context.session_id, group.task_group_id)
+        group_status = final_group.status if final_group is not None else _derive_result_group_status(results)
         return AgentTaskGroupResult(
-            task_group_id=task_records[0].task_group_id,
+            task_group_id=group.task_group_id,
             status=group_status,
             results=results,
             max_concurrency=max_concurrency,
@@ -369,6 +249,14 @@ def _run_coroutine_sync(coro: Coroutine[object, object, AgentTaskGroupResult]) -
 def _safe_error_message(exc: Exception) -> str:
     message = str(exc).strip()
     return message or exc.__class__.__name__
+
+
+def _derive_result_group_status(results: list[AgentTaskResult]) -> str:
+    if all(result.status == "completed" for result in results):
+        return "completed"
+    if all(result.status == "failed" for result in results):
+        return "failed"
+    return "partial_failed"
 
 
 def _require_non_empty(name: str, value: str) -> str:
