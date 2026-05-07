@@ -2800,3 +2800,34 @@
   - mid-term flush 改为只读取当前 agent 事件。
   - context compaction 改为只重写当前 agent 事件文件。
   - context summary 的 `created_at` 改为继承第一条被压缩事件，避免合成视图排序失真。
+
+116. [完成] 设计并实现 AgentTask 持久化任务协议。
+- 背景：
+  - multi-agent 事件隔离和并发 child-agent 执行已经具备基础。
+  - 当前 `InMemoryAgentTaskStore` 只适合单进程即时返回，不适合作为后续 `wait=false`、状态查询、失败恢复或 LangGraph 编排底座。
+- 设计文档：
+  - 新增 `AGENT_TASK_SYSTEM_DESIGN_2026-05-07.md`。
+- 设计要点：
+  - AgentTask 是 session-scoped durable coordination data，不属于 memory/state/raw events。
+  - 存储位置为 `data/sessions/<session_id>/agent_tasks/`。
+  - task group 和 task 分别记录，支持 durable status query。
+  - `AgentTaskStore` 独立于 `SessionRepository`，避免 session 仓储继续膨胀。
+  - `delegate_agents(wait=true)` 第一版保持行为不变。
+  - 新增只读 `agent_task_status` 工具作为后续异步编排基础。
+  - LangGraph 后续只作为可选 orchestrator，不接管 memory/event/artifact/task 事实源。
+- 实现：
+  - 新增 `app/domain/agent_tasks.py` 和 `app/domain/agent_task_protocols.py`。
+  - 新增 `app/infra/storage/jsonl_agent_task_store.py`，落盘 `task_groups.jsonl` 与 `tasks.jsonl`。
+  - `AgentTaskRuntime` 改为使用持久化 `AgentTaskStore`，运行前写 running，完成后写 completed/failed。
+  - `AgentInvocationRequest` 支持传入 `child_run_id`，使 task 状态与 child-agent run 可追踪关联。
+  - 新增 `agent_task_status` 工具，只允许编排 main-agent 查询当前 session 的 task group。
+  - API 依赖注入从 `InMemoryAgentTaskStore` 切到 `JsonlAgentTaskStore`。
+- 新增/更新测试：
+  - AgentTaskStore 持久化、重载、状态更新、group status 推导。
+  - `delegate_agents` 仍支持并发 child-agent 执行。
+  - `agent_task_status` 可读取已完成 task group。
+  - child-agent 原始事件仍保持物理隔离。
+- 验证结果：
+  - `uv run pytest tests/test_agent_task_store.py tests/test_agent_task_runtime.py tests/test_agent_invocation_service.py tests/test_context_assembler.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 172 source files`）。
+  - `uv run pytest -q`：全量通过。
