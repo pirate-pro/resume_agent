@@ -2762,3 +2762,41 @@
   - `uv run mypy`：通过（`Success: no issues found in 167 source files`）。
   - `uv run pytest -q`：全量通过。
   - 当前环境没有 `dart/flutter` 命令，Flutter 只能完成代码级清理，未跑 analyzer。
+
+114. [完成] 收紧 multi-agent 上下文与压缩隔离边界。
+- 背景：
+  - session events 仍是共享物理日志，但上下文注入和压缩不能把 child-agent 原始消息暴露给 main-agent。
+  - context compaction 也不能把多个 agent 的事件混在一起压缩。
+- 实现：
+  - `ContextAssembler` 的 main-agent recent events 改为 orchestration view：
+    - 保留 main-agent 自身事件。
+    - 保留指向 main-agent 的 child result summary。
+    - 不再注入 child-agent 原始 user/assistant 消息。
+  - `ContextCompactor` 改为按当前 `agent_id` 选择可压缩事件。
+  - compaction 写回时只替换当前 agent 被压缩的事件，其他 agent 原始事件原位保留。
+  - `agent_task_assigned`、`agent_result_summary`、`context_summary` 不参与普通压缩，避免破坏编排语义。
+- 新增测试：
+  - main-agent 不接收 child-agent 原始消息，但仍接收 child result summary。
+  - context compactor 只重写当前 agent 事件，不删除其他 agent 事件。
+- 验证结果：
+  - `uv run pytest tests/test_context_assembler.py tests/test_context_compactor.py -q`：通过。
+  - `uv run pytest tests/test_agent_task_runtime.py tests/test_agent_invocation_service.py tests/test_multi_agent_contracts.py tests/test_context_assembler.py tests/test_context_compactor.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 167 source files`）。
+  - `uv run pytest -q`：全量通过。
+
+115. [进行中] 拆分 session 编排日志与 agent 私有事件日志。
+- 背景：
+  - 单个 `events.jsonl` 承载所有 agent 原始事件后，ContextAssembler、mid-term flush、context compaction 都需要全量扫描再按 `agent_id` 过滤。
+  - 这在 multi-agent 并发和长会话下会放大性能成本，也让物理隔离边界不够清楚。
+- 设计：
+  - `data/sessions/<session_id>/events.jsonl` 只作为 session 编排日志。
+  - `data/sessions/<session_id>/agents/<agent_id>/events.jsonl` 保存该 agent 的原始事件。
+  - `agent_task_assigned`、`agent_result_summary` 额外写入 session 编排日志。
+  - 主会话可见历史由 entry agent 事件 + 编排日志合成，不包含 child-agent 原始事件。
+- 实现：
+  - `SessionRepository` 新增 agent/orchestration/run 精确读写接口。
+  - `JsonlSessionRepository.append_event` 改为写 agent 私有日志，并按事件类型分流编排日志。
+  - ContextAssembler 改为 main-agent 读取自身事件 + 编排日志，other-agent 读取自身事件 + 任务分发。
+  - mid-term flush 改为只读取当前 agent 事件。
+  - context compaction 改为只重写当前 agent 事件文件。
+  - context summary 的 `created_at` 改为继承第一条被压缩事件，避免合成视图排序失真。
