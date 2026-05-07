@@ -259,16 +259,20 @@ class MidTermSummaryValidator:
         for index, raw in enumerate(items[:MAX_LIST_LINES]):
             if not isinstance(raw, dict):
                 continue
-            path_or_file_id = optional_text(raw.get("path_or_file_id"))
+            path_or_artifact_id = optional_text(raw.get("path_or_artifact_id"))
             reason = optional_text(raw.get("reason"))
             evidence = _normalize_required_evidence(
                 raw.get("evidence_event_ids"),
                 valid_event_ids,
                 field=f"artifact_refs[{index}].evidence_event_ids",
             )
-            if path_or_file_id is None or reason is None or not evidence:
+            if path_or_artifact_id is None or reason is None or not evidence:
                 continue
-            output.append({"path_or_file_id": path_or_file_id, "reason": reason, "evidence_event_ids": evidence})
+            output.append({
+                "path_or_artifact_id": path_or_artifact_id,
+                "reason": reason,
+                "evidence_event_ids": evidence,
+            })
         return output
 
 

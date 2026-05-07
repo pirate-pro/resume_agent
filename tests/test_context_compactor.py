@@ -552,7 +552,11 @@ def test_context_compactor_normalizes_tool_name_from_evidence(tmp_path: Path) ->
             session_id,
             "evt_tool_call",
             "tool_call",
-            {"name": "session_read_file", "arguments": {"path": "MEMORY_DEV_PROGRESS.md"}, "tool_call_id": "call_read"},
+            {
+                "name": "session_read_artifact",
+                "arguments": {"artifact_id": "artifact_progress"},
+                "tool_call_id": "call_read",
+            },
             2,
         ),
         _event(
@@ -560,7 +564,7 @@ def test_context_compactor_normalizes_tool_name_from_evidence(tmp_path: Path) ->
             "evt_tool_result",
             "tool_result",
             {
-                "tool_name": "session_read_file",
+                "tool_name": "session_read_artifact",
                 "success": True,
                 "content": "成功读取 MEMORY_DEV_PROGRESS.md。",
                 "tool_call_id": "call_read",
@@ -587,7 +591,7 @@ def test_context_compactor_normalizes_tool_name_from_evidence(tmp_path: Path) ->
     assert result.compacted is True
     events = repo.list_events(session_id)
     structured = events[0].payload["structured"]
-    assert structured["tool_progress"][0]["tool_name"] == "session_read_file"
+    assert structured["tool_progress"][0]["tool_name"] == "session_read_artifact"
 
 
 def test_context_compactor_skips_rewrite_when_events_change_during_model_call(tmp_path: Path) -> None:

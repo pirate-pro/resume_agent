@@ -81,7 +81,7 @@ def build_mid_term_user_prompt(pack: MidTermEventPackLike) -> str:
             }
         ],
         "artifact_refs": [
-            {"path_or_file_id": "string", "reason": "string", "evidence_event_ids": ["evt_xxx"]}
+            {"path_or_artifact_id": "string", "reason": "string", "evidence_event_ids": ["evt_xxx"]}
         ],
     }
     input_payload = {

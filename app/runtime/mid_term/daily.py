@@ -149,6 +149,6 @@ def _render_artifact_refs(items: list[dict[str, Any]]) -> list[str]:
     if not items:
         return ["- (none)"]
     return [
-        f"- {item['path_or_file_id']} [reason={item['reason']}] [evidence={','.join(item['evidence_event_ids'])}]"
+        f"- {item['path_or_artifact_id']} [reason={item['reason']}] [evidence={','.join(item['evidence_event_ids'])}]"
         for item in items
     ]

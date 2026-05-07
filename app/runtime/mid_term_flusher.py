@@ -43,6 +43,7 @@ _logger = logging.getLogger(__name__)
 
 _RETRY_BACKOFF_SECONDS = (5, 20, 60)
 _DEFERRED_RETRY_SECONDS = 180
+_DEFAULT_RUNNING_JOB_STALE_AFTER_SECONDS = 600
 
 
 class MidTermFlusher:
@@ -59,6 +60,7 @@ class MidTermFlusher:
         model_output_reserve_tokens: int = 1200,
         prompt_overhead_tokens: int = 900,
         max_input_tokens: int = 5200,
+        running_job_stale_after_seconds: int = _DEFAULT_RUNNING_JOB_STALE_AFTER_SECONDS,
     ) -> None:
         if model_context_window_tokens <= 0:
             raise ValidationError("model_context_window_tokens must be positive.")
@@ -70,6 +72,9 @@ class MidTermFlusher:
             raise ValidationError("prompt_overhead_tokens must be positive.")
         if max_input_tokens < MIN_INPUT_BUDGET_TOKENS:
             raise ValidationError(f"max_input_tokens must be at least {MIN_INPUT_BUDGET_TOKENS}.")
+        if running_job_stale_after_seconds <= 0:
+            raise ValidationError("running_job_stale_after_seconds must be positive.")
+        self._running_job_stale_after = timedelta(seconds=running_job_stale_after_seconds)
         self._job_store = MidTermFlushJobStore(memory_store.root_dir)
         self._cursor_store = MidTermFlushCursorStore(memory_store.root_dir)
         self._event_pack_builder = MidTermEventPackBuilder(
@@ -362,12 +367,42 @@ class MidTermFlusher:
             if job.status == MidTermFlushJobStatus.SUCCEEDED:
                 continue
             if job.status == MidTermFlushJobStatus.RUNNING:
-                continue
+                if not self._is_stale_running_job(job, now):
+                    continue
+                job = self._recover_stale_running_job(job, now)
             if job.next_attempt_at > now:
                 continue
             updated = self._process_one_job(job)
             output.append(updated)
         return output
+
+    def _is_stale_running_job(self, job: MidTermFlushJob, now: datetime) -> bool:
+        return now - job.updated_at >= self._running_job_stale_after
+
+    def _recover_stale_running_job(self, job: MidTermFlushJob, now: datetime) -> MidTermFlushJob:
+        recovered = MidTermFlushJob(
+            job_id=job.job_id,
+            session_id=job.session_id,
+            agent_id=job.agent_id,
+            status=MidTermFlushJobStatus.RETRY,
+            retry_count=job.retry_count + 1,
+            next_attempt_at=now,
+            created_at=job.created_at,
+            updated_at=now,
+            event_pack=job.event_pack,
+            daily_path=job.daily_path,
+            last_error="stale running job recovered for retry",
+            dirty=job.dirty,
+        )
+        self._job_store.update_job(recovered)
+        _logger.warning(
+            "recovered stale mid-term running job: job_id=%s session_id=%s agent_id=%s retry=%s",
+            recovered.job_id,
+            recovered.session_id,
+            recovered.agent_id,
+            recovered.retry_count,
+        )
+        return recovered
 
     def _process_one_job(self, job: MidTermFlushJob) -> MidTermFlushJob:
         running = self._copy_job_with_status(job, status=MidTermFlushJobStatus.RUNNING)

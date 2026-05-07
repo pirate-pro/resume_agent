@@ -223,7 +223,7 @@ def _build_summary_payload(pack: dict[str, Any]) -> dict[str, Any]:
         ],
         "artifact_refs": [
             {
-                "path_or_file_id": "session://events",
+                "path_or_artifact_id": "session://events",
                 "reason": "回溯本轮执行细节",
                 "evidence_event_ids": [run_finished_id],
             }
@@ -392,6 +392,94 @@ def test_mid_term_flusher_writes_daily_with_model_summary(tmp_path: Path) -> Non
     assert isinstance(metadata, dict)
     assert metadata.get("origin") == "mid_term_flush"
     assert metadata.get("flush_job_id") == result.job_id
+
+
+def test_mid_term_flusher_isolates_daily_and_event_packs_by_agent(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_multi_agent"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    model = _CapturingSummaryModel()
+    flusher = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=model,
+    )
+
+    base = datetime(2026, 4, 30, 8, 30, tzinfo=UTC)
+    for idx, (agent_id, prefix) in enumerate(
+        [
+            ("resume_agent", "resume"),
+            ("job_agent", "job"),
+        ],
+        start=1,
+    ):
+        offset = idx * 10
+        _append_event(
+            repo,
+            session_id=session_id,
+            event_id=f"evt_{prefix}_01",
+            event_type="user_message",
+            payload={"content": f"{prefix} 私有输入"},
+            created_at=base + timedelta(seconds=offset),
+            agent_id=agent_id,
+            run_id=f"run_{prefix}",
+        )
+        _append_event(
+            repo,
+            session_id=session_id,
+            event_id=f"evt_{prefix}_02",
+            event_type="assistant_message",
+            payload={"content": f"{prefix} 私有分析"},
+            created_at=base + timedelta(seconds=offset + 1),
+            agent_id=agent_id,
+            run_id=f"run_{prefix}",
+        )
+        _append_event(
+            repo,
+            session_id=session_id,
+            event_id=f"evt_{prefix}_03",
+            event_type="assistant_message",
+            payload={"content": f"{prefix} 私有结论"},
+            created_at=base + timedelta(seconds=offset + 2),
+            agent_id=agent_id,
+            run_id=f"run_{prefix}",
+        )
+        _append_event(
+            repo,
+            session_id=session_id,
+            event_id=f"evt_{prefix}_04",
+            event_type="run_finished",
+            payload={"answer_length": 10, "tool_calls": 0},
+            created_at=base + timedelta(seconds=offset + 3),
+            agent_id=agent_id,
+            run_id=f"run_{prefix}",
+        )
+
+    resume_result = flusher.flush_for_run_finished(
+        _context(session_id, agent_id="resume_agent", run_id="run_resume")
+    )
+    job_result = flusher.flush_for_run_finished(_context(session_id, agent_id="job_agent", run_id="run_job"))
+
+    assert resume_result.flushed is True
+    assert job_result.flushed is True
+    assert resume_result.daily_path is not None
+    assert job_result.daily_path is not None
+    assert "/agents/resume_agent/mid_term/daily/" in resume_result.daily_path
+    assert "/agents/job_agent/mid_term/daily/" in job_result.daily_path
+    assert resume_result.daily_path != job_result.daily_path
+    assert Path(resume_result.daily_path).exists()
+    assert Path(job_result.daily_path).exists()
+
+    captured_event_ids = [
+        [str(event.get("event_id")) for event in _event_index_from_pack(pack)]
+        for pack in model.captured_packs
+    ]
+    assert ["evt_resume_01", "evt_resume_02", "evt_resume_03", "evt_resume_04"] in captured_event_ids
+    assert ["evt_job_01", "evt_job_02", "evt_job_03", "evt_job_04"] in captured_event_ids
+
+    assert (store.root_dir / "agents" / "resume_agent" / "facts.jsonl").exists()
+    assert (store.root_dir / "agents" / "job_agent" / "facts.jsonl").exists()
 
 
 def test_mid_term_flusher_does_not_resurrect_archived_canonical_name_candidate(tmp_path: Path) -> None:
@@ -601,6 +689,80 @@ def test_mid_term_flusher_model_failure_enters_retry_without_cursor_commit(tmp_p
         / f"{session_id}.json"
     )
     assert cursor_path.exists() is False
+
+
+def test_mid_term_flusher_recovers_stale_running_job_after_process_interruption(tmp_path: Path) -> None:
+    session_id = "sess_mid_term_stale_running"
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    repo.create_session(session_id)
+    store = FileMemoryStore(root_dir=tmp_path / "memory")
+    failing = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_InvalidSummaryModel(),
+    )
+
+    base = datetime(2026, 4, 30, 10, 15, tzinfo=UTC)
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_sr01",
+        event_type="user_message",
+        payload={"content": "记录 stale running 恢复测试"},
+        created_at=base,
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_sr02",
+        event_type="assistant_message",
+        payload={"content": "收到"},
+        created_at=base + timedelta(seconds=1),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_sr03",
+        event_type="assistant_message",
+        payload={"content": "继续"},
+        created_at=base + timedelta(seconds=2),
+    )
+    _append_event(
+        repo,
+        session_id=session_id,
+        event_id="evt_sr04",
+        event_type="run_finished",
+        payload={"answer_length": 4, "tool_calls": 0},
+        created_at=base + timedelta(seconds=3),
+    )
+
+    first = failing.flush_for_run_finished(_context(session_id))
+    assert first.job_status == "retry"
+
+    jobs_root = store.root_dir / "agents" / "agent_main" / "mid_term" / "flush_jobs" / session_id
+    job_path = next(jobs_root.glob("*.json"))
+    payload = json.loads(job_path.read_text(encoding="utf-8"))
+    payload["status"] = "running"
+    payload["updated_at"] = "2000-01-01T00:00:00Z"
+    payload["next_attempt_at"] = "2000-01-01T00:00:00Z"
+    job_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    recovering = MidTermFlusher(
+        session_repository=repo,
+        memory_store=store,
+        model_client=_ValidSummaryModel(),
+        running_job_stale_after_seconds=1,
+    )
+    report = recovering.process_due_jobs_report(max_agents=10, max_jobs_per_agent=1)
+
+    assert report.processed_count == 1
+    assert report.succeeded_count == 1
+    latest = json.loads(job_path.read_text(encoding="utf-8"))
+    assert latest["status"] == "succeeded"
+    assert latest["retry_count"] == 2
+    assert Path(latest["daily_path"]).exists()
+    cursor_path = store.root_dir / "agents" / "agent_main" / "mid_term" / "flush_cursors" / f"{session_id}.json"
+    assert cursor_path.exists()
 
 
 def test_mid_term_flusher_rejects_progress_with_unpaired_tool_evidence(tmp_path: Path) -> None:

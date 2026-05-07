@@ -884,7 +884,7 @@ def _build_mid_term_summary(messages: list[dict[str, Any]]) -> dict[str, Any]:
     artifact_refs = (
         [
             {
-                "path_or_file_id": "MEMORY_DEV_PROGRESS.md",
+                "path_or_artifact_id": "MEMORY_DEV_PROGRESS.md",
                 "reason": "用户要求回溯开发进展文档。",
                 "evidence_event_ids": [artifact_id],
             }

@@ -189,7 +189,7 @@ class StressModelClient:
                     "evidence_event_ids": [user_event],
                 }
             ],
-            "artifact_refs": [{"path_or_file_id": "session://events", "reason": "追溯执行", "evidence_event_ids": [finish_event]}],
+            "artifact_refs": [{"path_or_artifact_id": "session://events", "reason": "追溯执行", "evidence_event_ids": [finish_event]}],
         }
 
     @staticmethod

@@ -32,6 +32,8 @@ def _single_agent_registry(
             "agent_main": AgentCapability(
                 agent_id="agent_main",
                 allowed_tools=["*"],
+                allowed_skills=["*"],
+                default_skills=["base"],
                 memory_read_scopes=memory_read_scopes
                 if memory_read_scopes is not None
                 else [MemoryScope.AGENT_SHORT, MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
