@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.core.errors import ValidationError
-from app.domain.models import RunContext
+from app.domain.models import RunContext, SessionArtifact
 from app.domain.protocols import ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
@@ -31,6 +32,34 @@ from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.tools.registry import ToolRegistry
 
 __all__ = []
+
+
+def _add_shared_artifact(repository: JsonlSessionRepository, session_id: str, artifact_id: str) -> None:
+    root = repository.get_session_root_path(session_id)
+    artifact_dir = root / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "original.bin").write_text("resume content", encoding="utf-8")
+    (artifact_dir / "content.txt").write_text("resume content", encoding="utf-8")
+    now = datetime.now(UTC)
+    repository.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            kind="uploaded_file",
+            title="resume.txt",
+            media_type="text/plain",
+            size_bytes=14,
+            status="ready",
+            visibility="session_shared",
+            created_at=now,
+            updated_at=now,
+            storage_relpath=f"artifacts/{artifact_id}/original.bin",
+            text_relpath=f"artifacts/{artifact_id}/content.txt",
+            text_char_count=14,
+            token_estimate=4,
+            parsed_at=now,
+        )
+    )
 
 
 class CapturingModelClient:
@@ -87,12 +116,16 @@ def _capability_registry() -> AgentCapabilityRegistry:
             "agent_main": AgentCapability(
                 agent_id="agent_main",
                 allowed_tools=["*"],
+                allowed_skills=["*"],
+                default_skills=["base", "memory", "tools"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
             ),
             "resume_agent": AgentCapability(
                 agent_id="resume_agent",
                 allowed_tools=["memory_search"],
+                allowed_skills=["base", "tools", "file-reader"],
+                default_skills=["base", "tools", "file-reader"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_LONG],
             ),
@@ -180,6 +213,7 @@ def _build_bundle(tmp_path: Path, *, answer: str = "简历解析完成") -> Invo
         agent_registry=registry,
         runtime=runtime,
         event_recorder=event_recorder,
+        session_repository=session_repository,
     )
     return InvocationBundle(
         service=service,
@@ -192,6 +226,7 @@ def _build_bundle(tmp_path: Path, *, answer: str = "简历解析完成") -> Invo
 def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_invoke")
+    _add_shared_artifact(bundle.session_repository, "sess_invoke", "artifact_resume_001")
     source_context = _source_context("sess_invoke")
 
     result = bundle.service.invoke(
@@ -200,7 +235,7 @@ def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_pa
             target_agent_id="resume_agent",
             instruction="解析当前会话里的简历文件",
             constraints=["只输出结构化摘要"],
-            artifact_refs=["file_resume_001"],
+            artifact_refs=["artifact_resume_001"],
             max_tool_rounds=0,
         )
     )
@@ -275,6 +310,22 @@ def test_agent_invocation_child_prompt_contains_assigned_task(tmp_path: Path) ->
     assert "instruction=提取简历中的项目经历" in prompt
     assert "constraints: 不要生成求职建议" in prompt
     assert "Main orchestration state:" not in prompt
+
+
+def test_agent_invocation_rejects_unallowed_child_skill(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_child_skill")
+
+    with pytest.raises(ValidationError, match="Skill not allowed"):
+        bundle.service.invoke(
+            AgentInvocationRequest(
+                source_context=_source_context("sess_child_skill"),
+                target_agent_id="resume_agent",
+                instruction="提取简历中的项目经历",
+                skill_names=["memory-editor"],
+                max_tool_rounds=0,
+            )
+        )
 
 
 def test_agent_invocation_result_summary_is_visible_to_main_context(tmp_path: Path) -> None:

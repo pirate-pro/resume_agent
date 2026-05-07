@@ -11,7 +11,8 @@
       "document_agent_id": "default",
       "can_invoke_agents": true,
       "invokable_agent_ids": [
-        "resume_agent"
+        "resume_agent",
+        "job_agent"
       ]
     },
     {
@@ -22,6 +23,17 @@
       "enabled": true,
       "is_main_agent": false,
       "document_agent_id": "resume_agent",
+      "can_invoke_agents": false,
+      "invokable_agent_ids": []
+    },
+    {
+      "agent_id": "job_agent",
+      "display_name": "JobAgent",
+      "description": "负责岗位 JD 解析、岗位要求结构化和岗位匹配信号提取。",
+      "role": "job_analyzer",
+      "enabled": true,
+      "is_main_agent": false,
+      "document_agent_id": "job_agent",
       "can_invoke_agents": false,
       "invokable_agent_ids": []
     }

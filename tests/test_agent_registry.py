@@ -29,12 +29,25 @@ def _capability_registry() -> AgentCapabilityRegistry:
             "agent_main": AgentCapability(
                 agent_id="agent_main",
                 allowed_tools=["*"],
+                allowed_skills=["*"],
+                default_skills=["base", "memory", "tools"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
             ),
             "resume_agent": AgentCapability(
                 agent_id="resume_agent",
-                allowed_tools=["session_read_file", "memory_search"],
+                allowed_tools=["session_read_artifact", "memory_search"],
+                allowed_skills=["base", "tools", "file-reader"],
+                default_skills=["base", "tools", "file-reader"],
+                memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
+                memory_write_scopes=[MemoryScope.AGENT_LONG],
+                allow_cross_session_short_read=False,
+            ),
+            "job_agent": AgentCapability(
+                agent_id="job_agent",
+                allowed_tools=["session_read_artifact", "memory_search"],
+                allowed_skills=["base", "tools", "file-reader"],
+                default_skills=["base", "tools", "file-reader"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_LONG],
                 allow_cross_session_short_read=False,
@@ -56,7 +69,7 @@ def _registry_payload() -> dict[str, object]:
                 "is_main_agent": True,
                 "document_agent_id": "default",
                 "can_invoke_agents": True,
-                "invokable_agent_ids": ["resume_agent"],
+                "invokable_agent_ids": ["resume_agent", "job_agent"],
             },
             {
                 "agent_id": "resume_agent",
@@ -69,6 +82,17 @@ def _registry_payload() -> dict[str, object]:
                 "can_invoke_agents": False,
                 "invokable_agent_ids": [],
             },
+            {
+                "agent_id": "job_agent",
+                "display_name": "JobAgent",
+                "description": "岗位 agent",
+                "role": "job_analyzer",
+                "enabled": True,
+                "is_main_agent": False,
+                "document_agent_id": "job_agent",
+                "can_invoke_agents": False,
+                "invokable_agent_ids": [],
+            },
         ],
     }
 
@@ -77,6 +101,7 @@ def _registry(tmp_path: Path) -> AgentRegistry:
     agents_dir = tmp_path / "agents"
     _write_docs(agents_dir, "default", agent_text="# Main Rules", soul_text="# Main Soul")
     _write_docs(agents_dir, "resume_agent", agent_text="# Resume Rules", soul_text="# Resume Soul")
+    _write_docs(agents_dir, "job_agent", agent_text="# Job Rules", soul_text="# Job Soul")
     return AgentRegistry.from_payload(
         _registry_payload(),
         capability_registry=_capability_registry(),
@@ -87,12 +112,17 @@ def _registry(tmp_path: Path) -> AgentRegistry:
 def test_agent_registry_loads_definitions_documents_and_capabilities(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
-    assert [agent.agent_id for agent in registry.list_agents()] == ["agent_main", "resume_agent"]
+    assert [agent.agent_id for agent in registry.list_agents()] == ["agent_main", "resume_agent", "job_agent"]
     assert registry.get_main_agent().agent_id == "agent_main"
     assert registry.documents_for("agent_main").agent_markdown == "# Main Rules"
     assert registry.documents_for("resume_agent").agent_markdown == "# Resume Rules"
-    assert registry.can_use_tool("resume_agent", "session_read_file") is True
+    assert registry.documents_for("job_agent").agent_markdown == "# Job Rules"
+    assert registry.can_use_tool("resume_agent", "session_read_artifact") is True
     assert registry.can_use_tool("resume_agent", "memory_write") is False
+    assert registry.capability_for("resume_agent").resolve_skill_names() == ["base", "tools", "file-reader"]
+    assert registry.capability_for("resume_agent").allows_skill("memory-editor") is False
+    assert registry.capability_for("job_agent").resolve_skill_names() == ["base", "tools", "file-reader"]
+    assert registry.capability_for("job_agent").allows_skill("memory-editor") is False
     assert registry.can_read_memory("resume_agent", MemoryScope.SHARED_LONG) is True
     assert registry.can_write_memory("resume_agent", MemoryScope.SHARED_LONG) is False
 
@@ -101,7 +131,9 @@ def test_agent_registry_checks_invocation_direction(tmp_path: Path) -> None:
     registry = _registry(tmp_path)
 
     assert registry.can_invoke("agent_main", "resume_agent") is True
+    assert registry.can_invoke("agent_main", "job_agent") is True
     assert registry.can_invoke("resume_agent", "agent_main") is False
+    assert registry.can_invoke("job_agent", "agent_main") is False
 
 
 def test_agent_registry_requires_single_enabled_main_agent(tmp_path: Path) -> None:
@@ -141,6 +173,8 @@ def test_agent_registry_validates_capability_for_each_agent(tmp_path: Path) -> N
             "agent_main": AgentCapability(
                 agent_id="agent_main",
                 allowed_tools=["*"],
+                allowed_skills=["*"],
+                default_skills=["base"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_LONG],
             )
@@ -159,6 +193,7 @@ def test_load_agent_registry_from_file(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     _write_docs(agents_dir, "default", agent_text="# Main", soul_text="# Main Soul")
     _write_docs(agents_dir, "resume_agent", agent_text="# Resume", soul_text="# Resume Soul")
+    _write_docs(agents_dir, "job_agent", agent_text="# Job", soul_text="# Job Soul")
     config_path = tmp_path / "agents.json"
     config_path.write_text(json.dumps(_registry_payload(), ensure_ascii=False), encoding="utf-8")
 
@@ -170,6 +205,7 @@ def test_load_agent_registry_from_file(tmp_path: Path) -> None:
 
     assert registry.get_main_agent().agent_id == "agent_main"
     assert registry.can_invoke("agent_main", "resume_agent") is True
+    assert registry.can_invoke("agent_main", "job_agent") is True
 
 
 def test_production_agent_registry_config_is_loadable() -> None:
@@ -182,5 +218,8 @@ def test_production_agent_registry_config_is_loadable() -> None:
 
     assert registry.get_main_agent().agent_id == "agent_main"
     assert registry.can_invoke("agent_main", "resume_agent") is True
+    assert registry.can_invoke("agent_main", "job_agent") is True
     assert registry.can_invoke("resume_agent", "agent_main") is False
+    assert registry.can_invoke("job_agent", "agent_main") is False
     assert registry.documents_for("resume_agent").agent_markdown is not None
+    assert registry.documents_for("job_agent").agent_markdown is not None

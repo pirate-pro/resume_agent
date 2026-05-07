@@ -7,10 +7,14 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.domain.models import RunContext, ToolCall
+import pytest
+
+from app.core.errors import ToolExecutionError, ValidationError
+from app.domain.models import RunContext, SessionArtifact, ToolCall
 from app.domain.protocols import ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
@@ -38,6 +42,34 @@ from app.tools.builtin_tools.memory import MemorySearchTool
 from app.tools.registry import ToolRegistry
 
 __all__ = []
+
+
+def _add_shared_artifact(repository: JsonlSessionRepository, session_id: str, artifact_id: str) -> None:
+    root = repository.get_session_root_path(session_id)
+    artifact_dir = root / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "original.bin").write_text("resume content", encoding="utf-8")
+    (artifact_dir / "content.txt").write_text("resume content", encoding="utf-8")
+    now = datetime.now(UTC)
+    repository.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            kind="uploaded_file",
+            title="resume.txt",
+            media_type="text/plain",
+            size_bytes=14,
+            status="ready",
+            visibility="session_shared",
+            created_at=now,
+            updated_at=now,
+            storage_relpath=f"artifacts/{artifact_id}/original.bin",
+            text_relpath=f"artifacts/{artifact_id}/content.txt",
+            text_char_count=14,
+            token_estimate=4,
+            parsed_at=now,
+        )
+    )
 
 
 class ConcurrentCaptureModelClient:
@@ -107,12 +139,24 @@ def _capability_registry() -> AgentCapabilityRegistry:
             "agent_main": AgentCapability(
                 agent_id="agent_main",
                 allowed_tools=["delegate_agents", "memory_search"],
+                allowed_skills=["*"],
+                default_skills=["base", "memory", "tools"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
             ),
             "resume_agent": AgentCapability(
                 agent_id="resume_agent",
                 allowed_tools=["memory_search"],
+                allowed_skills=["base", "tools", "file-reader"],
+                default_skills=["base", "tools", "file-reader"],
+                memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
+                memory_write_scopes=[MemoryScope.AGENT_LONG],
+            ),
+            "job_agent": AgentCapability(
+                agent_id="job_agent",
+                allowed_tools=["memory_search"],
+                allowed_skills=["base", "tools", "file-reader"],
+                default_skills=["base", "tools", "file-reader"],
                 memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_LONG],
             ),
@@ -132,7 +176,7 @@ def _registry_payload() -> dict[str, object]:
                 "is_main_agent": True,
                 "document_agent_id": "default",
                 "can_invoke_agents": True,
-                "invokable_agent_ids": ["resume_agent"],
+                "invokable_agent_ids": ["resume_agent", "job_agent"],
             },
             {
                 "agent_id": "resume_agent",
@@ -142,6 +186,17 @@ def _registry_payload() -> dict[str, object]:
                 "enabled": True,
                 "is_main_agent": False,
                 "document_agent_id": "resume_agent",
+                "can_invoke_agents": False,
+                "invokable_agent_ids": [],
+            },
+            {
+                "agent_id": "job_agent",
+                "display_name": "JobAgent",
+                "description": "岗位 agent",
+                "role": "job_analyzer",
+                "enabled": True,
+                "is_main_agent": False,
+                "document_agent_id": "job_agent",
                 "can_invoke_agents": False,
                 "invokable_agent_ids": [],
             },
@@ -172,6 +227,7 @@ def _build_bundle(tmp_path: Path) -> RuntimeBundle:
     agents_dir = tmp_path / "agents"
     _write_docs(agents_dir, "default", agent_text="# Main Agent", soul_text="# Main Soul")
     _write_docs(agents_dir, "resume_agent", agent_text="# Resume Agent", soul_text="# Resume Soul")
+    _write_docs(agents_dir, "job_agent", agent_text="# Job Agent", soul_text="# Job Soul")
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=agents_dir)
     model_client = ConcurrentCaptureModelClient()
     tool_registry = ToolRegistry(capability_registry=capability_registry)
@@ -200,6 +256,7 @@ def _build_bundle(tmp_path: Path) -> RuntimeBundle:
         agent_registry=agent_registry,
         runtime=runtime,
         event_recorder=event_recorder,
+        session_repository=session_repository,
     )
     task_runtime = AgentTaskRuntime(
         invocation_service=invocation_service,
@@ -260,9 +317,46 @@ def test_same_target_child_prompt_only_receives_its_own_assigned_task(tmp_path: 
     assert "只处理任务 Alpha" not in beta_prompts[0]
 
 
+def test_different_child_agents_run_concurrently_and_keep_contexts_isolated(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.task_runtime.run_group(
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=2,
+            tasks=[
+                AgentTaskSpec(target_agent_id="resume_agent", instruction="只分析简历 Alpha", max_tool_rounds=0),
+                AgentTaskSpec(target_agent_id="job_agent", instruction="只分析岗位 Beta", max_tool_rounds=0),
+            ],
+        )
+    )
+
+    assert result.status == "completed"
+    assert {item.target_agent_id for item in result.results} == {"resume_agent", "job_agent"}
+    assert bundle.model_client.max_active >= 2
+
+    prompts = [call["system_prompt"] for call in bundle.model_client.calls]
+    resume_prompts = [prompt for prompt in prompts if "只分析简历 Alpha" in prompt]
+    job_prompts = [prompt for prompt in prompts if "只分析岗位 Beta" in prompt]
+    assert len(resume_prompts) == 1
+    assert len(job_prompts) == 1
+    assert "AGENT.md:\n# Resume Agent" in resume_prompts[0]
+    assert "AGENT.md:\n# Job Agent" not in resume_prompts[0]
+    assert "只分析岗位 Beta" not in resume_prompts[0]
+    assert "AGENT.md:\n# Job Agent" in job_prompts[0]
+    assert "AGENT.md:\n# Resume Agent" not in job_prompts[0]
+    assert "只分析简历 Alpha" not in job_prompts[0]
+
+    events = bundle.session_repository.list_events("sess_delegate")
+    child_started = [event for event in events if event.type == "run_started" and event.parent_run_id == "run_main"]
+    assert {event.agent_id for event in child_started} == {"resume_agent", "job_agent"}
+
+
 def test_delegate_agents_tool_returns_aggregated_results(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_delegate")
+    _add_shared_artifact(bundle.session_repository, "sess_delegate", "artifact_resume_001")
 
     result = bundle.tool_registry.execute(
         ToolCall(
@@ -284,6 +378,89 @@ def test_delegate_agents_tool_returns_aggregated_results(tmp_path: Path) -> None
     assert payload["status"] == "completed"
     assert len(payload["results"]) == 2
     assert all(item["target_agent_id"] == "resume_agent" for item in payload["results"])
+
+
+def test_delegate_agents_tool_accepts_session_artifact_refs(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.tool_registry.execute(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "wait": True,
+                "tasks": [
+                    {
+                        "target_agent_id": "resume_agent",
+                        "instruction": "解析已上传简历文件",
+                            "artifact_refs": ["artifact_resume_001"],
+                        "max_tool_rounds": 0,
+                    }
+                ],
+            },
+        ),
+        _source_context(),
+    )
+
+    payload = json.loads(result.content)
+    assert result.success is True
+    assert payload["results"][0]["artifact_refs"] == ["artifact_resume_001"]
+
+
+def test_delegate_agents_tool_rejects_workspace_path_artifact_refs(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    with pytest.raises(ToolExecutionError, match="not workspace paths or filenames"):
+        bundle.tool_registry.execute(
+            ToolCall(
+                name="delegate_agents",
+                arguments={
+                    "tasks": [
+                        {
+                            "target_agent_id": "resume_agent",
+                            "instruction": "解析 main-agent 临时文件",
+                            "artifact_refs": ["resume.txt"],
+                            "max_tool_rounds": 0,
+                        }
+                    ],
+                },
+            ),
+            _source_context(),
+        )
+
+
+def test_agent_task_spec_rejects_workspace_artifact_refs() -> None:
+    with pytest.raises(ValidationError, match="not workspace paths or filenames"):
+        AgentTaskSpec(
+            target_agent_id="resume_agent",
+            instruction="解析 main-agent 临时文件",
+            artifact_refs=["workspace/resume.txt"],
+        )
+
+
+def test_agent_task_runtime_returns_partial_failed_when_one_child_fails(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.task_runtime.run_group(
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=2,
+            tasks=[
+                AgentTaskSpec(target_agent_id="resume_agent", instruction="提取项目经历", max_tool_rounds=0),
+                AgentTaskSpec(target_agent_id="missing_agent", instruction="这个 agent 不存在", max_tool_rounds=0),
+            ],
+        )
+    )
+
+    assert result.status == "partial_failed"
+    assert [item.status for item in result.results].count("completed") == 1
+    failed = [item for item in result.results if item.status == "failed"]
+    assert len(failed) == 1
+    assert failed[0].target_agent_id == "missing_agent"
+    assert failed[0].error is not None
+    assert "Unknown agent_id" in failed[0].error
 
 
 def test_context_assembler_filters_tool_catalog_by_agent_capability(tmp_path: Path) -> None:

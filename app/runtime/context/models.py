@@ -17,6 +17,22 @@ class ContextAssemblyRole(str, Enum):
 
 
 @dataclass(slots=True)
+class AgentCatalogItem:
+    """Prompt-safe metadata for a child agent the current agent may invoke."""
+
+    agent_id: str
+    display_name: str
+    role: str
+    description: str
+
+    def __post_init__(self) -> None:
+        self.agent_id = _normalize_non_empty("agent_id", self.agent_id)
+        self.display_name = _normalize_non_empty("display_name", self.display_name)
+        self.role = _normalize_non_empty("role", self.role)
+        self.description = _normalize_non_empty("description", self.description)
+
+
+@dataclass(slots=True)
 class ContextSection:
     """One renderable prompt section with a stable internal name."""
 
@@ -95,3 +111,9 @@ class MemoryContextSlices:
     long_term_summaries: list[MemoryItem]
     facts_by_lane: dict[str, list[MemoryItem]]
     mid_term_items: list[MemoryItem]
+
+
+def _normalize_non_empty(name: str, value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError(f"{name} must be a non-empty string.")
+    return value.strip()

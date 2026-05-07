@@ -24,8 +24,11 @@ class DelegateAgentsTool:
         return ToolDefinition(
             name="delegate_agents",
             description=(
-                "Delegate independent subtasks to registered child agents concurrently and wait for their results. "
-                "Use only when the subtasks are logically independent."
+                "Delegate one or more specialized subtasks to registered child agents and wait for their results. "
+                "Use this when the user task clearly matches an available child agent's role. "
+                "A single specialized subtask is valid. Multiple subtasks must be logically independent. "
+                "If source material is already pasted in the current user message, include the relevant text directly "
+                "inside each child instruction. artifact_refs must reference current session artifact ids only."
             ),
             parameters_schema={
                 "type": "object",
@@ -41,7 +44,6 @@ class DelegateAgentsTool:
                                 "instruction": {"type": "string"},
                                 "constraints": {"type": "array", "items": {"type": "string"}},
                                 "artifact_refs": {"type": "array", "items": {"type": "string"}},
-                                "skill_names": {"type": "array", "items": {"type": "string"}},
                                 "max_tool_rounds": {"type": "integer", "minimum": 0, "maximum": 10},
                                 "depends_on": {"type": "array", "items": {"type": "string"}},
                             },
@@ -111,11 +113,6 @@ def _parse_task_specs(raw: Any) -> list[AgentTaskSpec]:
                     instruction=_required_string(item.get("instruction"), field_name="instruction"),
                     constraints=_optional_string_list(item.get("constraints"), field_name="constraints"),
                     artifact_refs=_optional_string_list(item.get("artifact_refs"), field_name="artifact_refs"),
-                    skill_names=_optional_string_list(
-                        item.get("skill_names"),
-                        field_name="skill_names",
-                        default=["base", "tools", "file-reader"],
-                    ),
                     max_tool_rounds=_parse_max_tool_rounds(item.get("max_tool_rounds", 2)),
                     depends_on=[],
                 )

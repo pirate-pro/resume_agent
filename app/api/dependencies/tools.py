@@ -15,13 +15,14 @@ from app.tools.builtins import (
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
-    SessionListFilesTool,
-    SessionPlanFileAccessTool,
-    SessionReadFileTool,
-    SessionSearchFileTool,
+    SessionListArtifactsTool,
+    SessionPlanArtifactAccessTool,
+    SessionReadArtifactTool,
+    SessionSearchArtifactTool,
     StateListTool,
     StatePublishTool,
     StateSetTool,
+    PublishArtifactTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
@@ -43,12 +44,13 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(StateSetTool(state_manager=get_state_manager()))
     registry.register(StatePublishTool(state_manager=get_state_manager()))
     registry.register(StateListTool(state_manager=get_state_manager()))
+    registry.register(PublishArtifactTool(session_repository=get_session_repository()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
-    registry.register(SessionListFilesTool(session_repository=get_session_repository()))
-    registry.register(SessionPlanFileAccessTool(session_repository=get_session_repository()))
-    registry.register(SessionReadFileTool(session_repository=get_session_repository()))
-    registry.register(SessionSearchFileTool(session_repository=get_session_repository()))
+    registry.register(SessionListArtifactsTool(session_repository=get_session_repository()))
+    registry.register(SessionPlanArtifactAccessTool(session_repository=get_session_repository()))
+    registry.register(SessionReadArtifactTool(session_repository=get_session_repository()))
+    registry.register(SessionSearchArtifactTool(session_repository=get_session_repository()))
     return registry
 
 

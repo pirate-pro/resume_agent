@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.core.errors import ValidationError
 from app.domain.models import RunContext
+from app.services.agent_artifact_refs import normalize_agent_artifact_refs
 from app.services.agent_invocation_service import AgentInvocationRequest, AgentInvocationService
 
 __all__ = [
@@ -44,7 +45,7 @@ class AgentTaskSpec:
         self.target_agent_id = _require_non_empty("target_agent_id", self.target_agent_id)
         self.instruction = _require_non_empty("instruction", self.instruction)
         self.constraints = _normalize_string_list("constraints", self.constraints)
-        self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
+        self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
         self.skill_names = _normalize_string_list("skill_names", self.skill_names)
         self.depends_on = _normalize_string_list("depends_on", self.depends_on)
         if self.max_tool_rounds < 0 or self.max_tool_rounds > 10:
@@ -137,7 +138,7 @@ class AgentTaskResult:
         self.summary = _require_non_empty("summary", self.summary)
         self.answer = _require_non_empty("answer", self.answer)
         self.child_run_id = _normalize_optional_string("child_run_id", self.child_run_id)
-        self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
+        self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
         self.error = _normalize_optional_string("error", self.error)
 
     def to_payload(self) -> dict[str, object]:

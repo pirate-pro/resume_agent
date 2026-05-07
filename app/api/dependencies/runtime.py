@@ -12,6 +12,7 @@ from app.api.dependencies.infrastructure import (
     get_skill_repository,
 )
 from app.api.dependencies.managers import (
+    get_agent_registry,
     get_event_recorder,
     get_memory_manager,
     get_session_manager,
@@ -93,6 +94,7 @@ def get_context_assembler() -> ContextAssembler:
         memory_manager=get_memory_manager(),
         state_manager=get_state_manager(),
         tool_executor=get_tool_registry(),
+        agent_registry=get_agent_registry(),
     )
 
 

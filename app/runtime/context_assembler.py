@@ -13,7 +13,7 @@ from app.domain.models import (
     EventRecord,
     MemoryItem,
     RunContext,
-    SessionFile,
+    SessionArtifact,
     ToolDefinition,
 )
 from app.domain.protocols import AgentDocumentRepository, SessionRepository, SkillRepository, ToolExecutor
@@ -28,11 +28,13 @@ from app.runtime.context.constants import (
 )
 from app.runtime.context.memory_sections import flatten_memory_lanes
 from app.runtime.context.models import (
+    AgentCatalogItem,
     ContextAssemblyPlan,
     ContextAssemblyRole,
     ContextSection,
     ShortTermContextPlan,
 )
+from app.runtime.agent_registry import AgentRegistry
 from app.runtime.context.section_builder import build_assembly_plan
 from app.runtime.context.short_term import (
     exclude_context_summaries,
@@ -65,6 +67,7 @@ class ContextAssembler:
         memory_manager: MemoryManager,
         state_manager: StateManager,
         tool_executor: ToolExecutor,
+        agent_registry: AgentRegistry | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._skill_repository = skill_repository
@@ -72,6 +75,7 @@ class ContextAssembler:
         self._memory_manager = memory_manager
         self._state_manager = state_manager
         self._tool_executor = tool_executor
+        self._agent_registry = agent_registry
 
     @staticmethod
     def determine_role(context: RunContext) -> ContextAssemblyRole:
@@ -96,6 +100,7 @@ class ContextAssembler:
         skills = self._skill_repository.load_skills(skill_names) if skill_names else {}
         skill_descriptions = self._load_skill_descriptions(loaded_skills=skills)
         agent_documents = self._load_agent_documents(context)
+        invokable_agents = self._load_invokable_agents(context=context, role=assembly_role)
         short_term_plan = self._build_short_term_context_plan(
             context,
             role=assembly_role,
@@ -106,7 +111,7 @@ class ContextAssembler:
             limit=5,
             context=context,
         )
-        active_files = self._load_active_files(normalized_session_id)
+        active_artifacts = self._load_active_artifacts(normalized_session_id)
         messages = self._build_messages_from_events(short_term_plan.recent_events)
         # 用户当前这条输入必须进入模型消息，否则会出现“模型只看历史不看当前”的问题。
         if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != normalized_message:
@@ -118,25 +123,27 @@ class ContextAssembler:
             skill_descriptions=skill_descriptions,
             tool_definitions=tool_definitions,
             agent_documents=agent_documents,
+            invokable_agents=invokable_agents,
             short_term_plan=short_term_plan,
             memory_lanes=memory_lanes,
-            active_files=active_files,
+            active_artifacts=active_artifacts,
         )
         system_prompt = assembly_plan.render_prompt()
         _logger.debug(
-            "上下文组装: session_id=%s role=%s sections=%s skills=%s has_agent_md=%s has_soul_md=%s agent_state=%s orchestration_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_files=%s recent_events=%s output_messages=%s",
+            "上下文组装: session_id=%s role=%s sections=%s skills=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
             normalized_session_id,
             assembly_plan.role.value,
             assembly_plan.section_names(),
             len(skills),
             bool(agent_documents.agent_markdown),
             bool(agent_documents.soul_markdown),
+            len(invokable_agents),
             len(short_term_plan.agent_state),
             len(short_term_plan.orchestration_state),
             len(short_term_plan.assigned_tasks),
             len(short_term_plan.child_result_summaries),
             len(memory_hits),
-            len(active_files),
+            len(active_artifacts),
             len(short_term_plan.recent_events),
             len(messages),
         )
@@ -182,6 +189,25 @@ class ContextAssembler:
                 exc,
             )
         return AgentIdentityDocuments()
+
+    def _load_invokable_agents(self, *, context: RunContext, role: ContextAssemblyRole) -> list[AgentCatalogItem]:
+        if role != ContextAssemblyRole.MAIN_AGENT or self._agent_registry is None:
+            return []
+        try:
+            return [
+                AgentCatalogItem(
+                    agent_id=definition.agent_id,
+                    display_name=definition.display_name,
+                    role=definition.role,
+                    description=definition.description,
+                )
+                for definition in self._agent_registry.list_agents(enabled_only=True)
+                if definition.agent_id != context.agent_id
+                and self._agent_registry.can_invoke(context.agent_id, definition.agent_id)
+            ]
+        except ValidationError as exc:
+            _logger.warning("可调用 agent 目录加载失败，跳过注入: agent_id=%s error=%s", context.agent_id, exc)
+            return []
 
     def _list_tool_definitions(self, agent_id: str) -> list[ToolDefinition]:
         list_for_agent = getattr(self._tool_executor, "list_definitions_for_agent", None)
@@ -294,14 +320,14 @@ class ContextAssembler:
                     messages.append({"role": "assistant", "content": content})
         return messages
 
-    def _load_active_files(self, session_id: str) -> list[SessionFile]:
-        files = self._session_repository.list_session_files(session_id)
-        active_ids = self._session_repository.get_active_file_ids(session_id)
-        file_map = {item.file_id: item for item in files}
+    def _load_active_artifacts(self, session_id: str) -> list[SessionArtifact]:
+        artifacts = self._session_repository.list_session_artifacts(session_id)
+        active_ids = self._session_repository.get_active_artifact_ids(session_id)
+        artifact_map = {item.artifact_id: item for item in artifacts}
 
-        output: list[SessionFile] = []
-        for file_id in active_ids:
-            item = file_map.get(file_id)
+        output: list[SessionArtifact] = []
+        for artifact_id in active_ids:
+            item = artifact_map.get(artifact_id)
             if item is None:
                 continue
             output.append(item)

@@ -54,6 +54,41 @@ def test_single_agent_run_preserves_event_schema_fields_and_participants(tmp_pat
     assert all(item.run_id for item in events)
 
 
+def test_entry_agent_rejects_unallowed_skill(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+
+    with pytest.raises(ValidationError, match="Skill not allowed"):
+        asyncio.run(
+            bundle.chat_service.chat(
+                ChatRequest(
+                    session_id=None,
+                    message="hello",
+                    skill_names=["memory-editor"],
+                    max_tool_rounds=0,
+                    entry_agent_id="resume_agent",
+                )
+            )
+        )
+
+
+def test_entry_agent_uses_default_skills_when_request_omits_skills(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+
+    response = asyncio.run(
+        bundle.chat_service.chat(
+            ChatRequest(
+                session_id=None,
+                message="hello",
+                skill_names=[],
+                max_tool_rounds=0,
+                entry_agent_id="resume_agent",
+            )
+        )
+    )
+
+    assert response.answer == "ok"
+
+
 def test_dual_agent_memory_isolation_keeps_private_memory_in_owner_scope(tmp_path: Path) -> None:
     _, memory_manager = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
 
@@ -77,6 +112,39 @@ def test_dual_agent_memory_isolation_keeps_private_memory_in_owner_scope(tmp_pat
 
     assert any("agent_alpha" in item.content for item in own_hits)
     assert other_hits == []
+
+
+def test_child_agent_long_term_memory_isolated_between_resume_and_job_agents(tmp_path: Path) -> None:
+    _, memory_manager = build_chat_service(data_dir=tmp_path, model_client=StaticModelClient(content="ok"))
+
+    memory_manager.write_memory(
+        content="resume_agent 私有长期记忆：用户简历重点是后端项目。",
+        tags=["preference", "long_term"],
+        context=_context("sess_resume_memory", "resume_agent"),
+        source_event_id="evt_resume_memory",
+    )
+    memory_manager.write_memory(
+        content="job_agent 私有长期记忆：目标岗位强调数据平台经验。",
+        tags=["preference", "long_term"],
+        context=_context("sess_job_memory", "job_agent"),
+        source_event_id="evt_job_memory",
+    )
+
+    resume_hits = memory_manager.search_for_agent(
+        query="私有长期记忆",
+        limit=10,
+        request_agent_id="resume_agent",
+    )
+    job_hits = memory_manager.search_for_agent(
+        query="私有长期记忆",
+        limit=10,
+        request_agent_id="job_agent",
+    )
+
+    assert any("resume_agent 私有长期记忆" in item.content for item in resume_hits)
+    assert all("job_agent 私有长期记忆" not in item.content for item in resume_hits)
+    assert any("job_agent 私有长期记忆" in item.content for item in job_hits)
+    assert all("resume_agent 私有长期记忆" not in item.content for item in job_hits)
 
 
 def test_shared_memory_is_visible_across_agents_but_cross_agent_read_switch_is_guarded(tmp_path: Path) -> None:

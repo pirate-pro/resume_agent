@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.domain.models import AgentIdentityDocuments, MemoryItem, SessionFile, ToolDefinition
+from app.domain.models import AgentIdentityDocuments, MemoryItem, SessionArtifact, ToolDefinition
 from app.runtime.context.catalog import catalog_description
 from app.runtime.context.constants import (
     MEMORY_ACCESS_RULES,
@@ -17,6 +17,7 @@ from app.runtime.context.memory_sections import (
     split_memory_lanes,
 )
 from app.runtime.context.models import ContextAssemblyPlan, ContextAssemblyRole, ContextSection, ShortTermContextPlan
+from app.runtime.context.models import AgentCatalogItem
 from app.runtime.context.short_term import (
     format_assigned_task_lines,
     format_child_result_summary_lines,
@@ -30,9 +31,10 @@ def build_assembly_plan(
     skill_descriptions: dict[str, str],
     tool_definitions: list[ToolDefinition],
     agent_documents: AgentIdentityDocuments,
+    invokable_agents: list[AgentCatalogItem],
     short_term_plan: ShortTermContextPlan,
     memory_lanes: dict[str, list[MemoryItem]],
-    active_files: list[SessionFile],
+    active_artifacts: list[SessionArtifact],
 ) -> ContextAssemblyPlan:
     memory_slices = split_memory_lanes(memory_lanes)
     sections: list[ContextSection] = [
@@ -71,6 +73,28 @@ def build_assembly_plan(
                     for definition in tool_definitions
                 ),
                 item_count=len(tool_definitions),
+            )
+        )
+    if role == ContextAssemblyRole.MAIN_AGENT and invokable_agents:
+        sections.append(
+            ContextSection(
+                name="available_child_agents",
+                content=(
+                    "Available child agents for delegation:\n"
+                    + "\n".join(format_agent_catalog_lines(invokable_agents))
+                    + "\n\nDelegation rules:\n"
+                    "- If the user's task clearly matches a listed child agent's role, you must call delegate_agents before finalizing the answer.\n"
+                    "- Do not directly complete specialized child-agent work yourself when a matching child agent is available.\n"
+                    "- A single specialized task is enough reason to delegate; delegation is not limited to multi-step tasks.\n"
+                    "- Delegate one or more subtasks when they clearly match a child agent's role.\n"
+                    "- Put multiple independent subtasks in one delegate_agents call so they can run concurrently.\n"
+                    "- Do not delegate tasks with unresolved sequential dependencies; resolve prerequisites first.\n"
+                    "- Keep each child instruction narrow, include constraints, and pass artifact_refs when shared artifacts matter.\n"
+                    "- If the source material is pasted in the current user message, include the relevant source text directly in the child instruction.\n"
+                    "- Do not create workspace files only to pass their paths to child agents; artifact_refs must be current session artifact ids.\n"
+                    "- After child results return, synthesize the final answer yourself; do not expose raw orchestration noise."
+                ),
+                item_count=len(invokable_agents),
             )
         )
     sections.append(ContextSection(name="memory_access_rules", content=MEMORY_ACCESS_RULES))
@@ -170,21 +194,31 @@ def build_assembly_plan(
                 item_count=len(memory_slices.mid_term_items),
             )
         )
-    if active_files:
-        file_lines = [
+    if active_artifacts:
+        artifact_lines = [
             (
-                f"- file_id={item.file_id} name={item.filename} type={item.media_type} "
-                f"status={item.status} size_bytes={item.size_bytes}"
+                f"- artifact_id={item.artifact_id} title={item.title} kind={item.kind} type={item.media_type} "
+                f"status={item.status} visibility={item.visibility} size_bytes={item.size_bytes}"
             )
-            for item in active_files
+            for item in active_artifacts
         ]
         sections.append(
             ContextSection(
-                name="active_files",
-                content="Active session files (metadata only):\n"
-                + "\n".join(file_lines)
-                + "\nUse session_list_files/session_read_file/session_search_file when you need file content details.",
-                item_count=len(active_files),
+                name="active_artifacts",
+                content="Active session artifacts (metadata only):\n"
+                + "\n".join(artifact_lines)
+                + "\nUse session_list_artifacts/session_read_artifact/session_search_artifact when you need artifact content details.",
+                item_count=len(active_artifacts),
             )
         )
     return ContextAssemblyPlan(role=role, sections=sections)
+
+
+def format_agent_catalog_lines(agents: list[AgentCatalogItem]) -> list[str]:
+    return [
+        (
+            f"- agent_id={agent.agent_id} name={agent.display_name} "
+            f"role={agent.role} description={agent.description}"
+        )
+        for agent in agents
+    ]

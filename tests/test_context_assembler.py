@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
-from app.domain.models import EventRecord, RunContext, SessionFile
+from app.domain.models import EventRecord, RunContext, SessionArtifact
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -18,11 +19,12 @@ from app.runtime.agent_events import (
     AgentResultSummaryPayload,
     AgentTaskAssignedPayload,
 )
+from app.runtime.agent_registry import AgentRegistry
 from app.runtime.context_assembler import ContextAssembler, ContextAssemblyRole
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
-from app.tools.builtins import MemorySearchTool
+from app.tools.builtins import DelegateAgentsTool, MemorySearchTool
 from app.tools.registry import ToolRegistry
 
 __all__ = []
@@ -61,12 +63,84 @@ def _memory_manager(tmp_path: Path, capability_registry: AgentCapabilityRegistry
     )
 
 
+def _agent_registry(capability_registry: AgentCapabilityRegistry) -> AgentRegistry:
+    payload = json.loads(Path("app/config/agents.json").read_text(encoding="utf-8"))
+    return AgentRegistry.from_payload(
+        payload,
+        capability_registry=capability_registry,
+        document_repository=_agent_document_repository(),
+    )
+
+
+def _unavailable_agent_task_runtime() -> NoReturn:
+    raise AssertionError("agent task runtime should not be needed while assembling context")
+
+
 def test_context_assembler_determines_main_and_other_agent_roles() -> None:
     main_context = _context("sess_role_main", agent_id="agent_main", entry_agent_id="agent_main")
     worker_context = _context("sess_role_worker", agent_id="agent_worker", entry_agent_id="agent_main")
 
     assert ContextAssembler.determine_role(main_context) == ContextAssemblyRole.MAIN_AGENT
     assert ContextAssembler.determine_role(worker_context) == ContextAssemblyRole.OTHER_AGENT
+
+
+def test_context_assembler_injects_invokable_agent_catalog_for_main_agent(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_agent_catalog")
+    capability_registry = _capability_registry()
+    memory_manager = _memory_manager(tmp_path, capability_registry)
+    tool_registry = ToolRegistry(capability_registry=capability_registry)
+    tool_registry.register(DelegateAgentsTool(agent_task_runtime_provider=_unavailable_agent_task_runtime))
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=memory_manager,
+        state_manager=_state_manager(tmp_path),
+        tool_executor=tool_registry,
+        agent_registry=_agent_registry(capability_registry),
+    )
+
+    bundle = assembler.assemble(
+        context=_context("sess_agent_catalog", agent_id="agent_main", entry_agent_id="agent_main"),
+        user_message="帮我分析这份简历",
+        skill_names=["base"],
+    )
+
+    assert "Available child agents for delegation:" in bundle.system_prompt
+    assert "agent_id=resume_agent name=ResumeAgent role=resume_parser" in bundle.system_prompt
+    assert "负责简历解析、结构化和简历信息诊断" in bundle.system_prompt
+    assert "agent_id=job_agent name=JobAgent role=job_analyzer" in bundle.system_prompt
+    assert "负责岗位 JD 解析、岗位要求结构化和岗位匹配信号提取" in bundle.system_prompt
+    assert "A single specialized task is enough reason to delegate" in bundle.system_prompt
+    assert "include the relevant source text directly in the child instruction" in bundle.system_prompt
+    assert "Do not create workspace files only to pass their paths to child agents" in bundle.system_prompt
+    assert any(definition.name == "delegate_agents" for definition in bundle.tool_definitions)
+
+
+def test_context_assembler_does_not_inject_agent_catalog_for_other_agent(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_agent_catalog_child")
+    capability_registry = _capability_registry()
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path, capability_registry),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=capability_registry),
+        agent_registry=_agent_registry(capability_registry),
+    )
+
+    bundle = assembler.assemble(
+        context=_context("sess_agent_catalog_child", agent_id="resume_agent", entry_agent_id="agent_main"),
+        user_message="执行简历解析子任务",
+        skill_names=["base"],
+    )
+
+    assert "Available child agents for delegation:" not in bundle.system_prompt
 
 
 def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> None:
@@ -147,30 +221,37 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
     assert len(bundle.tool_definitions) == 1
 
 
-def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) -> None:
+def test_context_assembler_includes_active_artifact_metadata_prompt(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     skill_repo = MarkdownSkillRepository(skills_dir=Path("app/skills"))
     session_repo.create_session("sess_2")
 
-    parsed_path = session_repo.get_workspace_path("sess_2") / ".parsed" / "file_1.txt"
-    parsed_path.parent.mkdir(parents=True, exist_ok=True)
+    session_root = session_repo.get_session_root_path("sess_2")
+    artifact_dir = session_root / "artifacts" / "artifact_1"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "original.bin").write_text("This is uploaded file content", encoding="utf-8")
+    parsed_path = artifact_dir / "content.txt"
     parsed_path.write_text("This is uploaded file content", encoding="utf-8")
 
-    session_repo.add_or_update_session_file(
-        SessionFile(
-            file_id="file_1",
+    now = datetime.now(UTC)
+    session_repo.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id="artifact_1",
             session_id="sess_2",
-            filename="doc.txt",
+            kind="uploaded_file",
+            title="doc.txt",
             media_type="text/plain",
             size_bytes=100,
             status="ready",
-            uploaded_at=datetime.now(UTC),
-            storage_relpath="workspace/uploads/file_1_doc.txt",
-            text_relpath="workspace/.parsed/file_1.txt",
+            visibility="session_shared",
+            created_at=now,
+            updated_at=now,
+            storage_relpath="artifacts/artifact_1/original.bin",
+            text_relpath="artifacts/artifact_1/content.txt",
             error=None,
         )
     )
-    session_repo.set_active_file_ids("sess_2", ["file_1"])
+    session_repo.set_active_artifact_ids("sess_2", ["artifact_1"])
 
     assembler = ContextAssembler(
         session_repository=session_repo,
@@ -187,10 +268,10 @@ def test_context_assembler_includes_active_file_metadata_prompt(tmp_path: Path) 
         skill_names=["base"],
     )
 
-    assert "Active session files (metadata only)" in bundle.system_prompt
-    assert "file_id=file_1" in bundle.system_prompt
+    assert "Active session artifacts (metadata only)" in bundle.system_prompt
+    assert "artifact_id=artifact_1" in bundle.system_prompt
     assert "doc.txt" in bundle.system_prompt
-    assert "session_read_file" in bundle.system_prompt
+    assert "session_read_artifact" in bundle.system_prompt
 
 
 def test_context_assembler_recalls_cross_session_chinese_name_memory(tmp_path: Path) -> None:
@@ -371,7 +452,7 @@ def test_context_assembler_injects_assigned_task_for_other_agent(tmp_path: Path)
                 target_agent_id="agent_worker",
                 instruction="分析 memory scaffold 的风险",
                 constraints=["不要改调度链路"],
-                artifact_refs=["CONTEXT_ASSEMBLER_MULTI_AGENT_DESIGN_2026-04-29.md"],
+                artifact_refs=["artifact_design_001"],
                 parent_run_id="run_main",
             ).to_payload(),
             created_at=now,

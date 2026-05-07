@@ -23,6 +23,8 @@ class AgentCapability:
 
     agent_id: str
     allowed_tools: list[str]
+    allowed_skills: list[str]
+    default_skills: list[str]
     memory_read_scopes: list[MemoryScope]
     memory_write_scopes: list[MemoryScope]
     allow_cross_session_short_read: bool = True
@@ -32,12 +34,39 @@ class AgentCapability:
     def __post_init__(self) -> None:
         self.agent_id = _normalize_non_empty("agent_id", self.agent_id)
         self.allowed_tools = _normalize_tool_list(self.allowed_tools)
+        self.allowed_skills = _normalize_skill_list(self.allowed_skills, field_name="allowed_skills")
+        self.default_skills = _normalize_skill_list(self.default_skills, field_name="default_skills")
         self.memory_read_scopes = _normalize_scope_list(self.memory_read_scopes, field_name="memory_read_scopes")
         self.memory_write_scopes = _normalize_scope_list(self.memory_write_scopes, field_name="memory_write_scopes")
+        for skill_name in self.default_skills:
+            if not self.allows_skill(skill_name):
+                raise ValidationError("default_skills must be a subset of allowed_skills.")
 
     def allows_tool(self, tool_name: str) -> bool:
         normalized = _normalize_non_empty("tool_name", tool_name)
         return "*" in self.allowed_tools or normalized in self.allowed_tools
+
+    def allows_skill(self, skill_name: str) -> bool:
+        normalized = _normalize_non_empty("skill_name", skill_name)
+        return "*" in self.allowed_skills or normalized in self.allowed_skills
+
+    def resolve_skill_names(self, requested_skill_names: list[str] | None = None) -> list[str]:
+        requested = self.default_skills if not requested_skill_names else _normalize_skill_list(
+            requested_skill_names,
+            field_name="requested_skill_names",
+        )
+        output: list[str] = []
+        seen: set[str] = set()
+        for skill_name in requested:
+            if not self.allows_skill(skill_name):
+                raise ValidationError(f"Skill not allowed for agent '{self.agent_id}': {skill_name}")
+            if skill_name in seen:
+                continue
+            output.append(skill_name)
+            seen.add(skill_name)
+        if not output:
+            raise ValidationError("resolved skill_names cannot be empty.")
+        return output
 
     def can_read_scope(self, scope: MemoryScope) -> bool:
         return scope in self.memory_read_scopes
@@ -93,7 +122,8 @@ class AgentCapabilityRegistry:
                 _default_agent_payload("agent_alpha"),
                 _default_agent_payload("agent_beta"),
                 _default_agent_payload("agent_other"),
-                _default_agent_payload("resume_agent"),
+                _file_reader_child_agent_payload("resume_agent"),
+                _file_reader_child_agent_payload("job_agent"),
             ],
         }
         return cls.from_payload(payload)
@@ -123,6 +153,8 @@ def _parse_capability_item(raw: Any) -> AgentCapability:
     return AgentCapability(
         agent_id=str(raw.get("agent_id", "")),
         allowed_tools=_normalize_tool_items(raw.get("allowed_tools")),
+        allowed_skills=_normalize_skill_items(raw.get("allowed_skills")),
+        default_skills=_normalize_skill_items(raw.get("default_skills")),
         memory_read_scopes=[_parse_scope(item, field_name="memory_read_scopes") for item in raw_read_scopes],
         memory_write_scopes=[_parse_scope(item, field_name="memory_write_scopes") for item in raw_write_scopes],
         allow_cross_session_short_read=bool(raw.get("allow_cross_session_short_read", True)),
@@ -145,6 +177,14 @@ def _normalize_tool_items(raw: Any) -> list[str]:
     return _normalize_tool_list([str(item) for item in raw])
 
 
+def _normalize_skill_items(raw: Any) -> list[str]:
+    if raw is None:
+        return ["base"]
+    if not isinstance(raw, list) or not raw:
+        raise ValidationError("skill list must be a non-empty list.")
+    return _normalize_skill_list([str(item) for item in raw], field_name="skill")
+
+
 def _normalize_tool_list(items: list[str]) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
@@ -156,6 +196,20 @@ def _normalize_tool_list(items: list[str]) -> list[str]:
         seen.add(tool)
     if not output:
         raise ValidationError("allowed_tools cannot be empty after normalization.")
+    return output
+
+
+def _normalize_skill_list(items: list[str], *, field_name: str) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        skill = _normalize_non_empty(field_name, raw)
+        if skill in seen:
+            continue
+        output.append(skill)
+        seen.add(skill)
+    if not output:
+        raise ValidationError(f"{field_name} cannot be empty after normalization.")
     return output
 
 
@@ -190,9 +244,31 @@ def _default_agent_payload(agent_id: str) -> dict[str, Any]:
     return {
         "agent_id": agent_id,
         "allowed_tools": ["*"],
+        "allowed_skills": ["*"],
+        "default_skills": ["base", "memory", "memory-editor", "tools", "file-reader"],
         "memory_read_scopes": ["agent_short", "agent_long", "shared_long"],
         "memory_write_scopes": ["agent_short", "agent_long", "shared_long"],
         "allow_cross_session_short_read": True,
+        "allow_cross_agent_memory_read": False,
+        "allow_cross_agent_memory_write": False,
+    }
+
+
+def _file_reader_child_agent_payload(agent_id: str) -> dict[str, Any]:
+    return {
+        "agent_id": agent_id,
+        "allowed_tools": [
+            "session_list_artifacts",
+            "session_plan_artifact_access",
+            "session_read_artifact",
+            "session_search_artifact",
+            "memory_search",
+        ],
+        "allowed_skills": ["base", "tools", "file-reader"],
+        "default_skills": ["base", "tools", "file-reader"],
+        "memory_read_scopes": ["agent_long", "shared_long"],
+        "memory_write_scopes": ["agent_long"],
+        "allow_cross_session_short_read": False,
         "allow_cross_agent_memory_read": False,
         "allow_cross_agent_memory_write": False,
     }

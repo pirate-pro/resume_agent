@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.core.errors import ValidationError
 from app.domain.models import AgentRunInput, RunContext
+from app.domain.protocols import SessionRepository
 from app.runtime.agent_events import (
     AGENT_RESULT_SUMMARY_EVENT,
     AGENT_TASK_ASSIGNED_EVENT,
@@ -16,15 +17,13 @@ from app.runtime.agent_events import (
 from app.runtime.agent_registry import AgentRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.event_recorder import EventRecorder
+from app.services.agent_artifact_refs import normalize_agent_artifact_refs
 
 __all__ = [
     "AgentInvocationRequest",
     "AgentInvocationResult",
     "AgentInvocationService",
 ]
-
-_DEFAULT_CHILD_SKILL_NAMES = ["base", "tools", "file-reader"]
-
 
 @dataclass(slots=True)
 class AgentInvocationRequest:
@@ -35,7 +34,7 @@ class AgentInvocationRequest:
     instruction: str
     constraints: list[str] = field(default_factory=list)
     artifact_refs: list[str] = field(default_factory=list)
-    skill_names: list[str] = field(default_factory=lambda: list(_DEFAULT_CHILD_SKILL_NAMES))
+    skill_names: list[str] = field(default_factory=list)
     max_tool_rounds: int = 2
     task_id: str | None = None
 
@@ -45,8 +44,8 @@ class AgentInvocationRequest:
         self.target_agent_id = _require_non_empty("target_agent_id", self.target_agent_id)
         self.instruction = _require_non_empty("instruction", self.instruction)
         self.constraints = _normalize_string_list("constraints", self.constraints)
-        self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
-        self.skill_names = _normalize_string_list("skill_names", self.skill_names)
+        self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
+        self.skill_names = _normalize_optional_string_list("skill_names", self.skill_names)
         if self.max_tool_rounds < 0 or self.max_tool_rounds > 10:
             raise ValidationError("max_tool_rounds must be in range 0..10.")
         if self.task_id is not None:
@@ -73,7 +72,7 @@ class AgentInvocationResult:
         self.child_run_id = _require_non_empty("child_run_id", self.child_run_id)
         self.status = _require_non_empty("status", self.status)
         self.summary = _require_non_empty("summary", self.summary)
-        self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
+        self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
         self.answer = _require_non_empty("answer", self.answer)
 
 
@@ -86,10 +85,12 @@ class AgentInvocationService:
         agent_registry: AgentRegistry,
         runtime: AgentRuntime,
         event_recorder: EventRecorder,
+        session_repository: SessionRepository,
     ) -> None:
         self._agent_registry = agent_registry
         self._runtime = runtime
         self._event_recorder = event_recorder
+        self._session_repository = session_repository
 
     def invoke(self, request: AgentInvocationRequest) -> AgentInvocationResult:
         if not isinstance(request, AgentInvocationRequest):
@@ -98,6 +99,11 @@ class AgentInvocationService:
         source_agent_id = request.source_context.agent_id
         target_agent_id = request.target_agent_id
         self._validate_invocation(source_agent_id=source_agent_id, target_agent_id=target_agent_id)
+        self._validate_artifact_refs(
+            session_id=request.source_context.session_id,
+            target_agent_id=target_agent_id,
+            artifact_refs=request.artifact_refs,
+        )
 
         task_id = request.task_id or f"task_{uuid4().hex[:12]}"
         child_context = self._build_child_context(
@@ -111,7 +117,7 @@ class AgentInvocationService:
                 AgentRunInput(
                     session_id=request.source_context.session_id,
                     user_message=_build_child_instruction_message(task_id=task_id, request=request),
-                    skill_names=request.skill_names,
+                    skill_names=self._resolve_child_skill_names(request),
                     max_tool_rounds=request.max_tool_rounds,
                     context=child_context,
                 )
@@ -155,6 +161,20 @@ class AgentInvocationService:
         self._agent_registry.require(target_agent_id)
         if not self._agent_registry.can_invoke(source_agent_id, target_agent_id):
             raise ValidationError(f"Agent '{source_agent_id}' is not allowed to invoke '{target_agent_id}'.")
+
+    def _validate_artifact_refs(self, *, session_id: str, target_agent_id: str, artifact_refs: list[str]) -> None:
+        _ = target_agent_id
+        for artifact_id in artifact_refs:
+            artifact = self._session_repository.get_session_artifact(session_id, artifact_id)
+            if artifact is None:
+                raise ValidationError(f"Artifact not found in session: artifact_id={artifact_id}")
+            if artifact.visibility != "session_shared":
+                raise ValidationError(f"Artifact is not visible to child agents: artifact_id={artifact_id}")
+
+    def _resolve_child_skill_names(self, request: AgentInvocationRequest) -> list[str]:
+        return self._agent_registry.capability_for(request.target_agent_id).resolve_skill_names(
+            request.skill_names or None
+        )
 
     def _build_child_context(self, *, source_context: RunContext, target_agent_id: str) -> RunContext:
         return RunContext(
@@ -254,3 +274,9 @@ def _normalize_string_list(name: str, values: list[str]) -> list[str]:
     for raw in values:
         output.append(_require_non_empty(name, raw))
     return output
+
+
+def _normalize_optional_string_list(name: str, values: list[str]) -> list[str]:
+    if not values:
+        return []
+    return _normalize_string_list(name, values)
