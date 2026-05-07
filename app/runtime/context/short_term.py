@@ -132,3 +132,17 @@ def is_other_agent_related_event(event: EventRecord, context: RunContext) -> boo
     if event.run_id == context.run_id:
         return True
     return event.parent_run_id == context.run_id
+
+
+def is_main_agent_orchestration_event(event: EventRecord, context: RunContext) -> bool:
+    """Return whether an event belongs in the main-agent orchestration view."""
+    if event.agent_id == context.agent_id:
+        return True
+    if event.type != AGENT_RESULT_SUMMARY_EVENT:
+        return False
+    try:
+        payload = AgentResultSummaryPayload.from_payload(event.payload)
+    except ValidationError as exc:
+        _logger.warning("跳过非法 agent result summary 事件: event_id=%s error=%s", event.event_id, exc)
+        return False
+    return payload.target_agent_id == context.agent_id

@@ -37,6 +37,71 @@ def test_session_create_and_append_event(tmp_path: Path) -> None:
     assert events[0].payload["content"] == "hello"
 
 
+def test_session_events_are_physically_split_by_agent_and_orchestration(tmp_path: Path) -> None:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session("sess_multi_agent_events")
+    main_event = EventRecord(
+        event_id="evt_main_user",
+        session_id="sess_multi_agent_events",
+        type="user_message",
+        payload={"content": "main visible"},
+        created_at=datetime.now(UTC),
+        agent_id="agent_main",
+        run_id="run_main",
+    )
+    worker_event = EventRecord(
+        event_id="evt_worker_raw",
+        session_id="sess_multi_agent_events",
+        type="assistant_message",
+        payload={"content": "worker private"},
+        created_at=datetime.now(UTC),
+        agent_id="resume_agent",
+        run_id="run_child",
+        parent_run_id="run_main",
+    )
+    result_summary = EventRecord(
+        event_id="evt_worker_summary",
+        session_id="sess_multi_agent_events",
+        type="agent_result_summary",
+        payload={
+            "task_id": "task_1",
+            "source_agent_id": "resume_agent",
+            "target_agent_id": "agent_main",
+            "status": "completed",
+            "summary": "worker result",
+            "artifact_refs": [],
+            "next_steps": [],
+            "parent_run_id": "run_main",
+        },
+        created_at=datetime.now(UTC),
+        agent_id="resume_agent",
+        run_id="run_child",
+        parent_run_id="run_main",
+    )
+
+    repository.append_event("sess_multi_agent_events", main_event)
+    repository.append_event("sess_multi_agent_events", worker_event)
+    repository.append_event("sess_multi_agent_events", result_summary)
+
+    assert (tmp_path / "sessions" / "sess_multi_agent_events" / "events.jsonl").exists()
+    assert (tmp_path / "sessions" / "sess_multi_agent_events" / "agents" / "agent_main" / "events.jsonl").exists()
+    assert (tmp_path / "sessions" / "sess_multi_agent_events" / "agents" / "resume_agent" / "events.jsonl").exists()
+    assert [event.event_id for event in repository.list_agent_events("sess_multi_agent_events", "agent_main")] == [
+        "evt_main_user"
+    ]
+    assert [event.event_id for event in repository.list_agent_events("sess_multi_agent_events", "resume_agent")] == [
+        "evt_worker_raw",
+        "evt_worker_summary",
+    ]
+    assert [event.event_id for event in repository.list_orchestration_events("sess_multi_agent_events")] == [
+        "evt_worker_summary"
+    ]
+    assert [event.event_id for event in repository.list_events("sess_multi_agent_events")] == [
+        "evt_main_user",
+        "evt_worker_summary",
+    ]
+
+
 
 def test_skill_file_read_standard_layout(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"

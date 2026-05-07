@@ -40,6 +40,10 @@ def _event(
     event_type: str,
     payload: dict[str, Any],
     offset_seconds: int,
+    *,
+    agent_id: str = "agent_main",
+    run_id: str = "run_compact",
+    parent_run_id: str | None = None,
 ) -> EventRecord:
     return EventRecord(
         event_id=event_id,
@@ -47,8 +51,9 @@ def _event(
         type=event_type,
         payload=payload,
         created_at=datetime(2026, 4, 30, tzinfo=UTC) + timedelta(seconds=offset_seconds),
-        agent_id="agent_main",
-        run_id="run_compact",
+        agent_id=agent_id,
+        run_id=run_id,
+        parent_run_id=parent_run_id,
     )
 
 
@@ -113,6 +118,69 @@ def test_context_compactor_rewrites_events_to_summary_plus_recent(tmp_path: Path
     assert events[0].payload["retained_event_count"] == 2
     assert "上下文压缩" in events[0].payload["summary"]
     assert [event.event_id for event in events[1:]] == ["evt_user_2", "evt_assistant_2"]
+
+
+def test_context_compactor_only_rewrites_current_agent_events(tmp_path: Path) -> None:
+    repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_compact_agent_isolation"
+    repo.create_session(session_id)
+    for event in [
+        _event(session_id, "evt_main_1", "user_message", {"content": "main 旧消息 1"}, 1),
+        _event(
+            session_id,
+            "evt_worker_1",
+            "assistant_message",
+            {"content": "worker private progress 1"},
+            2,
+            agent_id="resume_agent",
+            run_id="run_worker",
+            parent_run_id="run_main",
+        ),
+        _event(session_id, "evt_main_2", "assistant_message", {"content": "main 旧消息 2"}, 3),
+        _event(session_id, "evt_main_recent", "user_message", {"content": "main 最近消息"}, 4),
+        _event(
+            session_id,
+            "evt_worker_2",
+            "assistant_message",
+            {"content": "worker private progress 2"},
+            5,
+            agent_id="resume_agent",
+            run_id="run_worker",
+            parent_run_id="run_main",
+        ),
+        _event(session_id, "evt_main_recent_answer", "assistant_message", {"content": "main 最近回答"}, 6),
+    ]:
+        _append(repo, event)
+
+    compactor = ContextCompactor(
+        session_repository=repo,
+        model_client=StaticModelClient(
+            '{"summary":"main 旧消息 1 和 main 旧消息 2。","timeline":["main 旧消息"],'
+            '"decisions":[],"open_threads":[],"tool_progress":[],"agent_activity":[],'
+            '"memory_relevant":[],"evidence_event_ids":["evt_main_1","evt_main_2"]}'
+        ),
+        config=ContextCompactionConfig(
+            trigger_event_count=3,
+            retention_strategy=RetentionStrategy.EVENT_COUNT,
+            retain_event_count=2,
+        ),
+    )
+
+    result = compactor.compact_after_flush(_context(session_id))
+
+    assert result.compacted is True
+    assert result.original_event_count == 4
+    events = repo.list_events(session_id)
+    assert [event.event_id for event in events] == [
+        result.summary_event_id,
+        "evt_main_recent",
+        "evt_main_recent_answer",
+    ]
+    assert events[0].agent_id == "agent_main"
+    worker_events = repo.list_agent_events(session_id, "resume_agent")
+    assert [event.event_id for event in worker_events] == ["evt_worker_1", "evt_worker_2"]
+    assert worker_events[0].payload["content"] == "worker private progress 1"
+    assert worker_events[1].payload["content"] == "worker private progress 2"
 
 
 def test_context_compactor_skips_when_flush_coverage_is_incomplete(tmp_path: Path) -> None:

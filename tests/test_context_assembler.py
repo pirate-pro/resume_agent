@@ -546,6 +546,94 @@ def test_context_assembler_injects_child_result_summary_for_main_agent(tmp_path:
     assert "main agent 决定是否继续实现调度" in bundle.system_prompt
 
 
+def test_context_assembler_main_agent_excludes_child_raw_messages(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_main_child_raw_filter"
+    session_repo.create_session(session_id)
+    now = datetime.now(UTC)
+    session_repo.append_event(
+        session_id,
+        EventRecord(
+            event_id="evt_main_user",
+            session_id=session_id,
+            type="user_message",
+            payload={"content": "main user instruction"},
+            created_at=now,
+            agent_id="agent_main",
+            run_id="run_main",
+        ),
+    )
+    session_repo.append_event(
+        session_id,
+        EventRecord(
+            event_id="evt_child_user",
+            session_id=session_id,
+            type="user_message",
+            payload={"content": "child private instruction"},
+            created_at=now,
+            agent_id="resume_agent",
+            run_id="run_child",
+            parent_run_id="run_main",
+        ),
+    )
+    session_repo.append_event(
+        session_id,
+        EventRecord(
+            event_id="evt_child_assistant",
+            session_id=session_id,
+            type="assistant_message",
+            payload={"content": "child private detailed answer"},
+            created_at=now,
+            agent_id="resume_agent",
+            run_id="run_child",
+            parent_run_id="run_main",
+        ),
+    )
+    session_repo.append_event(
+        session_id,
+        EventRecord(
+            event_id="evt_child_result",
+            session_id=session_id,
+            type=AGENT_RESULT_SUMMARY_EVENT,
+            payload=AgentResultSummaryPayload(
+                task_id="task_resume_1",
+                source_agent_id="resume_agent",
+                target_agent_id="agent_main",
+                status="completed",
+                summary="resume_agent 已输出简历摘要",
+                parent_run_id="run_main",
+            ).to_payload(),
+            created_at=now,
+            agent_id="resume_agent",
+            run_id="run_child",
+            parent_run_id="run_main",
+        ),
+    )
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
+    )
+
+    bundle = assembler.assemble(
+        context=_context(session_id, agent_id="agent_main", entry_agent_id="agent_main"),
+        user_message="继续编排",
+        skill_names=["base"],
+    )
+    message_contents = [str(message.get("content", "")) for message in bundle.messages]
+
+    assert "main user instruction" in message_contents
+    assert "继续编排" in message_contents
+    assert "child private instruction" not in message_contents
+    assert "child private detailed answer" not in message_contents
+    assert "Child agent result summaries:" in bundle.system_prompt
+    assert "resume_agent 已输出简历摘要" in bundle.system_prompt
+
+
 def test_context_assembler_filters_recent_events_for_other_agent(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_events_worker")

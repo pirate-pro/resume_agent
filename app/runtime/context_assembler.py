@@ -40,6 +40,7 @@ from app.runtime.context.short_term import (
     exclude_context_summaries,
     extract_assigned_tasks,
     extract_child_result_summaries,
+    is_main_agent_orchestration_event,
     is_other_agent_related_event,
     latest_context_summaries,
 )
@@ -236,9 +237,12 @@ class ContextAssembler:
             orchestration_state = self._state_manager.list_shared_state(session_id=context.session_id)[
                 :ORCHESTRATION_STATE_MAX_COUNT
             ]
-            all_events = self._session_repository.list_events(context.session_id)
-            context_summaries = latest_context_summaries(all_events, context)
-            recent_events = exclude_context_summaries(all_events)[-limit:]
+            agent_events = self._session_repository.list_agent_events(context.session_id, context.agent_id)
+            orchestration_events = self._session_repository.list_orchestration_events(context.session_id)
+            main_view_events = _merge_context_events(agent_events, orchestration_events)
+            visible_events = [event for event in main_view_events if is_main_agent_orchestration_event(event, context)]
+            context_summaries = latest_context_summaries(visible_events, context)
+            recent_events = exclude_context_summaries(visible_events)[-limit:]
             child_result_summaries = extract_child_result_summaries(recent_events, context)[
                 -CHILD_RESULT_CONTEXT_MAX_COUNT:
             ]
@@ -246,8 +250,10 @@ class ContextAssembler:
         else:
             # Other agents keep a local execution view. Main-agent orchestration state is passed via task events.
             orchestration_state = []
-            all_events = self._session_repository.list_events(context.session_id)
-            related_events = [event for event in all_events if is_other_agent_related_event(event, context)]
+            agent_events = self._session_repository.list_agent_events(context.session_id, context.agent_id)
+            orchestration_events = self._session_repository.list_orchestration_events(context.session_id)
+            all_events = _merge_context_events(agent_events, orchestration_events)
+            related_events = [event for event in agent_events if is_other_agent_related_event(event, context)]
             context_summaries = latest_context_summaries(related_events, context)
             recent_events = exclude_context_summaries(related_events)[-limit:]
             assigned_tasks = extract_assigned_tasks(all_events, context)[-AGENT_TASK_CONTEXT_MAX_COUNT:]
@@ -334,3 +340,11 @@ class ContextAssembler:
             if len(output) >= ACTIVE_FILE_MAX_COUNT:
                 break
         return output
+
+
+def _merge_context_events(*event_groups: list[EventRecord]) -> list[EventRecord]:
+    by_id: dict[str, EventRecord] = {}
+    for group in event_groups:
+        for event in group:
+            by_id.setdefault(event.event_id, event)
+    return sorted(by_id.values(), key=lambda item: item.created_at)

@@ -348,7 +348,10 @@ def test_different_child_agents_run_concurrently_and_keep_contexts_isolated(tmp_
     assert "AGENT.md:\n# Resume Agent" not in job_prompts[0]
     assert "只分析简历 Alpha" not in job_prompts[0]
 
-    events = bundle.session_repository.list_events("sess_delegate")
+    events = (
+        bundle.session_repository.list_agent_events("sess_delegate", "resume_agent")
+        + bundle.session_repository.list_agent_events("sess_delegate", "job_agent")
+    )
     child_started = [event for event in events if event.type == "run_started" and event.parent_run_id == "run_main"]
     assert {event.agent_id for event in child_started} == {"resume_agent", "job_agent"}
 

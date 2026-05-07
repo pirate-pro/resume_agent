@@ -16,6 +16,7 @@ from app.core.errors import ValidationError
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import ChatModelClient, ModelResponse, SessionRepository
 from app.prompts.context_compaction import CONTEXT_COMPACTOR_SYSTEM_PROMPT, build_context_compaction_prompt
+from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT, AGENT_TASK_ASSIGNED_EVENT
 from app.runtime.context_compaction import (
     AllowAllCompactionCoverage,
     CONTEXT_SUMMARY_EVENT,
@@ -61,10 +62,18 @@ class ContextCompactor:
     def compact_after_flush(self, context: RunContext) -> ContextCompactionResult:
         if not isinstance(context, RunContext):
             raise ValidationError("context must be RunContext.")
-        events = self._session_repository.list_events(context.session_id)
-        return self.compact_events(context=context, events=events)
+        agent_events = self._session_repository.list_agent_events(context.session_id, context.agent_id)
+        events = _agent_compactable_events(all_events=agent_events, context=context)
+        return self.compact_events(context=context, events=events, all_session_events=agent_events)
 
-    def compact_events(self, *, context: RunContext, events: list[EventRecord]) -> ContextCompactionResult:
+    def compact_events(
+        self,
+        *,
+        context: RunContext,
+        events: list[EventRecord],
+        all_session_events: list[EventRecord] | None = None,
+    ) -> ContextCompactionResult:
+        all_events = all_session_events if all_session_events is not None else events
         if not self._config.enabled:
             return self._result(context=context, events=events, reason="disabled", compacted=False)
         if not events:
@@ -124,11 +133,16 @@ class ContextCompactor:
             compressed_events=compressed_events,
             retained_events=retained_events,
         )
-        new_events = [summary_event] + retained_events
-        replaced = self._session_repository.replace_events_if_unchanged(
+        new_events = _merge_compacted_agent_events(
+            all_events=all_events,
+            summary_event=summary_event,
+            compressed_events=compressed_events,
+        )
+        replaced = self._session_repository.replace_agent_events_if_unchanged(
             context.session_id,
+            context.agent_id,
             new_events,
-            expected_last_event_id=events[-1].event_id,
+            expected_last_event_id=all_events[-1].event_id,
         )
         if not replaced:
             return ContextCompactionResult(
@@ -242,9 +256,46 @@ class ContextCompactor:
             session_id=context.session_id,
             type=CONTEXT_SUMMARY_EVENT,
             payload=payload,
-            created_at=datetime.now(UTC),
+            created_at=compressed_events[0].created_at,
             agent_id=context.agent_id,
             run_id=context.run_id,
             parent_run_id=context.parent_run_id,
             event_version=2,
         )
+
+
+_NON_COMPACTABLE_AGENT_EVENT_TYPES = {
+    CONTEXT_SUMMARY_EVENT,
+    AGENT_TASK_ASSIGNED_EVENT,
+    AGENT_RESULT_SUMMARY_EVENT,
+}
+
+
+def _agent_compactable_events(*, all_events: list[EventRecord], context: RunContext) -> list[EventRecord]:
+    return [
+        event
+        for event in all_events
+        if event.agent_id == context.agent_id and event.type not in _NON_COMPACTABLE_AGENT_EVENT_TYPES
+    ]
+
+
+def _merge_compacted_agent_events(
+    *,
+    all_events: list[EventRecord],
+    summary_event: EventRecord,
+    compressed_events: list[EventRecord],
+) -> list[EventRecord]:
+    compressed_ids = {event.event_id for event in compressed_events}
+    if not compressed_ids:
+        return list(all_events)
+
+    output: list[EventRecord] = []
+    inserted_summary = False
+    for event in all_events:
+        if event.event_id not in compressed_ids:
+            output.append(event)
+            continue
+        if not inserted_summary:
+            output.append(summary_event)
+            inserted_summary = True
+    return output

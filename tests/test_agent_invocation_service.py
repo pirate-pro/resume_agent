@@ -240,14 +240,25 @@ def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_pa
         )
     )
 
-    events = bundle.session_repository.list_events("sess_invoke")
-    event_types = [event.type for event in events]
+    orchestration_events = bundle.session_repository.list_orchestration_events("sess_invoke")
+    event_types = [event.type for event in orchestration_events]
     assert result.status == "completed"
     assert result.source_agent_id == "agent_main"
     assert result.target_agent_id == "resume_agent"
     assert result.summary == "简历解析完成"
     assert event_types == [
         AGENT_TASK_ASSIGNED_EVENT,
+        AGENT_RESULT_SUMMARY_EVENT,
+    ]
+
+    assignment = orchestration_events[0]
+    assert assignment.agent_id == "agent_main"
+    assert assignment.run_id == "run_agent_main"
+    assert assignment.payload["target_agent_id"] == "resume_agent"
+    assert assignment.payload["instruction"] == "解析当前会话里的简历文件"
+
+    child_events = bundle.session_repository.list_agent_events("sess_invoke", "resume_agent")
+    assert [event.type for event in child_events] == [
         "run_started",
         "user_message",
         "memory_retrieval",
@@ -255,19 +266,11 @@ def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_pa
         "run_finished",
         AGENT_RESULT_SUMMARY_EVENT,
     ]
-
-    assignment = events[0]
-    assert assignment.agent_id == "agent_main"
-    assert assignment.run_id == "run_agent_main"
-    assert assignment.payload["target_agent_id"] == "resume_agent"
-    assert assignment.payload["instruction"] == "解析当前会话里的简历文件"
-
-    child_events = events[1:6]
     assert all(event.agent_id == "resume_agent" for event in child_events)
     assert all(event.run_id == result.child_run_id for event in child_events)
     assert all(event.parent_run_id == "run_agent_main" for event in child_events)
 
-    summary = events[-1]
+    summary = orchestration_events[-1]
     assert summary.agent_id == "resume_agent"
     assert summary.parent_run_id == "run_agent_main"
     assert summary.payload["target_agent_id"] == "agent_main"

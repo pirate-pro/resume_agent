@@ -26,6 +26,12 @@ from app.infra.storage.session_serializers import (
 __all__ = ["JsonlSessionRepository"]
 _logger = logging.getLogger(__name__)
 
+_DEFAULT_ENTRY_AGENT_ID = "agent_main"
+_ORCHESTRATION_EVENT_TYPES = {
+    "agent_task_assigned",
+    "agent_result_summary",
+}
+
 
 class JsonlSessionRepository:
     """Store session metadata/events in local JSON and JSONL files."""
@@ -44,6 +50,7 @@ class JsonlSessionRepository:
         events_path = session_dir / "events.jsonl"
         artifacts_path = session_dir / "artifacts.json"
         artifacts_dir = session_dir / "artifacts"
+        agents_dir = session_dir / "agents"
         workspaces_path = session_dir / "workspaces"
 
         if metadata_path.exists():
@@ -66,6 +73,7 @@ class JsonlSessionRepository:
         try:
             session_dir.mkdir(parents=True, exist_ok=True)
             artifacts_dir.mkdir(parents=True, exist_ok=True)
+            agents_dir.mkdir(parents=True, exist_ok=True)
             workspaces_path.mkdir(parents=True, exist_ok=True)
             events_path.touch(exist_ok=True)
             write_json_atomically(
@@ -169,33 +177,22 @@ class JsonlSessionRepository:
     def list_session_messages(self, session_id: str) -> list[dict[str, Any]]:
         """Reconstruct chat messages from session events."""
         session_id = self._validate_session_id(session_id)
-        events_path = self._session_dir(session_id) / "events.jsonl"
-        if not events_path.exists():
+        if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
         messages: list[dict[str, Any]] = []
-        try:
-            with events_path.open("r", encoding="utf-8") as handle:
-                for raw_line in handle:
-                    stripped = raw_line.strip()
-                    if not stripped:
-                        continue
-                    event: dict[str, Any] = json.loads(stripped)
-                    etype = event.get("type", "")
-                    payload = event.get("payload", {})
-                    if etype == "user_message":
-                        messages.append({
-                            "role": "user",
-                            "content": payload.get("content", ""),
-                            "created_at": event.get("created_at"),
-                        })
-                    elif etype == "assistant_message":
-                        messages.append({
-                            "role": "assistant",
-                            "content": payload.get("content", ""),
-                            "created_at": event.get("created_at"),
-                        })
-        except (json.JSONDecodeError, OSError) as exc:
-            raise StorageError(f"Failed to read events for '{session_id}': {exc}") from exc
+        for event in self.list_events(session_id):
+            if event.type == "user_message":
+                messages.append({
+                    "role": "user",
+                    "content": event.payload.get("content", ""),
+                    "created_at": event.created_at,
+                })
+            elif event.type == "assistant_message":
+                messages.append({
+                    "role": "assistant",
+                    "content": event.payload.get("content", ""),
+                    "created_at": event.created_at,
+                })
         return messages
 
     def delete_session(self, session_id: str) -> None:
@@ -215,19 +212,35 @@ class JsonlSessionRepository:
             raise ValidationError("event.session_id must match append target session_id.")
         if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
-        line = event_to_payload(event)
-        events_path = self._session_dir(session_id) / "events.jsonl"
-        try:
-            with events_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(line, ensure_ascii=False) + "\n")
-            self._touch_updated_at(
-                session_id,
-                participant=event.agent_id,
-                entry_agent_id=event.agent_id if event.type == "run_started" else None,
-            )
-        except OSError as exc:
-            raise StorageError(f"Failed to append event for '{session_id}': {exc}") from exc
+        self.append_agent_event(session_id, event.agent_id, event)
+        if _is_orchestration_event(event):
+            self.append_orchestration_event(session_id, event)
         _logger.debug("事件已写入: session_id=%s event_id=%s event_type=%s", session_id, event.event_id, event.type)
+
+    def append_agent_event(self, session_id: str, agent_id: str, event: EventRecord) -> None:
+        session_id = self._validate_session_id(session_id)
+        agent_id = self._validate_agent_id(agent_id)
+        if event.session_id != session_id:
+            raise ValidationError("event.session_id must match append target session_id.")
+        if event.agent_id != agent_id:
+            raise ValidationError("event.agent_id must match append target agent_id.")
+        if self.get_session(session_id) is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        self._append_event_record(self._agent_events_path(session_id, agent_id), event)
+        self._touch_updated_at(
+            session_id,
+            participant=event.agent_id,
+            entry_agent_id=event.agent_id if event.type == "run_started" and event.parent_run_id is None else None,
+        )
+
+    def append_orchestration_event(self, session_id: str, event: EventRecord) -> None:
+        session_id = self._validate_session_id(session_id)
+        if event.session_id != session_id:
+            raise ValidationError("event.session_id must match append target session_id.")
+        if self.get_session(session_id) is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        self._append_event_record(self._orchestration_events_path(session_id), event)
+        self._touch_updated_at(session_id, participant=event.agent_id)
 
     def replace_events(self, session_id: str, events: list[EventRecord]) -> None:
         session_id = self._validate_session_id(session_id)
@@ -243,7 +256,7 @@ class JsonlSessionRepository:
     ) -> bool:
         session_id = self._validate_session_id(session_id)
         normalized_expected = self._validate_event_id(expected_last_event_id)
-        current_events = self.list_events(session_id)
+        current_events = self.list_orchestration_events(session_id)
         current_last_event_id = current_events[-1].event_id if current_events else None
         if current_last_event_id != normalized_expected:
             _logger.info(
@@ -257,7 +270,68 @@ class JsonlSessionRepository:
         _logger.info("会话事件已条件重写: session_id=%s event_count=%s", session_id, len(events))
         return True
 
+    def replace_agent_events_if_unchanged(
+        self,
+        session_id: str,
+        agent_id: str,
+        events: list[EventRecord],
+        *,
+        expected_last_event_id: str,
+    ) -> bool:
+        session_id = self._validate_session_id(session_id)
+        agent_id = self._validate_agent_id(agent_id)
+        normalized_expected = self._validate_event_id(expected_last_event_id)
+        current_events = self.list_agent_events(session_id, agent_id)
+        current_last_event_id = current_events[-1].event_id if current_events else None
+        if current_last_event_id != normalized_expected:
+            _logger.info(
+                "agent 事件重写跳过，events 已变化: session_id=%s agent_id=%s expected_last=%s current_last=%s",
+                session_id,
+                agent_id,
+                normalized_expected,
+                current_last_event_id,
+            )
+            return False
+        self._replace_agent_events_validated(session_id=session_id, agent_id=agent_id, events=events)
+        _logger.info(
+            "agent 事件已条件重写: session_id=%s agent_id=%s event_count=%s",
+            session_id,
+            agent_id,
+            len(events),
+        )
+        return True
+
     def _replace_events_validated(self, *, session_id: str, events: list[EventRecord]) -> None:
+        self._replace_events_at_path(
+            session_id=session_id,
+            events=events,
+            events_path=self._orchestration_events_path(session_id),
+        )
+
+    def _replace_agent_events_validated(
+        self,
+        *,
+        session_id: str,
+        agent_id: str,
+        events: list[EventRecord],
+    ) -> None:
+        agent_id = self._validate_agent_id(agent_id)
+        for event in events:
+            if isinstance(event, EventRecord) and event.agent_id != agent_id:
+                raise ValidationError("agent events entries must match target agent_id.")
+        self._replace_events_at_path(
+            session_id=session_id,
+            events=events,
+            events_path=self._agent_events_path(session_id, agent_id),
+        )
+
+    def _replace_events_at_path(
+        self,
+        *,
+        session_id: str,
+        events: list[EventRecord],
+        events_path: Path,
+    ) -> None:
         if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
         if not isinstance(events, list):
@@ -274,9 +348,9 @@ class JsonlSessionRepository:
             seen_ids.add(event.event_id)
             lines.append(event_to_payload(event))
 
-        events_path = self._session_dir(session_id) / "events.jsonl"
         tmp_path = events_path.with_name(f".{events_path.name}.{uuid4().hex}.tmp")
         try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
             with tmp_path.open("w", encoding="utf-8") as handle:
                 for line in lines:
                     handle.write(json.dumps(line, ensure_ascii=False) + "\n")
@@ -287,9 +361,47 @@ class JsonlSessionRepository:
 
     def list_events(self, session_id: str) -> list[EventRecord]:
         session_id = self._validate_session_id(session_id)
-        events_path = self._session_dir(session_id) / "events.jsonl"
-        if not events_path.exists():
+        if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
+        entry_agent_id = self._entry_agent_id(session_id)
+        records = _merge_events(
+            self.list_agent_events(session_id, entry_agent_id),
+            self.list_orchestration_events(session_id),
+        )
+        _logger.debug("读取会话可见事件完成: session_id=%s count=%s", session_id, len(records))
+        return records
+
+    def list_agent_events(self, session_id: str, agent_id: str) -> list[EventRecord]:
+        session_id = self._validate_session_id(session_id)
+        agent_id = self._validate_agent_id(agent_id)
+        if self.get_session(session_id) is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        records = self._read_events_file(self._agent_events_path(session_id, agent_id))
+        _logger.debug(
+            "读取 agent 事件完成: session_id=%s agent_id=%s count=%s",
+            session_id,
+            agent_id,
+            len(records),
+        )
+        return records
+
+    def list_orchestration_events(self, session_id: str) -> list[EventRecord]:
+        session_id = self._validate_session_id(session_id)
+        if self.get_session(session_id) is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        records = self._read_events_file(self._orchestration_events_path(session_id))
+        _logger.debug("读取编排事件完成: session_id=%s count=%s", session_id, len(records))
+        return records
+
+    def list_run_events(self, session_id: str, agent_id: str, run_id: str) -> list[EventRecord]:
+        session_id = self._validate_session_id(session_id)
+        agent_id = self._validate_agent_id(agent_id)
+        run_id = self._validate_run_id(run_id)
+        return [event for event in self.list_agent_events(session_id, agent_id) if event.run_id == run_id]
+
+    def _read_events_file(self, events_path: Path) -> list[EventRecord]:
+        if not events_path.exists():
+            return []
         records: list[EventRecord] = []
         try:
             with events_path.open("r", encoding="utf-8") as handle:
@@ -300,8 +412,7 @@ class JsonlSessionRepository:
                     payload: dict[str, Any] = json.loads(stripped)
                     records.append(event_from_payload(payload))
         except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
-            raise StorageError(f"Failed to read events for '{session_id}': {exc}") from exc
-        _logger.debug("读取会话事件完成: session_id=%s count=%s", session_id, len(records))
+            raise StorageError(f"Failed to read events file '{events_path}': {exc}") from exc
         return records
 
     def list_recent_events(self, session_id: str, limit: int) -> list[EventRecord]:
@@ -451,8 +562,29 @@ class JsonlSessionRepository:
     def _session_dir(self, session_id: str) -> Path:
         return self._sessions_dir / session_id
 
+    def _orchestration_events_path(self, session_id: str) -> Path:
+        return self._session_dir(session_id) / "events.jsonl"
+
+    def _agent_events_path(self, session_id: str, agent_id: str) -> Path:
+        return self._session_dir(session_id) / "agents" / agent_id / "events.jsonl"
+
     def _artifacts_manifest_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "artifacts.json"
+
+    def _append_event_record(self, events_path: Path, event: EventRecord) -> None:
+        line = event_to_payload(event)
+        try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            with events_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(line, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            raise StorageError(f"Failed to append event file '{events_path}': {exc}") from exc
+
+    def _entry_agent_id(self, session_id: str) -> str:
+        meta = self.get_session(session_id)
+        if meta is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+        return meta.entry_agent_id or _DEFAULT_ENTRY_AGENT_ID
 
     def _read_artifacts_state(self, session_id: str) -> dict[str, Any]:
         path = self._artifacts_manifest_path(session_id)
@@ -531,6 +663,11 @@ class JsonlSessionRepository:
             raise ValidationError("event_id must be a non-empty string.")
         return event_id.strip()
 
+    def _validate_run_id(self, run_id: str) -> str:
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise ValidationError("run_id must be a non-empty string.")
+        return run_id.strip()
+
     def _validate_agent_id(self, agent_id: str) -> str:
         if not isinstance(agent_id, str) or not agent_id.strip():
             raise ValidationError("agent_id must be a non-empty string.")
@@ -544,3 +681,14 @@ class JsonlSessionRepository:
             error_prefix=f"Failed to update metadata for '{session_id}'",
         )
 
+
+def _is_orchestration_event(event: EventRecord) -> bool:
+    return event.type in _ORCHESTRATION_EVENT_TYPES
+
+
+def _merge_events(*event_groups: list[EventRecord]) -> list[EventRecord]:
+    by_id: dict[str, EventRecord] = {}
+    for group in event_groups:
+        for event in group:
+            by_id.setdefault(event.event_id, event)
+    return sorted(by_id.values(), key=lambda item: item.created_at)

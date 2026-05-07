@@ -48,8 +48,7 @@ class MidTermEventPackBuilder:
         context: RunContext,
         cursor: FlushCursor,
     ) -> tuple[list[MidTermEventPack] | None, str]:
-        events = self._session_repository.list_events(context.session_id)
-        agent_events = [event for event in events if event.agent_id == context.agent_id]
+        agent_events = self._session_repository.list_agent_events(context.session_id, context.agent_id)
         if not agent_events:
             return None, "no_agent_events"
 
