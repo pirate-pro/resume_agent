@@ -1574,7 +1574,7 @@
     - `app/api/deps.py` 保留为聚合导出，避免一次性改动所有调用点。
   - 拆分 `ChatService` 外围职责：
     - `SessionQueryService`：会话列表、会话元数据、历史消息、事件、删除。
-    - `SessionFileService`：文件上传、active files、workspace 预览。
+    - `SessionArtifactService`：文件上传、active artifacts、workspace 预览。
     - `MemoryQueryService`：memory list/search 查询入口。
     - `ChatService` 保留 chat / chat_stream workflow facade。
   - 测试类型债修复：
@@ -1611,17 +1611,17 @@
 
 74. [完成] API 路由按用例依赖具体 service，移除 ChatService 非 chat facade 职责。
 - 背景：
-  - 第 72 步已经拆出 `SessionQueryService` / `SessionFileService` / `MemoryQueryService`，但 API 路由仍统一依赖 `ChatService` 转发。
+  - 第 72 步已经拆出 `SessionQueryService` / `SessionArtifactService` / `MemoryQueryService`，但 API 路由仍统一依赖 `ChatService` 转发。
   - 这会让 `ChatService` 继续承担“上帝 facade”的外观，不利于后续拆分和测试。
 - 说明：
   - `app/api/chat.py`：
     - chat/chat_stream 只依赖 `ChatService`。
     - session 列表、消息、事件、更新、删除依赖 `SessionQueryService`。
-    - 文件上传、active files、workspace preview 依赖 `SessionFileService`。
+    - 文件上传、active artifacts、workspace preview 依赖 `SessionArtifactService`。
     - memory 查询依赖 `MemoryQueryService`。
   - `app/services/chat_service.py`：
     - 移除非 chat 代理方法：session query/file/memory 相关方法不再挂在 `ChatService` 上。
-    - 构造函数移除 `SessionQueryService` / `SessionFileService` / `MemoryQueryService` 注入。
+    - 构造函数移除 `SessionQueryService` / `SessionArtifactService` / `MemoryQueryService` 注入。
   - `tests/helpers.py`：
     - 新增 `ChatServiceBundle` 和 `build_chat_service_bundle(...)`，让 API 测试可以明确 override 各类 service。
     - 保留 `build_chat_service(...)` 兼容已有 runtime/chat service 测试。
@@ -1664,7 +1664,7 @@
     - `memory.py`：`memory_write/search/inspect/explain/forget/update`。
     - `state.py`：`state_set/publish/list`。
     - `workspace.py`：`workspace_write_file/read_file`。
-    - `session_files.py`：`session_list_files/read_file/plan_file_access/search_file`。
+    - `session_artifacts.py`：`session_list_files/read_file/plan_file_access/search_file`。
   - `app/tools/builtins.py` 改为兼容导出层：
     - 现有 `from app.tools.builtins import ...` 不需要修改。
     - 工具注册代码和测试 helper 保持原导入路径可用。
@@ -1852,8 +1852,8 @@
   - 新增 `app/infra/storage/session_serializers.py`：
     - `SessionMeta <-> payload`
     - `EventRecord <-> payload`
-    - `SessionFile <-> payload`
-    - file id 校验。
+    - `SessionArtifact <-> payload`
+    - artifact id 校验。
     - active file status 判断。
     - metadata/event 兼容字段读取。
   - `app/infra/storage/jsonl_session_repository.py` 保留：
@@ -1900,20 +1900,20 @@
   - `session_list_files/read_file/plan_file_access/search_file` 的工具入口已经独立出来，但文件懒解析、文本搜索、访问策略、列表序列化仍适合从 Tool 类中继续抽离。
   - 这类逻辑属于 session file 工具的内部策略，不应该和 tool definition / execute 编排混在一起。
 - 说明：
-  - 新增 `app/tools/builtin_tools/session_file_helpers.py`：
+  - 新增 `app/tools/builtin_tools/session_artifact_helpers.py`：
     - session file listing 序列化。
-    - file_id 查找与错误转换。
+    - artifact_id 查找与错误转换。
     - 上传文件懒解析与 parsed text 落盘。
     - txt/md/json/pdf 文本解析。
     - keyword hit 搜索。
     - token 粗估。
     - file access plan 决策。
-  - `app/tools/builtin_tools/session_files.py` 保留：
+  - `app/tools/builtin_tools/session_artifacts.py` 保留：
     - 四个 session file 工具类。
     - tool definition。
     - execute 参数读取、context 校验和 result 包装。
   - 文件体积变化：
-    - `app/tools/builtin_tools/session_files.py` 从原大工具文件拆分后继续收敛到约 216 行。
+    - `app/tools/builtin_tools/session_artifacts.py` 从原大工具文件拆分后继续收敛到约 216 行。
 - 验证结果：
   - `uv run pytest tests/test_tool_registry.py tests/test_context_assembler.py tests/test_chat_api.py tests/test_chat_service.py -q`：通过。
   - `uv run mypy`：通过（`Success: no issues found in 148 source files`）
@@ -2535,3 +2535,230 @@
   - `uv run pytest tests/test_agent_task_runtime.py tests/test_agent_invocation_service.py tests/test_agent_registry.py tests/test_multi_agent_contracts.py tests/test_context_assembler.py tests/test_tool_registry.py -q`：通过。
   - `uv run mypy`：通过（`Success: no issues found in 165 source files`）。
   - `uv run pytest -q`：全量通过。
+
+106. [完成] Multi-agent F4：注入可调用 Agent Catalog 与 main-agent 编排规则。
+- 背景：
+  - main-agent 已能看到 `delegate_agents` 工具，但缺少“可调用谁、什么时候该委派”的明确上下文。
+  - 如果只暴露工具，不注入 child-agent catalog，模型只能猜 target agent，调度稳定性不足。
+- 说明：
+  - `ContextAssembler` 新增可选 `AgentRegistry` 注入：
+    - 仅 main-agent 加载可调用 child-agent。
+    - other-agent 不注入可调用目录，避免 child-agent 获得编排视角。
+  - `section_builder` 新增 `available_child_agents` prompt section：
+    - 注入 `agent_id / display_name / role / description`。
+    - 明确委派规则：只委派匹配角色的独立子任务；独立任务用一次 `delegate_agents` 并发；有依赖的任务不能伪并发。
+  - `app/agents/default/AGENT.md` 增加多 Agent 编排规则：
+    - main-agent 负责拆分、委派、汇总。
+    - child-agent instruction 必须窄、明确、带约束和必要 artifact_refs。
+    - child 结果返回后由 main-agent 综合判断，不直接暴露内部编排噪声。
+  - DI 更新：
+    - `get_context_assembler()` 注入 `get_agent_registry()`。
+- 边界：
+  - 本阶段提升 main-agent 自主调度的提示条件，不引入新的调度器。
+  - agent catalog 来自配置，不硬编码到 prompt；新增 agent 后只需更新 registry/capability/doc。
+- 新增测试：
+  - 验证 main-agent prompt 注入 `resume_agent` catalog。
+  - 验证 other-agent prompt 不注入可调用 agent catalog。
+- 验证结果：
+  - `uv run pytest tests/test_context_assembler.py tests/test_agent_task_runtime.py tests/test_agent_invocation_service.py tests/test_agent_registry.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 165 source files`）。
+  - `uv run pytest -q`：全量通过。
+
+107. [完成] Multi-agent F4 实战验证与调度规则加固。
+- 真实模型：
+  - `mimo-v2.5-pro`
+- 测试场景：
+  - 用户提供简历片段，要求输出核心优势、风险点和适合岗位方向。
+  - 用户没有显式要求调用 `delegate_agents`。
+- 发现问题：
+  - 第一次 main-agent 会调用 `delegate_agents`，但传入了不存在的 `skill_names=["resume_parser"]`，导致 child run 失败。
+  - 收紧工具契约后，main-agent 一度选择直接回答或调用 `state_set`，说明“prefer delegate”提示强度不足。
+- 修正：
+  - `delegate_agents` 工具 schema 移除 `skill_names`，child skills 由后端默认策略控制，避免模型伪造 skill。
+  - `delegate_agents` 描述改为支持一个或多个专业子任务。
+  - main-agent `AGENT.md` 增加强规则：
+    - 一次性问题不要写 `state_set`。
+    - 用户任务明显匹配 child-agent 角色时，必须先调用 `delegate_agents`。
+    - 单个专业任务也可以委派。
+  - agent catalog section 增加强规则：
+    - 用户任务匹配 listed child agent 时，final answer 前必须调用 `delegate_agents`。
+    - 不要直接代做可匹配 child-agent 的专业任务。
+- 最终验证结果：
+  - main-agent 成功自主调用 `delegate_agents`。
+  - `resume_agent` 成功执行 child run。
+  - 事件链完整：
+    - `tool_call(delegate_agents)`
+    - `agent_task_assigned`
+    - child `run_started/user_message/memory_retrieval/assistant_message/run_finished`
+    - `agent_result_summary(completed)`
+    - parent `tool_result`
+    - parent `assistant_message/run_finished`
+  - main-agent 基于 child result 汇总最终回答。
+- 验证命令：
+  - `uv run pytest tests/test_context_assembler.py tests/test_agent_task_runtime.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 165 source files`）。
+  - `uv run pytest -q`：全量通过。
+- 清理：
+  - 已删除本轮真实测试生成的临时 `data/sessions`、`data/state` 和 `data/memory` flush job/cursor。
+
+108. [完成] Multi-agent F5：按 agent 隔离 skill。
+- 背景：
+  - tool 已有 `allowed_tools`，但 skill 仍主要由请求或内部默认值控制。
+  - 在 multi-agent 下，skill 会改变 agent 行为边界，不能让 main-agent 的 `memory-editor` 等能力泄漏给 child-agent。
+- 说明：
+  - `AgentCapability` 增加：
+    - `allowed_skills`
+    - `default_skills`
+    - `allows_skill()`
+    - `resolve_skill_names()`
+  - 配置更新：
+    - `agent_main` 允许全部 skill，默认 `base/memory/memory-editor/tools/file-reader`。
+    - `resume_agent` 只允许 `base/tools/file-reader`，默认同上。
+  - `ChatService` 入口 run：
+    - 如果请求未指定 skill，使用 entry-agent 的 `default_skills`。
+    - 如果请求指定 skill，必须是 entry-agent 的 `allowed_skills` 子集。
+  - `AgentInvocationService` child run：
+    - child skill 从 target-agent capability 解析。
+    - 模型或上层传入未授权 child skill 时直接拒绝。
+  - `AgentCapabilityRegistry.for_tests()` 的 `resume_agent` 也改为受限配置，避免测试环境掩盖泄漏。
+- 新增测试：
+  - entry-agent 请求未授权 skill 会拒绝。
+  - entry-agent 不指定 skill 时使用 default skill。
+  - child-agent 请求未授权 skill 会拒绝。
+  - agent registry 能解析 `resume_agent` 默认 skill，且 `memory-editor` 不允许。
+- 验证结果：
+  - `uv run pytest tests/test_multi_agent_contracts.py tests/test_agent_registry.py tests/test_agent_invocation_service.py tests/test_agent_task_runtime.py tests/test_tool_registry.py tests/test_memory_manager.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 165 source files`）。
+  - `uv run pytest -q`：全量通过。
+
+109. [完成] Multi-agent F6：新增第二个 child-agent 并验证隔离。
+- 背景：
+  - 只有 `resume_agent` 时，只能验证“main -> child”单线委派，无法覆盖多个 other-agent 并发、上下文隔离和 memory 分区隔离。
+- 说明：
+  - 新增 `job_agent`：
+    - 职责限定为岗位 JD 解析、岗位要求结构化和岗位匹配信号提取。
+    - 默认使用 `base/tools/file-reader`，不暴露 `memory-editor`。
+    - 只允许读取 `agent_long/shared_long`，只允许写自己的 `agent_long`。
+  - `agent_main` 的可调用目录扩展为 `resume_agent + job_agent`。
+  - 测试补强：
+    - registry/catalog 能同时暴露两个 child-agent。
+    - `resume_agent` 与 `job_agent` 可并发执行。
+    - 两个 child-agent 的 AGENT/SOUL、assigned task、events 不互相进入上下文。
+    - 两个 child-agent 的长期 memory 和中期 daily 按 agent 分目录隔离。
+- 验证结果：
+  - `uv run pytest tests/test_agent_registry.py tests/test_context_assembler.py tests/test_agent_task_runtime.py tests/test_multi_agent_contracts.py tests/test_mid_term_flusher.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 165 source files`）。
+  - `uv run pytest -q`：全量通过。
+
+110. [完成] Multi-agent F6 压力测试与真实链路修正。
+- 测试范围：
+  - 确定性回归：`mypy`、全量 pytest、多 agent/memory/mid-term/context pressure 定向测试。
+  - 真实模型端到端：`agent_main` 面对“简历 + JD”任务，自主委派 `resume_agent` 和 `job_agent`，并汇总结果。
+  - 隔离验证：child-agent 的上下文、事件、长期 facts、中期 daily 均按 agent 分区。
+  - 失败路径：一个 child-agent 失败时，task group 返回 `partial_failed`，不影响另一个 child-agent 结果。
+- 发现问题：
+  - main-agent 第一次真实测试会把用户粘贴的简历/JD写入 workspace 文件，再把 workspace 路径传给 child-agent。
+  - child-agent 默认不能读 main-agent 临时 workspace 文件，导致第一轮 child run 出现失败/工具上限；main-agent 后续内联原文重试后才成功。
+  - 真实脚本退出过快时，后台 mid-term flush 可能留下 `running` job；下一进程默认会跳过 running job，存在永久卡住风险。
+- 修正：
+  - main-agent 编排规则、agent catalog section、`delegate_agents` 工具描述补充材料传递规则：
+    - 用户已粘贴原文时，必须把相关原文直接放进 child instruction。
+    - `artifact_refs` 只用于 child-agent 明确可访问的上传 artifact 或会话 artifact ID。
+    - 不要创建 workspace 文件只为了把路径传给 child-agent。
+  - `resume_agent/job_agent` 文档补充：
+    - instruction 已包含原文时直接分析，不反复查找文件。
+    - 只有 artifact_refs 指向可访问会话 artifact 时才尝试读取资料。
+  - `MidTermFlusher` 增加 stale `running` job 恢复：
+    - `running_job_stale_after_seconds` 超时后恢复为可重试 job。
+    - 覆盖进程中断后 running job 不永久阻塞的场景。
+- 最终真实验证结果：
+  - `agent_main` 只调用 1 次 `delegate_agents`。
+  - 未再调用 `workspace_write_file`。
+  - `resume_agent/job_agent` 均完成并返回 `agent_result_summary`。
+  - `delegate_agents` 工具结果包含每个 child 的 `status/summary/answer/child_run_id`。
+  - `agent_main/job_agent/resume_agent` 三个 agent 的 mid-term flush jobs 全部 `succeeded`。
+  - daily 文件分别写入：
+    - `memory/agents/agent_main/mid_term/daily/...`
+    - `memory/agents/resume_agent/mid_term/daily/...`
+    - `memory/agents/job_agent/mid_term/daily/...`
+- 验证结果：
+  - `uv run pytest tests/test_memory_pipeline_pressure.py tests/test_agent_task_runtime.py tests/test_multi_agent_contracts.py tests/test_mid_term_flusher.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 165 source files`）。
+  - `uv run pytest -q`：全量通过。
+
+111. [完成] Multi-agent workspace/artifact 边界文档与最小护栏。
+- 背景：
+  - 上传文件、用户粘贴文本、agent workspace 文件在 multi-agent 下应有不同可见性。
+  - workspace 是 agent 私有中间产物，不应默认作为 child-agent 可访问资料。
+- 说明：
+  - 新增文档 `MULTI_AGENT_WORKSPACE_ARTIFACT_DESIGN_2026-05-06.md`：
+    - 定义 workspace、session artifacts、artifact_refs 的职责边界。
+    - 明确当前阶段只做最小护栏，完整 Artifact Registry / publish / cleanup 后续单独做。
+    - 规划 `uploaded_file / pasted_text / generated_file` 三类 artifact 及权限规则。
+  - 新增 `app/services/agent_artifact_refs.py`：
+    - `artifact_refs` 只接受当前会话 artifact id 形态。
+    - 拒绝 workspace path、相对路径、裸文件名。
+  - 接入：
+    - `AgentInvocationRequest`
+    - `AgentInvocationResult`
+    - `AgentTaskSpec`
+    - `AgentTaskResult`
+- 当前阶段结论：
+  - 不完整重构 workspace。
+  - workspace 保留为 agent 私有工作台。
+  - child-agent 共享资料后续必须走 session artifact registry。
+- 新增测试：
+  - `delegate_agents` 允许 `artifact_refs=["artifact_resume_001"]`。
+  - `delegate_agents` 拒绝 `artifact_refs=["resume.txt"]`。
+  - `AgentTaskSpec` 拒绝 `artifact_refs=["workspace/resume.txt"]`。
+- 验证结果：
+  - `uv run pytest tests/test_agent_task_runtime.py tests/test_agent_invocation_service.py tests/test_context_assembler.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 166 source files`）。
+
+112. [完成] Artifact-first 硬切主链路。
+- 背景：
+  - 继续保留 `files.json/workspace/uploads` 会让 multi-agent 资料共享、权限校验和上下文优先级长期混乱。
+  - 本轮按 artifact-first 方案硬切内部主链路，不做旧存储兼容。
+- 设计文档：
+  - 重写 `MULTI_AGENT_WORKSPACE_ARTIFACT_DESIGN_2026-05-06.md`。
+  - 明确 artifact 是 session 共享资料唯一事实源。
+  - 明确 workspace 是 agent 私有中间产物。
+  - 明确当前轮 required artifacts 属于高优先级上下文，超预算时应 flush + compact 后重组。
+- 实现：
+  - 新增 `SessionArtifact` 领域模型。
+  - 新 session 初始化 `artifacts.json/artifacts/workspaces`，不再创建 `files.json`。
+  - 上传文件写入 `artifacts/<artifact_id>/original.bin`，manifest 写 `artifacts.json`。
+  - ContextAssembler 注入 active artifacts metadata，不再注入旧上传资料 metadata。
+  - 新增 artifact 工具：
+    - `session_list_artifacts`
+    - `session_plan_artifact_access`
+    - `session_read_artifact`
+    - `session_search_artifact`
+  - 移除旧 session file 工具注册与实现文件。
+  - `artifact_refs` 只接受 `artifact_*`，并校验当前 session 中存在且 `visibility=session_shared`。
+  - workspace 工具改为按 `agent_id` 隔离到 `workspaces/<agent_id>/`，读取不再向父目录 fallback。
+  - 新增 `publish_artifact`，可把当前 agent workspace 文件发布为 session shared artifact。
+- 清理补充：
+  - 前端 HTTP 路由改为 `/artifacts`、`/active-artifacts`。
+  - DTO 和前端状态改为 `artifact_id`、`active_artifact_ids`。
+  - 删除旧上传资料领域模型、repository 适配方法、旧 service 和旧 tools。
+- 验证结果：
+  - `uv run mypy`：通过（`Success: no issues found in 166 source files`）。
+  - `uv run pytest -q`：全量通过。
+
+113. [完成] Artifact-first 旧链路彻底清理与压测。
+- 背景：
+  - 上一轮硬切后，后端主链路已改为 artifact，但 Flutter 客户端、评估脚本和部分历史文档仍残留旧命名。
+  - 本轮按“不要兼容、不要残留”的原则继续清理。
+- 实现：
+  - 移除旧上传资料 service 文件与旧 tool 文件。
+  - 后端 API/DTO/service/repository/tool/context/tests 统一使用 `artifact_id`、`active_artifact_ids`、`artifacts`。
+  - Web 前端和 Flutter 客户端统一切到 `/artifacts`、`/active-artifacts`、`SessionArtifactView`。
+  - 压测脚本与评估脚本改为 `path_or_artifact_id`。
+  - 新增 `tests/test_artifact_pipeline_pressure.py`，覆盖批量上传、激活、manifest、惰性解析、读取、搜索、missing id 过滤。
+- 验证结果：
+  - 旧标识扫描：`app/tests/flutter_app/lib/scripts/tools` 和当前设计/进度文档无旧关键标识残留。
+  - `uv run pytest tests/test_artifact_pipeline_pressure.py tests/test_memory_pipeline_pressure.py tests/test_multi_agent_contracts.py tests/test_agent_task_runtime.py tests/test_context_compactor.py tests/test_mid_term_flush_worker.py -q`：通过。
+  - `uv run mypy`：通过（`Success: no issues found in 167 source files`）。
+  - `uv run pytest -q`：全量通过。
+  - 当前环境没有 `dart/flutter` 命令，Flutter 只能完成代码级清理，未跑 analyzer。

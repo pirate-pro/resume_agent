@@ -387,10 +387,10 @@ Flutter 聊天气泡与流式气泡现在都支持展示 `artifacts`：
 
 在不继续扩协议的前提下，先补了最小可用交互：
 
-1. 如果 `artifact.path` 是 `file_id:...`
-   1. 前端会尝试解析为当前会话已上传文件
-   2. 若命中，会显示 `文件名 (file_id)`
-   3. 支持“激活文件”，直接把它加入当前会话上下文
+1. 如果 `artifact.path` 是 `artifact_id:...`
+   1. 前端会尝试解析为当前会话 artifact
+   2. 若命中，会显示 `artifact 标题 (artifact_id)`
+   3. 支持“激活 artifact”，直接把它加入当前会话上下文
 2. 如果 `artifact.path` 是普通路径
    1. 前端显示原始路径
    2. 支持“复制路径”
@@ -634,8 +634,8 @@ Flutter 聊天气泡与流式气泡现在都支持展示 `artifacts`：
 
 Flutter 前端调整为：
 
-1. `file_id:` 类型 artifact：
-   1. 继续执行“激活文件”
+1. `artifact_id:` 类型 artifact：
+   1. 继续执行“激活 artifact”
    2. 激活成功后同步进入当前上下文
 2. workspace 路径类型 artifact：
    1. 主按钮改为“查看内容”
@@ -644,11 +644,11 @@ Flutter 前端调整为：
 
 ### 14.3 激活文件后增加输入区高亮反馈
 
-仅仅把文件加入 `active_file_ids` 不够，用户看不到结果。
+仅仅把文件加入 `active_artifact_ids` 不够，用户看不到结果。
 
 本阶段补了一个轻量状态：
 
-1. `recentActivatedFileId`
+1. `recentActivatedArtifactId`
 2. 激活成功后保留约 3 秒
 3. 输入框上方的“已激活上下文”文件 chip 会用强调样式高亮
 
