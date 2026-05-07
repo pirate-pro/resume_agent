@@ -196,12 +196,12 @@ class ChatService:
 
     def _prepare_run_input(self, request: ChatRequest) -> tuple[SessionMeta, AgentRunInput]:
         session = self._session_manager.get_or_create_session(request.session_id)
-        if request.active_file_ids is not None:
-            self._session_repository.set_active_file_ids(session.session_id, request.active_file_ids)
-        skill_names = request.skill_names or ["base", "memory", "memory-editor", "tools", "file-reader"]
+        if request.active_artifact_ids is not None:
+            self._session_repository.set_active_artifact_ids(session.session_id, request.active_artifact_ids)
         normalized_agent_id = request.entry_agent_id.strip()
         # 入口 agent 必须先在能力矩阵中声明，避免隐式 agent 绕过权限模型。
-        self._capability_registry.require(normalized_agent_id)
+        capability = self._capability_registry.require(normalized_agent_id)
+        skill_names = capability.resolve_skill_names(request.skill_names or None)
         run_context = RunContext(
             session_id=session.session_id,
             run_id=f"run_{uuid4().hex[:12]}",

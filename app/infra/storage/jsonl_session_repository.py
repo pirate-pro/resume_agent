@@ -10,17 +10,17 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.errors import SessionNotFoundError, StorageError, ValidationError
-from app.domain.models import EventRecord, SessionFile, SessionMeta
+from app.domain.models import EventRecord, SessionArtifact, SessionMeta
 from app.infra.storage.session_io import utc_now, write_json_atomically
 from app.infra.storage.session_serializers import (
+    artifact_from_payload,
+    artifact_to_payload,
     event_from_payload,
     event_to_payload,
-    file_from_payload,
-    file_to_payload,
-    is_activatable_file_status,
+    is_activatable_artifact_status,
     session_meta_from_payload,
     session_meta_to_payload,
-    validate_file_id,
+    validate_artifact_id,
 )
 
 __all__ = ["JsonlSessionRepository"]
@@ -42,8 +42,9 @@ class JsonlSessionRepository:
         session_dir = self._session_dir(session_id)
         metadata_path = session_dir / "metadata.json"
         events_path = session_dir / "events.jsonl"
-        files_path = session_dir / "files.json"
-        workspace_path = session_dir / "workspace"
+        artifacts_path = session_dir / "artifacts.json"
+        artifacts_dir = session_dir / "artifacts"
+        workspaces_path = session_dir / "workspaces"
 
         if metadata_path.exists():
             loaded = self.get_session(session_id)
@@ -64,12 +65,13 @@ class JsonlSessionRepository:
         )
         try:
             session_dir.mkdir(parents=True, exist_ok=True)
-            workspace_path.mkdir(parents=True, exist_ok=True)
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            workspaces_path.mkdir(parents=True, exist_ok=True)
             events_path.touch(exist_ok=True)
             write_json_atomically(
-                files_path,
-                {"files": [], "active_file_ids": []},
-                error_prefix=f"Failed to initialize files manifest for '{session_id}'",
+                artifacts_path,
+                {"artifacts": [], "active_artifact_ids": []},
+                error_prefix=f"Failed to initialize artifacts manifest for '{session_id}'",
             )
             write_json_atomically(
                 metadata_path,
@@ -310,10 +312,14 @@ class JsonlSessionRepository:
         return all_events[-limit:]
 
     def get_workspace_path(self, session_id: str) -> Path:
+        return self.get_agent_workspace_path(session_id, "agent_main")
+
+    def get_agent_workspace_path(self, session_id: str, agent_id: str) -> Path:
         session_id = self._validate_session_id(session_id)
+        agent_id = self._validate_agent_id(agent_id)
         if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
-        path = self._session_dir(session_id) / "workspace"
+        path = self._session_dir(session_id) / "workspaces" / agent_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -323,148 +329,166 @@ class JsonlSessionRepository:
             raise SessionNotFoundError(f"Session not found: {session_id}")
         return self._session_dir(session_id)
 
-    def add_or_update_session_file(self, file_record: SessionFile) -> None:
-        if not isinstance(file_record, SessionFile):
-            raise ValidationError("file_record must be SessionFile.")
-        session_id = self._validate_session_id(file_record.session_id)
+    def add_or_update_session_artifact(self, artifact: SessionArtifact) -> None:
+        if not isinstance(artifact, SessionArtifact):
+            raise ValidationError("artifact must be SessionArtifact.")
+        session_id = self._validate_session_id(artifact.session_id)
         if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
 
-        payload = self._read_files_state(session_id)
-        files_payload = payload.get("files")
-        if not isinstance(files_payload, list):
-            raise StorageError(f"Invalid files manifest for '{session_id}': files must be a list.")
+        payload = self._read_artifacts_state(session_id)
+        artifacts_payload = payload.get("artifacts")
+        if not isinstance(artifacts_payload, list):
+            raise StorageError(f"Invalid artifacts manifest for '{session_id}': artifacts must be a list.")
 
-        file_row = file_to_payload(file_record)
+        artifact_row = artifact_to_payload(artifact)
         updated_rows: list[dict[str, Any]] = []
         replaced = False
-        for row in files_payload:
+        for row in artifacts_payload:
             if not isinstance(row, dict):
                 continue
-            if str(row.get("file_id", "")) == file_record.file_id:
-                updated_rows.append(file_row)
+            if str(row.get("artifact_id", "")) == artifact.artifact_id:
+                updated_rows.append(artifact_row)
                 replaced = True
             else:
                 updated_rows.append(dict(row))
         if not replaced:
-            updated_rows.append(file_row)
-        payload["files"] = updated_rows
-        self._write_files_state(session_id, payload)
+            updated_rows.append(artifact_row)
+        payload["artifacts"] = updated_rows
+        self._write_artifacts_state(session_id, payload)
+        self._write_artifact_metadata(session_id, artifact)
         self._touch_updated_at(session_id)
 
-    def list_session_files(self, session_id: str) -> list[SessionFile]:
+    def list_session_artifacts(self, session_id: str) -> list[SessionArtifact]:
         session_id = self._validate_session_id(session_id)
         if self.get_session(session_id) is None:
             raise SessionNotFoundError(f"Session not found: {session_id}")
-        payload = self._read_files_state(session_id)
-        files_payload = payload.get("files")
-        if not isinstance(files_payload, list):
-            raise StorageError(f"Invalid files manifest for '{session_id}': files must be a list.")
-        output: list[SessionFile] = []
-        for row in files_payload:
+        payload = self._read_artifacts_state(session_id)
+        artifacts_payload = payload.get("artifacts")
+        if not isinstance(artifacts_payload, list):
+            raise StorageError(f"Invalid artifacts manifest for '{session_id}': artifacts must be a list.")
+        output: list[SessionArtifact] = []
+        for row in artifacts_payload:
             if not isinstance(row, dict):
                 continue
-            output.append(file_from_payload(session_id, row))
+            output.append(artifact_from_payload(session_id, row))
         return output
 
-    def get_session_file(self, session_id: str, file_id: str) -> SessionFile | None:
+    def get_session_artifact(self, session_id: str, artifact_id: str) -> SessionArtifact | None:
         session_id = self._validate_session_id(session_id)
-        normalized_file_id = validate_file_id(file_id)
-        for item in self.list_session_files(session_id):
-            if item.file_id == normalized_file_id:
+        normalized_artifact_id = validate_artifact_id(artifact_id)
+        for item in self.list_session_artifacts(session_id):
+            if item.artifact_id == normalized_artifact_id:
                 return item
         return None
 
-    def set_active_file_ids(self, session_id: str, file_ids: list[str]) -> list[str]:
+    def set_active_artifact_ids(self, session_id: str, artifact_ids: list[str]) -> list[str]:
         session_id = self._validate_session_id(session_id)
-        if not isinstance(file_ids, list):
-            raise ValidationError("file_ids must be a list.")
-        existing_files = self.list_session_files(session_id)
-        existing_ids = {item.file_id for item in existing_files}
+        if not isinstance(artifact_ids, list):
+            raise ValidationError("artifact_ids must be a list.")
+        existing_artifacts = self.list_session_artifacts(session_id)
+        existing_ids = {item.artifact_id for item in existing_artifacts}
         normalized: list[str] = []
         seen: set[str] = set()
-        for raw in file_ids:
+        for raw in artifact_ids:
             if not isinstance(raw, str) or not raw.strip():
-                raise ValidationError("file_ids entries must be non-empty strings.")
-            file_id = raw.strip()
-            if file_id in seen:
+                raise ValidationError("artifact_ids entries must be non-empty strings.")
+            artifact_id = raw.strip()
+            if artifact_id in seen:
                 continue
-            if file_id not in existing_ids:
+            if artifact_id not in existing_ids:
                 continue
-            status = next((item.status for item in existing_files if item.file_id == file_id), "")
-            if not is_activatable_file_status(status):
+            status = next((item.status for item in existing_artifacts if item.artifact_id == artifact_id), "")
+            if not is_activatable_artifact_status(status):
                 continue
-            normalized.append(file_id)
-            seen.add(file_id)
-        payload = self._read_files_state(session_id)
-        payload["active_file_ids"] = normalized
-        self._write_files_state(session_id, payload)
+            normalized.append(artifact_id)
+            seen.add(artifact_id)
+        payload = self._read_artifacts_state(session_id)
+        payload["active_artifact_ids"] = normalized
+        self._write_artifacts_state(session_id, payload)
         self._touch_updated_at(session_id)
         return normalized
 
-    def get_active_file_ids(self, session_id: str) -> list[str]:
+    def get_active_artifact_ids(self, session_id: str) -> list[str]:
         session_id = self._validate_session_id(session_id)
-        payload = self._read_files_state(session_id)
-        active_payload = payload.get("active_file_ids")
+        payload = self._read_artifacts_state(session_id)
+        active_payload = payload.get("active_artifact_ids")
         if not isinstance(active_payload, list):
             return []
-        existing = {item.file_id: item for item in self.list_session_files(session_id)}
+        existing = {item.artifact_id: item for item in self.list_session_artifacts(session_id)}
         result: list[str] = []
         for raw in active_payload:
             if not isinstance(raw, str) or not raw.strip():
                 continue
-            file_id = raw.strip()
-            item = existing.get(file_id)
-            if item is None or not is_activatable_file_status(item.status):
+            artifact_id = raw.strip()
+            item = existing.get(artifact_id)
+            if item is None or not is_activatable_artifact_status(item.status):
                 continue
-            result.append(file_id)
+            result.append(artifact_id)
         return result
 
-    def read_session_file_text(self, session_id: str, file_id: str) -> str:
+    def read_session_artifact_text(self, session_id: str, artifact_id: str) -> str:
         session_id = self._validate_session_id(session_id)
-        normalized_file_id = validate_file_id(file_id)
-        file_record = self.get_session_file(session_id, normalized_file_id)
-        if file_record is None:
-            raise SessionNotFoundError(f"Session file not found: session_id={session_id} file_id={normalized_file_id}")
-        if file_record.status != "ready" or file_record.text_relpath is None:
-            raise StorageError(f"Session file has no parsed text: session_id={session_id} file_id={normalized_file_id}")
+        normalized_artifact_id = validate_artifact_id(artifact_id)
+        artifact = self.get_session_artifact(session_id, normalized_artifact_id)
+        if artifact is None:
+            raise SessionNotFoundError(
+                f"Session artifact not found: session_id={session_id} artifact_id={normalized_artifact_id}"
+            )
+        if artifact.status != "ready" or artifact.text_relpath is None:
+            raise StorageError(
+                f"Session artifact has no parsed text: session_id={session_id} artifact_id={normalized_artifact_id}"
+            )
         root = self.get_session_root_path(session_id).resolve()
-        text_path = (root / file_record.text_relpath).resolve()
+        text_path = (root / artifact.text_relpath).resolve()
         if not text_path.is_relative_to(root):
-            raise StorageError(f"Invalid parsed text path for file_id={normalized_file_id}")
+            raise StorageError(f"Invalid parsed text path for artifact_id={normalized_artifact_id}")
         try:
             return text_path.read_text(encoding="utf-8")
         except OSError as exc:
-            raise StorageError(f"Failed to read parsed text for file_id={normalized_file_id}: {exc}") from exc
+            raise StorageError(f"Failed to read parsed text for artifact_id={normalized_artifact_id}: {exc}") from exc
 
     def _session_dir(self, session_id: str) -> Path:
         return self._sessions_dir / session_id
 
-    def _files_manifest_path(self, session_id: str) -> Path:
-        return self._session_dir(session_id) / "files.json"
+    def _artifacts_manifest_path(self, session_id: str) -> Path:
+        return self._session_dir(session_id) / "artifacts.json"
 
-    def _read_files_state(self, session_id: str) -> dict[str, Any]:
-        path = self._files_manifest_path(session_id)
+    def _read_artifacts_state(self, session_id: str) -> dict[str, Any]:
+        path = self._artifacts_manifest_path(session_id)
         if not path.exists():
-            initial: dict[str, Any] = {"files": [], "active_file_ids": []}
-            self._write_files_state(session_id, initial)
+            initial: dict[str, Any] = {"artifacts": [], "active_artifact_ids": []}
+            self._write_artifacts_state(session_id, initial)
             return initial
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
-            raise StorageError(f"Failed to read files manifest for '{session_id}': {exc}") from exc
+            raise StorageError(f"Failed to read artifacts manifest for '{session_id}': {exc}") from exc
         if not isinstance(payload, dict):
-            raise StorageError(f"Invalid files manifest for '{session_id}': root must be object.")
-        payload.setdefault("files", [])
-        payload.setdefault("active_file_ids", [])
+            raise StorageError(f"Invalid artifacts manifest for '{session_id}': root must be object.")
+        payload.setdefault("artifacts", [])
+        payload.setdefault("active_artifact_ids", [])
         return payload
 
-    def _write_files_state(self, session_id: str, payload: dict[str, Any]) -> None:
-        path = self._files_manifest_path(session_id)
+    def _write_artifacts_state(self, session_id: str, payload: dict[str, Any]) -> None:
+        path = self._artifacts_manifest_path(session_id)
         write_json_atomically(
             path,
             payload,
-            error_prefix=f"Failed to write files manifest for '{session_id}'",
+            error_prefix=f"Failed to write artifacts manifest for '{session_id}'",
+        )
+
+    def _write_artifact_metadata(self, session_id: str, artifact: SessionArtifact) -> None:
+        root = self.get_session_root_path(session_id).resolve()
+        storage_path = (root / artifact.storage_relpath).resolve()
+        if not storage_path.is_relative_to(root):
+            raise StorageError(f"Invalid artifact storage path for artifact_id={artifact.artifact_id}")
+        metadata_path = storage_path.parent / "metadata.json"
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomically(
+            metadata_path,
+            artifact_to_payload(artifact),
+            error_prefix=f"Failed to write artifact metadata for '{session_id}'",
         )
 
     def _touch_updated_at(
@@ -507,6 +531,11 @@ class JsonlSessionRepository:
             raise ValidationError("event_id must be a non-empty string.")
         return event_id.strip()
 
+    def _validate_agent_id(self, agent_id: str) -> str:
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValidationError("agent_id must be a non-empty string.")
+        return agent_id.strip()
+
     def _write_session_metadata(self, session_id: str, meta: SessionMeta) -> None:
         metadata_path = self._session_dir(session_id) / "metadata.json"
         write_json_atomically(
@@ -514,3 +543,4 @@ class JsonlSessionRepository:
             session_meta_to_payload(meta),
             error_prefix=f"Failed to update metadata for '{session_id}'",
         )
+

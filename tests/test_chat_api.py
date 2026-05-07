@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import (
     get_chat_service,
     get_memory_query_service,
-    get_session_file_service,
+    get_session_artifact_service,
     get_session_query_service,
 )
 from app.domain.models import RunContext, ToolCall
@@ -118,7 +118,7 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
         assert len(_data(memories_resp)) >= 1
 
         upload_resp = client.post(
-            f"/api/sessions/{session_id}/files/upload",
+            f"/api/sessions/{session_id}/artifacts/upload",
             json={
                 "filename": "notes.txt",
                 "content_base64": "YWxwaGEgYmV0YQ==",
@@ -127,20 +127,20 @@ def test_chat_and_query_endpoints(tmp_path: Path) -> None:
         )
         assert upload_resp.status_code == 200
         upload_payload = _data(upload_resp)
-        file_id = upload_payload["file_id"]
+        artifact_id = upload_payload["artifact_id"]
         assert upload_payload["status"] in {"uploaded", "ready", "failed"}
 
-        files_resp = client.get(f"/api/sessions/{session_id}/files")
-        assert files_resp.status_code == 200
-        files_payload = _data(files_resp)
-        assert any(item["file_id"] == file_id for item in files_payload["files"])
+        artifacts_resp = client.get(f"/api/sessions/{session_id}/artifacts")
+        assert artifacts_resp.status_code == 200
+        artifacts_payload = _data(artifacts_resp)
+        assert any(item["artifact_id"] == artifact_id for item in artifacts_payload["artifacts"])
 
         active_resp = client.post(
-            f"/api/sessions/{session_id}/active-files",
-            json={"file_ids": [file_id]},
+            f"/api/sessions/{session_id}/active-artifacts",
+            json={"artifact_ids": [artifact_id]},
         )
         assert active_resp.status_code == 200
-        assert file_id in _data(active_resp)["active_file_ids"]
+        assert artifact_id in _data(active_resp)["active_artifact_ids"]
 
     app.dependency_overrides.clear()
 
@@ -386,7 +386,7 @@ def _data(response: Any) -> Any:
 def _override_api_services(bundle: ChatServiceBundle) -> None:
     app.dependency_overrides[get_chat_service] = lambda: bundle.chat_service
     app.dependency_overrides[get_session_query_service] = lambda: bundle.session_query_service
-    app.dependency_overrides[get_session_file_service] = lambda: bundle.session_file_service
+    app.dependency_overrides[get_session_artifact_service] = lambda: bundle.session_artifact_service
     app.dependency_overrides[get_memory_query_service] = lambda: bundle.memory_query_service
 
 

@@ -6,19 +6,19 @@ from datetime import datetime
 from typing import Any
 
 from app.core.errors import StorageError, ValidationError
-from app.domain.models import EventRecord, SessionFile, SessionMeta
+from app.domain.models import EventRecord, SessionArtifact, SessionMeta
 from app.infra.storage.session_io import from_iso, to_iso
 
 __all__ = [
     "event_from_payload",
     "event_to_payload",
-    "file_from_payload",
-    "file_to_payload",
-    "is_activatable_file_status",
+    "artifact_from_payload",
+    "artifact_to_payload",
+    "is_activatable_artifact_status",
     "read_optional_text",
     "session_meta_from_payload",
     "session_meta_to_payload",
-    "validate_file_id",
+    "validate_artifact_id",
 ]
 
 
@@ -76,46 +76,58 @@ def event_from_payload(payload: dict[str, Any]) -> EventRecord:
     )
 
 
-def file_to_payload(item: SessionFile) -> dict[str, Any]:
+def artifact_to_payload(item: SessionArtifact) -> dict[str, Any]:
     return {
-        "file_id": item.file_id,
-        "filename": item.filename,
+        "artifact_id": item.artifact_id,
+        "kind": item.kind,
+        "title": item.title,
+        "description": item.description,
         "media_type": item.media_type,
         "size_bytes": item.size_bytes,
         "status": item.status,
-        "uploaded_at": to_iso(item.uploaded_at),
+        "visibility": item.visibility,
+        "owner_agent_id": item.owner_agent_id,
+        "source_type": item.source_type,
+        "source_event_id": item.source_event_id,
+        "created_at": to_iso(item.created_at),
+        "updated_at": to_iso(item.updated_at),
         "storage_relpath": item.storage_relpath,
         "text_relpath": item.text_relpath,
         "error": item.error,
-        "parsed_char_count": item.parsed_char_count,
-        "parsed_token_estimate": item.parsed_token_estimate,
+        "text_char_count": item.text_char_count,
+        "token_estimate": item.token_estimate,
         "parsed_at": None if item.parsed_at is None else to_iso(item.parsed_at),
     }
 
 
-def file_from_payload(session_id: str, payload: dict[str, Any]) -> SessionFile:
+def artifact_from_payload(session_id: str, payload: dict[str, Any]) -> SessionArtifact:
     try:
-        return SessionFile(
-            file_id=str(payload["file_id"]),
+        created_at = from_iso(str(payload["created_at"]))
+        updated_at = payload.get("updated_at")
+        return SessionArtifact(
+            artifact_id=str(payload["artifact_id"]),
             session_id=session_id,
-            filename=str(payload["filename"]),
+            kind=str(payload["kind"]),
+            title=str(payload["title"]),
+            description=read_optional_text(payload.get("description")),
             media_type=str(payload["media_type"]),
             size_bytes=int(payload["size_bytes"]),
             status=str(payload["status"]),
-            uploaded_at=from_iso(str(payload["uploaded_at"])),
+            visibility=str(payload["visibility"]),
+            owner_agent_id=read_optional_text(payload.get("owner_agent_id")),
+            source_type=read_optional_text(payload.get("source_type")),
+            source_event_id=read_optional_text(payload.get("source_event_id")),
+            created_at=created_at,
+            updated_at=created_at if updated_at is None else from_iso(str(updated_at)),
             storage_relpath=str(payload["storage_relpath"]),
             text_relpath=None if payload.get("text_relpath") is None else str(payload["text_relpath"]),
             error=None if payload.get("error") is None else str(payload["error"]),
-            parsed_char_count=None
-            if payload.get("parsed_char_count") is None
-            else int(payload["parsed_char_count"]),
-            parsed_token_estimate=None
-            if payload.get("parsed_token_estimate") is None
-            else int(payload["parsed_token_estimate"]),
+            text_char_count=None if payload.get("text_char_count") is None else int(payload["text_char_count"]),
+            token_estimate=None if payload.get("token_estimate") is None else int(payload["token_estimate"]),
             parsed_at=None if payload.get("parsed_at") is None else from_iso(str(payload["parsed_at"])),
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise StorageError(f"Invalid session file payload for '{session_id}': {exc}") from exc
+        raise StorageError(f"Invalid session artifact payload for '{session_id}': {exc}") from exc
 
 
 def read_optional_text(value: Any) -> str | None:
@@ -127,14 +139,14 @@ def read_optional_text(value: Any) -> str | None:
     return normalized or None
 
 
-def validate_file_id(file_id: str) -> str:
-    if not isinstance(file_id, str) or not file_id.strip():
-        raise ValidationError("file_id must be a non-empty string.")
-    return file_id.strip()
+def validate_artifact_id(artifact_id: str) -> str:
+    if not isinstance(artifact_id, str) or not artifact_id.strip():
+        raise ValidationError("artifact_id must be a non-empty string.")
+    return artifact_id.strip()
 
 
-def is_activatable_file_status(status: str) -> bool:
-    return status in {"uploaded", "ready"}
+def is_activatable_artifact_status(status: str) -> bool:
+    return status in {"uploaded", "parsing", "ready"}
 
 
 def _read_optional_datetime(value: Any) -> datetime | None:

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from app.core.errors import ToolExecutionError, ValidationError
-from app.domain.models import RunContext, SessionFile, ToolCall
+from app.domain.models import RunContext, SessionArtifact, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.models import MemoryScope
 from app.memory.file_store import FileMemoryStore
@@ -23,13 +24,14 @@ from app.tools.builtins import (
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
-    SessionListFilesTool,
-    SessionPlanFileAccessTool,
-    SessionReadFileTool,
-    SessionSearchFileTool,
+    SessionListArtifactsTool,
+    SessionPlanArtifactAccessTool,
+    SessionReadArtifactTool,
+    SessionSearchArtifactTool,
     StateListTool,
     StatePublishTool,
     StateSetTool,
+    PublishArtifactTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
@@ -52,6 +54,25 @@ def _context(session_id: str, agent_id: str = "agent_main") -> RunContext:
 
 def _capability_registry() -> AgentCapabilityRegistry:
     return AgentCapabilityRegistry.for_tests()
+
+
+def _workspace_capability_registry() -> AgentCapabilityRegistry:
+    return AgentCapabilityRegistry(
+        {
+            agent_id: AgentCapability(
+                agent_id=agent_id,
+                allowed_tools=["workspace_write_file", "workspace_read_file", "publish_artifact"],
+                allowed_skills=["*"],
+                default_skills=["base"],
+                memory_read_scopes=[MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
+                memory_write_scopes=[MemoryScope.AGENT_LONG],
+                allow_cross_session_short_read=False,
+                allow_cross_agent_memory_read=False,
+                allow_cross_agent_memory_write=False,
+            )
+            for agent_id in ["agent_main", "resume_agent"]
+        }
+    )
 
 
 def _registry(
@@ -87,6 +108,54 @@ def _read_jsonl(path: Path) -> list[dict]:
                 continue
             rows.append(json.loads(stripped))
     return rows
+
+
+def _add_text_artifact(
+    session_repo: JsonlSessionRepository,
+    session_id: str,
+    artifact_id: str,
+    *,
+    title: str = "notes.txt",
+    text: str = "alpha beta gamma",
+    status: str = "uploaded",
+    token_estimate: int | None = None,
+) -> None:
+    session_root = session_repo.get_session_root_path(session_id)
+    artifact_dir = session_root / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = artifact_dir / "original.bin"
+    storage_path.write_text(text, encoding="utf-8")
+    text_relpath: str | None = None
+    text_char_count: int | None = None
+    parsed_at = None
+    if status == "ready":
+        parsed_path = artifact_dir / "content.txt"
+        parsed_path.write_text(text, encoding="utf-8")
+        text_relpath = f"artifacts/{artifact_id}/content.txt"
+        text_char_count = len(text)
+        parsed_at = datetime.now(UTC)
+    meta = session_repo.get_session(session_id)
+    now = meta.created_at if meta is not None else datetime.now(UTC)
+    session_repo.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            kind="uploaded_file",
+            title=title,
+            media_type="text/plain",
+            size_bytes=len(text.encode("utf-8")),
+            status=status,
+            visibility="session_shared",
+            created_at=now,
+            updated_at=now,
+            storage_relpath=f"artifacts/{artifact_id}/original.bin",
+            text_relpath=text_relpath,
+            error=None,
+            text_char_count=text_char_count,
+            token_estimate=token_estimate,
+            parsed_at=parsed_at,
+        )
+    )
 
 
 
@@ -638,7 +707,7 @@ def test_workspace_path_traversal_is_blocked(tmp_path: Path) -> None:
         )
 
 
-def test_workspace_read_file_fallback_to_parent_directories(tmp_path: Path) -> None:
+def test_workspace_read_file_does_not_fallback_to_parent_directories(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_2")
     (tmp_path / ".env.example").write_text("HELLO=1", encoding="utf-8")
@@ -646,13 +715,11 @@ def test_workspace_read_file_fallback_to_parent_directories(tmp_path: Path) -> N
     registry = _registry()
     registry.register(WorkspaceReadFileTool(session_repository=session_repo))
 
-    result = registry.execute(
-        ToolCall(name="workspace_read_file", arguments={"path": ".env.example"}),
-        context=_context("sess_2"),
-    )
-
-    assert result.success is True
-    assert "HELLO=1" in result.content
+    with pytest.raises(ToolExecutionError, match="current agent workspace"):
+        registry.execute(
+            ToolCall(name="workspace_read_file", arguments={"path": ".env.example"}),
+            context=_context("sess_2"),
+        )
 
 
 def test_workspace_read_file_error_contains_workspace(tmp_path: Path) -> None:
@@ -670,8 +737,56 @@ def test_workspace_read_file_error_contains_workspace(tmp_path: Path) -> None:
         )
 
     message = str(exc_info.value)
-    assert "workspace-first lookup" in message
+    assert "current agent workspace" in message
     assert str(workspace) in message
+
+
+def test_workspace_files_are_isolated_by_agent(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_workspace_isolated")
+
+    registry = _registry(_workspace_capability_registry())
+    registry.register(WorkspaceWriteFileTool(session_repository=session_repo))
+    registry.register(WorkspaceReadFileTool(session_repository=session_repo))
+    registry.execute(
+        ToolCall(name="workspace_write_file", arguments={"path": "notes.txt", "content": "main only"}),
+        context=_context("sess_workspace_isolated", agent_id="agent_main"),
+    )
+
+    with pytest.raises(ToolExecutionError, match="current agent workspace"):
+        registry.execute(
+            ToolCall(name="workspace_read_file", arguments={"path": "notes.txt"}),
+            context=_context("sess_workspace_isolated", agent_id="resume_agent"),
+        )
+
+
+def test_publish_artifact_from_agent_workspace(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_publish")
+
+    registry = _registry(_workspace_capability_registry())
+    registry.register(WorkspaceWriteFileTool(session_repository=session_repo))
+    registry.register(PublishArtifactTool(session_repository=session_repo))
+    registry.execute(
+        ToolCall(name="workspace_write_file", arguments={"path": "report.md", "content": "# Report\ncontent"}),
+        context=_context("sess_publish", agent_id="resume_agent"),
+    )
+
+    result = registry.execute(
+        ToolCall(
+            name="publish_artifact",
+            arguments={"path": "report.md", "title": "Resume report"},
+        ),
+        context=_context("sess_publish", agent_id="resume_agent"),
+    )
+
+    payload = json.loads(result.content)
+    artifact = session_repo.get_session_artifact("sess_publish", payload["artifact_id"])
+    assert result.success is True
+    assert artifact is not None
+    assert artifact.owner_agent_id == "resume_agent"
+    assert artifact.visibility == "session_shared"
+    assert session_repo.read_session_artifact_text("sess_publish", artifact.artifact_id).startswith("# Report")
 
 
 def test_workspace_read_file_blocks_explicit_parent_segments(tmp_path: Path) -> None:
@@ -688,112 +803,76 @@ def test_workspace_read_file_blocks_explicit_parent_segments(tmp_path: Path) -> 
         )
 
 
-def test_session_list_files_returns_uploaded_file(tmp_path: Path) -> None:
+def test_session_list_artifacts_returns_uploaded_artifact(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    meta = session_repo.create_session("sess_file_1")
-    workspace = session_repo.get_workspace_path("sess_file_1")
-    upload_path = workspace / "uploads" / "file_1_notes.txt"
-    upload_path.parent.mkdir(parents=True, exist_ok=True)
-    upload_path.write_text("alpha beta gamma", encoding="utf-8")
-    session_repo.add_or_update_session_file(
-        SessionFile(
-            file_id="file_1",
-            session_id="sess_file_1",
-            filename="notes.txt",
-            media_type="text/plain",
-            size_bytes=16,
-            status="uploaded",
-            uploaded_at=meta.created_at,
-            storage_relpath="workspace/uploads/file_1_notes.txt",
-            text_relpath=None,
-            error=None,
-        )
-    )
-    session_repo.set_active_file_ids("sess_file_1", ["file_1"])
+    session_repo.create_session("sess_file_1")
+    _add_text_artifact(session_repo, "sess_file_1", "artifact_1")
+    session_repo.set_active_artifact_ids("sess_file_1", ["artifact_1"])
 
     registry = _registry()
-    registry.register(SessionListFilesTool(session_repository=session_repo))
+    registry.register(SessionListArtifactsTool(session_repository=session_repo))
 
     result = registry.execute(
-        ToolCall(name="session_list_files", arguments={}),
+        ToolCall(name="session_list_artifacts", arguments={}),
         context=_context("sess_file_1"),
     )
     assert result.success is True
-    assert "file_1" in result.content
+    assert "artifact_1" in result.content
     assert "\"is_active\": true" in result.content
-    assert "\"recommended_access_plan\"" in result.content
 
 
-def test_session_read_file_lazy_parse_uploaded_text(tmp_path: Path) -> None:
+def test_session_read_artifact_lazy_parse_uploaded_text(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    meta = session_repo.create_session("sess_file_2")
-    workspace = session_repo.get_workspace_path("sess_file_2")
-    upload_path = workspace / "uploads" / "file_2_notes.txt"
-    upload_path.parent.mkdir(parents=True, exist_ok=True)
-    upload_path.write_text("first line\nsecond line\nthird line", encoding="utf-8")
-    session_repo.add_or_update_session_file(
-        SessionFile(
-            file_id="file_2",
-            session_id="sess_file_2",
-            filename="notes.txt",
-            media_type="text/plain",
-            size_bytes=31,
-            status="uploaded",
-            uploaded_at=meta.created_at,
-            storage_relpath="workspace/uploads/file_2_notes.txt",
-            text_relpath=None,
-            error=None,
-        )
+    session_repo.create_session("sess_file_2")
+    _add_text_artifact(
+        session_repo,
+        "sess_file_2",
+        "artifact_2",
+        text="first line\nsecond line\nthird line",
     )
 
     registry = _registry()
-    registry.register(SessionReadFileTool(session_repository=session_repo))
+    registry.register(SessionReadArtifactTool(session_repository=session_repo))
 
     result = registry.execute(
-        ToolCall(name="session_read_file", arguments={"file_id": "file_2", "offset": 0, "max_chars": 12}),
+        ToolCall(
+            name="session_read_artifact",
+            arguments={"artifact_id": "artifact_2", "offset": 0, "max_chars": 12},
+        ),
         context=_context("sess_file_2"),
     )
-    updated = session_repo.get_session_file("sess_file_2", "file_2")
+    updated = session_repo.get_session_artifact("sess_file_2", "artifact_2")
 
     assert result.success is True
     assert "\"content\": \"first line\\ns\"" in result.content
     assert updated is not None
     assert updated.status == "ready"
     assert updated.text_relpath is not None
-    assert updated.parsed_char_count is not None
-    assert updated.parsed_char_count > 0
-    assert updated.parsed_token_estimate is not None
-    assert updated.parsed_token_estimate > 0
+    assert updated.text_char_count is not None
+    assert updated.text_char_count > 0
+    assert updated.token_estimate is not None
+    assert updated.token_estimate > 0
     assert updated.parsed_at is not None
 
 
-def test_session_search_file_returns_hits(tmp_path: Path) -> None:
+def test_session_search_artifact_returns_hits(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    meta = session_repo.create_session("sess_file_3")
-    workspace = session_repo.get_workspace_path("sess_file_3")
-    upload_path = workspace / "uploads" / "file_3_notes.txt"
-    upload_path.parent.mkdir(parents=True, exist_ok=True)
-    upload_path.write_text("alpha beta\ngamma beta\ndelta", encoding="utf-8")
-    session_repo.add_or_update_session_file(
-        SessionFile(
-            file_id="file_3",
-            session_id="sess_file_3",
-            filename="notes.txt",
-            media_type="text/plain",
-            size_bytes=27,
-            status="uploaded",
-            uploaded_at=meta.created_at,
-            storage_relpath="workspace/uploads/file_3_notes.txt",
-            text_relpath=None,
-            error=None,
-        )
+    session_repo.create_session("sess_file_3")
+    _add_text_artifact(
+        session_repo,
+        "sess_file_3",
+        "artifact_3",
+        text="alpha beta\ngamma beta\ndelta",
     )
 
     registry = _registry()
-    registry.register(SessionSearchFileTool(session_repository=session_repo))
+    registry.register(SessionSearchArtifactTool(session_repository=session_repo))
 
     result = registry.execute(
-        ToolCall(name="session_search_file", arguments={"file_id": "file_3", "query": "beta", "top_k": 2}),
+        ToolCall(
+            name="session_search_artifact",
+            arguments={"artifact_id": "artifact_3", "query": "beta", "top_k": 2},
+        ),
         context=_context("sess_file_3"),
     )
 
@@ -802,62 +881,46 @@ def test_session_search_file_returns_hits(tmp_path: Path) -> None:
     assert "gamma beta" in result.content
 
 
-def test_session_plan_file_access_returns_direct_read_for_small_file(tmp_path: Path) -> None:
+def test_session_plan_artifact_access_returns_direct_read_for_small_artifact(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    meta = session_repo.create_session("sess_file_4")
-    session_repo.add_or_update_session_file(
-        SessionFile(
-            file_id="file_4",
-            session_id="sess_file_4",
-            filename="small.txt",
-            media_type="text/plain",
-            size_bytes=1200,
-            status="ready",
-            uploaded_at=meta.created_at,
-            storage_relpath="workspace/uploads/file_4_small.txt",
-            text_relpath="workspace/.parsed/file_4.txt",
-            error=None,
-            parsed_char_count=2000,
-            parsed_token_estimate=500,
-            parsed_at=meta.created_at,
-        )
+    session_repo.create_session("sess_file_4")
+    _add_text_artifact(
+        session_repo,
+        "sess_file_4",
+        "artifact_4",
+        title="small.txt",
+        text="x" * 2000,
+        status="ready",
+        token_estimate=500,
     )
     registry = _registry()
-    registry.register(SessionPlanFileAccessTool(session_repository=session_repo))
+    registry.register(SessionPlanArtifactAccessTool(session_repository=session_repo))
     result = registry.execute(
-        ToolCall(name="session_plan_file_access", arguments={"file_id": "file_4"}),
+        ToolCall(name="session_plan_artifact_access", arguments={"artifact_id": "artifact_4"}),
         context=_context("sess_file_4"),
     )
     assert result.success is True
     assert "\"strategy\": \"direct_read\"" in result.content
 
 
-def test_session_plan_file_access_returns_search_for_precision_goal(tmp_path: Path) -> None:
+def test_session_plan_artifact_access_returns_search_for_precision_goal(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    meta = session_repo.create_session("sess_file_5")
-    session_repo.add_or_update_session_file(
-        SessionFile(
-            file_id="file_5",
-            session_id="sess_file_5",
-            filename="manual.txt",
-            media_type="text/plain",
-            size_bytes=5000,
-            status="ready",
-            uploaded_at=meta.created_at,
-            storage_relpath="workspace/uploads/file_5_manual.txt",
-            text_relpath="workspace/.parsed/file_5.txt",
-            error=None,
-            parsed_char_count=6000,
-            parsed_token_estimate=1500,
-            parsed_at=meta.created_at,
-        )
+    session_repo.create_session("sess_file_5")
+    _add_text_artifact(
+        session_repo,
+        "sess_file_5",
+        "artifact_5",
+        title="manual.txt",
+        text="manual " * 1000,
+        status="ready",
+        token_estimate=1500,
     )
     registry = _registry()
-    registry.register(SessionPlanFileAccessTool(session_repository=session_repo))
+    registry.register(SessionPlanArtifactAccessTool(session_repository=session_repo))
     result = registry.execute(
         ToolCall(
-            name="session_plan_file_access",
-            arguments={"file_id": "file_5", "user_goal": "quote_exact"},
+            name="session_plan_artifact_access",
+            arguments={"artifact_id": "artifact_5", "user_goal": "quote_exact"},
         ),
         context=_context("sess_file_5"),
     )
@@ -873,6 +936,8 @@ def test_tool_registry_blocks_tool_when_agent_not_allowed(tmp_path: Path) -> Non
             "agent_main": AgentCapability(
                 agent_id="agent_main",
                 allowed_tools=["memory_search"],
+                allowed_skills=["*"],
+                default_skills=["base"],
                 memory_read_scopes=[MemoryScope.AGENT_SHORT, MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 memory_write_scopes=[MemoryScope.AGENT_SHORT, MemoryScope.AGENT_LONG, MemoryScope.SHARED_LONG],
                 allow_cross_session_short_read=True,

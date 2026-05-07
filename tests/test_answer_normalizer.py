@@ -27,8 +27,8 @@ def test_normalizer_keeps_markdown_source_when_no_document_unwrap() -> None:
         "```markdown\n# 标题\n\n```python\nprint('hi')\n```\n```",
         tool_calls=[
             ToolCall(
-                name="session_read_file",
-                arguments={"file_id": "file_demo"},
+                name="session_read_artifact",
+                arguments={"artifact_id": "artifact_demo"},
             )
         ],
     )

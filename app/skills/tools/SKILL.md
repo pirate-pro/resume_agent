@@ -15,12 +15,12 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
 7. `memory_explain(content, tags=[], source="memory_explain_tool")`：dry-run 解释一段内容会如何被 admission/classification/policy 处理，不写入记忆。
 8. `memory_forget(query, limit=5, hard_delete=false, reason?)`：先检索后遗忘，删除/作废符合查询的记忆。
 9. `memory_update(query, new_content, new_tags=[], limit=3)`：更新一条唯一命中的记忆；若多条命中会返回候选，不会自动修改。
-10. `workspace_write_file(path, content)`：写入当前 session 的 workspace 文件。
-11. `workspace_read_file(path)`：读取文件，查找顺序为“workspace 优先，若未命中则逐级向上到文件系统根目录”。
-12. `session_list_files()`：列出当前会话上传文件及 active 状态。
-13. `session_plan_file_access(file_id, user_goal?)`：基于文件元数据给出推荐访问策略（直读/先检索后精读等）。
-14. `session_read_file(file_id, offset=0, max_chars=3000)`：读取文件文本内容，若未解析会懒解析。
-15. `session_search_file(file_id, query, top_k=3, window_chars=160)`：在文件中检索关键词并返回片段。
+10. `workspace_write_file(path, content)`：写入当前 agent 的私有 workspace 文件。
+11. `workspace_read_file(path)`：读取当前 agent workspace 文件。
+12. `session_list_artifacts()`：列出当前会话共享 artifact 及 active 状态。
+13. `session_plan_artifact_access(artifact_id, user_goal?)`：基于 artifact 元数据给出推荐访问策略（直读/先检索后精读等）。
+14. `session_read_artifact(artifact_id, offset=0, max_chars=3000)`：读取 artifact 文本内容，若未解析会懒解析。
+15. `session_search_artifact(artifact_id, query, top_k=3, window_chars=160)`：在 artifact 中检索关键词并返回片段。
 
 规则：
 
@@ -45,7 +45,7 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
 - 使用 `memory_update` 时：
   - 只有在目标唯一明确时才执行更新。
   - 当返回 `ambiguous_match` 时，先让用户确认目标后再重试。
-- 文件工具必须使用相对路径，不允许路径逃逸。
-- workspace 目录定义：`data/sessions/<session_id>/workspace`（由后端运行目录决定绝对路径）。
-- 文件读取优先用会话文件工具（`session_*`），而不是盲猜文件内容。
+- workspace 工具必须使用相对路径，不允许路径逃逸。
+- workspace 是 agent 私有中间产物，不要把 workspace path 当作 child-agent 可访问资料。
+- 文件/资料读取优先用会话 artifact 工具（`session_*_artifact`），而不是盲猜内容。
 - 对大文件优先采用“先检索再精读”的策略，避免一次性注入过长上下文。

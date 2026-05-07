@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from app.api.deps import (
     get_chat_service,
     get_memory_query_service,
-    get_session_file_service,
+    get_session_artifact_service,
     get_session_query_service,
     get_skill_repository,
 )
@@ -21,16 +21,16 @@ from app.api.presenters import event_view, memory_view, session_item_view, sessi
 from app.api.responses import ok
 from app.domain.protocols import SkillRepository
 from app.schemas.chat import (
-    ActiveFilesRequest,
+    ActiveArtifactsRequest,
+    ArtifactUploadRequest,
     ChatRequest,
     ChatResponse,
     EventView,
-    FileUploadRequest,
     MemoryQueryParams,
     MemoryView,
     SessionDeleteResponse,
-    SessionFileView,
-    SessionFilesResponse,
+    SessionArtifactView,
+    SessionArtifactsResponse,
     SessionListItem,
     SessionMessage,
     SessionUpdateRequest,
@@ -40,7 +40,7 @@ from app.schemas.chat import (
 from app.schemas.common import StandardResponse
 from app.services.chat_service import ChatService
 from app.services.memory_query_service import MemoryQueryService
-from app.services.session_file_service import SessionFileService
+from app.services.session_artifact_service import SessionArtifactService
 from app.services.session_query_service import SessionQueryService
 
 __all__ = ["router"]
@@ -132,38 +132,38 @@ async def post_chat_stream(
     )
 
 
-@router.post("/sessions/{session_id}/files/upload", response_model=StandardResponse[SessionFileView])
-async def post_session_file_upload(
+@router.post("/sessions/{session_id}/artifacts/upload", response_model=StandardResponse[SessionArtifactView])
+async def post_session_artifact_upload(
     session_id: str,
-    request: FileUploadRequest,
-    service: SessionFileService = Depends(get_session_file_service),
-) -> StandardResponse[SessionFileView]:
+    request: ArtifactUploadRequest,
+    service: SessionArtifactService = Depends(get_session_artifact_service),
+) -> StandardResponse[SessionArtifactView]:
     _logger.info(
-        "收到会话文件上传请求: session_id=%s filename=%s auto_activate=%s",
+        "收到会话 artifact 上传请求: session_id=%s filename=%s auto_activate=%s",
         session_id,
         request.filename,
         request.auto_activate,
     )
-    return ok(await service.upload_session_file_from_request(session_id, request))
+    return ok(await service.upload_session_artifact_from_request(session_id, request))
 
 
-@router.get("/sessions/{session_id}/files", response_model=StandardResponse[SessionFilesResponse])
-async def get_session_files(
+@router.get("/sessions/{session_id}/artifacts", response_model=StandardResponse[SessionArtifactsResponse])
+async def get_session_artifacts(
     session_id: str,
-    service: SessionFileService = Depends(get_session_file_service),
-) -> StandardResponse[SessionFilesResponse]:
-    _logger.info("查询会话文件列表: session_id=%s", session_id)
-    return ok(service.list_session_files(session_id))
+    service: SessionArtifactService = Depends(get_session_artifact_service),
+) -> StandardResponse[SessionArtifactsResponse]:
+    _logger.info("查询会话 artifact 列表: session_id=%s", session_id)
+    return ok(service.list_session_artifacts(session_id))
 
 
-@router.post("/sessions/{session_id}/active-files", response_model=StandardResponse[SessionFilesResponse])
-async def post_session_active_files(
+@router.post("/sessions/{session_id}/active-artifacts", response_model=StandardResponse[SessionArtifactsResponse])
+async def post_session_active_artifacts(
     session_id: str,
-    request: ActiveFilesRequest,
-    service: SessionFileService = Depends(get_session_file_service),
-) -> StandardResponse[SessionFilesResponse]:
-    _logger.info("更新会话 active files: session_id=%s file_count=%s", session_id, len(request.file_ids))
-    return ok(service.set_active_files(session_id, request))
+    request: ActiveArtifactsRequest,
+    service: SessionArtifactService = Depends(get_session_artifact_service),
+) -> StandardResponse[SessionArtifactsResponse]:
+    _logger.info("更新会话 active artifacts: session_id=%s artifact_count=%s", session_id, len(request.artifact_ids))
+    return ok(service.set_active_artifacts(session_id, request))
 
 
 @router.get(
@@ -174,7 +174,7 @@ async def get_workspace_file_preview(
     session_id: str,
     path: str = Query(..., min_length=1),
     max_chars: int = Query(default=12000, ge=200, le=24000),
-    service: SessionFileService = Depends(get_session_file_service),
+    service: SessionArtifactService = Depends(get_session_artifact_service),
 ) -> StandardResponse[WorkspaceFilePreviewResponse]:
     _logger.info(
         "预览会话 workspace 文件: session_id=%s path=%s max_chars=%s",

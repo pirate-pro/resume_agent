@@ -26,7 +26,7 @@ from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.services.chat_service import ChatService
 from app.services.answer_normalizer import AnswerNormalizer
 from app.services.memory_query_service import MemoryQueryService
-from app.services.session_file_service import SessionFileService
+from app.services.session_artifact_service import SessionArtifactService
 from app.services.session_query_service import SessionQueryService
 from app.services.session_title_service import SessionTitleService
 from app.tools.builtins import (
@@ -36,13 +36,14 @@ from app.tools.builtins import (
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
-    SessionListFilesTool,
-    SessionPlanFileAccessTool,
-    SessionReadFileTool,
-    SessionSearchFileTool,
+    SessionListArtifactsTool,
+    SessionPlanArtifactAccessTool,
+    SessionReadArtifactTool,
+    SessionSearchArtifactTool,
     StateListTool,
     StatePublishTool,
     StateSetTool,
+    PublishArtifactTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
@@ -126,7 +127,7 @@ class ChatServiceBundle:
     chat_service: ChatService
     memory_manager: MemoryManager
     session_query_service: SessionQueryService
-    session_file_service: SessionFileService
+    session_artifact_service: SessionArtifactService
     memory_query_service: MemoryQueryService
 
 
@@ -176,12 +177,13 @@ def build_chat_service_bundle(
     tool_registry.register(StateSetTool(state_manager=state_manager))
     tool_registry.register(StatePublishTool(state_manager=state_manager))
     tool_registry.register(StateListTool(state_manager=state_manager))
+    tool_registry.register(PublishArtifactTool(session_repository=session_repository))
     tool_registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     tool_registry.register(WorkspaceReadFileTool(session_repository=session_repository))
-    tool_registry.register(SessionListFilesTool(session_repository=session_repository))
-    tool_registry.register(SessionPlanFileAccessTool(session_repository=session_repository))
-    tool_registry.register(SessionReadFileTool(session_repository=session_repository))
-    tool_registry.register(SessionSearchFileTool(session_repository=session_repository))
+    tool_registry.register(SessionListArtifactsTool(session_repository=session_repository))
+    tool_registry.register(SessionPlanArtifactAccessTool(session_repository=session_repository))
+    tool_registry.register(SessionReadArtifactTool(session_repository=session_repository))
+    tool_registry.register(SessionSearchArtifactTool(session_repository=session_repository))
     session_manager = SessionManager(session_repository=session_repository)
     lock_manager = SessionLockManager()
     answer_normalizer = AnswerNormalizer()
@@ -211,7 +213,7 @@ def build_chat_service_bundle(
         session_lock_manager=lock_manager,
         answer_normalizer=answer_normalizer,
     )
-    session_file_service = SessionFileService(
+    session_artifact_service = SessionArtifactService(
         session_manager=session_manager,
         session_repository=session_repository,
         session_lock_manager=lock_manager,
@@ -233,6 +235,6 @@ def build_chat_service_bundle(
         chat_service=chat_service,
         memory_manager=memory_manager,
         session_query_service=session_query_service,
-        session_file_service=session_file_service,
+        session_artifact_service=session_artifact_service,
         memory_query_service=memory_query_service,
     )

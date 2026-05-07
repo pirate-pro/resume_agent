@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.models import EventRecord, SessionFile
+from app.domain.models import EventRecord, SessionArtifact
 from app.core.errors import SessionNotFoundError, StorageError
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
@@ -79,36 +79,42 @@ def test_skill_file_read_legacy_layout_is_rejected(tmp_path: Path) -> None:
         repository.load_skills(["base"])
 
 
-def test_session_file_manifest_and_active_files(tmp_path: Path) -> None:
+def test_session_artifact_manifest_and_active_artifacts(tmp_path: Path) -> None:
     repository = JsonlSessionRepository(data_dir=tmp_path)
     repository.create_session("sess_file")
-    workspace = repository.get_workspace_path("sess_file")
-    text_path = workspace / ".parsed" / "file_1.txt"
-    text_path.parent.mkdir(parents=True, exist_ok=True)
+    session_root = repository.get_session_root_path("sess_file")
+    artifact_dir = session_root / "artifacts" / "artifact_1"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "original.bin").write_text("hello file", encoding="utf-8")
+    text_path = artifact_dir / "content.txt"
     text_path.write_text("hello file", encoding="utf-8")
 
-    file_record = SessionFile(
-        file_id="file_1",
+    artifact = SessionArtifact(
+        artifact_id="artifact_1",
         session_id="sess_file",
-        filename="a.txt",
+        kind="uploaded_file",
+        title="a.txt",
         media_type="text/plain",
         size_bytes=10,
         status="ready",
-        uploaded_at=datetime.now(UTC),
-        storage_relpath="workspace/uploads/file_1_a.txt",
-        text_relpath="workspace/.parsed/file_1.txt",
+        visibility="session_shared",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        storage_relpath="artifacts/artifact_1/original.bin",
+        text_relpath="artifacts/artifact_1/content.txt",
         error=None,
     )
-    repository.add_or_update_session_file(file_record)
+    repository.add_or_update_session_artifact(artifact)
 
-    files = repository.list_session_files("sess_file")
-    active = repository.set_active_file_ids("sess_file", ["file_1"])
-    text = repository.read_session_file_text("sess_file", "file_1")
+    artifacts = repository.list_session_artifacts("sess_file")
+    active = repository.set_active_artifact_ids("sess_file", ["artifact_1"])
+    text = repository.read_session_artifact_text("sess_file", "artifact_1")
 
-    assert len(files) == 1
-    assert files[0].file_id == "file_1"
-    assert active == ["file_1"]
+    assert len(artifacts) == 1
+    assert artifacts[0].artifact_id == "artifact_1"
+    assert active == ["artifact_1"]
     assert "hello file" in text
+    assert not (session_root / "files.json").exists()
 
 
 def test_skill_file_invalid_frontmatter_raises(tmp_path: Path) -> None:

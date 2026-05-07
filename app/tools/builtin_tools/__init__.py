@@ -11,14 +11,14 @@ from app.tools.builtin_tools.memory import (
     MemoryUpdateTool,
     MemoryWriteTool,
 )
-from app.tools.builtin_tools.session_files import (
-    SessionListFilesTool,
-    SessionPlanFileAccessTool,
-    SessionReadFileTool,
-    SessionSearchFileTool,
+from app.tools.builtin_tools.session_artifacts import (
+    SessionListArtifactsTool,
+    SessionPlanArtifactAccessTool,
+    SessionReadArtifactTool,
+    SessionSearchArtifactTool,
 )
 from app.tools.builtin_tools.state import StateListTool, StatePublishTool, StateSetTool
-from app.tools.builtin_tools.workspace import WorkspaceReadFileTool, WorkspaceWriteFileTool
+from app.tools.builtin_tools.workspace import PublishArtifactTool, WorkspaceReadFileTool, WorkspaceWriteFileTool
 
 __all__ = [
     "DelegateAgentsTool",
@@ -28,13 +28,14 @@ __all__ = [
     "MemorySearchTool",
     "MemoryUpdateTool",
     "MemoryWriteTool",
-    "SessionListFilesTool",
-    "SessionPlanFileAccessTool",
-    "SessionReadFileTool",
-    "SessionSearchFileTool",
+    "SessionListArtifactsTool",
+    "SessionPlanArtifactAccessTool",
+    "SessionReadArtifactTool",
+    "SessionSearchArtifactTool",
     "StateListTool",
     "StatePublishTool",
     "StateSetTool",
+    "PublishArtifactTool",
     "WorkspaceReadFileTool",
     "WorkspaceWriteFileTool",
 ]

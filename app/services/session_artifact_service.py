@@ -1,4 +1,4 @@
-"""Session file upload, active-file, and workspace preview use cases."""
+"""Session artifact upload, activation, and workspace preview use cases."""
 
 from __future__ import annotations
 
@@ -9,28 +9,29 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.errors import ValidationError
-from app.domain.models import SessionFile
+from app.domain.models import SessionArtifact
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.runtime.session_manager import SessionManager
 from app.schemas.chat import (
-    ActiveFilesRequest,
-    FileUploadRequest,
-    SessionFileView,
-    SessionFilesResponse,
+    ActiveArtifactsRequest,
+    ArtifactUploadRequest,
+    SessionArtifactView,
+    SessionArtifactsResponse,
     WorkspaceFilePreviewResponse,
 )
 from app.services.answer_normalizer import AnswerNormalizer
 
-__all__ = ["SessionFileService"]
+__all__ = ["SessionArtifactService"]
 
 _logger = logging.getLogger(__name__)
-_SUPPORTED_FILE_EXTENSIONS = {".pdf", ".md", ".markdown", ".json", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
+_SUPPORTED_ARTIFACT_EXTENSIONS = {".pdf", ".md", ".markdown", ".json", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
 _MAX_UPLOAD_SIZE_BYTES = 12 * 1024 * 1024
+_MAX_UPLOAD_TOKEN_ESTIMATE = 60000
 
 
-class SessionFileService:
-    """Handle all session file operations."""
+class SessionArtifactService:
+    """Handle session artifact operations."""
 
     def __init__(
         self,
@@ -44,14 +45,14 @@ class SessionFileService:
         self._session_lock_manager = session_lock_manager
         self._answer_normalizer = answer_normalizer
 
-    async def upload_session_file(
+    async def upload_session_artifact(
         self,
         session_id: str,
         filename: str,
         content_bytes: bytes,
         *,
         auto_activate: bool = True,
-    ) -> SessionFileView:
+    ) -> SessionArtifactView:
         if not isinstance(filename, str):
             raise ValidationError("filename must be string.")
         if not isinstance(content_bytes, bytes):
@@ -59,100 +60,107 @@ class SessionFileService:
         session = self._session_manager.get_or_create_session(session_id)
         lock = self._session_lock_manager.get_lock(session.session_id)
         async with lock:
-            filename = _sanitize_filename(filename)
-            extension = _normalized_extension(filename)
-            if extension not in _SUPPORTED_FILE_EXTENSIONS:
-                supported = ", ".join(sorted(_SUPPORTED_FILE_EXTENSIONS))
-                raise ValidationError(f"Unsupported file type '{extension}'. supported={supported}")
+            title = _sanitize_title(filename)
+            extension = _normalized_extension(title)
+            if extension not in _SUPPORTED_ARTIFACT_EXTENSIONS:
+                supported = ", ".join(sorted(_SUPPORTED_ARTIFACT_EXTENSIONS))
+                raise ValidationError(f"Unsupported artifact type '{extension}'. supported={supported}")
 
             size_bytes = len(content_bytes)
             if size_bytes <= 0:
-                raise ValidationError("Uploaded file is empty.")
+                raise ValidationError("Uploaded artifact is empty.")
             if size_bytes > _MAX_UPLOAD_SIZE_BYTES:
-                raise ValidationError(f"Uploaded file too large, max={_MAX_UPLOAD_SIZE_BYTES} bytes.")
+                raise ValidationError(f"Uploaded artifact too large, max={_MAX_UPLOAD_SIZE_BYTES} bytes.")
+            token_estimate = max(1, (size_bytes + 3) // 4)
+            if token_estimate > _MAX_UPLOAD_TOKEN_ESTIMATE:
+                raise ValidationError(
+                    f"Uploaded artifact too large for context handling, max_tokens={_MAX_UPLOAD_TOKEN_ESTIMATE}."
+                )
 
-            file_id = f"file_{uuid4().hex[:12]}"
-            workspace = self._session_repository.get_workspace_path(session.session_id)
+            artifact_id = f"artifact_{uuid4().hex[:12]}"
             session_root = self._session_repository.get_session_root_path(session.session_id)
-            uploads_dir = workspace / "uploads"
-            uploads_dir.mkdir(parents=True, exist_ok=True)
+            artifact_dir = session_root / "artifacts" / artifact_id
+            artifact_dir.mkdir(parents=True, exist_ok=False)
 
-            storage_path = uploads_dir / f"{file_id}_{filename}"
+            storage_path = artifact_dir / "original.bin"
             storage_path.write_bytes(content_bytes)
 
-            media_type = _infer_media_type(extension)
-            record = SessionFile(
-                file_id=file_id,
+            now = _utc_now()
+            record = SessionArtifact(
+                artifact_id=artifact_id,
                 session_id=session.session_id,
-                filename=filename,
-                media_type=media_type,
+                kind="uploaded_file",
+                title=title,
+                description=f"Uploaded artifact: {title}",
+                media_type=_infer_media_type(extension),
                 size_bytes=size_bytes,
                 status="uploaded",
-                uploaded_at=_utc_now(),
+                visibility="session_shared",
+                owner_agent_id=None,
+                source_type="upload",
+                source_event_id=None,
+                created_at=now,
+                updated_at=now,
                 storage_relpath=str(storage_path.resolve().relative_to(session_root.resolve())),
                 text_relpath=None,
                 error=None,
-                parsed_char_count=None,
-                parsed_token_estimate=None,
+                text_char_count=None,
+                token_estimate=token_estimate,
                 parsed_at=None,
             )
-            self._session_repository.add_or_update_session_file(record)
+            self._session_repository.add_or_update_session_artifact(record)
             if auto_activate:
-                current = self._session_repository.get_active_file_ids(session.session_id)
-                self._session_repository.set_active_file_ids(session.session_id, [*current, file_id])
+                current = self._session_repository.get_active_artifact_ids(session.session_id)
+                self._session_repository.set_active_artifact_ids(session.session_id, [*current, artifact_id])
 
             _logger.info(
-                "上传会话文件完成: session_id=%s file_id=%s filename=%s status=%s size=%s",
+                "上传会话 artifact 完成: session_id=%s artifact_id=%s title=%s status=%s size=%s",
                 session.session_id,
-                file_id,
-                filename,
+                artifact_id,
+                title,
                 record.status,
                 size_bytes,
             )
-            return _to_file_view(record)
+            return _to_artifact_view(record)
 
-    async def upload_session_file_from_request(
+    async def upload_session_artifact_from_request(
         self,
         session_id: str,
-        request: FileUploadRequest,
-    ) -> SessionFileView:
-        if not isinstance(request, FileUploadRequest):
-            raise ValidationError("request must be FileUploadRequest.")
+        request: ArtifactUploadRequest,
+    ) -> SessionArtifactView:
+        if not isinstance(request, ArtifactUploadRequest):
+            raise ValidationError("request must be ArtifactUploadRequest.")
         try:
-            file_bytes = b64decode(request.content_base64, validate=True)
+            artifact_bytes = b64decode(request.content_base64, validate=True)
         except Exception as exc:  # noqa: BLE001
             raise ValidationError(f"Invalid base64 content: {exc}") from exc
-        return await self.upload_session_file(
+        return await self.upload_session_artifact(
             session_id=session_id,
             filename=request.filename,
-            content_bytes=file_bytes,
+            content_bytes=artifact_bytes,
             auto_activate=request.auto_activate,
         )
 
-    def list_session_files(self, session_id: str) -> SessionFilesResponse:
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValidationError("session_id must be a non-empty string.")
-        normalized = session_id.strip()
-        files = self._session_repository.list_session_files(normalized)
-        active_file_ids = self._session_repository.get_active_file_ids(normalized)
-        return SessionFilesResponse(
+    def list_session_artifacts(self, session_id: str) -> SessionArtifactsResponse:
+        normalized = _normalize_session_id(session_id)
+        artifacts = self._session_repository.list_session_artifacts(normalized)
+        active_artifact_ids = self._session_repository.get_active_artifact_ids(normalized)
+        return SessionArtifactsResponse(
             session_id=normalized,
-            active_file_ids=active_file_ids,
-            files=[_to_file_view(item) for item in files],
+            active_artifact_ids=active_artifact_ids,
+            artifacts=[_to_artifact_view(item) for item in artifacts],
         )
 
-    def set_active_files(self, session_id: str, request: ActiveFilesRequest) -> SessionFilesResponse:
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValidationError("session_id must be a non-empty string.")
-        if not isinstance(request, ActiveFilesRequest):
-            raise ValidationError("request must be ActiveFilesRequest.")
-        normalized = session_id.strip()
-        active = self._session_repository.set_active_file_ids(normalized, request.file_ids)
-        files = self._session_repository.list_session_files(normalized)
-        return SessionFilesResponse(
+    def set_active_artifacts(self, session_id: str, request: ActiveArtifactsRequest) -> SessionArtifactsResponse:
+        normalized = _normalize_session_id(session_id)
+        if not isinstance(request, ActiveArtifactsRequest):
+            raise ValidationError("request must be ActiveArtifactsRequest.")
+        active = self._session_repository.set_active_artifact_ids(normalized, request.artifact_ids)
+        artifacts = self._session_repository.list_session_artifacts(normalized)
+        return SessionArtifactsResponse(
             session_id=normalized,
-            active_file_ids=active,
-            files=[_to_file_view(item) for item in files],
+            active_artifact_ids=active,
+            artifacts=[_to_artifact_view(item) for item in artifacts],
         )
 
     def preview_workspace_file(
@@ -162,14 +170,12 @@ class SessionFileService:
         path: str,
         max_chars: int = 12000,
     ) -> WorkspaceFilePreviewResponse:
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValidationError("session_id must be a non-empty string.")
+        normalized_session_id = _normalize_session_id(session_id)
         if not isinstance(path, str) or not path.strip():
             raise ValidationError("path must be a non-empty string.")
         if not isinstance(max_chars, int) or max_chars <= 0:
             raise ValidationError("max_chars must be a positive integer.")
 
-        normalized_session_id = session_id.strip()
         normalized_path = path.strip()
         max_chars = min(max_chars, 24000)
 
@@ -203,22 +209,33 @@ class SessionFileService:
         )
 
 
-def _to_file_view(item: SessionFile) -> SessionFileView:
-    return SessionFileView(
-        file_id=item.file_id,
-        filename=item.filename,
+def _to_artifact_view(item: SessionArtifact) -> SessionArtifactView:
+    return SessionArtifactView(
+        artifact_id=item.artifact_id,
+        title=item.title,
+        kind=item.kind,
         media_type=item.media_type,
         size_bytes=item.size_bytes,
         status=item.status,
-        uploaded_at=item.uploaded_at,
+        visibility=item.visibility,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        owner_agent_id=item.owner_agent_id,
+        description=item.description,
         error=item.error,
-        parsed_char_count=item.parsed_char_count,
-        parsed_token_estimate=item.parsed_token_estimate,
+        text_char_count=item.text_char_count,
+        token_estimate=item.token_estimate,
         parsed_at=item.parsed_at,
     )
 
 
-def _sanitize_filename(raw: str) -> str:
+def _normalize_session_id(session_id: str) -> str:
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise ValidationError("session_id must be a non-empty string.")
+    return session_id.strip()
+
+
+def _sanitize_title(raw: str) -> str:
     candidate = Path(raw).name.strip()
     if not candidate:
         raise ValidationError("filename cannot be empty.")

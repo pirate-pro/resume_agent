@@ -1,4 +1,4 @@
-"""Backward-compatible aggregate exports for API dependency providers."""
+"""Aggregate exports for API dependency providers."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from app.api.dependencies.services import (
     get_answer_normalizer,
     get_chat_service,
     get_memory_query_service,
-    get_session_file_service,
+    get_session_artifact_service,
     get_session_query_service,
     get_session_title_service,
 )
@@ -62,7 +62,7 @@ __all__ = [
     "get_maintenance_model_client",
     "get_model_client",
     "get_session_manager",
-    "get_session_file_service",
+    "get_session_artifact_service",
     "get_session_query_service",
     "get_session_repository",
     "get_session_title_service",

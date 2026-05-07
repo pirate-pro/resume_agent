@@ -1,21 +1,21 @@
 ---
 name: file-reader
-description: Read uploaded session files using list/search/read workflow with citations. Use when questions depend on file content.
+description: Read session artifacts using list/search/read workflow with citations. Use when questions depend on uploaded or shared artifact content.
 ---
 # File Reader Skill
 
-目标：在不扩大上下文负担的前提下，基于会话文件给出可追溯答案。
+目标：在不扩大上下文负担的前提下，基于会话 artifact 给出可追溯答案。
 
 流程：
 
-1. 先调用 `session_list_files()` 确认可用文件、active 状态、`file_id` 与元数据（大小、parsed_token_estimate、parsed_char_count）。
-2. 用户未指定文件时，优先使用 active 文件；用户指定文件名时先映射到 `file_id`。
-3. 调用 `session_plan_file_access(file_id, user_goal?)` 获取推荐策略。
+1. 先调用 `session_list_artifacts()` 确认可用资料、active 状态、`artifact_id` 与元数据（大小、token_estimate、text_char_count）。
+2. 用户未指定资料时，优先使用 active artifact；用户指定文件名时先映射到 `artifact_id`。
+3. 调用 `session_plan_artifact_access(artifact_id, user_goal?)` 获取推荐策略。
 4. 按策略执行：
-   - `direct_read`：直接 `session_read_file(...)`；
-   - `search_then_read`：先 `session_search_file(...)`，再 `session_read_file(...)`；
+   - `direct_read`：直接 `session_read_artifact(...)`；
+   - `search_then_read`：先 `session_search_artifact(...)`，再 `session_read_artifact(...)`；
    - `focused_search_then_chunked_read`：先检索，再按 offset 分块精读。
-5. 回答时标注来源（至少给出 `file_id` 和文件名），不要把检索命中当作未验证事实。
+5. 回答时标注来源（至少给出 `artifact_id` 和标题），不要把检索命中当作未验证事实。
 
 约束：
 

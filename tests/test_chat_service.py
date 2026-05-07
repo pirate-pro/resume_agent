@@ -186,7 +186,7 @@ def test_chat_service_previews_workspace_file_with_render_protocol(tmp_path: Pat
     target = workspace / "report.md"
     target.write_text("# 标题\n\n- 条目 1\n- 条目 2\n", encoding="utf-8")
 
-    preview = bundle.session_file_service.preview_workspace_file(
+    preview = bundle.session_artifact_service.preview_workspace_file(
         "sess_workspace_preview",
         path="report.md",
         max_chars=12000,

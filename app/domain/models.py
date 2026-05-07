@@ -16,7 +16,7 @@ __all__ = [
     "EventRecord",
     "MemoryItem",
     "RunContext",
-    "SessionFile",
+    "SessionArtifact",
     "SessionMeta",
     "ToolCall",
     "ToolDefinition",
@@ -139,41 +139,56 @@ class EventRecord:
 
 
 @dataclass(slots=True)
-class SessionFile:
-    file_id: str
+class SessionArtifact:
+    artifact_id: str
     session_id: str
-    filename: str
+    kind: str
+    title: str
     media_type: str
     size_bytes: int
     status: str
-    uploaded_at: datetime
+    visibility: str
+    created_at: datetime
+    updated_at: datetime
     storage_relpath: str
     text_relpath: str | None = None
+    owner_agent_id: str | None = None
+    description: str | None = None
+    source_type: str | None = None
+    source_event_id: str | None = None
     error: str | None = None
-    parsed_char_count: int | None = None
-    parsed_token_estimate: int | None = None
+    text_char_count: int | None = None
+    token_estimate: int | None = None
     parsed_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        self.file_id = _require_non_empty("file_id", self.file_id)
+        self.artifact_id = _require_non_empty("artifact_id", self.artifact_id)
         self.session_id = _require_non_empty("session_id", self.session_id)
-        self.filename = _require_non_empty("filename", self.filename)
+        self.kind = _require_non_empty("kind", self.kind).lower()
+        if self.kind not in {"uploaded_file", "pasted_text", "generated_file", "answer_file"}:
+            raise ValidationError("kind must be one of uploaded_file/pasted_text/generated_file/answer_file.")
+        self.title = _require_non_empty("title", self.title)
         self.media_type = _require_non_empty("media_type", self.media_type)
         self.storage_relpath = _require_non_empty("storage_relpath", self.storage_relpath)
         if self.size_bytes < 0:
             raise ValidationError("size_bytes cannot be negative.")
-        normalized_status = _require_non_empty("status", self.status).lower()
-        if normalized_status not in {"uploaded", "ready", "failed"}:
-            raise ValidationError("status must be one of uploaded/ready/failed.")
-        self.status = normalized_status
+        self.status = _require_non_empty("status", self.status).lower()
+        if self.status not in {"uploaded", "parsing", "ready", "failed"}:
+            raise ValidationError("status must be one of uploaded/parsing/ready/failed.")
+        self.visibility = _require_non_empty("visibility", self.visibility).lower()
+        if self.visibility not in {"session_shared", "agent_private", "user_visible"}:
+            raise ValidationError("visibility must be one of session_shared/agent_private/user_visible.")
         if self.text_relpath is not None:
             self.text_relpath = _require_non_empty("text_relpath", self.text_relpath)
-        if self.error is not None:
-            self.error = _require_non_empty("error", self.error)
-        if self.parsed_char_count is not None and self.parsed_char_count < 0:
-            raise ValidationError("parsed_char_count cannot be negative.")
-        if self.parsed_token_estimate is not None and self.parsed_token_estimate < 0:
-            raise ValidationError("parsed_token_estimate cannot be negative.")
+        self.owner_agent_id = _normalize_optional_string("owner_agent_id", self.owner_agent_id)
+        self.description = _normalize_optional_string("description", self.description)
+        self.source_type = _normalize_optional_string("source_type", self.source_type)
+        self.source_event_id = _normalize_optional_string("source_event_id", self.source_event_id)
+        self.error = _normalize_optional_string("error", self.error)
+        if self.text_char_count is not None and self.text_char_count < 0:
+            raise ValidationError("text_char_count cannot be negative.")
+        if self.token_estimate is not None and self.token_estimate < 0:
+            raise ValidationError("token_estimate cannot be negative.")
 
 
 @dataclass(slots=True)

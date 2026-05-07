@@ -8,15 +8,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 __all__ = [
-    "ActiveFilesRequest",
+    "ActiveArtifactsRequest",
     "AnswerArtifactView",
     "ChatRequest",
     "ChatResponse",
     "EventView",
-    "FileUploadRequest",
+    "ArtifactUploadRequest",
     "MemoryQueryParams",
-    "SessionFileView",
-    "SessionFilesResponse",
+    "SessionArtifactView",
+    "SessionArtifactsResponse",
     "MemoryView",
     "SkillSummaryView",
     "SessionDeleteResponse",
@@ -33,7 +33,7 @@ class ChatRequest(BaseModel):
     message: str
     skill_names: list[str] = Field(default_factory=list)
     max_tool_rounds: int = Field(default=3, ge=0, le=10)
-    active_file_ids: list[str] | None = None
+    active_artifact_ids: list[str] | None = None
     entry_agent_id: str = "agent_main"
     trace_level: Literal["basic", "verbose"] = "basic"
 
@@ -66,17 +66,17 @@ class ChatRequest(BaseModel):
             normalized.append(skill)
         return normalized
 
-    @field_validator("active_file_ids")
+    @field_validator("active_artifact_ids")
     @classmethod
-    def _validate_active_file_ids(cls, value: list[str] | None) -> list[str] | None:
+    def _validate_active_artifact_ids(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
         normalized: list[str] = []
         seen: set[str] = set()
-        for file_id in value:
-            item = file_id.strip()
+        for artifact_id in value:
+            item = artifact_id.strip()
             if not item:
-                raise ValueError("active_file_ids cannot contain blank entries.")
+                raise ValueError("active_artifact_ids cannot contain blank entries.")
             if item in seen:
                 continue
             normalized.append(item)
@@ -162,23 +162,28 @@ class EventView(BaseModel):
     created_at: datetime
 
 
-class SessionFileView(BaseModel):
-    file_id: str
-    filename: str
+class SessionArtifactView(BaseModel):
+    artifact_id: str
+    title: str
+    kind: str
     media_type: str
     size_bytes: int
     status: str
-    uploaded_at: datetime
+    visibility: str
+    created_at: datetime
+    updated_at: datetime
+    owner_agent_id: str | None = None
+    description: str | None = None
     error: str | None = None
-    parsed_char_count: int | None = None
-    parsed_token_estimate: int | None = None
+    text_char_count: int | None = None
+    token_estimate: int | None = None
     parsed_at: datetime | None = None
 
 
-class SessionFilesResponse(BaseModel):
+class SessionArtifactsResponse(BaseModel):
     session_id: str
-    active_file_ids: list[str]
-    files: list[SessionFileView]
+    active_artifact_ids: list[str]
+    artifacts: list[SessionArtifactView]
 
 
 class SessionDeleteResponse(BaseModel):
@@ -234,18 +239,18 @@ class WorkspaceFilePreviewResponse(BaseModel):
     layout_hint: Literal["brief", "paragraph", "bullets", "steps"] = "paragraph"
 
 
-class ActiveFilesRequest(BaseModel):
-    file_ids: list[str] = Field(default_factory=list)
+class ActiveArtifactsRequest(BaseModel):
+    artifact_ids: list[str] = Field(default_factory=list)
 
-    @field_validator("file_ids")
+    @field_validator("artifact_ids")
     @classmethod
-    def _validate_file_ids(cls, value: list[str]) -> list[str]:
+    def _validate_artifact_ids(cls, value: list[str]) -> list[str]:
         normalized: list[str] = []
         seen: set[str] = set()
-        for file_id in value:
-            item = file_id.strip()
+        for artifact_id in value:
+            item = artifact_id.strip()
             if not item:
-                raise ValueError("file_ids cannot contain blank entries.")
+                raise ValueError("artifact_ids cannot contain blank entries.")
             if item in seen:
                 continue
             normalized.append(item)
@@ -253,7 +258,7 @@ class ActiveFilesRequest(BaseModel):
         return normalized
 
 
-class FileUploadRequest(BaseModel):
+class ArtifactUploadRequest(BaseModel):
     filename: str
     content_base64: str
     auto_activate: bool = True

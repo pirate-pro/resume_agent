@@ -1,4 +1,4 @@
-"""Built-in tools for uploaded session files."""
+"""Built-in tools for session artifacts."""
 
 from __future__ import annotations
 
@@ -14,29 +14,25 @@ from app.tools.builtin_tools.common import (
     require_non_empty_argument,
     validate_context,
 )
-from app.tools.builtin_tools.session_file_helpers import (
+from app.tools.builtin_tools.session_artifact_helpers import (
     collect_text_hits,
-    decide_file_access_plan,
-    ensure_session_file_text_ready,
-    require_session_file,
-    serialize_file_listing,
+    decide_artifact_access_plan,
+    ensure_session_artifact_text_ready,
+    require_session_artifact,
 )
 
 
-class SessionListFilesTool:
-    """List uploaded files for current session."""
+class SessionListArtifactsTool:
+    """List session artifacts visible in the current session."""
 
     def __init__(self, session_repository: SessionRepository) -> None:
         self._session_repository = session_repository
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="session_list_files",
-            description="List uploaded files in current session, including active status and parse status.",
-            parameters_schema={
-                "type": "object",
-                "properties": {},
-            },
+            name="session_list_artifacts",
+            description="List shared session artifacts, including active status and parse status.",
+            parameters_schema={"type": "object", "properties": {}},
         )
 
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
@@ -44,60 +40,73 @@ class SessionListFilesTool:
         session_id = run_context.session_id
         if not isinstance(arguments, dict):
             raise ToolExecutionError("Tool arguments must be an object.")
-        files = self._session_repository.list_session_files(session_id)
-        active_file_ids = self._session_repository.get_active_file_ids(session_id)
-        active_set = set(active_file_ids)
+        artifacts = self._session_repository.list_session_artifacts(session_id)
+        active_artifact_ids = set(self._session_repository.get_active_artifact_ids(session_id))
         payload = {
             "session_id": session_id,
-            "active_file_ids": active_file_ids,
-            "files": [serialize_file_listing(item, active_file_ids=active_set) for item in files],
+            "active_artifact_ids": list(active_artifact_ids),
+            "artifacts": [
+                {
+                    "artifact_id": item.artifact_id,
+                    "kind": item.kind,
+                    "title": item.title,
+                    "media_type": item.media_type,
+                    "size_bytes": item.size_bytes,
+                    "status": item.status,
+                    "visibility": item.visibility,
+                    "owner_agent_id": item.owner_agent_id,
+                    "is_active": item.artifact_id in active_artifact_ids,
+                    "text_ready": item.status == "ready" and item.text_relpath is not None,
+                    "text_char_count": item.text_char_count,
+                    "token_estimate": item.token_estimate,
+                }
+                for item in artifacts
+                if item.visibility == "session_shared"
+            ],
         }
         return ToolExecutionResult(
-            tool_name="session_list_files",
+            tool_name="session_list_artifacts",
             success=True,
             content=json.dumps(payload, ensure_ascii=False),
         )
 
 
-class SessionReadFileTool:
-    """Read session file text with lazy parse."""
+class SessionReadArtifactTool:
+    """Read session artifact text by artifact_id."""
 
     def __init__(self, session_repository: SessionRepository) -> None:
         self._session_repository = session_repository
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="session_read_file",
-            description=(
-                "Read text content from an uploaded session file by file_id. "
-                "If file text is not parsed yet, parse lazily then read."
-            ),
+            name="session_read_artifact",
+            description="Read text content from a shared session artifact by artifact_id.",
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "file_id": {"type": "string"},
+                    "artifact_id": {"type": "string"},
                     "offset": {"type": "integer", "default": 0, "minimum": 0},
                     "max_chars": {"type": "integer", "default": 3000, "minimum": 200, "maximum": 12000},
                 },
-                "required": ["file_id"],
+                "required": ["artifact_id"],
             },
         )
 
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         session_id = run_context.session_id
-        file_id = require_non_empty_argument(arguments, "file_id")
+        artifact_id = require_non_empty_argument(arguments, "artifact_id")
         offset = parse_non_negative_int(arguments.get("offset", 0), field_name="offset")
-        max_chars = parse_positive_int(arguments.get("max_chars", 3000), field_name="max_chars")
-        max_chars = min(max_chars, 12000)
-        file_record = require_session_file(self._session_repository, session_id, file_id)
-        updated_file, text = ensure_session_file_text_ready(self._session_repository, session_id, file_record)
+        max_chars = min(parse_positive_int(arguments.get("max_chars", 3000), field_name="max_chars"), 12000)
+
+        artifact = require_session_artifact(self._session_repository, session_id, artifact_id)
+        updated_artifact, text = ensure_session_artifact_text_ready(self._session_repository, session_id, artifact)
         snippet = text[offset : offset + max_chars] if offset < len(text) else ""
         payload = {
-            "file_id": updated_file.file_id,
-            "filename": updated_file.filename,
-            "media_type": updated_file.media_type,
-            "status": updated_file.status,
+            "artifact_id": updated_artifact.artifact_id,
+            "title": updated_artifact.title,
+            "media_type": updated_artifact.media_type,
+            "status": updated_artifact.status,
             "total_chars": len(text),
             "offset": offset,
             "returned_chars": len(snippet),
@@ -105,112 +114,100 @@ class SessionReadFileTool:
             "content": snippet,
         }
         return ToolExecutionResult(
-            tool_name="session_read_file",
+            tool_name="session_read_artifact",
             success=True,
             content=json.dumps(payload, ensure_ascii=False),
         )
 
 
-class SessionPlanFileAccessTool:
-    """Plan a recommended file reading strategy from metadata."""
+class SessionPlanArtifactAccessTool:
+    """Plan a recommended artifact reading strategy from metadata."""
 
     def __init__(self, session_repository: SessionRepository) -> None:
         self._session_repository = session_repository
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="session_plan_file_access",
-            description=(
-                "Return recommended reading strategy for one uploaded session file "
-                "based on metadata and optional user_goal."
-            ),
+            name="session_plan_artifact_access",
+            description="Return recommended reading strategy for one shared session artifact.",
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "file_id": {"type": "string"},
-                    "user_goal": {
-                        "type": "string",
-                        "description": (
-                            "Optional user intent hint, e.g. summarize, find_fact, quote_exact, compare, troubleshoot."
-                        ),
-                    },
+                    "artifact_id": {"type": "string"},
+                    "user_goal": {"type": "string"},
                 },
-                "required": ["file_id"],
+                "required": ["artifact_id"],
             },
         )
 
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         session_id = run_context.session_id
-        file_id = require_non_empty_argument(arguments, "file_id")
+        artifact_id = require_non_empty_argument(arguments, "artifact_id")
         raw_goal = arguments.get("user_goal")
         user_goal = raw_goal.strip() if isinstance(raw_goal, str) and raw_goal.strip() else None
-
-        file_record = require_session_file(self._session_repository, session_id, file_id)
-        plan = decide_file_access_plan(file_record=file_record, user_goal=user_goal)
+        artifact = require_session_artifact(self._session_repository, session_id, artifact_id)
+        plan = decide_artifact_access_plan(artifact=artifact, user_goal=user_goal)
         payload = {
-            "file_id": file_record.file_id,
-            "filename": file_record.filename,
-            "media_type": file_record.media_type,
-            "status": file_record.status,
-            "size_bytes": file_record.size_bytes,
-            "parsed_char_count": file_record.parsed_char_count,
-            "parsed_token_estimate": file_record.parsed_token_estimate,
+            "artifact_id": artifact.artifact_id,
+            "title": artifact.title,
+            "media_type": artifact.media_type,
+            "status": artifact.status,
+            "size_bytes": artifact.size_bytes,
+            "text_char_count": artifact.text_char_count,
+            "token_estimate": artifact.token_estimate,
             "user_goal": user_goal,
             "plan": plan,
         }
         return ToolExecutionResult(
-            tool_name="session_plan_file_access",
+            tool_name="session_plan_artifact_access",
             success=True,
             content=json.dumps(payload, ensure_ascii=False),
         )
 
 
-class SessionSearchFileTool:
-    """Search keyword in parsed text for one uploaded file."""
+class SessionSearchArtifactTool:
+    """Search keyword in parsed text for one shared artifact."""
 
     def __init__(self, session_repository: SessionRepository) -> None:
         self._session_repository = session_repository
 
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="session_search_file",
-            description=(
-                "Search keyword in one uploaded session file by file_id. "
-                "Return snippet hits with nearby context."
-            ),
+            name="session_search_artifact",
+            description="Search keyword in one shared session artifact by artifact_id.",
             parameters_schema={
                 "type": "object",
                 "properties": {
-                    "file_id": {"type": "string"},
+                    "artifact_id": {"type": "string"},
                     "query": {"type": "string"},
                     "top_k": {"type": "integer", "default": 3, "minimum": 1, "maximum": 8},
                     "window_chars": {"type": "integer", "default": 160, "minimum": 40, "maximum": 800},
                 },
-                "required": ["file_id", "query"],
+                "required": ["artifact_id", "query"],
             },
         )
 
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         session_id = run_context.session_id
-        file_id = require_non_empty_argument(arguments, "file_id")
+        artifact_id = require_non_empty_argument(arguments, "artifact_id")
         query = require_non_empty_argument(arguments, "query")
         top_k = min(parse_positive_int(arguments.get("top_k", 3), field_name="top_k"), 8)
         window_chars = min(parse_positive_int(arguments.get("window_chars", 160), field_name="window_chars"), 800)
 
-        file_record = require_session_file(self._session_repository, session_id, file_id)
-        updated_file, text = ensure_session_file_text_ready(self._session_repository, session_id, file_record)
+        artifact = require_session_artifact(self._session_repository, session_id, artifact_id)
+        updated_artifact, text = ensure_session_artifact_text_ready(self._session_repository, session_id, artifact)
         hits = collect_text_hits(text=text, query=query, top_k=top_k, window_chars=window_chars)
         payload = {
-            "file_id": updated_file.file_id,
-            "filename": updated_file.filename,
+            "artifact_id": updated_artifact.artifact_id,
+            "title": updated_artifact.title,
             "query": query,
             "hit_count": len(hits),
             "hits": hits,
         }
         return ToolExecutionResult(
-            tool_name="session_search_file",
+            tool_name="session_search_artifact",
             success=True,
             content=json.dumps(payload, ensure_ascii=False),
         )

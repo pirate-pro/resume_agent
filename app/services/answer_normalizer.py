@@ -160,10 +160,10 @@ class AnswerNormalizer:
             if path:
                 return AnswerArtifact(type="file", path=path, role="source")
             return None
-        if tool_call.name in {"session_read_file", "session_search_file", "session_plan_file_access"}:
-            file_id = self._string_argument(arguments, "file_id")
-            if file_id:
-                return AnswerArtifact(type="file", path=f"file_id:{file_id}", role="source")
+        if tool_call.name in {"session_read_artifact", "session_search_artifact", "session_plan_artifact_access"}:
+            artifact_id = self._string_argument(arguments, "artifact_id")
+            if artifact_id:
+                return AnswerArtifact(type="artifact", path=artifact_id, role="source")
         return None
 
     def _infer_source_kind(
