@@ -14,7 +14,8 @@ from app.api.deps import (
     get_session_artifact_service,
     get_session_query_service,
 )
-from app.domain.models import RunContext, ToolCall
+from app.core.time import app_now
+from app.domain.models import RunContext, SessionArtifact, ToolCall
 from app.domain.protocols import ModelResponse
 from app.main import app
 from tests.helpers import ChatServiceBundle, SequenceModelClient, StaticModelClient, build_chat_service_bundle
@@ -275,6 +276,80 @@ def test_workspace_file_preview_endpoint(tmp_path: Path) -> None:
         app.dependency_overrides.clear()
 
 
+def test_session_artifact_content_endpoint_reads_ready_text(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="artifact-ok"))
+    repository = bundle.chat_service._session_repository  # noqa: SLF001
+    _add_test_text_artifact(
+        repository,
+        session_id="sess_artifact_content_api",
+        artifact_id="artifact_report",
+        content="# 报告\n\n" + "内容" * 140,
+    )
+    _override_api_services(bundle)
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/sessions/sess_artifact_content_api/artifacts/artifact_report/content",
+                params={"offset": 0, "max_chars": 200},
+            )
+
+        assert response.status_code == 200
+        payload = _data(response)
+        assert payload["session_id"] == "sess_artifact_content_api"
+        assert payload["artifact_id"] == "artifact_report"
+        assert payload["title"] == "报告.md"
+        assert payload["media_type"] == "text/markdown"
+        assert payload["status"] == "ready"
+        assert payload["total_chars"] > 200
+        assert payload["returned_chars"] == 200
+        assert payload["truncated"] is True
+        assert payload["content"].startswith("# 报告")
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_session_artifact_content_endpoint_returns_404_for_missing_artifact(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="artifact-ok"))
+    bundle.chat_service._session_repository.create_session("sess_artifact_missing_api")  # noqa: SLF001
+    _override_api_services(bundle)
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/sessions/sess_artifact_missing_api/artifacts/artifact_missing/content",
+            )
+
+        assert response.status_code == 404
+        assert response.json()["code"] == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_session_artifact_content_endpoint_rejects_artifact_without_text(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="artifact-ok"))
+    repository = bundle.chat_service._session_repository  # noqa: SLF001
+    _add_test_text_artifact(
+        repository,
+        session_id="sess_artifact_no_text_api",
+        artifact_id="artifact_uploaded",
+        content="等待解析",
+        ready=False,
+    )
+    _override_api_services(bundle)
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/sessions/sess_artifact_no_text_api/artifacts/artifact_uploaded/content",
+            )
+
+        assert response.status_code == 400
+        assert response.json()["code"] == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> None:
     bundle = build_chat_service_bundle(
         data_dir=tmp_path,
@@ -388,6 +463,50 @@ def _override_api_services(bundle: ChatServiceBundle) -> None:
     app.dependency_overrides[get_session_query_service] = lambda: bundle.session_query_service
     app.dependency_overrides[get_session_artifact_service] = lambda: bundle.session_artifact_service
     app.dependency_overrides[get_memory_query_service] = lambda: bundle.memory_query_service
+
+
+def _add_test_text_artifact(
+    repository: Any,
+    *,
+    session_id: str,
+    artifact_id: str,
+    content: str,
+    ready: bool = True,
+) -> None:
+    repository.create_session(session_id)
+    session_root = repository.get_session_root_path(session_id)
+    artifact_dir = session_root / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    original_path = artifact_dir / "original.bin"
+    original_path.write_text(content, encoding="utf-8")
+    text_path = artifact_dir / "content.txt"
+    if ready:
+        text_path.write_text(content, encoding="utf-8")
+    now = app_now()
+    repository.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            kind="generated_file",
+            title="报告.md",
+            media_type="text/markdown",
+            size_bytes=len(content.encode("utf-8")),
+            status="ready" if ready else "uploaded",
+            visibility="session_shared",
+            created_at=now,
+            updated_at=now,
+            storage_relpath=str(original_path.resolve().relative_to(session_root.resolve())),
+            text_relpath=str(text_path.resolve().relative_to(session_root.resolve())) if ready else None,
+            owner_agent_id="agent_main",
+            description="测试报告",
+            source_type="generated",
+            source_event_id=None,
+            error=None,
+            text_char_count=len(content) if ready else None,
+            token_estimate=max(1, len(content) // 4),
+            parsed_at=now if ready else None,
+        )
+    )
 
 
 def _parse_sse_events(raw: str) -> list[tuple[str, dict]]:

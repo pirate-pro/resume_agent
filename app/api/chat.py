@@ -29,6 +29,7 @@ from app.schemas.chat import (
     MemoryQueryParams,
     MemoryView,
     SessionDeleteResponse,
+    SessionArtifactContentResponse,
     SessionArtifactView,
     SessionArtifactsResponse,
     SessionListItem,
@@ -154,6 +155,34 @@ async def get_session_artifacts(
 ) -> StandardResponse[SessionArtifactsResponse]:
     _logger.info("查询会话 artifact 列表: session_id=%s", session_id)
     return ok(service.list_session_artifacts(session_id))
+
+
+@router.get(
+    "/sessions/{session_id}/artifacts/{artifact_id}/content",
+    response_model=StandardResponse[SessionArtifactContentResponse],
+)
+async def get_session_artifact_content(
+    session_id: str,
+    artifact_id: str,
+    offset: int = Query(default=0, ge=0),
+    max_chars: int = Query(default=12000, ge=200, le=24000),
+    service: SessionArtifactService = Depends(get_session_artifact_service),
+) -> StandardResponse[SessionArtifactContentResponse]:
+    _logger.info(
+        "读取会话 artifact 正文: session_id=%s artifact_id=%s offset=%s max_chars=%s",
+        session_id,
+        artifact_id,
+        offset,
+        max_chars,
+    )
+    return ok(
+        service.read_session_artifact_content(
+            session_id,
+            artifact_id,
+            offset=offset,
+            max_chars=max_chars,
+        )
+    )
 
 
 @router.post("/sessions/{session_id}/active-artifacts", response_model=StandardResponse[SessionArtifactsResponse])

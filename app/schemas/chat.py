@@ -15,6 +15,7 @@ __all__ = [
     "EventView",
     "ArtifactUploadRequest",
     "MemoryQueryParams",
+    "SessionArtifactContentResponse",
     "SessionArtifactView",
     "SessionArtifactsResponse",
     "MemoryView",
@@ -184,6 +185,19 @@ class SessionArtifactsResponse(BaseModel):
     session_id: str
     active_artifact_ids: list[str]
     artifacts: list[SessionArtifactView]
+
+
+class SessionArtifactContentResponse(BaseModel):
+    session_id: str
+    artifact_id: str
+    title: str
+    media_type: str
+    status: str
+    total_chars: int
+    offset: int
+    returned_chars: int
+    truncated: bool
+    content: str
 
 
 class SessionDeleteResponse(BaseModel):

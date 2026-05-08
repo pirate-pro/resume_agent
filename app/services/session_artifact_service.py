@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.core.errors import ValidationError
+from app.core.errors import SessionNotFoundError, ValidationError
 from app.core.time import app_now
 from app.domain.models import SessionArtifact
 from app.domain.protocols import SessionRepository
@@ -17,6 +17,7 @@ from app.runtime.session_manager import SessionManager
 from app.schemas.chat import (
     ActiveArtifactsRequest,
     ArtifactUploadRequest,
+    SessionArtifactContentResponse,
     SessionArtifactView,
     SessionArtifactsResponse,
     WorkspaceFilePreviewResponse,
@@ -164,6 +165,52 @@ class SessionArtifactService:
             artifacts=[_to_artifact_view(item) for item in artifacts],
         )
 
+    def read_session_artifact_content(
+        self,
+        session_id: str,
+        artifact_id: str,
+        *,
+        offset: int = 0,
+        max_chars: int = 12000,
+    ) -> SessionArtifactContentResponse:
+        normalized_session_id = _normalize_session_id(session_id)
+        normalized_artifact_id = _normalize_artifact_id(artifact_id)
+        if not isinstance(offset, int) or offset < 0:
+            raise ValidationError("offset must be a non-negative integer.")
+        if not isinstance(max_chars, int) or max_chars <= 0:
+            raise ValidationError("max_chars must be a positive integer.")
+        max_chars = min(max_chars, 24000)
+
+        artifact = self._session_repository.get_session_artifact(normalized_session_id, normalized_artifact_id)
+        if artifact is None:
+            raise SessionNotFoundError(
+                f"Session artifact not found: session_id={normalized_session_id} "
+                f"artifact_id={normalized_artifact_id}"
+            )
+        if artifact.status != "ready" or artifact.text_relpath is None:
+            raise ValidationError(
+                f"Session artifact content is not ready: session_id={normalized_session_id} "
+                f"artifact_id={normalized_artifact_id} status={artifact.status}"
+            )
+
+        content = self._session_repository.read_session_artifact_text(
+            normalized_session_id,
+            normalized_artifact_id,
+        )
+        snippet = content[offset : offset + max_chars] if offset < len(content) else ""
+        return SessionArtifactContentResponse(
+            session_id=normalized_session_id,
+            artifact_id=artifact.artifact_id,
+            title=artifact.title,
+            media_type=artifact.media_type,
+            status=artifact.status,
+            total_chars=len(content),
+            offset=offset,
+            returned_chars=len(snippet),
+            truncated=offset + max_chars < len(content),
+            content=snippet,
+        )
+
     def preview_workspace_file(
         self,
         session_id: str,
@@ -234,6 +281,12 @@ def _normalize_session_id(session_id: str) -> str:
     if not isinstance(session_id, str) or not session_id.strip():
         raise ValidationError("session_id must be a non-empty string.")
     return session_id.strip()
+
+
+def _normalize_artifact_id(artifact_id: str) -> str:
+    if not isinstance(artifact_id, str) or not artifact_id.strip():
+        raise ValidationError("artifact_id must be a non-empty string.")
+    return artifact_id.strip()
 
 
 def _sanitize_title(raw: str) -> str:
