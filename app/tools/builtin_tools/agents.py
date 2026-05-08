@@ -28,6 +28,7 @@ class DelegateAgentsTool:
                 "Delegate one or more specialized subtasks to registered child agents and wait for their results. "
                 "Use this when the user task clearly matches an available child agent's role. "
                 "A single specialized subtask is valid. Multiple subtasks must be logically independent. "
+                "Do not pass depends_on; sequential dependencies must be resolved by separate calls. "
                 "If source material is already pasted in the current user message, include the relevant text directly "
                 "inside each child instruction. artifact_refs must reference current session artifact ids only."
             ),
@@ -45,8 +46,13 @@ class DelegateAgentsTool:
                                 "instruction": {"type": "string"},
                                 "constraints": {"type": "array", "items": {"type": "string"}},
                                 "artifact_refs": {"type": "array", "items": {"type": "string"}},
-                                "max_tool_rounds": {"type": "integer", "minimum": 0, "maximum": 10},
-                                "depends_on": {"type": "array", "items": {"type": "string"}},
+                                "max_tool_rounds": {
+                                    "type": "integer",
+                                    "default": 8,
+                                    "minimum": 0,
+                                    "maximum": 10,
+                                    "description": "Use 8-10 when the child must create artifacts or product records.",
+                                },
                             },
                             "required": ["target_agent_id", "instruction"],
                         },
@@ -180,7 +186,7 @@ def _parse_task_specs(raw: Any) -> list[AgentTaskSpec]:
                     instruction=_required_string(item.get("instruction"), field_name="instruction"),
                     constraints=_optional_string_list(item.get("constraints"), field_name="constraints"),
                     artifact_refs=_optional_string_list(item.get("artifact_refs"), field_name="artifact_refs"),
-                    max_tool_rounds=_parse_max_tool_rounds(item.get("max_tool_rounds", 2)),
+                    max_tool_rounds=_parse_max_tool_rounds(item.get("max_tool_rounds", 8)),
                     depends_on=[],
                 )
             )

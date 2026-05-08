@@ -364,6 +364,11 @@ def test_delegate_agents_tool_returns_aggregated_results(tmp_path: Path) -> None
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_delegate")
     _add_shared_artifact(bundle.session_repository, "sess_delegate", "artifact_resume_001")
+    definition = next(item for item in bundle.tool_registry.list_definitions() if item.name == "delegate_agents")
+    task_properties = definition.parameters_schema["properties"]["tasks"]["items"]["properties"]
+
+    assert "depends_on" not in task_properties
+    assert task_properties["max_tool_rounds"]["default"] == 8
 
     result = bundle.tool_registry.execute(
         ToolCall(
