@@ -255,6 +255,23 @@ def _default_agent_payload(agent_id: str) -> dict[str, Any]:
 
 
 def _file_reader_child_agent_payload(agent_id: str) -> dict[str, Any]:
+    career_tools = (
+        [
+            "session_create_text_artifact",
+            "career_resume_profile_save",
+            "career_resume_profile_get",
+        ]
+        if agent_id == "resume_agent"
+        else [
+            "session_create_text_artifact",
+            "career_resume_profile_get",
+            "career_profile_get",
+            "career_jd_analysis_save",
+            "career_jd_analysis_get",
+            "career_job_fit_report_save",
+            "career_job_fit_report_get",
+        ]
+    )
     return {
         "agent_id": agent_id,
         "allowed_tools": [
@@ -262,7 +279,7 @@ def _file_reader_child_agent_payload(agent_id: str) -> dict[str, Any]:
             "session_plan_artifact_access",
             "session_read_artifact",
             "session_search_artifact",
-            "memory_search",
+            *career_tools,
         ],
         "allowed_skills": ["base", "tools", "file-reader"],
         "default_skills": ["base", "tools", "file-reader"],

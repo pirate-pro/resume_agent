@@ -5,11 +5,25 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.domain.agent_task_protocols import AgentTaskStore
-from app.api.dependencies.infrastructure import get_session_repository
+from app.api.dependencies.infrastructure import get_career_product_store, get_session_repository
 from app.api.dependencies.managers import get_agent_capability_registry, get_memory_manager, get_state_manager
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.tools.builtins import (
     AgentTaskStatusTool,
+    CareerJobFitReportGetTool,
+    CareerJobFitReportListTool,
+    CareerJobFitReportSaveTool,
+    CareerJDAnalysisGetTool,
+    CareerJDAnalysisListTool,
+    CareerJDAnalysisSaveTool,
+    CareerProfileGetTool,
+    CareerProfileMergeTool,
+    CareerResumeProfileGetTool,
+    CareerResumeProfileListTool,
+    CareerResumeProfileSaveTool,
+    CareerResumeVersionCreateTool,
+    CareerResumeVersionGetTool,
+    CareerResumeVersionListTool,
     DelegateAgentsTool,
     MemoryExplainTool,
     MemoryForgetTool,
@@ -17,6 +31,7 @@ from app.tools.builtins import (
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
+    SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
     SessionPlanArtifactAccessTool,
     SessionReadArtifactTool,
@@ -50,10 +65,50 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(PublishArtifactTool(session_repository=get_session_repository()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))
+    registry.register(SessionCreateTextArtifactTool(session_repository=get_session_repository()))
     registry.register(SessionListArtifactsTool(session_repository=get_session_repository()))
     registry.register(SessionPlanArtifactAccessTool(session_repository=get_session_repository()))
     registry.register(SessionReadArtifactTool(session_repository=get_session_repository()))
     registry.register(SessionSearchArtifactTool(session_repository=get_session_repository()))
+    registry.register(
+        CareerResumeProfileSaveTool(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(CareerResumeProfileGetTool(career_store=get_career_product_store()))
+    registry.register(CareerResumeProfileListTool(career_store=get_career_product_store()))
+    registry.register(CareerProfileGetTool(career_store=get_career_product_store()))
+    registry.register(
+        CareerProfileMergeTool(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(
+        CareerJDAnalysisSaveTool(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(CareerJDAnalysisGetTool(career_store=get_career_product_store()))
+    registry.register(CareerJDAnalysisListTool(career_store=get_career_product_store()))
+    registry.register(
+        CareerJobFitReportSaveTool(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(CareerJobFitReportGetTool(career_store=get_career_product_store()))
+    registry.register(CareerJobFitReportListTool(career_store=get_career_product_store()))
+    registry.register(
+        CareerResumeVersionCreateTool(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(CareerResumeVersionGetTool(career_store=get_career_product_store()))
+    registry.register(CareerResumeVersionListTool(career_store=get_career_product_store()))
     return registry
 
 

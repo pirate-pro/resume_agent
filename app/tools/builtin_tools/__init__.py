@@ -3,6 +3,22 @@
 from __future__ import annotations
 
 from app.tools.builtin_tools.agents import AgentTaskStatusTool, DelegateAgentsTool
+from app.tools.builtin_tools.career import (
+    CareerJobFitReportGetTool,
+    CareerJobFitReportListTool,
+    CareerJobFitReportSaveTool,
+    CareerJDAnalysisGetTool,
+    CareerJDAnalysisListTool,
+    CareerJDAnalysisSaveTool,
+    CareerProfileGetTool,
+    CareerProfileMergeTool,
+    CareerResumeProfileGetTool,
+    CareerResumeProfileListTool,
+    CareerResumeProfileSaveTool,
+    CareerResumeVersionCreateTool,
+    CareerResumeVersionGetTool,
+    CareerResumeVersionListTool,
+)
 from app.tools.builtin_tools.memory import (
     MemoryExplainTool,
     MemoryForgetTool,
@@ -12,6 +28,7 @@ from app.tools.builtin_tools.memory import (
     MemoryWriteTool,
 )
 from app.tools.builtin_tools.session_artifacts import (
+    SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
     SessionPlanArtifactAccessTool,
     SessionReadArtifactTool,
@@ -23,12 +40,27 @@ from app.tools.builtin_tools.workspace import PublishArtifactTool, WorkspaceRead
 __all__ = [
     "DelegateAgentsTool",
     "AgentTaskStatusTool",
+    "CareerJobFitReportGetTool",
+    "CareerJobFitReportListTool",
+    "CareerJobFitReportSaveTool",
+    "CareerJDAnalysisGetTool",
+    "CareerJDAnalysisListTool",
+    "CareerJDAnalysisSaveTool",
+    "CareerProfileGetTool",
+    "CareerProfileMergeTool",
+    "CareerResumeProfileGetTool",
+    "CareerResumeProfileListTool",
+    "CareerResumeProfileSaveTool",
+    "CareerResumeVersionCreateTool",
+    "CareerResumeVersionGetTool",
+    "CareerResumeVersionListTool",
     "MemoryForgetTool",
     "MemoryExplainTool",
     "MemoryInspectTool",
     "MemorySearchTool",
     "MemoryUpdateTool",
     "MemoryWriteTool",
+    "SessionCreateTextArtifactTool",
     "SessionListArtifactsTool",
     "SessionPlanArtifactAccessTool",
     "SessionReadArtifactTool",

@@ -4,7 +4,36 @@
     {
       "agent_id": "agent_main",
       "allowed_tools": [
-        "*"
+        "delegate_agents",
+        "agent_task_status",
+        "session_list_artifacts",
+        "session_plan_artifact_access",
+        "session_read_artifact",
+        "session_search_artifact",
+        "session_create_text_artifact",
+        "state_set",
+        "state_publish",
+        "state_list",
+        "memory_write",
+        "memory_search",
+        "memory_inspect",
+        "memory_explain",
+        "memory_forget",
+        "memory_update",
+        "workspace_write_file",
+        "workspace_read_file",
+        "publish_artifact",
+        "career_resume_profile_get",
+        "career_resume_profile_list",
+        "career_profile_get",
+        "career_profile_merge",
+        "career_jd_analysis_get",
+        "career_jd_analysis_list",
+        "career_job_fit_report_get",
+        "career_job_fit_report_list",
+        "career_resume_version_create",
+        "career_resume_version_get",
+        "career_resume_version_list"
       ],
       "allowed_skills": [
         "*"
@@ -37,7 +66,9 @@
         "session_plan_artifact_access",
         "session_read_artifact",
         "session_search_artifact",
-        "memory_search"
+        "session_create_text_artifact",
+        "career_resume_profile_save",
+        "career_resume_profile_get"
       ],
       "allowed_skills": [
         "base",
@@ -67,7 +98,13 @@
         "session_plan_artifact_access",
         "session_read_artifact",
         "session_search_artifact",
-        "memory_search"
+        "session_create_text_artifact",
+        "career_resume_profile_get",
+        "career_profile_get",
+        "career_jd_analysis_save",
+        "career_jd_analysis_get",
+        "career_job_fit_report_save",
+        "career_job_fit_report_get"
       ],
       "allowed_skills": [
         "base",
