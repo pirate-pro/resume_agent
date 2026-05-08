@@ -526,6 +526,19 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
         },
         _context(agent_id="agent_main"),
     )
+    typed_evidence_payload = _execute(
+        registry,
+        "career_profile_merge",
+        {
+            "updates": {"skills": ["证据归一化"]},
+            "evidence_refs": [
+                f"artifact:{evidence_artifact_id}",
+                "jd_analysis:jd_alpha",
+                "job_fit_report:fit_alpha",
+            ],
+        },
+        _context(agent_id="agent_main"),
+    )
     version_payload = _execute(
         registry,
         "career_resume_version_create",
@@ -597,6 +610,35 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
         },
         _context(agent_id="agent_main"),
     )
+    atomic_version_payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "AI 应用开发简历版本 atomic",
+            "content": "# 原子定制简历\n\n突出 RAG 和 Agent 工程。",
+            "evidence_refs": ["resume_profile:resume_profile_alpha", "jd_analysis:jd_alpha"],
+            "change_summary": ["验证原子创建 artifact 和 ResumeVersion"],
+        },
+        _context(agent_id="agent_main"),
+    )
+    atomic_duplicate_payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "AI 应用开发简历版本 atomic",
+            "content": "# 原子定制简历\n\n重复调用。",
+            "evidence_refs": ["resume_profile:resume_profile_alpha", "jd_analysis:jd_alpha"],
+        },
+        _context(agent_id="agent_main"),
+    )
+    atomic_artifact_payload = _execute(
+        registry,
+        "session_read_artifact",
+        {"artifact_id": atomic_version_payload["record"]["artifact_id"]},
+        _context(agent_id="agent_main"),
+    )
 
     assert profile_payload["record"]["career_goal"] == "AI 应用开发"
     assert alias_payload["record"]["career_goal"] == "AI 应用开发"
@@ -606,6 +648,8 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
     assert merged_payload["record"]["career_goal"] == "AI 应用开发"
     assert merged_payload["record"]["target_roles"] == ["后端开发", "AI 应用开发工程师", "AI 应用开发"]
     assert "缺少量化成果" in string_payload["record"]["weaknesses"]
+    assert "jd_alpha" in typed_evidence_payload["record"]["evidence_refs"]
+    assert "fit_alpha" in typed_evidence_payload["record"]["evidence_refs"]
     assert version_payload["record"]["format"] == "markdown"
     assert version_payload["record"]["resume_version_id"] == "resume_version_zhangsan_ai_app_dev"
     assert version_payload["record"]["source_artifact_id"] == resume_version_artifact_id
@@ -613,6 +657,12 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
     assert duplicate_version_payload["idempotent_reused"] is True
     assert alias_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
     assert inferred_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
+    assert atomic_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
+    assert atomic_version_payload["record"]["source_artifact_id"].startswith("artifact_")
+    assert atomic_version_payload["record"]["source_artifact_id"] in atomic_version_payload["record"]["evidence_refs"]
+    assert atomic_duplicate_payload["record_id"] == atomic_version_payload["record_id"]
+    assert atomic_duplicate_payload["idempotent_reused"] is True
+    assert atomic_artifact_payload["content"].startswith("# 原子定制简历")
     assert version_fallback_payload["record_id"] == "resume_version_zhangsan_ai_app_dev"
     assert version_fallback_payload["requested_record_id"] == "resume_version_001"
 

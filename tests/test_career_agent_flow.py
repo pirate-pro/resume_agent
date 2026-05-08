@@ -953,6 +953,7 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "不要为了定制简历再次委派任何 child-agent" in main_doc
     assert "包括 `resume_agent` 和 `job_agent`" in main_doc
     assert "不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`" in main_doc
+    assert "优先一次调用 `career_resume_version_create` 并传入 `content`" in main_doc
     assert "`career_resume_version_create` 是必做动作" in main_doc
     assert "不要向 `delegate_agents` 传 `depends_on`" in main_doc
     assert "child-agent id 不是工具名" in main_doc

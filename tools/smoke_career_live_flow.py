@@ -293,7 +293,8 @@ def run_live_flow(
                 name="定制简历版本",
                 message=(
                     "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport，生成一版 markdown "
-                    "定制简历，并保存为可复用的简历版本。不要重新诊断简历，不要委派任何 child-agent，"
+                    "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
+                    "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
                     "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
                     "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"
                     "不要猜测或编造 id。"

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ from app.career.models import (
 from app.career.store import CareerProductStore
 from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.core.time import app_now, to_app_iso
-from app.domain.models import RunContext, ToolDefinition, ToolExecutionResult
+from app.domain.models import RunContext, SessionArtifact, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
 from app.tools.builtin_tools.common import validate_context
 from app.tools.builtin_tools.session_artifact_helpers import require_session_artifact
@@ -84,6 +84,25 @@ _CAREER_PROFILE_IGNORED_UPDATE_FIELDS = {
     "resume_profile_id",
     "summary",
     "work_experience_years",
+}
+_EVIDENCE_REF_TYPE_ALIASES = {
+    "artifact": "artifact",
+    "artifact_id": "artifact",
+    "career_profile": "career_profile",
+    "career_profile_id": "career_profile",
+    "fit": "fit",
+    "fit_report": "fit",
+    "job_fit_report": "fit",
+    "job_fit_report_id": "fit",
+    "jd": "jd",
+    "jd_analysis": "jd",
+    "jd_analysis_id": "jd",
+    "resume_profile": "resume_profile",
+    "resume_profile_id": "resume_profile",
+    "resume_version": "resume_version",
+    "resume_version_id": "resume_version",
+    "session": "sess",
+    "session_id": "sess",
 }
 
 
@@ -161,7 +180,7 @@ class CareerResumeProfileSaveTool:
                 status=CareerRecordStatus.ACTIVE,
                 source_session_id=run_context.session_id,
                 source_artifact_id=source_artifact_id,
-                evidence_refs=_required_string_list(args.get("evidence_refs"), field_name="evidence_refs"),
+                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
                 created_at=_now(),
                 updated_at=_now(),
                 basic_info=_optional_dict(args.get("basic_info"), field_name="basic_info"),
@@ -326,7 +345,7 @@ class CareerProfileMergeTool:
                 args.get("source_artifact_id"),
                 field_name="source_artifact_id",
             )
-            evidence_refs = _required_string_list(args.get("evidence_refs"), field_name="evidence_refs")
+            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
             updates = _normalize_career_profile_updates(_required_dict(args.get("updates"), field_name="updates"))
             current = self._career_store.get_career_profile(record_id)
             if current is None:
@@ -411,7 +430,7 @@ class CareerJDAnalysisSaveTool:
                 status=CareerRecordStatus.ACTIVE,
                 source_session_id=run_context.session_id,
                 source_artifact_id=source_artifact_id,
-                evidence_refs=_required_string_list(args.get("evidence_refs"), field_name="evidence_refs"),
+                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
                 created_at=_now(),
                 updated_at=_now(),
                 company=_optional_string(args.get("company")) or "",
@@ -585,7 +604,7 @@ class CareerJobFitReportSaveTool:
                 status=CareerRecordStatus.ACTIVE,
                 source_session_id=run_context.session_id,
                 source_artifact_id=source_artifact_id,
-                evidence_refs=_required_string_list(args.get("evidence_refs"), field_name="evidence_refs"),
+                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
                 created_at=_now(),
                 updated_at=_now(),
                 jd_analysis_id=jd_analysis_id,
@@ -700,12 +719,17 @@ class CareerResumeVersionCreateTool:
                     "target_jd_analysis_id": {"type": "string"},
                     "title": {"type": "string"},
                     "artifact_id": {"type": "string"},
+                    "artifact_title": {"type": "string"},
+                    "content": {
+                        "type": "string",
+                        "description": "Markdown resume content. When artifact_id is omitted, the tool creates a generated_file artifact.",
+                    },
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
                     "change_summary": {"type": "array", "items": {"type": "string"}},
                     "keyword_strategy": {"type": "array", "items": {"type": "string"}},
                     "risk_notes": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["base_resume_profile_id", "title", "artifact_id", "evidence_refs"],
+                "required": ["base_resume_profile_id", "title", "evidence_refs"],
             },
         )
 
@@ -713,32 +737,61 @@ class CareerResumeVersionCreateTool:
         run_context = validate_context(context)
         try:
             args = _require_arguments(arguments)
-            artifact_id = _required_current_artifact(
-                self._session_repository,
-                run_context.session_id,
-                args,
-                "artifact_id",
-            )
-            evidence_refs = _required_string_list(args.get("evidence_refs"), field_name="evidence_refs")
+            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
             base_resume_profile_id = _resolve_resume_version_base_profile_id(args, evidence_refs)
             target_jd_analysis_id = _optional_prefixed_id(args.get("target_jd_analysis_id"), "jd")
-            existing = _find_current_session_record(
-                self._career_store.list_resume_versions(),
-                run_context.session_id,
-                lambda item: (
-                    item.artifact_id == artifact_id
-                    and item.base_resume_profile_id == base_resume_profile_id
-                    and item.target_jd_analysis_id == target_jd_analysis_id
-                ),
-            )
-            if existing is not None:
-                return _record_result(
-                    "career_resume_version_create",
-                    "resume_version",
-                    existing.resume_version_id,
-                    existing,
-                    extra={"idempotent_reused": True},
+            title = _required_string(args.get("title"), field_name="title")
+            raw_artifact_id = args.get("artifact_id")
+            if raw_artifact_id is None:
+                existing = _find_current_session_record(
+                    self._career_store.list_resume_versions(),
+                    run_context.session_id,
+                    lambda item: (
+                        item.base_resume_profile_id == base_resume_profile_id
+                        and item.target_jd_analysis_id == target_jd_analysis_id
+                        and item.title == title
+                    ),
                 )
+                if existing is not None:
+                    return _record_result(
+                        "career_resume_version_create",
+                        "resume_version",
+                        existing.resume_version_id,
+                        existing,
+                        extra={"idempotent_reused": True},
+                    )
+                artifact_id = _create_generated_markdown_artifact(
+                    self._session_repository,
+                    run_context,
+                    title=_optional_string(args.get("artifact_title")) or title,
+                    content=_required_string(args.get("content"), field_name="content"),
+                )
+            else:
+                artifact_id = _require_current_artifact(
+                    self._session_repository,
+                    run_context.session_id,
+                    _required_string(raw_artifact_id, field_name="artifact_id"),
+                    field_name="artifact_id",
+                )
+                existing = _find_current_session_record(
+                    self._career_store.list_resume_versions(),
+                    run_context.session_id,
+                    lambda item: (
+                        item.artifact_id == artifact_id
+                        and item.base_resume_profile_id == base_resume_profile_id
+                        and item.target_jd_analysis_id == target_jd_analysis_id
+                    ),
+                )
+                if existing is not None:
+                    return _record_result(
+                        "career_resume_version_create",
+                        "resume_version",
+                        existing.resume_version_id,
+                        existing,
+                        extra={"idempotent_reused": True},
+                    )
+            if artifact_id not in evidence_refs:
+                evidence_refs.append(artifact_id)
             record = ResumeVersion(
                 resume_version_id=_optional_prefixed_id(args.get("resume_version_id"), "resume_version")
                 or _new_id("resume_version"),
@@ -750,7 +803,7 @@ class CareerResumeVersionCreateTool:
                 updated_at=_now(),
                 base_resume_profile_id=base_resume_profile_id,
                 target_jd_analysis_id=target_jd_analysis_id,
-                title=_required_string(args.get("title"), field_name="title"),
+                title=title,
                 format="markdown",
                 artifact_id=artifact_id,
                 change_summary=_optional_string_list(args.get("change_summary"), field_name="change_summary"),
@@ -991,6 +1044,45 @@ def _required_string_list(raw: Any, *, field_name: str) -> list[str]:
     return values
 
 
+def _required_evidence_refs(raw: Any) -> list[str]:
+    refs = _required_string_list(raw, field_name="evidence_refs")
+    output: list[str] = []
+    seen: set[str] = set()
+    for ref in refs:
+        normalized = _normalize_evidence_ref(ref)
+        if normalized in seen:
+            continue
+        output.append(normalized)
+        seen.add(normalized)
+    return output
+
+
+def _normalize_evidence_ref(raw: str) -> str:
+    value = raw.strip().strip("`")
+    if ":" not in value:
+        return value
+    raw_kind, raw_id = value.split(":", 1)
+    kind = _EVIDENCE_REF_TYPE_ALIASES.get(raw_kind.strip().lower())
+    record_id = raw_id.strip().strip("`")
+    if kind is None or not record_id:
+        return value
+    if kind == "artifact" and record_id.startswith("artifact_"):
+        return record_id
+    if kind == "career_profile" and record_id.startswith("career_profile_"):
+        return record_id
+    if kind == "fit" and record_id.startswith("fit_"):
+        return record_id
+    if kind == "jd" and record_id.startswith("jd_"):
+        return record_id
+    if kind == "resume_profile" and record_id.startswith("resume_profile_"):
+        return record_id
+    if kind == "resume_version" and record_id.startswith("resume_version_"):
+        return record_id
+    if kind == "sess" and record_id.startswith("sess_"):
+        return record_id
+    return value
+
+
 def _optional_string_list(raw: Any, *, field_name: str) -> list[str]:
     if raw is None:
         return []
@@ -1061,6 +1153,51 @@ def _find_current_session_record(records: list[Any], session_id: str, predicate:
         if getattr(record, "source_session_id", None) == session_id and predicate(record):
             return record
     return None
+
+
+def _create_generated_markdown_artifact(
+    session_repository: SessionRepository,
+    context: RunContext,
+    *,
+    title: str,
+    content: str,
+) -> str:
+    artifact_id = _new_id("artifact")
+    root = session_repository.get_session_root_path(context.session_id).resolve()
+    artifact_dir = root / "artifacts" / artifact_id
+    original_path = artifact_dir / "original.bin"
+    text_path = artifact_dir / "content.txt"
+    try:
+        artifact_dir.mkdir(parents=True, exist_ok=False)
+        original_path.write_text(content, encoding="utf-8")
+        text_path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        raise ToolExecutionError(f"Failed to create resume version artifact: {exc}") from exc
+    now = _now()
+    artifact = SessionArtifact(
+        artifact_id=artifact_id,
+        session_id=context.session_id,
+        kind="generated_file",
+        title=title,
+        media_type="text/markdown",
+        size_bytes=original_path.stat().st_size,
+        status="ready",
+        visibility="session_shared",
+        storage_relpath=str(original_path.relative_to(root)),
+        text_relpath=str(text_path.relative_to(root)),
+        owner_agent_id=context.agent_id,
+        description="Generated markdown resume version",
+        source_type="tool_career_resume_version_create",
+        source_event_id=None,
+        error=None,
+        text_char_count=len(content),
+        token_estimate=max(1, (len(content) + 3) // 4),
+        parsed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    session_repository.add_or_update_session_artifact(artifact)
+    return artifact_id
 
 
 def _new_id(prefix: str) -> str:
