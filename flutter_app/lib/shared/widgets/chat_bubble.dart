@@ -3884,7 +3884,10 @@ String _formatBytes(int value) {
 String? _artifactIdFromPath(AnswerArtifactView artifact) {
   const prefix = "artifact_id:";
   if (!artifact.path.startsWith(prefix)) {
-    return null;
+    final value = artifact.path.trim();
+    return RegExp(r'^artifact_[A-Za-z0-9][A-Za-z0-9_-]*$').hasMatch(value)
+        ? value
+        : null;
   }
   final value = artifact.path.substring(prefix.length).trim();
   return value.isEmpty ? null : value;
