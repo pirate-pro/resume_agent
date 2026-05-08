@@ -263,6 +263,7 @@ def _build_bundle(tmp_path: Path) -> RuntimeBundle:
     task_runtime = AgentTaskRuntime(
         invocation_service=invocation_service,
         task_store=task_store,
+        event_recorder=event_recorder,
         default_max_concurrency=2,
     )
     tool_registry.register(DelegateAgentsTool(agent_task_runtime_provider=lambda: task_runtime))
@@ -295,6 +296,48 @@ def test_agent_task_runtime_runs_independent_child_tasks_concurrently(tmp_path: 
     assert result.status == "completed"
     assert len(result.results) == 2
     assert bundle.model_client.max_active >= 2
+
+
+def test_agent_task_runtime_records_progress_events_without_raw_instruction(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.task_runtime.run_group(
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=1,
+            tasks=[
+                AgentTaskSpec(
+                    target_agent_id="resume_agent",
+                    instruction="需要保密的完整指令：解析简历并输出详细诊断",
+                    max_tool_rounds=0,
+                )
+            ],
+        )
+    )
+
+    assert result.status == "completed"
+    progress_events = [
+        event
+        for event in bundle.session_repository.list_events("sess_delegate")
+        if event.type
+        in {
+            "agent_task_group_created",
+            "agent_task_started",
+            "agent_task_completed",
+            "agent_task_group_completed",
+        }
+    ]
+    assert {event.type for event in progress_events} == {
+        "agent_task_group_created",
+        "agent_task_started",
+        "agent_task_completed",
+        "agent_task_group_completed",
+    }
+    payload_text = json.dumps([event.payload for event in progress_events], ensure_ascii=False)
+    assert "需要保密的完整指令" not in payload_text
+    assert "resume_agent" in payload_text
+    assert result.task_group_id in payload_text
 
 
 def test_same_target_child_prompt_only_receives_its_own_assigned_task(tmp_path: Path) -> None:

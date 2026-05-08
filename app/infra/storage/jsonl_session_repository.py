@@ -30,6 +30,11 @@ _DEFAULT_ENTRY_AGENT_ID = "agent_main"
 _ORCHESTRATION_EVENT_TYPES = {
     "agent_task_assigned",
     "agent_result_summary",
+    "agent_task_group_created",
+    "agent_task_started",
+    "agent_task_completed",
+    "agent_task_failed",
+    "agent_task_group_completed",
 }
 
 

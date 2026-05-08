@@ -8,6 +8,11 @@ from typing import Any, Self
 from app.core.errors import ValidationError
 
 __all__ = [
+    "AGENT_TASK_COMPLETED_EVENT",
+    "AGENT_TASK_FAILED_EVENT",
+    "AGENT_TASK_GROUP_COMPLETED_EVENT",
+    "AGENT_TASK_GROUP_CREATED_EVENT",
+    "AGENT_TASK_STARTED_EVENT",
     "AGENT_RESULT_SUMMARY_EVENT",
     "AGENT_TASK_ASSIGNED_EVENT",
     "AgentResultSummaryPayload",
@@ -16,6 +21,11 @@ __all__ = [
 
 AGENT_TASK_ASSIGNED_EVENT = "agent_task_assigned"
 AGENT_RESULT_SUMMARY_EVENT = "agent_result_summary"
+AGENT_TASK_GROUP_CREATED_EVENT = "agent_task_group_created"
+AGENT_TASK_STARTED_EVENT = "agent_task_started"
+AGENT_TASK_COMPLETED_EVENT = "agent_task_completed"
+AGENT_TASK_FAILED_EVENT = "agent_task_failed"
+AGENT_TASK_GROUP_COMPLETED_EVENT = "agent_task_group_completed"
 
 
 @dataclass(slots=True)

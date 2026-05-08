@@ -48,6 +48,7 @@ def get_agent_task_runtime() -> AgentTaskRuntime:
     return AgentTaskRuntime(
         invocation_service=get_agent_invocation_service(),
         task_store=get_agent_task_store(),
+        event_recorder=get_event_recorder(),
         default_max_concurrency=get_settings().agent_task_max_concurrency,
     )
 

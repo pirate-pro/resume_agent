@@ -12,7 +12,15 @@ from app.core.errors import ValidationError
 from app.core.time import app_now
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import SessionRepository
-from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT, AGENT_TASK_ASSIGNED_EVENT
+from app.runtime.agent_events import (
+    AGENT_RESULT_SUMMARY_EVENT,
+    AGENT_TASK_ASSIGNED_EVENT,
+    AGENT_TASK_COMPLETED_EVENT,
+    AGENT_TASK_FAILED_EVENT,
+    AGENT_TASK_GROUP_COMPLETED_EVENT,
+    AGENT_TASK_GROUP_CREATED_EVENT,
+    AGENT_TASK_STARTED_EVENT,
+)
 from app.runtime.event_channel import EventChannel
 
 __all__ = ["EventRecorder"]
@@ -29,6 +37,11 @@ _ALLOWED_EVENT_TYPES = {
     "memory_retrieval",
     AGENT_TASK_ASSIGNED_EVENT,
     AGENT_RESULT_SUMMARY_EVENT,
+    AGENT_TASK_GROUP_CREATED_EVENT,
+    AGENT_TASK_STARTED_EVENT,
+    AGENT_TASK_COMPLETED_EVENT,
+    AGENT_TASK_FAILED_EVENT,
+    AGENT_TASK_GROUP_COMPLETED_EVENT,
     "run_finished",
 }
 

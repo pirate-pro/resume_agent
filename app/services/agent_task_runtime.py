@@ -12,6 +12,14 @@ from app.core.errors import ValidationError
 from app.domain.agent_task_protocols import AgentTaskStore
 from app.domain.agent_tasks import AgentTaskRecord, AgentTaskSpec
 from app.domain.models import RunContext
+from app.runtime.agent_events import (
+    AGENT_TASK_COMPLETED_EVENT,
+    AGENT_TASK_FAILED_EVENT,
+    AGENT_TASK_GROUP_COMPLETED_EVENT,
+    AGENT_TASK_GROUP_CREATED_EVENT,
+    AGENT_TASK_STARTED_EVENT,
+)
+from app.runtime.event_recorder import EventRecorder
 from app.services.agent_invocation_service import AgentInvocationRequest, AgentInvocationService
 
 __all__ = [
@@ -123,12 +131,14 @@ class AgentTaskRuntime:
         *,
         invocation_service: AgentInvocationService,
         task_store: AgentTaskStore,
+        event_recorder: EventRecorder | None = None,
         default_max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
     ) -> None:
         if default_max_concurrency <= 0:
             raise ValidationError("default_max_concurrency must be positive.")
         self._invocation_service = invocation_service
         self._task_store = task_store
+        self._event_recorder = event_recorder
         self._default_max_concurrency = default_max_concurrency
 
     def run_group(self, request: AgentTaskGroupRequest) -> AgentTaskGroupResult:
@@ -152,15 +162,35 @@ class AgentTaskRuntime:
             specs=request.tasks,
         )
         task_records = self._task_store.list_group_tasks(request.source_context.session_id, group.task_group_id)
+        self._record_progress_event(
+            request.source_context,
+            AGENT_TASK_GROUP_CREATED_EVENT,
+            {
+                "task_group_id": group.task_group_id,
+                "status": group.status,
+                "max_concurrency": max_concurrency,
+                "title": "委派子任务",
+                "detail": f"已委派 {len(task_records)} 个 agent 任务",
+                "tasks": [_task_progress_payload(task) for task in task_records],
+            },
+        )
         semaphore = asyncio.Semaphore(max_concurrency)
 
         async def _run_one(spec: AgentTaskSpec, record: AgentTaskRecord) -> AgentTaskResult:
             async with semaphore:
                 child_run_id = f"run_{uuid4().hex[:12]}"
-                self._task_store.mark_running(
+                running = self._task_store.mark_running(
                     request.source_context.session_id,
                     record.task_id,
                     child_run_id=child_run_id,
+                )
+                self._record_progress_event(
+                    request.source_context,
+                    AGENT_TASK_STARTED_EVENT,
+                    {
+                        **_task_progress_payload(running),
+                        "detail": _running_detail(running),
+                    },
                 )
                 try:
                     result = await asyncio.to_thread(
@@ -179,7 +209,15 @@ class AgentTaskRuntime:
                     )
                 except Exception as exc:  # noqa: BLE001
                     error = _safe_error_message(exc)
-                    self._task_store.mark_failed(request.source_context.session_id, record.task_id, error=error)
+                    failed = self._task_store.mark_failed(request.source_context.session_id, record.task_id, error=error)
+                    self._record_progress_event(
+                        request.source_context,
+                        AGENT_TASK_FAILED_EVENT,
+                        {
+                            **_task_progress_payload(failed),
+                            "detail": _shorten(error, 160),
+                        },
+                    )
                     return AgentTaskResult(
                         task_id=record.task_id,
                         target_agent_id=spec.target_agent_id,
@@ -190,12 +228,20 @@ class AgentTaskRuntime:
                         artifact_refs=spec.artifact_refs,
                         error=error,
                     )
-                self._task_store.mark_completed(
+                completed = self._task_store.mark_completed(
                     request.source_context.session_id,
                     record.task_id,
                     summary=result.summary,
                     answer=result.answer,
                     artifact_refs=result.artifact_refs,
+                )
+                self._record_progress_event(
+                    request.source_context,
+                    AGENT_TASK_COMPLETED_EVENT,
+                    {
+                        **_task_progress_payload(completed),
+                        "detail": _shorten(result.summary, 160),
+                    },
                 )
                 return AgentTaskResult(
                     task_id=record.task_id,
@@ -212,12 +258,29 @@ class AgentTaskRuntime:
         )
         final_group = self._task_store.get_group(request.source_context.session_id, group.task_group_id)
         group_status = final_group.status if final_group is not None else _derive_result_group_status(results)
+        self._record_progress_event(
+            request.source_context,
+            AGENT_TASK_GROUP_COMPLETED_EVENT,
+            {
+                "task_group_id": group.task_group_id,
+                "status": group_status,
+                "max_concurrency": max_concurrency,
+                "title": "子任务已结束",
+                "detail": _group_completion_detail(group_status, results),
+                "tasks": [result.to_payload() for result in results],
+            },
+        )
         return AgentTaskGroupResult(
             task_group_id=group.task_group_id,
             status=group_status,
             results=results,
             max_concurrency=max_concurrency,
         )
+
+    def _record_progress_event(self, context: RunContext, event_type: str, payload: dict[str, object]) -> None:
+        if self._event_recorder is None:
+            return
+        self._event_recorder.record(context=context, event_type=event_type, payload=payload)
 
 
 def _run_coroutine_sync(coro: Coroutine[object, object, AgentTaskGroupResult]) -> AgentTaskGroupResult:
@@ -257,6 +320,59 @@ def _derive_result_group_status(results: list[AgentTaskResult]) -> str:
     if all(result.status == "failed" for result in results):
         return "failed"
     return "partial_failed"
+
+
+def _task_progress_payload(task: AgentTaskRecord) -> dict[str, object]:
+    return {
+        "task_group_id": task.task_group_id,
+        "task_id": task.task_id,
+        "target_agent_id": task.target_agent_id,
+        "status": task.status,
+        "title": _task_title(task.target_agent_id),
+        "detail": _queued_detail(task),
+        "artifact_refs": list(task.artifact_refs),
+        "product_refs": [],
+        "child_run_id": task.child_run_id,
+    }
+
+
+def _task_title(target_agent_id: str) -> str:
+    if target_agent_id == "resume_agent":
+        return "解析简历"
+    if target_agent_id == "job_agent":
+        return "分析岗位"
+    return "执行子任务"
+
+
+def _queued_detail(task: AgentTaskRecord) -> str:
+    if task.artifact_refs:
+        return f"等待处理 {len(task.artifact_refs)} 个 artifact"
+    return "等待执行"
+
+
+def _running_detail(task: AgentTaskRecord) -> str:
+    if task.target_agent_id == "resume_agent":
+        return "正在解析简历 artifact"
+    if task.target_agent_id == "job_agent":
+        return "正在分析 JD 和匹配度"
+    return "正在执行委派任务"
+
+
+def _group_completion_detail(status: str, results: list[AgentTaskResult]) -> str:
+    completed = sum(1 for result in results if result.status == "completed")
+    failed = sum(1 for result in results if result.status == "failed")
+    if status == "completed":
+        return f"{completed} 个 agent 任务已完成"
+    if status == "failed":
+        return f"{failed} 个 agent 任务失败"
+    return f"{completed} 个完成，{failed} 个失败"
+
+
+def _shorten(value: str, max_chars: int) -> str:
+    text = " ".join(value.strip().split())
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}..."
 
 
 def _require_non_empty(name: str, value: str) -> str:
