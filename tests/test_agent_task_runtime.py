@@ -118,13 +118,60 @@ class ConcurrentCaptureModelClient:
         yield StreamChunk(delta="", tool_calls=[], finished=True, has_tool_call_delta=False)
 
 
+class ToolProgressModelClient:
+    """Drive one child run through a tool call so progress projection can be tested."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        _ = (system_prompt, messages, tools)
+        self.calls += 1
+        if self.calls == 1:
+            return ModelResponse(
+                content="我会先检索资料，再做简历诊断。",
+                tool_calls=[
+                    ToolCall(
+                        name="memory_search",
+                        arguments={"query": "不要展示的搜索词", "limit": 3},
+                        tool_call_id="call_progress_secret",
+                    )
+                ],
+            )
+        return ModelResponse(
+            content="完成简历诊断，产物为 artifact_progress_001 和 resume_profile_progress_001。",
+            tool_calls=[],
+        )
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        response = self.generate(system_prompt=system_prompt, messages=messages, tools=tools)
+        if response.content:
+            yield StreamChunk(delta=response.content, finished=False, has_tool_call_delta=False)
+        yield StreamChunk(
+            delta="",
+            tool_calls=response.tool_calls,
+            finished=True,
+            has_tool_call_delta=bool(response.tool_calls),
+        )
+
+
 @dataclass(slots=True)
 class RuntimeBundle:
     task_runtime: AgentTaskRuntime
     tool_registry: ToolRegistry
     session_repository: JsonlSessionRepository
     task_store: JsonlAgentTaskStore
-    model_client: ConcurrentCaptureModelClient
+    model_client: Any
 
 
 def _write_docs(root: Path, agent_id: str, *, agent_text: str, soul_text: str) -> None:
@@ -217,7 +264,7 @@ def _source_context(session_id: str = "sess_delegate") -> RunContext:
     )
 
 
-def _build_bundle(tmp_path: Path) -> RuntimeBundle:
+def _build_bundle(tmp_path: Path, model_client: Any | None = None) -> RuntimeBundle:
     session_repository = JsonlSessionRepository(data_dir=tmp_path / "sessions")
     state_manager = StateManager(store=JsonlFileStateStore(root_dir=tmp_path / "state"))
     capability_registry = _capability_registry()
@@ -230,7 +277,7 @@ def _build_bundle(tmp_path: Path) -> RuntimeBundle:
     _write_docs(agents_dir, "resume_agent", agent_text="# Resume Agent", soul_text="# Resume Soul")
     _write_docs(agents_dir, "job_agent", agent_text="# Job Agent", soul_text="# Job Soul")
     agent_document_repository = MarkdownAgentDocumentRepository(agents_dir=agents_dir)
-    model_client = ConcurrentCaptureModelClient()
+    resolved_model_client = model_client or ConcurrentCaptureModelClient()
     tool_registry = ToolRegistry(capability_registry=capability_registry)
     context_assembler = ContextAssembler(
         session_repository=session_repository,
@@ -245,7 +292,7 @@ def _build_bundle(tmp_path: Path) -> RuntimeBundle:
         session_manager=SessionManager(session_repository=session_repository),
         event_recorder=event_recorder,
         context_assembler=context_assembler,
-        model_client=model_client,
+        model_client=resolved_model_client,
         tool_executor=tool_registry,
     )
     agent_registry = AgentRegistry.from_payload(
@@ -274,7 +321,7 @@ def _build_bundle(tmp_path: Path) -> RuntimeBundle:
         tool_registry=tool_registry,
         session_repository=session_repository,
         task_store=task_store,
-        model_client=model_client,
+        model_client=resolved_model_client,
     )
 
 
@@ -338,6 +385,45 @@ def test_agent_task_runtime_records_progress_events_without_raw_instruction(tmp_
     assert "需要保密的完整指令" not in payload_text
     assert "resume_agent" in payload_text
     assert result.task_group_id in payload_text
+
+
+def test_child_agent_tool_events_are_projected_as_safe_task_progress(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path, model_client=ToolProgressModelClient())
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.task_runtime.run_group(
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=1,
+            tasks=[
+                AgentTaskSpec(
+                    target_agent_id="resume_agent",
+                    instruction="需要保密的完整指令：解析简历并输出详细诊断",
+                    max_tool_rounds=1,
+                )
+            ],
+        )
+    )
+
+    assert result.status == "completed"
+    visible_events = bundle.session_repository.list_events("sess_delegate")
+    progress_events = [event for event in visible_events if event.type == "agent_task_progress"]
+    source_types = {event.payload["source_event_type"] for event in progress_events}
+    assert {"tool_call", "tool_result", "assistant_message"} <= source_types
+
+    payload_text = json.dumps([event.payload for event in progress_events], ensure_ascii=False)
+    assert "需要保密的完整指令" not in payload_text
+    assert "不要展示的搜索词" not in payload_text
+    assert "memory_search" in payload_text
+    assert "artifact_progress_001" in payload_text
+    assert "resume_profile_progress_001" in payload_text
+
+    for event in progress_events:
+        assert event.parent_run_id == "run_main"
+        assert event.run_id.startswith("run_")
+        assert event.payload["child_run_id"] == event.run_id
+        assert event.payload["target_agent_id"] == "resume_agent"
+        assert "detail" in event.payload
 
 
 def test_same_target_child_prompt_only_receives_its_own_assigned_task(tmp_path: Path) -> None:

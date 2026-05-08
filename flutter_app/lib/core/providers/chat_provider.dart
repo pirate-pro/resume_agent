@@ -728,7 +728,11 @@ class ChatProvider extends ChangeNotifier {
       final runId = _activeRunId;
       final visibleEvents = runId == null
           ? events
-          : events.where((event) => event.runId == runId).toList();
+          : events
+              .where(
+                (event) => event.runId == runId || event.parentRunId == runId,
+              )
+              .toList();
       _mergeStreamEvents(visibleEvents);
       notifyListeners();
     } catch (_) {

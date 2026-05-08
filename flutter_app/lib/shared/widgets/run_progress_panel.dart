@@ -7,6 +7,7 @@ import '../theme/app_theme.dart';
 const _agentTaskEventTypes = {
   "agent_task_group_created",
   "agent_task_started",
+  "agent_task_progress",
   "agent_task_completed",
   "agent_task_failed",
   "agent_task_group_completed",
@@ -205,6 +206,10 @@ class _AgentTaskCard extends StatelessWidget {
                         color: AppTheme.textTertiary,
                       ),
                     ),
+                    if (task.currentStage.isNotEmpty) ...[
+                      const SizedBox(height: 7),
+                      _StageChip(label: task.currentStage),
+                    ],
                   ],
                 ),
               ),
@@ -361,6 +366,46 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
+class _StageChip extends StatelessWidget {
+  final String label;
+
+  const _StageChip({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 7,
+            height: 7,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.4,
+              color: AppTheme.accent,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: AppTheme.ts(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.accent,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ReferenceWrap extends StatelessWidget {
   final IconData icon;
   final List<String> values;
@@ -419,6 +464,7 @@ class _RunProgressSnapshot {
       ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
     String status = "running";
     final tasks = <String, _AgentTaskProgress>{};
+    final taskIdsByChildRunId = <String, String>{};
 
     for (final event in filtered) {
       final payload = event.payload;
@@ -435,11 +481,16 @@ class _RunProgressSnapshot {
             task.timeline.add(
               _TimelineItem(
                 detail: "已分配任务",
+                stage: "queued",
                 status: task.status,
                 createdAt: event.createdAt,
               ),
             );
             tasks[taskId] = task;
+            final childRunId = task.childRunId;
+            if (childRunId.isNotEmpty) {
+              taskIdsByChildRunId[childRunId] = taskId;
+            }
           }
         }
         continue;
@@ -449,19 +500,35 @@ class _RunProgressSnapshot {
         continue;
       }
 
-      final taskId = _payloadText(payload, "task_id");
+      var taskId = _payloadText(payload, "task_id");
+      if (taskId.isEmpty) {
+        final childRunId = _payloadText(payload, "child_run_id");
+        taskId = taskIdsByChildRunId[childRunId] ?? "";
+      }
       if (taskId.isEmpty) continue;
       final previous = tasks[taskId];
-      final next = _AgentTaskProgress.fromPayload(payload, previous: previous);
+      final next = event.type == "agent_task_progress"
+          ? _AgentTaskProgress.fromProgressPayload(
+              payload,
+              previous: previous,
+            )
+          : _AgentTaskProgress.fromPayload(payload, previous: previous);
       next.timeline.addAll(previous?.timeline ?? const []);
       next.timeline.add(
         _TimelineItem(
           detail: _timelineDetail(event.type, next),
-          status: next.status,
+          stage: next.currentStage,
+          status: event.type == "agent_task_progress"
+              ? _payloadText(payload, "status", fallback: next.status)
+              : next.status,
           createdAt: event.createdAt,
         ),
       );
       tasks[taskId] = next;
+      final childRunId = next.childRunId;
+      if (childRunId.isNotEmpty) {
+        taskIdsByChildRunId[childRunId] = taskId;
+      }
     }
 
     if (tasks.values.any((task) => task.status == "running")) {
@@ -488,9 +555,11 @@ class _AgentTaskProgress {
   final String taskId;
   final String taskGroupId;
   final String targetAgentId;
+  final String childRunId;
   final String status;
   final String title;
   final String detail;
+  final String currentStage;
   final List<String> artifactRefs;
   final List<String> productRefs;
   final List<_TimelineItem> timeline;
@@ -499,9 +568,11 @@ class _AgentTaskProgress {
     required this.taskId,
     required this.taskGroupId,
     required this.targetAgentId,
+    required this.childRunId,
     required this.status,
     required this.title,
     required this.detail,
+    required this.currentStage,
     required this.artifactRefs,
     required this.productRefs,
     required this.timeline,
@@ -511,6 +582,15 @@ class _AgentTaskProgress {
     Map<String, dynamic> payload, {
     _AgentTaskProgress? previous,
   }) {
+    final nextStatus =
+        _payloadText(payload, "status", fallback: previous?.status ?? "queued");
+    final nextStage = _isTerminalTaskStatus(nextStatus)
+        ? ""
+        : _payloadText(
+            payload,
+            "stage",
+            fallback: previous?.currentStage ?? "",
+          );
     return _AgentTaskProgress(
       taskId:
           _payloadText(payload, "task_id", fallback: previous?.taskId ?? ""),
@@ -524,11 +604,16 @@ class _AgentTaskProgress {
         "target_agent_id",
         fallback: previous?.targetAgentId ?? "agent",
       ),
-      status: _payloadText(payload, "status",
-          fallback: previous?.status ?? "queued"),
+      childRunId: _payloadText(
+        payload,
+        "child_run_id",
+        fallback: previous?.childRunId ?? "",
+      ),
+      status: nextStatus,
       title:
           _payloadText(payload, "title", fallback: previous?.title ?? "执行任务"),
       detail: _payloadText(payload, "detail", fallback: previous?.detail ?? ""),
+      currentStage: nextStage,
       artifactRefs:
           _payloadStringList(payload["artifact_refs"], previous?.artifactRefs),
       productRefs:
@@ -536,15 +621,64 @@ class _AgentTaskProgress {
       timeline: [],
     );
   }
+
+  factory _AgentTaskProgress.fromProgressPayload(
+    Map<String, dynamic> payload, {
+    _AgentTaskProgress? previous,
+  }) {
+    final progressStatus = _payloadText(payload, "status", fallback: "running");
+    final nextStatus = previous?.status == "completed" ||
+            previous?.status == "failed" ||
+            previous?.status == "cancelled"
+        ? previous!.status
+        : progressStatus == "failed"
+            ? "running"
+            : previous?.status ?? "running";
+    return _AgentTaskProgress(
+      taskId:
+          _payloadText(payload, "task_id", fallback: previous?.taskId ?? ""),
+      taskGroupId: _payloadText(
+        payload,
+        "task_group_id",
+        fallback: previous?.taskGroupId ?? "",
+      ),
+      targetAgentId: _payloadText(
+        payload,
+        "target_agent_id",
+        fallback: previous?.targetAgentId ?? "agent",
+      ),
+      childRunId: _payloadText(
+        payload,
+        "child_run_id",
+        fallback: previous?.childRunId ?? "",
+      ),
+      status: nextStatus,
+      title:
+          _payloadText(payload, "title", fallback: previous?.title ?? "执行任务"),
+      detail: _payloadText(payload, "detail", fallback: previous?.detail ?? ""),
+      currentStage: _stageLabel(_payloadText(payload, "stage")),
+      artifactRefs: _mergePayloadStringLists(
+        previous?.artifactRefs,
+        payload["artifact_refs"],
+      ),
+      productRefs: _mergePayloadStringLists(
+        previous?.productRefs,
+        payload["product_refs"],
+      ),
+      timeline: [],
+    );
+  }
 }
 
 class _TimelineItem {
   final String detail;
+  final String stage;
   final String status;
   final DateTime createdAt;
 
   const _TimelineItem({
     required this.detail,
+    required this.stage,
     required this.status,
     required this.createdAt,
   });
@@ -553,6 +687,16 @@ class _TimelineItem {
 String _timelineDetail(String eventType, _AgentTaskProgress task) {
   if (eventType == "agent_task_started") {
     return task.detail.isEmpty ? "开始执行" : task.detail;
+  }
+  if (eventType == "agent_task_progress") {
+    final stage = task.currentStage;
+    if (stage.isEmpty) {
+      return task.detail.isEmpty ? "状态更新" : task.detail;
+    }
+    if (task.detail.isEmpty) {
+      return stage;
+    }
+    return "$stage：${task.detail}";
   }
   if (eventType == "agent_task_completed") {
     return task.detail.isEmpty ? "任务完成" : task.detail;
@@ -594,6 +738,10 @@ Color _statusColor(String status) {
   };
 }
 
+bool _isTerminalTaskStatus(String status) {
+  return status == "completed" || status == "failed" || status == "cancelled";
+}
+
 IconData _agentIcon(String agentId) {
   if (agentId == "resume_agent") {
     return Icons.badge_outlined;
@@ -627,4 +775,31 @@ List<String> _payloadStringList(Object? raw, List<String>? fallback) {
     }
   }
   return output;
+}
+
+List<String> _mergePayloadStringLists(List<String>? previous, Object? raw) {
+  final output = <String>[...?previous];
+  if (raw is! List) {
+    return output;
+  }
+  for (final item in raw) {
+    final value = item.toString().trim();
+    if (value.isNotEmpty && !output.contains(value)) {
+      output.add(value);
+    }
+  }
+  return output;
+}
+
+String _stageLabel(String stage) {
+  return switch (stage) {
+    "started" => "启动中",
+    "context" => "读取上下文",
+    "planning" => "规划中",
+    "tool_call" => "调用工具",
+    "tool_result" => "处理工具结果",
+    "summary" => "汇总结果",
+    "finished" => "等待主流程汇总",
+    _ => stage,
+  };
 }

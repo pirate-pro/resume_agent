@@ -32,6 +32,7 @@ _ORCHESTRATION_EVENT_TYPES = {
     "agent_result_summary",
     "agent_task_group_created",
     "agent_task_started",
+    "agent_task_progress",
     "agent_task_completed",
     "agent_task_failed",
     "agent_task_group_completed",
