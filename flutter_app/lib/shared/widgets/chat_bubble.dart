@@ -1085,26 +1085,7 @@ class _CareerReportBody extends StatelessWidget {
             title: reportTitle, sectionCount: report.sections.length),
         const SizedBox(height: 12),
         if (report.lead.isNotEmpty) ...[
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppTheme.accent.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: AppTheme.accent.withValues(alpha: 0.18),
-              ),
-            ),
-            child: SelectableText(
-              report.lead,
-              style: AppTheme.ts(
-                fontSize: 13,
-                height: 1.55,
-                fontWeight: FontWeight.w600,
-                color: AppTheme.textPrimary,
-              ),
-            ),
-          ),
+          _CareerReportLeadBlock(content: report.lead),
           const SizedBox(height: 14),
         ],
         for (var index = 0; index < report.sections.length; index++) ...[
@@ -1255,6 +1236,40 @@ class _CareerReportHeader extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CareerReportLeadBlock extends StatelessWidget {
+  final String content;
+
+  const _CareerReportLeadBlock({required this.content});
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = _careerLeadContent(content);
+    if (normalized.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: AppTheme.accent.withValues(alpha: 0.18),
+        ),
+      ),
+      child: _CompactMarkdownBody(
+        content: normalized,
+        style: AppTheme.ts(
+          fontSize: 13,
+          height: 1.55,
+          fontWeight: FontWeight.w600,
+          color: AppTheme.textPrimary,
+        ),
       ),
     );
   }
@@ -4790,6 +4805,29 @@ String _careerReportDisplayTitle(_CareerReportPresentation report) {
     return "简历优化报告";
   }
   return "简历诊断报告";
+}
+
+String _careerLeadContent(String content) {
+  final lines =
+      content.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
+  final output = <String>[];
+  for (final rawLine in lines) {
+    final trimmed = rawLine.trim();
+    if (trimmed.isEmpty || trimmed == "---") {
+      continue;
+    }
+    final heading = trimmed.replaceFirst(RegExp(r"^#{1,6}\s*"), "").trim();
+    final duplicatedReportTitle = trimmed.startsWith("#") &&
+        (heading.contains("诊断报告") ||
+            heading.contains("匹配报告") ||
+            heading.contains("分析报告") ||
+            heading.contains("优化报告"));
+    if (duplicatedReportTitle) {
+      continue;
+    }
+    output.add(rawLine);
+  }
+  return output.join("\n").trim();
 }
 
 bool _isSummarySection(String title) {
