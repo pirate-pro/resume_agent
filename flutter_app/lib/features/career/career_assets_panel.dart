@@ -167,7 +167,7 @@ class CareerAssetTabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tabs = CareerAssetsTab.values;
+    const tabs = CareerAssetsTab.values;
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
@@ -390,7 +390,9 @@ class CareerProfileCard extends StatelessWidget {
     return _CareerAssetCardShell(
       icon: Icons.track_changes_rounded,
       label: "职业画像",
-      title: record.careerGoal.isEmpty ? record.careerProfileId : record.careerGoal,
+      title: record.careerGoal.isEmpty
+          ? record.careerProfileId
+          : record.careerGoal,
       id: record.careerProfileId,
       meta: record.meta,
       selected: selected,
@@ -812,7 +814,8 @@ class CareerAssetLoadingState extends StatelessWidget {
       child: SizedBox(
         width: 24,
         height: 24,
-        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent),
+        child:
+            CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent),
       ),
     );
   }
@@ -917,14 +920,16 @@ class _CareerAssetCardShell extends StatelessWidget {
                 id,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: AppTheme.ts(fontSize: 10.5, color: AppTheme.textTertiary),
+                style:
+                    AppTheme.ts(fontSize: 10.5, color: AppTheme.textTertiary),
               ),
               const SizedBox(height: 10),
               child,
               const SizedBox(height: 10),
               Text(
                 "更新于 ${_formatTime(meta.updatedAt)}",
-                style: AppTheme.ts(fontSize: 10.5, color: AppTheme.textTertiary),
+                style:
+                    AppTheme.ts(fontSize: 10.5, color: AppTheme.textTertiary),
               ),
             ],
           ),
@@ -1180,7 +1185,8 @@ class _ArtifactButton extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.visibility_outlined, size: 14, color: AppTheme.accent),
+                Icon(Icons.visibility_outlined,
+                    size: 14, color: AppTheme.accent),
                 const SizedBox(width: 6),
                 Text(
                   label,

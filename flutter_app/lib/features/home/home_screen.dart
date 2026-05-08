@@ -486,7 +486,8 @@ class _DebugPanel extends ConsumerWidget {
     if (files.isEmpty) return '当前会话暂无资料';
     final buf = StringBuffer();
     for (final f in files) {
-      final active = provider.activeArtifactIds.contains(f.artifactId) ? '✓' : ' ';
+      final active =
+          provider.activeArtifactIds.contains(f.artifactId) ? '✓' : ' ';
       buf.writeln('[$active] ${f.title} (${f.status}) ${f.sizeDisplay}');
     }
     return buf.toString().trim();

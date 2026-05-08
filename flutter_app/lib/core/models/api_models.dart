@@ -96,7 +96,7 @@ class MidTermFlushQueueView {
   });
 
   factory MidTermFlushQueueView.fromJson(Map<String, dynamic> json) {
-    int _readInt(String key) {
+    int readInt(String key) {
       final raw = json[key];
       if (raw is int) return raw;
       if (raw is num) return raw.toInt();
@@ -105,12 +105,12 @@ class MidTermFlushQueueView {
     }
 
     return MidTermFlushQueueView(
-      targets: _readInt("targets"),
-      total: _readInt("total"),
-      due: _readInt("due"),
-      retry: _readInt("retry"),
-      deferred: _readInt("deferred"),
-      succeeded: _readInt("succeeded"),
+      targets: readInt("targets"),
+      total: readInt("total"),
+      due: readInt("due"),
+      retry: readInt("retry"),
+      deferred: readInt("deferred"),
+      succeeded: readInt("succeeded"),
     );
   }
 }
@@ -686,8 +686,7 @@ class JobFitReportView {
       gaps: _readList(json["gaps"]),
       resumeOptimizationDirection:
           _readList(json["resume_optimization_direction"]),
-      interviewPreparationFocus:
-          _readList(json["interview_preparation_focus"]),
+      interviewPreparationFocus: _readList(json["interview_preparation_focus"]),
       recommendation: (json["recommendation"] ?? "").toString(),
       reportArtifactId: _readOptionalString(json["report_artifact_id"]),
     );

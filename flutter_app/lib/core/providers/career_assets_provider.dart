@@ -5,7 +5,8 @@ import '../models/api_models.dart';
 import '../services/api_service.dart';
 import 'chat_provider.dart';
 
-final careerAssetsProvider = ChangeNotifierProvider<CareerAssetsProvider>((ref) {
+final careerAssetsProvider =
+    ChangeNotifierProvider<CareerAssetsProvider>((ref) {
   return CareerAssetsProvider(ref.read(apiServiceProvider));
 });
 
@@ -112,8 +113,7 @@ class CareerAssetsProvider extends ChangeNotifier {
   List<CareerProfileView> get careerProfiles =>
       List.unmodifiable(_careerProfiles);
   List<JDAnalysisView> get jdAnalyses => List.unmodifiable(_jdAnalyses);
-  List<JobFitReportView> get jobFitReports =>
-      List.unmodifiable(_jobFitReports);
+  List<JobFitReportView> get jobFitReports => List.unmodifiable(_jobFitReports);
   List<ResumeVersionView> get resumeVersions =>
       List.unmodifiable(_resumeVersions);
 

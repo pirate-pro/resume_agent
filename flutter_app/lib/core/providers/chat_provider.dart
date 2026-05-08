@@ -79,7 +79,8 @@ class ChatProvider extends ChangeNotifier {
   List<ToolCallView> get lastToolCalls => List.unmodifiable(_lastToolCalls);
   List<MemoryView> get lastMemoryHits => List.unmodifiable(_lastMemoryHits);
   List<EventView> get streamEvents => List.unmodifiable(_streamEvents);
-  List<SessionArtifactView> get sessionArtifacts => List.unmodifiable(_sessionArtifacts);
+  List<SessionArtifactView> get sessionArtifacts =>
+      List.unmodifiable(_sessionArtifacts);
   String? get recentActivatedArtifactId => _recentActivatedArtifactId;
 
   ChatProvider(this._api) {
@@ -475,7 +476,8 @@ class ChatProvider extends ChangeNotifier {
     for (final delay in delays) {
       await Future<void>.delayed(delay);
       await refreshSessions();
-      final session = _sessions.where((item) => item.id == sessionId).firstOrNull;
+      final session =
+          _sessions.where((item) => item.id == sessionId).firstOrNull;
       if (session == null) {
         return;
       }
@@ -512,7 +514,8 @@ class ChatProvider extends ChangeNotifier {
           sessionId: _sessionId,
           skillNames: _selectedSkillNames,
           maxToolRounds: _maxToolRounds,
-          activeArtifactIds: _activeArtifactIds.isEmpty ? null : _activeArtifactIds,
+          activeArtifactIds:
+              _activeArtifactIds.isEmpty ? null : _activeArtifactIds,
         )) {
           gotEvents = true;
           doneResponse = _handleStreamEvent(event);
@@ -530,7 +533,8 @@ class ChatProvider extends ChangeNotifier {
           sessionId: _sessionId,
           skillNames: _selectedSkillNames,
           maxToolRounds: _maxToolRounds,
-          activeArtifactIds: _activeArtifactIds.isEmpty ? null : _activeArtifactIds,
+          activeArtifactIds:
+              _activeArtifactIds.isEmpty ? null : _activeArtifactIds,
         );
         doneResponse = resp;
       }

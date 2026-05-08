@@ -161,7 +161,8 @@ class ApiService {
 
   // ── Session Artifacts ─────────────────────────────────────────────────────
 
-  Future<SessionArtifactsResponse> listSessionArtifacts(String sessionId) async {
+  Future<SessionArtifactsResponse> listSessionArtifacts(
+      String sessionId) async {
     final resp = await http.get(_uri("/api/sessions/$sessionId/artifacts"));
     return SessionArtifactsResponse.fromJson(
       Map<String, dynamic>.from(_decodeResponseData(resp)),
