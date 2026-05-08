@@ -1,3 +1,3 @@
 """Pydantic schemas exposed to HTTP clients."""
 
-__all__ = ["chat"]
+__all__ = ["career", "chat"]

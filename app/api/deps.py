@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.api.dependencies.config import get_settings
 from app.api.dependencies.infrastructure import (
     get_agent_document_repository,
+    get_career_product_store,
     get_lock_manager,
     get_memory_store,
     get_session_repository,
@@ -50,6 +51,7 @@ __all__ = [
     "get_agent_task_store",
     "get_answer_normalizer",
     "get_chat_service",
+    "get_career_product_store",
     "get_context_assembler",
     "get_context_compactor",
     "get_event_recorder",

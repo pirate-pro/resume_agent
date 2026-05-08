@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.career import router as career_router
 from app.api.chat import router as chat_router
 from app.api.deps import get_chat_service, get_mid_term_flusher, get_mid_term_flush_worker, get_settings
 from app.api.errors import app_error_handler, http_exception_handler, request_validation_error_handler
@@ -55,6 +56,7 @@ app.add_middleware(
 
 app.include_router(web_router)
 app.include_router(chat_router)
+app.include_router(career_router)
 
 
 @app.get("/health", response_model=StandardResponse[dict[str, Any]])
