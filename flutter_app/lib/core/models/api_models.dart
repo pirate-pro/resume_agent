@@ -7,6 +7,7 @@ class ChatMessage {
   final String sourceKind;
   final List<AnswerArtifactView> artifacts;
   final List<ToolCallView> toolCalls;
+  final List<EventView> progressEvents;
   final DateTime timestamp;
 
   ChatMessage({
@@ -18,6 +19,7 @@ class ChatMessage {
     this.sourceKind = "direct_answer",
     this.artifacts = const [],
     this.toolCalls = const [],
+    this.progressEvents = const [],
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 

@@ -34,6 +34,7 @@ class ChatProvider extends ChangeNotifier {
   List<AnswerArtifactView> _streamArtifacts = [];
   String _pendingStreamDelta = "";
   Timer? _streamFlushTimer;
+  Timer? _eventPollingTimer;
   Timer? _recentActivatedArtifactTimer;
   final Map<String, Future<void>> _pendingTitleRefreshes = {};
   String? _error;
@@ -46,6 +47,7 @@ class ChatProvider extends ChangeNotifier {
   int _maxToolRounds = AppConfig.maxToolRounds;
   bool _serverReachable = false;
   HealthView? _healthView;
+  String? _activeRunId;
 
   // Debug / side panel data
   List<ToolCallView> _lastToolCalls = [];
@@ -90,6 +92,7 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _streamFlushTimer?.cancel();
+    _eventPollingTimer?.cancel();
     _recentActivatedArtifactTimer?.cancel();
     super.dispose();
   }
@@ -498,6 +501,7 @@ class ChatProvider extends ChangeNotifier {
     _lastToolCalls = [];
     _lastMemoryHits = [];
     _streamEvents = [];
+    _activeRunId = null;
     _messages.add(ChatMessage(role: "user", content: content.trim()));
     _isStreaming = true;
     _resetStreamingBuffer(notify: false);
@@ -539,6 +543,9 @@ class ChatProvider extends ChangeNotifier {
         doneResponse = resp;
       }
 
+      if (_sessionId != null) {
+        await _pollCurrentRunEvents();
+      }
       _flushPendingStreamDelta(notify: false);
 
       // done 事件里的 answer 才是最终真值，必须覆盖流式阶段的临时 buffer。
@@ -563,6 +570,7 @@ class ChatProvider extends ChangeNotifier {
             sourceKind: doneResponse?.sourceKind ?? "direct_answer",
             artifacts: doneResponse?.artifacts ?? const [],
             toolCalls: doneResponse?.toolCalls ?? const [],
+            progressEvents: _agentTaskEvents(_streamEvents),
           ),
         );
         _resetStreamingBuffer(notify: false);
@@ -598,6 +606,7 @@ class ChatProvider extends ChangeNotifier {
       _error = e.toString();
     } finally {
       _isStreaming = false;
+      _stopEventPolling();
       unawaited(_checkHealth());
       notifyListeners();
     }
@@ -612,6 +621,7 @@ class ChatProvider extends ChangeNotifier {
         final sid = data["session_id"]?.toString();
         if (sid != null && sid.isNotEmpty) {
           _sessionId = sid;
+          _startEventPolling();
         }
         notifyListeners();
         return null;
@@ -646,17 +656,22 @@ class ChatProvider extends ChangeNotifier {
       case "run_event":
         // Store run events for the debug panel
         final eventRecord = EventView(
-          eventId: "",
-          sessionId: _sessionId ?? "",
-          agentId: data["agent_id"] ?? "",
-          runId: data["run_id"] ?? "",
-          eventVersion: 0,
-          type: data["type"] ?? "",
+          eventId: data["event_id"]?.toString() ?? "",
+          sessionId: data["session_id"]?.toString() ?? _sessionId ?? "",
+          agentId: data["agent_id"]?.toString() ?? "",
+          runId: data["run_id"]?.toString() ?? "",
+          parentRunId: data["parent_run_id"]?.toString(),
+          eventVersion: _readInt(data["event_version"]),
+          type: data["type"]?.toString() ?? "",
           payload: Map<String, dynamic>.from(data["payload"] ?? {}),
           createdAt:
               DateTime.tryParse(data["created_at"] ?? "") ?? DateTime.now(),
         );
-        _streamEvents.add(eventRecord);
+        if (eventRecord.type == "run_started" &&
+            eventRecord.parentRunId == null) {
+          _activeRunId = eventRecord.runId;
+        }
+        _mergeStreamEvents([eventRecord]);
         if (_streamEvents.length > 200) {
           _streamEvents = _streamEvents.sublist(_streamEvents.length - 200);
         }
@@ -685,6 +700,81 @@ class ChatProvider extends ChangeNotifier {
       default:
         return null;
     }
+  }
+
+  void _startEventPolling() {
+    if (_eventPollingTimer != null || _sessionId == null) {
+      return;
+    }
+    _eventPollingTimer = Timer.periodic(
+      const Duration(milliseconds: 900),
+      (_) => unawaited(_pollCurrentRunEvents()),
+    );
+    unawaited(_pollCurrentRunEvents());
+  }
+
+  void _stopEventPolling() {
+    _eventPollingTimer?.cancel();
+    _eventPollingTimer = null;
+  }
+
+  Future<void> _pollCurrentRunEvents() async {
+    final sessionId = _sessionId;
+    if (!_isStreaming || sessionId == null) {
+      return;
+    }
+    try {
+      final events = await _api.listSessionEvents(sessionId);
+      final runId = _activeRunId;
+      final visibleEvents = runId == null
+          ? events
+          : events.where((event) => event.runId == runId).toList();
+      _mergeStreamEvents(visibleEvents);
+      notifyListeners();
+    } catch (_) {
+      // 进度轮询只增强体验，失败时不影响主 SSE 输出。
+    }
+  }
+
+  void _mergeStreamEvents(List<EventView> events) {
+    if (events.isEmpty) {
+      return;
+    }
+    final byKey = <String, EventView>{};
+    for (final event in _streamEvents) {
+      byKey[_eventKey(event)] = event;
+    }
+    for (final event in events) {
+      byKey[_eventKey(event)] = event;
+    }
+    final merged = byKey.values.toList()
+      ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
+    _streamEvents =
+        merged.length > 200 ? merged.sublist(merged.length - 200) : merged;
+  }
+
+  String _eventKey(EventView event) {
+    if (event.eventId.isNotEmpty) {
+      return event.eventId;
+    }
+    return [
+      event.runId,
+      event.type,
+      event.createdAt.toIso8601String(),
+    ].join(":");
+  }
+
+  List<EventView> _agentTaskEvents(List<EventView> events) {
+    return events
+        .where((event) => event.type.startsWith("agent_task_"))
+        .toList();
+  }
+
+  int _readInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim()) ?? 0;
+    return 0;
   }
 
   // ── Session artifacts ───────────────────────────────────────────────────

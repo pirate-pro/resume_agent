@@ -881,6 +881,7 @@ class _MessageListState extends State<_MessageList> {
               renderHint: widget.streamRenderHint,
               layoutHint: widget.streamLayoutHint,
               artifacts: widget.streamArtifacts,
+              progressEvents: _buildProgressEvents(widget.streamEvents),
               thinkingLines: _buildThinkingLines(widget.streamEvents),
             );
           } else if (msgIdx < widget.messages.length) {
@@ -931,6 +932,12 @@ class _MessageListState extends State<_MessageList> {
       }
     }
     return lines;
+  }
+
+  List<EventView> _buildProgressEvents(List<EventView> events) {
+    return events
+        .where((event) => event.type.startsWith("agent_task_"))
+        .toList();
   }
 }
 

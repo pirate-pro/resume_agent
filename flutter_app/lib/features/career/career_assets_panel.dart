@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/models/api_models.dart';
 import '../../core/providers/career_assets_provider.dart';
+import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 
 class CareerAssetsPanel extends ConsumerStatefulWidget {
@@ -31,6 +32,14 @@ class _CareerAssetsPanelState extends ConsumerState<CareerAssetsPanel> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<bool>(
+      chatProvider.select((provider) => provider.isStreaming),
+      (previous, next) {
+        if (previous == true && !next) {
+          unawaited(ref.read(careerAssetsProvider).refresh());
+        }
+      },
+    );
     final provider = ref.watch(careerAssetsProvider);
     return Container(
       decoration: AppTheme.floatingPanelDecoration(

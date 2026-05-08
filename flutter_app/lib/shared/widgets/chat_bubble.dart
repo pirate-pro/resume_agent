@@ -13,6 +13,7 @@ import 'package:highlight/highlight.dart' show Node;
 import '../../core/models/api_models.dart';
 import '../../core/providers/chat_provider.dart';
 import '../theme/app_theme.dart';
+import 'run_progress_panel.dart';
 
 const double _bubbleMaxWidth = 780;
 const int _richMarkdownMaxChars = 6000;
@@ -112,6 +113,16 @@ class _ChatBubbleState extends State<ChatBubble> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (!isUser &&
+                          RunProgressPanel.hasProgress(
+                            widget.message.progressEvents,
+                          )) ...[
+                        RunProgressPanel(
+                          events: widget.message.progressEvents,
+                        ),
+                        if (widget.message.content.isNotEmpty)
+                          const SizedBox(height: 2),
+                      ],
                       if (widget.message.content.isNotEmpty)
                         RepaintBoundary(
                           child: _MessageBody(
@@ -147,6 +158,7 @@ class StreamingBubble extends StatelessWidget {
   final String? layoutHint;
   final List<AnswerArtifactView> artifacts;
   final List<String> thinkingLines;
+  final List<EventView> progressEvents;
   const StreamingBubble(
       {super.key,
       required this.buffer,
@@ -154,7 +166,8 @@ class StreamingBubble extends StatelessWidget {
       this.renderHint,
       this.layoutHint,
       this.artifacts = const [],
-      this.thinkingLines = const []});
+      this.thinkingLines = const [],
+      this.progressEvents = const []});
 
   @override
   Widget build(BuildContext context) {
@@ -190,8 +203,11 @@ class StreamingBubble extends StatelessWidget {
                 ],
               ),
             ),
-            // Thinking section (collapsible)
-            if (thinkingLines.isNotEmpty) _ThinkingBlock(lines: thinkingLines),
+            // Progress section (collapsible)
+            if (RunProgressPanel.hasProgress(progressEvents))
+              RunProgressPanel(events: progressEvents)
+            else if (thinkingLines.isNotEmpty)
+              _ThinkingBlock(lines: thinkingLines),
             // Content
             if (buffer.isNotEmpty)
               ConstrainedBox(
