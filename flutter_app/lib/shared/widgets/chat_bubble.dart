@@ -1077,9 +1077,13 @@ class _CareerReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final reportTitle = _careerReportDisplayTitle(report);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _CareerReportHeader(
+            title: reportTitle, sectionCount: report.sections.length),
+        const SizedBox(height: 12),
         if (report.lead.isNotEmpty) ...[
           Container(
             width: double.infinity,
@@ -1120,6 +1124,7 @@ class _CareerReportSectionBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _careerSectionColor(section.title);
+    final body = section.body.trim();
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(13, 12, 13, 13),
@@ -1161,12 +1166,337 @@ class _CareerReportSectionBlock extends StatelessWidget {
           ),
           if (section.body.isNotEmpty) ...[
             const SizedBox(height: 10),
-            _AssistantMarkdownBody(content: section.body),
+            if (_isSummarySection(section.title))
+              _CareerSummarySection(body: body)
+            else if (_isInsightGridSection(section.title))
+              _CareerInsightGridSection(
+                body: body,
+                color: color,
+                icon: _careerSectionIcon(section.title),
+              )
+            else if (_isActionListSection(section.title))
+              _CareerActionListSection(
+                body: body,
+                color: color,
+                icon: _careerSectionIcon(section.title),
+              )
+            else
+              _AssistantMarkdownBody(content: body),
           ],
         ],
       ),
     );
   }
+}
+
+class _CareerReportHeader extends StatelessWidget {
+  final String title;
+  final int sectionCount;
+
+  const _CareerReportHeader({
+    required this.title,
+    required this.sectionCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: AppTheme.accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(10),
+              border:
+                  Border.all(color: AppTheme.accent.withValues(alpha: 0.22)),
+            ),
+            child: Icon(
+              Icons.fact_check_outlined,
+              size: 18,
+              color: AppTheme.accent,
+            ),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: AppTheme.ts(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  "$sectionCount 个分析模块 · 已整理为结构化报告",
+                  style: AppTheme.ts(
+                    fontSize: 12,
+                    color: AppTheme.textSecondary,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CareerSummarySection extends StatelessWidget {
+  final String body;
+
+  const _CareerSummarySection({required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    final fields = _careerSummaryFields(body);
+    if (fields.isEmpty) {
+      return _AssistantMarkdownBody(content: body);
+    }
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final field in fields)
+          Container(
+            constraints: const BoxConstraints(minWidth: 180, maxWidth: 310),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: AppTheme.bg.withValues(alpha: 0.34),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  field.label,
+                  style: AppTheme.ts(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textTertiary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                SelectableText(
+                  field.value,
+                  style: AppTheme.ts(
+                    fontSize: 12.5,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _CareerInsightGridSection extends StatelessWidget {
+  final String body;
+  final Color color;
+  final IconData icon;
+
+  const _CareerInsightGridSection({
+    required this.body,
+    required this.color,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _careerSectionItems(body);
+    if (items.isEmpty) {
+      return _AssistantMarkdownBody(content: body);
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final useGrid = constraints.maxWidth >= 560 && items.length > 1;
+        if (!useGrid) {
+          return Column(
+            children: [
+              for (var index = 0; index < items.length; index++) ...[
+                _CareerReportItemCard(
+                  item: items[index],
+                  color: color,
+                  icon: icon,
+                  index: index + 1,
+                  dense: false,
+                ),
+                if (index < items.length - 1) const SizedBox(height: 8),
+              ],
+            ],
+          );
+        }
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (var index = 0; index < items.length; index++)
+              SizedBox(
+                width: (constraints.maxWidth - 8) / 2,
+                child: _CareerReportItemCard(
+                  item: items[index],
+                  color: color,
+                  icon: icon,
+                  index: index + 1,
+                  dense: true,
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CareerActionListSection extends StatelessWidget {
+  final String body;
+  final Color color;
+  final IconData icon;
+
+  const _CareerActionListSection({
+    required this.body,
+    required this.color,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _careerSectionItems(body);
+    if (items.isEmpty) {
+      return _AssistantMarkdownBody(content: body);
+    }
+    return Column(
+      children: [
+        for (var index = 0; index < items.length; index++) ...[
+          _CareerReportItemCard(
+            item: items[index],
+            color: color,
+            icon: icon,
+            index: index + 1,
+            dense: false,
+          ),
+          if (index < items.length - 1) const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _CareerReportItemCard extends StatelessWidget {
+  final _CareerSectionItem item;
+  final Color color;
+  final IconData icon;
+  final int index;
+  final bool dense;
+
+  const _CareerReportItemCard({
+    required this.item,
+    required this.color,
+    required this.icon,
+    required this.index,
+    required this.dense,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(10, dense ? 9 : 10, 10, dense ? 9 : 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.64),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.9)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: item.title.isEmpty
+                ? Icon(icon, size: 13, color: color)
+                : Text(
+                    index.toString(),
+                    style: AppTheme.ts(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (item.title.isNotEmpty) ...[
+                  SelectableText(
+                    item.title,
+                    style: AppTheme.ts(
+                      fontSize: 12.5,
+                      height: 1.35,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  if (item.detail.isNotEmpty) const SizedBox(height: 5),
+                ],
+                if (item.detail.isNotEmpty)
+                  SelectableText(
+                    item.detail,
+                    style: AppTheme.ts(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CareerSummaryField {
+  final String label;
+  final String value;
+
+  const _CareerSummaryField({required this.label, required this.value});
+}
+
+class _CareerSectionItem {
+  final String title;
+  final String detail;
+
+  const _CareerSectionItem({required this.title, required this.detail});
 }
 
 class _AssistantMarkdownBody extends StatelessWidget {
@@ -3194,12 +3524,14 @@ class _CareerAssetReferenceCard extends ConsumerWidget {
                 _ArtifactActionButton(
                   label: "预览",
                   icon: Icons.visibility_outlined,
+                  primary: true,
                   onPressed: () =>
                       _previewSessionArtifact(context, ref, asset.id),
                 ),
                 _ArtifactActionButton(
                   label: "下载",
                   icon: Icons.download_rounded,
+                  primary: true,
                   onPressed: () =>
                       _downloadSessionArtifact(context, ref, asset.id),
                 ),
@@ -3207,10 +3539,11 @@ class _CareerAssetReferenceCard extends ConsumerWidget {
                 _ArtifactActionButton(
                   label: "详情",
                   icon: Icons.open_in_new_rounded,
+                  primary: true,
                   onPressed: () => _selectCareerAsset(context, ref, asset),
                 ),
               _ArtifactActionButton(
-                label: "复制ID",
+                label: "复制 ID",
                 icon: Icons.content_copy_rounded,
                 onPressed: () => _copyText(context, asset.id, "资产编号已复制"),
               ),
@@ -3338,12 +3671,14 @@ class _ArtifactCard extends ConsumerWidget {
                       _ArtifactActionButton(
                         label: "预览",
                         icon: Icons.visibility_outlined,
+                        primary: true,
                         onPressed: () =>
                             _previewSessionArtifact(context, ref, artifactId),
                       ),
                       _ArtifactActionButton(
                         label: "下载",
                         icon: Icons.download_rounded,
+                        primary: true,
                         onPressed: () =>
                             _downloadSessionArtifact(context, ref, artifactId),
                       ),
@@ -3353,6 +3688,7 @@ class _ArtifactCard extends ConsumerWidget {
                             ? Icons.check_circle_outline_rounded
                             : Icons.push_pin_outlined,
                         enabled: !isActiveArtifact,
+                        primary: !isActiveArtifact,
                         onPressed: () async {
                           final activated = await ref
                               .read(chatProvider)
@@ -3380,7 +3716,7 @@ class _ArtifactCard extends ConsumerWidget {
                         },
                       ),
                       _ArtifactActionButton(
-                        label: "复制ID",
+                        label: "复制 ID",
                         icon: Icons.content_copy_rounded,
                         onPressed: () =>
                             _copyText(context, artifactId, "资产编号已复制"),
@@ -3389,6 +3725,7 @@ class _ArtifactCard extends ConsumerWidget {
                       _ArtifactActionButton(
                         label: "查看内容",
                         icon: Icons.visibility_outlined,
+                        primary: true,
                         onPressed: () => _previewWorkspaceArtifact(
                             context, ref, artifact.path),
                       ),
@@ -3414,6 +3751,7 @@ class _ArtifactActionButton extends StatelessWidget {
   final String label;
   final IconData icon;
   final bool enabled;
+  final bool primary;
   final Future<void> Function() onPressed;
 
   const _ArtifactActionButton({
@@ -3421,6 +3759,7 @@ class _ArtifactActionButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.enabled = true,
+    this.primary = false,
   });
 
   @override
@@ -3428,14 +3767,22 @@ class _ArtifactActionButton extends StatelessWidget {
     return TextButton.icon(
       onPressed: enabled ? () => unawaited(onPressed()) : null,
       style: TextButton.styleFrom(
-        foregroundColor:
-            enabled ? AppTheme.textSecondary : AppTheme.textTertiary,
+        foregroundColor: enabled
+            ? (primary ? AppTheme.accent : AppTheme.textSecondary)
+            : AppTheme.textTertiary,
+        backgroundColor: enabled && primary
+            ? AppTheme.accent.withValues(alpha: 0.1)
+            : Colors.transparent,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         minimumSize: Size.zero,
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        side: primary && enabled
+            ? BorderSide(color: AppTheme.accent.withValues(alpha: 0.18))
+            : BorderSide.none,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         textStyle: AppTheme.ts(
           fontSize: 12,
-          fontWeight: FontWeight.w600,
+          fontWeight: primary ? FontWeight.w700 : FontWeight.w600,
         ),
       ),
       icon: Icon(icon, size: 14),
@@ -4228,6 +4575,131 @@ class _CareerReportSection {
     required this.title,
     required this.body,
   });
+}
+
+String _careerReportDisplayTitle(_CareerReportPresentation report) {
+  final joinedTitles =
+      report.sections.map((section) => section.title).join(" ");
+  if (joinedTitles.contains("匹配") || joinedTitles.contains("差距")) {
+    return "岗位匹配报告";
+  }
+  if (joinedTitles.contains("JD")) {
+    return "JD 分析报告";
+  }
+  if (joinedTitles.contains("优化")) {
+    return "简历优化报告";
+  }
+  return "简历诊断报告";
+}
+
+bool _isSummarySection(String title) {
+  return title.contains("摘要");
+}
+
+bool _isInsightGridSection(String title) {
+  return title.contains("优势");
+}
+
+bool _isActionListSection(String title) {
+  return title.contains("风险") ||
+      title.contains("差距") ||
+      title.contains("建议") ||
+      title.contains("优化") ||
+      title.contains("面试");
+}
+
+List<_CareerSummaryField> _careerSummaryFields(String body) {
+  final fields = <_CareerSummaryField>[];
+  for (final rawLine in body.split("\n")) {
+    final line = _normalizeCareerReportLine(rawLine);
+    if (line.isEmpty) {
+      continue;
+    }
+    final separator = RegExp(r"[:：]").firstMatch(line);
+    if (separator == null || separator.start == 0 || separator.start > 16) {
+      continue;
+    }
+    final label = line.substring(0, separator.start).trim();
+    final value = line.substring(separator.end).trim();
+    if (label.isEmpty || value.isEmpty) {
+      continue;
+    }
+    fields.add(_CareerSummaryField(label: label, value: value));
+    if (fields.length >= 8) {
+      break;
+    }
+  }
+  return fields;
+}
+
+List<_CareerSectionItem> _careerSectionItems(String body) {
+  final groups = <String>[];
+  final current = <String>[];
+
+  void flush() {
+    final value = current.join(" ").trim();
+    if (value.isNotEmpty) {
+      groups.add(value);
+    }
+    current.clear();
+  }
+
+  for (final rawLine in body.split("\n")) {
+    final trimmed = rawLine.trim();
+    if (trimmed.isEmpty) {
+      continue;
+    }
+    final startsItem = RegExp(r"^(\d+[\.\)、]|[-*•])\s+").hasMatch(trimmed);
+    final line = _normalizeCareerReportLine(rawLine);
+    if (line.isEmpty) {
+      continue;
+    }
+    if (startsItem) {
+      flush();
+    }
+    current.add(line);
+  }
+  flush();
+  if (groups.isEmpty && body.trim().isNotEmpty) {
+    groups.add(_normalizeCareerReportLine(body));
+  }
+  return groups
+      .where((item) => item.isNotEmpty)
+      .map(_careerSectionItemFromText)
+      .toList();
+}
+
+_CareerSectionItem _careerSectionItemFromText(String text) {
+  final normalized = _stripMarkdownInline(text).trim();
+  final separator = RegExp(r"[:：]").firstMatch(normalized);
+  if (separator != null && separator.start > 0 && separator.start <= 36) {
+    final title = normalized.substring(0, separator.start).trim();
+    final detail = normalized.substring(separator.end).trim();
+    return _CareerSectionItem(title: title, detail: detail);
+  }
+  return _CareerSectionItem(title: "", detail: normalized);
+}
+
+String _normalizeCareerReportLine(String value) {
+  final withoutMarker = value
+      .trim()
+      .replaceFirst(RegExp(r"^#{1,6}\s*"), "")
+      .replaceFirst(RegExp(r"^(\d+[\.\)、]|[-*•])\s+"), "")
+      .trim();
+  return _stripMarkdownInline(withoutMarker).replaceAll(RegExp(r"\s+"), " ");
+}
+
+String _stripMarkdownInline(String value) {
+  return value
+      .replaceAllMapped(
+        RegExp(r"\*\*([^*]+)\*\*"),
+        (match) => match.group(1) ?? "",
+      )
+      .replaceAllMapped(
+        RegExp(r"`([^`]+)`"),
+        (match) => match.group(1) ?? "",
+      )
+      .trim();
 }
 
 bool _looksLikeCareerReport(String content) {
