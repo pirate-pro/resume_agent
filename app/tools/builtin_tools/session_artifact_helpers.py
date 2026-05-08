@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.errors import ToolExecutionError
+from app.core.time import app_now
 from app.domain.models import SessionArtifact
 from app.domain.protocols import SessionRepository
 
@@ -80,7 +80,7 @@ def ensure_session_artifact_text_ready(
                 source_type=artifact.source_type,
                 source_event_id=artifact.source_event_id,
                 created_at=artifact.created_at,
-                updated_at=datetime.now(UTC),
+                updated_at=app_now(),
                 storage_relpath=artifact.storage_relpath,
                 text_relpath=None,
                 error=parse_error,
@@ -90,7 +90,7 @@ def ensure_session_artifact_text_ready(
 
     parsed_path = storage_path.parent / "content.txt"
     parsed_path.write_text(parsed_text, encoding="utf-8")
-    now = datetime.now(UTC)
+    now = app_now()
     ready_artifact = SessionArtifact(
         artifact_id=artifact.artifact_id,
         session_id=artifact.session_id,

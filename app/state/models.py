@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 
 from app.core.errors import ValidationError
+from app.core.time import normalize_app_datetime
 
 __all__ = [
     "StateRecord",
@@ -71,7 +72,7 @@ def _normalize_optional(field_name: str, value: str | None) -> str | None:
 def _normalize_datetime(field_name: str, value: datetime) -> datetime:
     if not isinstance(value, datetime):
         raise ValidationError(f"{field_name} must be datetime.")
-    return value.astimezone(UTC)
+    return normalize_app_datetime(value)
 
 
 def _normalize_metadata(metadata: dict[str, str]) -> dict[str, str]:

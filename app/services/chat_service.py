@@ -6,11 +6,12 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from collections.abc import Coroutine
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.core.time import app_now, to_app_iso
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, SessionMeta
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
@@ -147,7 +148,7 @@ class ChatService:
                         "data": {
                             "session_id": session_id,
                             "idle_seconds": self._stream_heartbeat_interval_seconds,
-                            "created_at": _utc_now().astimezone(UTC).isoformat().replace("+00:00", "Z"),
+                            "created_at": to_app_iso(_utc_now()),
                         },
                     }
                     if run_task.done():
@@ -335,4 +336,4 @@ class ChatService:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(UTC)
+    return app_now()

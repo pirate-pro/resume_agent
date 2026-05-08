@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.core.time import app_now
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import ChatModelClient, SessionRepository
 from app.memory.file_store import FileMemoryStore
@@ -219,7 +220,7 @@ class MidTermFlusher:
     def collect_job_metrics(self) -> MidTermFlushJobMetrics:
         """Collect queue-level metrics for logging/observability."""
         jobs = self._job_store.list_all_jobs()
-        now = datetime.now(UTC)
+        now = app_now()
         pending_jobs = 0
         running_jobs = 0
         retry_jobs = 0
@@ -323,7 +324,7 @@ class MidTermFlusher:
             retry_count=refreshed.retry_count,
             next_attempt_at=refreshed.next_attempt_at,
             created_at=refreshed.created_at,
-            updated_at=datetime.now(UTC),
+            updated_at=app_now(),
             event_pack=refreshed.event_pack,
             daily_path=refreshed.daily_path,
             last_error=refreshed.last_error,
@@ -341,7 +342,7 @@ class MidTermFlusher:
         return refreshed if refreshed is not None else job
 
     def _create_job(self, *, context: RunContext, pack: MidTermEventPack) -> MidTermFlushJob:
-        now = datetime.now(UTC)
+        now = app_now()
         path = self._daily_writer.daily_path(agent_id=context.agent_id, now=pack.created_at)
         return MidTermFlushJob(
             job_id=f"job_{uuid4().hex[:12]}",
@@ -358,7 +359,7 @@ class MidTermFlusher:
         )
 
     def _process_due_jobs(self, *, session_id: str, agent_id: str, max_jobs: int) -> list[MidTermFlushJob]:
-        now = datetime.now(UTC)
+        now = app_now()
         output: list[MidTermFlushJob] = []
         jobs = self._job_store.list_jobs(session_id=session_id, agent_id=agent_id)
         for job in jobs:
@@ -410,7 +411,7 @@ class MidTermFlusher:
         try:
             raw_summary = self._summarizer.summarize(running.event_pack)
             validated = self._validator.validate(raw_summary, running.event_pack)
-            flushed_at = datetime.now(UTC)
+            flushed_at = app_now()
             block = self._renderer.render(summary=validated, pack=running.event_pack, flushed_at=flushed_at)
             self._daily_writer.append_daily_block(Path(running.daily_path), running.event_pack, block)
             facts_written, facts_skipped = self._candidate_materializer.materialize(
@@ -471,7 +472,7 @@ class MidTermFlusher:
             retry_count=job.retry_count,
             next_attempt_at=next_attempt_at if next_attempt_at is not None else job.next_attempt_at,
             created_at=job.created_at,
-            updated_at=updated_at if updated_at is not None else datetime.now(UTC),
+            updated_at=updated_at if updated_at is not None else app_now(),
             event_pack=job.event_pack,
             daily_path=job.daily_path,
             last_error=resolved_last_error,
@@ -479,7 +480,7 @@ class MidTermFlusher:
         )
 
     def _mark_retry_or_deferred(self, job: MidTermFlushJob, *, error: str) -> MidTermFlushJob:
-        now = datetime.now(UTC)
+        now = app_now()
         next_retry_count = job.retry_count + 1
         if next_retry_count <= len(_RETRY_BACKOFF_SECONDS):
             backoff = timedelta(seconds=_RETRY_BACKOFF_SECONDS[next_retry_count - 1])

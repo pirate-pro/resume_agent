@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from app.core.errors import ValidationError
+from app.core.time import from_app_iso, normalize_app_datetime, to_app_iso
 
 __all__ = [
     "MemoryFact",
@@ -130,8 +131,7 @@ class MemoryFact:
 
 
 def format_memory_time(value: datetime) -> str:
-    normalized = _normalize_datetime(value)
-    return normalized.isoformat().replace("+00:00", "Z")
+    return to_app_iso(value)
 
 
 def parse_memory_time(value: Any) -> datetime:
@@ -139,11 +139,8 @@ def parse_memory_time(value: Any) -> datetime:
         return _normalize_datetime(value)
     if not isinstance(value, str) or not value.strip():
         raise ValidationError("datetime value must be a non-empty string.")
-    raw = value.strip()
     try:
-        if raw.endswith("Z"):
-            raw = raw[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(raw)
+        parsed = from_app_iso(value)
     except ValueError as exc:
         raise ValidationError(f"invalid datetime value: {value}") from exc
     return _normalize_datetime(parsed)
@@ -152,9 +149,7 @@ def parse_memory_time(value: Any) -> datetime:
 def _normalize_datetime(value: datetime) -> datetime:
     if not isinstance(value, datetime):
         raise ValidationError("datetime value must be datetime.")
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return normalize_app_datetime(value)
 
 
 def _require_non_empty(field_name: str, value: str) -> str:

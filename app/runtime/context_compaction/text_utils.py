@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 import json
 import re
 from typing import Any
 
 from app.core.errors import ValidationError
+from app.core.time import to_app_iso
 
 __all__ = [
     "MAX_TOOL_TEXT_LEN",
@@ -102,4 +103,4 @@ def optional_text(raw: Any, *, max_len: int = 2000) -> str | None:
 
 
 def format_iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return to_app_iso(value)

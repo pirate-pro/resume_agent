@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.core.time import from_app_iso, normalize_app_datetime, to_app_iso
 from app.domain.models import EventRecord
 
 MAX_LIST_LINES = 8
@@ -184,21 +185,15 @@ def optional_text(raw: Any) -> str | None:
 def parse_iso_datetime(raw: Any) -> datetime | None:
     if not isinstance(raw, str) or not raw.strip():
         return None
-    normalized = raw.strip()
-    if normalized.endswith("Z"):
-        normalized = normalized[:-1] + "+00:00"
     try:
-        value = datetime.fromisoformat(normalized)
+        value = from_app_iso(raw)
     except ValueError:
         return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value
+    return normalize_app_datetime(value)
 
 
 def format_iso(value: datetime) -> str:
-    normalized = value.astimezone(UTC).replace(microsecond=0)
-    return normalized.isoformat().replace("+00:00", "Z")
+    return to_app_iso(value.replace(microsecond=0))
 
 
 def read_json(path: Path) -> dict[str, Any]:

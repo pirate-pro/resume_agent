@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from app.core.errors import ValidationError
+from app.core.time import from_app_iso, normalize_app_datetime
 from app.memory.models import MemoryScope
 
 SCHEMA_VERSION = "1.0"
@@ -97,11 +98,8 @@ def clip_text(value: str, *, max_chars: int) -> str:
 def parse_optional_time(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
-    raw = value.strip()
     try:
-        if raw.endswith("Z"):
-            raw = raw[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(raw)
+        parsed = from_app_iso(value)
     except ValueError:
         return None
     return normalize_datetime(parsed)
@@ -110,9 +108,7 @@ def parse_optional_time(value: Any) -> datetime | None:
 def normalize_datetime(value: datetime) -> datetime:
     if not isinstance(value, datetime):
         raise ValidationError("datetime value must be datetime.")
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return normalize_app_datetime(value)
 
 
 def require_non_empty(field_name: str, value: str) -> str:

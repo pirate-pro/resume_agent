@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 from base64 import b64decode
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.core.time import app_now
 from app.domain.models import SessionArtifact
 from app.domain.protocols import SessionRepository
 from app.infra.locks.session_lock_manager import SessionLockManager
@@ -276,4 +277,4 @@ def _infer_media_type(extension: str) -> str:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(UTC)
+    return app_now()

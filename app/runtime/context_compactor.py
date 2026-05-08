@@ -7,12 +7,12 @@ memory has a chance to consume the raw events before they are compacted.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import logging
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.core.time import app_now
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import ChatModelClient, ModelResponse, SessionRepository
 from app.prompts.context_compaction import CONTEXT_COMPACTOR_SYSTEM_PROMPT, build_context_compaction_prompt
@@ -249,7 +249,7 @@ class ContextCompactor:
             "retained_event_ids": [event.event_id for event in retained_events],
             "first_compressed_event_id": compressed_events[0].event_id,
             "last_compressed_event_id": compressed_events[-1].event_id,
-            "compacted_at": format_iso(datetime.now(UTC)),
+            "compacted_at": format_iso(app_now()),
         }
         return EventRecord(
             event_id=f"evt_{uuid4().hex[:12]}",

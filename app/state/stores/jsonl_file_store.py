@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import StorageError, ValidationError
+from app.core.time import from_app_iso, to_app_iso
 from app.state.models import StateRecord, StateScope, StateStatus
 
 __all__ = ["JsonlFileStateStore"]
@@ -217,10 +218,8 @@ def _require_non_empty(field_name: str, value: str) -> str:
 
 
 def _to_iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return to_app_iso(value)
 
 
 def _from_iso(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value).astimezone(UTC)
+    return from_app_iso(value)

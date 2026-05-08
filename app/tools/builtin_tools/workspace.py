@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ToolExecutionError
+from app.core.time import app_now
 from app.domain.models import RunContext, SessionArtifact, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
 from app.tools.builtin_tools.common import require_non_empty_argument, validate_context
@@ -167,7 +167,7 @@ class PublishArtifactTool:
         except OSError as exc:
             raise ToolExecutionError(f"Failed to publish artifact: {exc}") from exc
 
-        now = datetime.now(UTC)
+        now = app_now()
         artifact = SessionArtifact(
             artifact_id=artifact_id,
             session_id=session_id,

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import StorageError
+from app.core.time import app_now, from_app_iso, to_app_iso
 
 __all__ = [
     "from_iso",
@@ -19,17 +20,15 @@ __all__ = [
 
 
 def utc_now() -> datetime:
-    return datetime.now(UTC)
+    return app_now()
 
 
 def to_iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return to_app_iso(value)
 
 
 def from_iso(value: str) -> datetime:
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    return datetime.fromisoformat(value).astimezone(UTC)
+    return from_app_iso(value)
 
 
 def write_json_atomically(path: Path, payload: dict[str, Any], *, error_prefix: str) -> None:

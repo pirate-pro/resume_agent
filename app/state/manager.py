@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.core.time import app_now
 from app.state.contracts import StateStore
 from app.state.models import StateRecord, StateScope, StateStatus
 
@@ -34,7 +34,7 @@ class StateManager:
         normalized_value = _require_non_empty("value", value)
         normalized_metadata = _normalize_metadata(metadata)
         normalized_source_run_id = _normalize_optional("source_run_id", source_run_id)
-        now = datetime.now(UTC)
+        now = app_now()
         existing = self._store.get_record(
             scope=StateScope.AGENT_SESSION,
             session_id=normalized_session_id,
@@ -83,7 +83,7 @@ class StateManager:
             scope=StateScope.AGENT_SESSION,
             session_id=normalized_session_id,
             keys=normalized_keys,
-            now=datetime.now(UTC),
+            now=app_now(),
             agent_id=normalized_agent_id,
         )
 
@@ -97,7 +97,7 @@ class StateManager:
         normalized_session_id = _require_non_empty("session_id", session_id)
         normalized_agent_id = _require_non_empty("agent_id", agent_id)
         normalized_keys = _normalize_required_keys(keys)
-        now = datetime.now(UTC)
+        now = app_now()
         published: list[StateRecord] = []
 
         for key in normalized_keys:
@@ -156,7 +156,7 @@ class StateManager:
             scope=StateScope.SHARED_SESSION,
             session_id=normalized_session_id,
             keys=normalized_keys,
-            now=datetime.now(UTC),
+            now=app_now(),
             agent_id=None,
         )
 

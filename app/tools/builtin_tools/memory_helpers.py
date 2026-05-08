@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC
 from typing import Any
 
 from app.core.errors import ToolExecutionError
+from app.core.time import to_app_iso
 from app.memory.admission import evaluate_memory_admission
 from app.memory.classification import classify_memory
 from app.memory.models import MemoryRecord, MemoryScope
@@ -266,11 +266,9 @@ def serialize_memory_record(record: MemoryRecord, *, include_metadata: bool) -> 
         "subject_kind": record.subject_kind,
         "classification_version": record.classification_version,
         "lane": memory_lane_for_metadata(record.canonical_key, record.kind),
-        "created_at": record.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        "updated_at": record.updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        "expires_at": None
-        if record.expires_at is None
-        else record.expires_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "created_at": to_app_iso(record.created_at),
+        "updated_at": to_app_iso(record.updated_at),
+        "expires_at": None if record.expires_at is None else to_app_iso(record.expires_at),
         "source_event_id": record.source_event_id,
         "source_agent_id": record.source_agent_id,
         "version": record.version,

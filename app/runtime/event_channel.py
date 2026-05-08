@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.core.time import to_app_iso
 from app.domain.models import EventRecord
 
 __all__ = ["EventChannel", "serialize_event_record"]
@@ -68,5 +68,5 @@ def serialize_event_record(event: EventRecord) -> dict[str, Any]:
         "event_version": event.event_version,
         "type": event.type,
         "payload": event.payload,
-        "created_at": event.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "created_at": to_app_iso(event.created_at),
     }

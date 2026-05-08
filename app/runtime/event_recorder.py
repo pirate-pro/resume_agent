@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ValidationError
+from app.core.time import app_now
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import SessionRepository
 from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT, AGENT_TASK_ASSIGNED_EVENT
@@ -62,7 +62,7 @@ class EventRecorder:
             session_id=context.session_id,
             type=event_type,
             payload=payload,
-            created_at=datetime.now(UTC),
+            created_at=app_now(),
             agent_id=context.agent_id,
             run_id=context.run_id,
             parent_run_id=context.parent_run_id,

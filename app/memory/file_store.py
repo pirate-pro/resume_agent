@@ -10,10 +10,11 @@ data/memory/
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from app.core.errors import StorageError, ValidationError
+from app.core.time import APP_TIMEZONE, app_now
 from app.memory.file_models import MemoryFact, format_memory_time
 from app.memory.file_store_facts import (
     append_fact_to_file,
@@ -99,7 +100,7 @@ class FileMemoryStore:
         metadata: dict[str, str],
         now: datetime | None = None,
     ) -> MemoryFact:
-        normalized_now = normalize_datetime(now or datetime.now(UTC))
+        normalized_now = normalize_datetime(now or app_now())
         normalized_scope, normalized_owner = to_memory_scope(scope=scope, owner_agent_id=owner_agent_id)
         path = self._layout.facts_path(scope=normalized_scope, agent_id=normalized_owner)
         return append_fact_to_file(
@@ -127,7 +128,7 @@ class FileMemoryStore:
     ) -> dict[str, str]:
         if scope not in {MemoryScope.SHARED_LONG, MemoryScope.AGENT_LONG}:
             raise ValidationError("long-term summary refresh only supports shared_long/agent_long.")
-        normalized_now = normalize_datetime(now or datetime.now(UTC))
+        normalized_now = normalize_datetime(now or app_now())
         normalized_scope, normalized_owner = to_memory_scope(scope=scope, owner_agent_id=agent_id)
         long_term_path = self._layout.long_term_path(scope=normalized_scope, agent_id=normalized_owner)
         facts_path = self._layout.facts_path(scope=normalized_scope, agent_id=normalized_owner)
@@ -255,7 +256,7 @@ class FileMemoryStore:
     ) -> ForgetResult:
         normalized_key = require_non_empty("canonical_key", canonical_key)
         normalized_reason = require_non_empty("reason", reason)
-        normalized_now = normalize_datetime(now or datetime.now(UTC))
+        normalized_now = normalize_datetime(now or app_now())
         normalized_scope, normalized_owner = to_memory_scope(scope=scope, owner_agent_id=agent_id)
         path = self._layout.facts_path(scope=normalized_scope, agent_id=normalized_owner)
         return archive_active_facts_by_canonical_key_in_file(
@@ -282,7 +283,7 @@ class FileMemoryStore:
         normalized_agent_id = require_non_empty("agent_id", agent_id)
         normalized_query = require_non_empty("query", query)
         normalized_limit = normalize_limit(limit)
-        normalized_now = normalize_datetime(now or datetime.now(UTC))
+        normalized_now = normalize_datetime(now or app_now())
         include_shared = MemoryScope.SHARED_LONG in include_scopes
         include_agent = MemoryScope.AGENT_LONG in include_scopes or MemoryScope.AGENT_SHORT in include_scopes
         if include_agent:
@@ -348,7 +349,7 @@ class FileMemoryStore:
     ) -> ForgetResult:
         normalized_agent_id = require_non_empty("agent_id", agent_id)
         normalized_ids = normalize_memory_ids(memory_ids)
-        normalized_now = normalize_datetime(now or datetime.now(UTC))
+        normalized_now = normalize_datetime(now or app_now())
         include_shared = MemoryScope.SHARED_LONG in scopes
         include_agent = MemoryScope.AGENT_LONG in scopes or MemoryScope.AGENT_SHORT in scopes
 
@@ -517,7 +518,7 @@ class FileMemoryStore:
                 continue
             clipped = clip_text(content, max_chars=MID_TERM_MAX_CHARS)
             stat = path.stat()
-            updated_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+            updated_at = datetime.fromtimestamp(stat.st_mtime, tz=APP_TIMEZONE)
             memory_id = mid_term_record_id(scope=scope, agent_id=agent_id, path=path)
             output.append(
                 make_memory_record(

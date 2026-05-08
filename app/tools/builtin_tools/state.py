@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC
 from typing import Any
 
 from app.core.errors import ToolExecutionError
+from app.core.time import to_app_iso
 from app.domain.models import RunContext, ToolDefinition, ToolExecutionResult
 from app.state.manager import StateManager
 from app.state.models import StateRecord
@@ -190,6 +190,6 @@ def _serialize_state_record(record: StateRecord) -> dict[str, Any]:
         "version": record.version,
         "source_run_id": record.source_run_id,
         "metadata": record.metadata,
-        "created_at": record.created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
-        "updated_at": record.updated_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "created_at": to_app_iso(record.created_at),
+        "updated_at": to_app_iso(record.updated_at),
     }

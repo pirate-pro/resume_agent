@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 from app.core.errors import ValidationError
+from app.core.time import app_now
 from app.memory.file_models import format_memory_time
 from app.memory.file_store_common import empty_long_term_payload, require_non_empty
 from app.memory.file_store_io import ensure_file, write_json_payload
@@ -68,6 +68,6 @@ class MemoryFileLayout:
     def _ensure_long_term_file(self, path: Path, *, scope: str, agent_id: str | None) -> None:
         if path.exists():
             return
-        now = format_memory_time(datetime.now(UTC))
+        now = format_memory_time(app_now())
         payload = empty_long_term_payload(scope=scope, agent_id=agent_id, now=now)
         write_json_payload(path, payload)

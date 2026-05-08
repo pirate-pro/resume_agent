@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
 from app.core.errors import ValidationError
+from app.core.time import app_now
 from app.runtime.mid_term.shared import (
     format_iso,
     optional_text,
@@ -153,7 +154,7 @@ class MidTermEventPack:
             ),
             events=normalized_events,
             semantic_units=normalized_units,
-            created_at=parse_iso_datetime(payload.get("created_at")) or datetime.now(UTC),
+            created_at=parse_iso_datetime(payload.get("created_at")) or app_now(),
         )
 
 
@@ -204,9 +205,9 @@ class MidTermFlushJob:
             agent_id=require_non_empty("agent_id", payload.get("agent_id")),
             status=status,
             retry_count=require_non_negative_int("retry_count", payload.get("retry_count")),
-            next_attempt_at=parse_iso_datetime(payload.get("next_attempt_at")) or datetime.now(UTC),
-            created_at=parse_iso_datetime(payload.get("created_at")) or datetime.now(UTC),
-            updated_at=parse_iso_datetime(payload.get("updated_at")) or datetime.now(UTC),
+            next_attempt_at=parse_iso_datetime(payload.get("next_attempt_at")) or app_now(),
+            created_at=parse_iso_datetime(payload.get("created_at")) or app_now(),
+            updated_at=parse_iso_datetime(payload.get("updated_at")) or app_now(),
             event_pack=MidTermEventPack.from_payload(event_pack_raw),
             daily_path=require_non_empty("daily_path", payload.get("daily_path")),
             last_error=optional_text(payload.get("last_error")),

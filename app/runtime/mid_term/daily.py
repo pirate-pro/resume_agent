@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.core.time import normalize_app_datetime
 from app.memory.file_store import FileMemoryStore
 from app.runtime.mid_term.models import MidTermEventPack
 from app.runtime.mid_term.shared import flush_id_for_pack, format_iso
@@ -61,7 +62,7 @@ class MidTermDailyWriter:
     def daily_path(self, *, agent_id: str, now: datetime) -> Path:
         base = self._memory_store.root_dir / "agents" / agent_id / "mid_term" / "daily"
         base.mkdir(parents=True, exist_ok=True)
-        return base / f"{now.astimezone(UTC).date().isoformat()}.md"
+        return base / f"{normalize_app_datetime(now).date().isoformat()}.md"
 
     def append_daily_block(self, path: Path, pack: MidTermEventPack, block: str) -> None:
         flush_id = flush_id_for_pack(pack)
