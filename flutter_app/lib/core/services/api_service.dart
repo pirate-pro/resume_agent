@@ -220,6 +220,87 @@ class ApiService {
     );
   }
 
+  Future<SessionArtifactContentView> readSessionArtifactContent({
+    required String sessionId,
+    required String artifactId,
+    int offset = 0,
+    int maxChars = 12000,
+  }) async {
+    final uri = _uri(
+      "/api/sessions/${Uri.encodeComponent(sessionId)}/artifacts/"
+      "${Uri.encodeComponent(artifactId)}/content",
+    ).replace(
+      queryParameters: {
+        "offset": offset.toString(),
+        "max_chars": maxChars.toString(),
+      },
+    );
+    final resp = await http.get(uri);
+    return SessionArtifactContentView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
+  // ── Career Product Assets ─────────────────────────────────────────────
+
+  Future<List<ResumeProfileView>> listCareerResumeProfiles({
+    bool includeArchived = false,
+  }) async {
+    final resp = await http.get(_careerUri("/resumes", includeArchived));
+    final list = _decodeResponseData(resp) as List;
+    return list
+        .map((e) => ResumeProfileView.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<List<CareerProfileView>> listCareerProfiles({
+    bool includeArchived = false,
+  }) async {
+    final resp = await http.get(_careerUri("/profiles", includeArchived));
+    final list = _decodeResponseData(resp) as List;
+    return list
+        .map((e) => CareerProfileView.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<List<JDAnalysisView>> listCareerJobs({
+    bool includeArchived = false,
+  }) async {
+    final resp = await http.get(_careerUri("/jobs", includeArchived));
+    final list = _decodeResponseData(resp) as List;
+    return list
+        .map((e) => JDAnalysisView.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<List<JobFitReportView>> listCareerJobFitReports({
+    bool includeArchived = false,
+  }) async {
+    final resp =
+        await http.get(_careerUri("/job-fit-reports", includeArchived));
+    final list = _decodeResponseData(resp) as List;
+    return list
+        .map((e) => JobFitReportView.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Future<List<ResumeVersionView>> listCareerResumeVersions({
+    bool includeArchived = false,
+  }) async {
+    final resp =
+        await http.get(_careerUri("/resume-versions", includeArchived));
+    final list = _decodeResponseData(resp) as List;
+    return list
+        .map((e) => ResumeVersionView.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  Uri _careerUri(String path, bool includeArchived) {
+    return _uri("/api/career$path").replace(
+      queryParameters: {"include_archived": includeArchived.toString()},
+    );
+  }
+
   // ── Session Events ────────────────────────────────────────────────────
 
   Future<List<EventView>> listSessionEvents(String sessionId) async {

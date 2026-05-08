@@ -10,7 +10,10 @@ import '../../core/models/api_models.dart';
 import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/session_sidebar.dart';
+import '../career/career_assets_panel.dart';
 import '../chat/chat_screen.dart';
+
+enum _RightPanelMode { career, debug }
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -21,7 +24,8 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _sidebarCollapsed = false;
-  bool _debugPanelOpen = true;
+  bool _rightPanelOpen = true;
+  _RightPanelMode _rightPanelMode = _RightPanelMode.career;
 
   void _openCompactSidebar(BuildContext context, ChatProvider provider) {
     showModalBottomSheet<void>(
@@ -81,6 +85,39 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  void _openCompactCareerAssetsPanel(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final height = MediaQuery.of(context).size.height;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: SizedBox(
+            height: math.min(height * 0.82, 720.0),
+            child: CareerAssetsPanel(
+              compact: true,
+              onClose: () => Navigator.of(context).pop(),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _toggleDesktopPanel(_RightPanelMode mode) {
+    setState(() {
+      if (_rightPanelMode == mode) {
+        _rightPanelOpen = !_rightPanelOpen;
+        return;
+      }
+      _rightPanelMode = mode;
+      _rightPanelOpen = true;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = ref.watch(chatProvider);
@@ -101,9 +138,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   final gap = width < 900 ? 12.0 : 18.0;
                   final sidebarWidth =
                       (width * 0.19).clamp(272.0, 308.0).toDouble();
-                  final debugWidth =
+                  final panelWidth =
                       (width * 0.22).clamp(296.0, 336.0).toDouble();
-                  final showDesktopDebug = _debugPanelOpen && !isCompact;
+                  final showDesktopRightPanel = _rightPanelOpen && !isCompact;
+                  final showDesktopCareer = showDesktopRightPanel &&
+                      _rightPanelMode == _RightPanelMode.career;
+                  final showDesktopDebug = showDesktopRightPanel &&
+                      _rightPanelMode == _RightPanelMode.debug;
 
                   return Padding(
                     padding: EdgeInsets.all(edgePadding),
@@ -136,25 +177,38 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             onSidebarToggle: useCompactSidebar
                                 ? () => _openCompactSidebar(context, provider)
                                 : null,
+                            showCareerAssetsToggle: true,
+                            isCareerAssetsPanelOpen: showDesktopCareer,
+                            onCareerAssetsToggle: isCompact
+                                ? () => _openCompactCareerAssetsPanel(context)
+                                : () => _toggleDesktopPanel(
+                                      _RightPanelMode.career,
+                                    ),
                             showDebugToggle: true,
                             isDebugPanelOpen: showDesktopDebug,
                             onDebugToggle: isCompact
                                 ? () =>
                                     _openCompactDebugPanel(context, provider)
-                                : () => setState(
-                                      () => _debugPanelOpen = !_debugPanelOpen,
+                                : () => _toggleDesktopPanel(
+                                      _RightPanelMode.debug,
                                     ),
                           ),
                         ),
-                        if (showDesktopDebug) ...[
+                        if (showDesktopRightPanel) ...[
                           SizedBox(width: gap),
                           SizedBox(
-                            width: debugWidth,
-                            child: _DebugPanel(
-                              provider: provider,
-                              onClose: () =>
-                                  setState(() => _debugPanelOpen = false),
-                            ),
+                            width: panelWidth,
+                            child: showDesktopCareer
+                                ? CareerAssetsPanel(
+                                    onClose: () =>
+                                        setState(() => _rightPanelOpen = false),
+                                  )
+                                : _DebugPanel(
+                                    provider: provider,
+                                    onClose: () => setState(
+                                      () => _rightPanelOpen = false,
+                                    ),
+                                  ),
                           ),
                         ],
                       ],
