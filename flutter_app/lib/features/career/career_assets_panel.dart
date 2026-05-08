@@ -253,6 +253,7 @@ class CareerAssetList extends StatelessWidget {
           (item) => ResumeProfileCard(
             record: item,
             selected: _isSelected(provider.selection, item.resumeProfileId),
+            highlighted: provider.isRecentlyCreated(item.resumeProfileId),
             onTap: () => provider.selectRecord(item),
             onPreviewArtifact: _preview(provider, item.meta.sourceSessionId),
           ),
@@ -265,6 +266,7 @@ class CareerAssetList extends StatelessWidget {
           (item) => CareerProfileCard(
             record: item,
             selected: _isSelected(provider.selection, item.careerProfileId),
+            highlighted: provider.isRecentlyCreated(item.careerProfileId),
             onTap: () => provider.selectRecord(item),
           ),
         ),
@@ -276,6 +278,7 @@ class CareerAssetList extends StatelessWidget {
           (item) => JDAnalysisCard(
             record: item,
             selected: _isSelected(provider.selection, item.jdAnalysisId),
+            highlighted: provider.isRecentlyCreated(item.jdAnalysisId),
             onTap: () => provider.selectRecord(item),
             onPreviewArtifact: _preview(provider, item.meta.sourceSessionId),
           ),
@@ -288,6 +291,7 @@ class CareerAssetList extends StatelessWidget {
           (item) => JobFitReportCard(
             record: item,
             selected: _isSelected(provider.selection, item.jobFitReportId),
+            highlighted: provider.isRecentlyCreated(item.jobFitReportId),
             onTap: () => provider.selectRecord(item),
             onPreviewArtifact: _preview(provider, item.meta.sourceSessionId),
           ),
@@ -300,6 +304,7 @@ class CareerAssetList extends StatelessWidget {
           (item) => ResumeVersionCard(
             record: item,
             selected: _isSelected(provider.selection, item.resumeVersionId),
+            highlighted: provider.isRecentlyCreated(item.resumeVersionId),
             onTap: () => provider.selectRecord(item),
             onPreviewArtifact: _preview(provider, item.meta.sourceSessionId),
           ),
@@ -337,6 +342,7 @@ class CareerAssetList extends StatelessWidget {
 class ResumeProfileCard extends StatelessWidget {
   final ResumeProfileView record;
   final bool selected;
+  final bool highlighted;
   final VoidCallback onTap;
   final ValueChanged<String> onPreviewArtifact;
 
@@ -344,6 +350,7 @@ class ResumeProfileCard extends StatelessWidget {
     super.key,
     required this.record,
     required this.selected,
+    required this.highlighted,
     required this.onTap,
     required this.onPreviewArtifact,
   });
@@ -357,6 +364,7 @@ class ResumeProfileCard extends StatelessWidget {
       id: record.resumeProfileId,
       meta: record.meta,
       selected: selected,
+      highlighted: highlighted,
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -385,12 +393,14 @@ class ResumeProfileCard extends StatelessWidget {
 class CareerProfileCard extends StatelessWidget {
   final CareerProfileView record;
   final bool selected;
+  final bool highlighted;
   final VoidCallback onTap;
 
   const CareerProfileCard({
     super.key,
     required this.record,
     required this.selected,
+    required this.highlighted,
     required this.onTap,
   });
 
@@ -405,6 +415,7 @@ class CareerProfileCard extends StatelessWidget {
       id: record.careerProfileId,
       meta: record.meta,
       selected: selected,
+      highlighted: highlighted,
       onTap: onTap,
       child: _ChipWrap(
         values: [
@@ -420,6 +431,7 @@ class CareerProfileCard extends StatelessWidget {
 class JDAnalysisCard extends StatelessWidget {
   final JDAnalysisView record;
   final bool selected;
+  final bool highlighted;
   final VoidCallback onTap;
   final ValueChanged<String> onPreviewArtifact;
 
@@ -427,6 +439,7 @@ class JDAnalysisCard extends StatelessWidget {
     super.key,
     required this.record,
     required this.selected,
+    required this.highlighted,
     required this.onTap,
     required this.onPreviewArtifact,
   });
@@ -440,6 +453,7 @@ class JDAnalysisCard extends StatelessWidget {
       id: record.jdAnalysisId,
       meta: record.meta,
       selected: selected,
+      highlighted: highlighted,
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -465,6 +479,7 @@ class JDAnalysisCard extends StatelessWidget {
 class JobFitReportCard extends StatelessWidget {
   final JobFitReportView record;
   final bool selected;
+  final bool highlighted;
   final VoidCallback onTap;
   final ValueChanged<String> onPreviewArtifact;
 
@@ -472,6 +487,7 @@ class JobFitReportCard extends StatelessWidget {
     super.key,
     required this.record,
     required this.selected,
+    required this.highlighted,
     required this.onTap,
     required this.onPreviewArtifact,
   });
@@ -485,6 +501,7 @@ class JobFitReportCard extends StatelessWidget {
       id: record.jobFitReportId,
       meta: record.meta,
       selected: selected,
+      highlighted: highlighted,
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -510,6 +527,7 @@ class JobFitReportCard extends StatelessWidget {
 class ResumeVersionCard extends StatelessWidget {
   final ResumeVersionView record;
   final bool selected;
+  final bool highlighted;
   final VoidCallback onTap;
   final ValueChanged<String> onPreviewArtifact;
 
@@ -517,6 +535,7 @@ class ResumeVersionCard extends StatelessWidget {
     super.key,
     required this.record,
     required this.selected,
+    required this.highlighted,
     required this.onTap,
     required this.onPreviewArtifact,
   });
@@ -530,6 +549,7 @@ class ResumeVersionCard extends StatelessWidget {
       id: record.resumeVersionId,
       meta: record.meta,
       selected: selected,
+      highlighted: highlighted,
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -837,6 +857,7 @@ class _CareerAssetCardShell extends StatelessWidget {
   final String id;
   final CareerRecordMetaView meta;
   final bool selected;
+  final bool highlighted;
   final VoidCallback onTap;
   final Widget child;
 
@@ -847,6 +868,7 @@ class _CareerAssetCardShell extends StatelessWidget {
     required this.id,
     required this.meta,
     required this.selected,
+    required this.highlighted,
     required this.onTap,
     required this.child,
   });
@@ -858,19 +880,33 @@ class _CareerAssetCardShell extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
           width: double.infinity,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: selected
                 ? AppTheme.accent.withValues(alpha: 0.12)
-                : AppTheme.surface.withValues(alpha: 0.76),
+                : highlighted
+                    ? AppTheme.accent.withValues(alpha: 0.08)
+                    : AppTheme.surface.withValues(alpha: 0.76),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: selected
                   ? AppTheme.accent.withValues(alpha: 0.34)
-                  : AppTheme.border,
+                  : highlighted
+                      ? AppTheme.accent.withValues(alpha: 0.28)
+                      : AppTheme.border,
             ),
+            boxShadow: highlighted
+                ? [
+                    BoxShadow(
+                      color: AppTheme.accent.withValues(alpha: 0.12),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ]
+                : const [],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -905,6 +941,10 @@ class _CareerAssetCardShell extends StatelessWidget {
                             ),
                             const SizedBox(width: 8),
                             _StatusDot(status: meta.status),
+                            if (highlighted) ...[
+                              const SizedBox(width: 6),
+                              const _NewRecordBadge(),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 4),
@@ -942,6 +982,30 @@ class _CareerAssetCardShell extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NewRecordBadge extends StatelessWidget {
+  const _NewRecordBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.22)),
+      ),
+      child: Text(
+        "新",
+        style: AppTheme.ts(
+          fontSize: 9.5,
+          fontWeight: FontWeight.w800,
+          color: AppTheme.accent,
         ),
       ),
     );

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -89,6 +91,8 @@ class CareerAssetsProvider extends ChangeNotifier {
   bool _isPreviewLoading = false;
   String? _previewError;
   SessionArtifactContentView? _preview;
+  Timer? _recentRecordTimer;
+  Set<String> _recentRecordIds = {};
 
   List<ResumeProfileView> _resumeProfiles = [];
   List<CareerProfileView> _careerProfiles = [];
@@ -107,6 +111,7 @@ class CareerAssetsProvider extends ChangeNotifier {
   bool get isPreviewLoading => _isPreviewLoading;
   String? get previewError => _previewError;
   SessionArtifactContentView? get preview => _preview;
+  Set<String> get recentRecordIds => Set.unmodifiable(_recentRecordIds);
 
   List<ResumeProfileView> get resumeProfiles =>
       List.unmodifiable(_resumeProfiles);
@@ -124,6 +129,16 @@ class CareerAssetsProvider extends ChangeNotifier {
       _jobFitReports.length +
       _resumeVersions.length;
 
+  @override
+  void dispose() {
+    _recentRecordTimer?.cancel();
+    super.dispose();
+  }
+
+  bool isRecentlyCreated(String recordId) {
+    return _recentRecordIds.contains(recordId);
+  }
+
   Future<void> ensureLoaded() async {
     if (_hasLoaded || _isLoading) return;
     await refresh();
@@ -131,6 +146,7 @@ class CareerAssetsProvider extends ChangeNotifier {
 
   Future<void> refresh() async {
     final firstLoad = !_hasLoaded;
+    final previousRecordIds = firstLoad ? const <String>{} : _recordIds();
     _isLoading = firstLoad;
     _isRefreshing = !firstLoad;
     _error = null;
@@ -151,6 +167,9 @@ class CareerAssetsProvider extends ChangeNotifier {
       _resumeVersions = results[4] as List<ResumeVersionView>;
       _hasLoaded = true;
       _selection = _selectionStillExists() ? _selection : null;
+      if (!firstLoad) {
+        _markRecentlyCreatedRecords(_recordIds().difference(previousRecordIds));
+      }
     } catch (error, stackTrace) {
       FlutterError.reportError(
         FlutterErrorDetails(
@@ -235,6 +254,32 @@ class CareerAssetsProvider extends ChangeNotifier {
       ..._jobFitReports.map((item) => item.jobFitReportId),
       ..._resumeVersions.map((item) => item.resumeVersionId),
     ].contains(current.recordId);
+  }
+
+  Set<String> _recordIds() {
+    return {
+      ..._resumeProfiles.map((item) => item.resumeProfileId),
+      ..._careerProfiles.map((item) => item.careerProfileId),
+      ..._jdAnalyses.map((item) => item.jdAnalysisId),
+      ..._jobFitReports.map((item) => item.jobFitReportId),
+      ..._resumeVersions.map((item) => item.resumeVersionId),
+    };
+  }
+
+  void _markRecentlyCreatedRecords(Set<String> recordIds) {
+    final normalized = recordIds
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    if (normalized.isEmpty) {
+      return;
+    }
+    _recentRecordTimer?.cancel();
+    _recentRecordIds = normalized;
+    _recentRecordTimer = Timer(const Duration(seconds: 5), () {
+      _recentRecordIds = {};
+      notifyListeners();
+    });
   }
 
   bool _selectionMatchesTab(

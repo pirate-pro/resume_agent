@@ -145,6 +145,7 @@ class _AgentTaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final taskDescription = _taskDescription(task);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(10),
@@ -196,16 +197,17 @@ class _AgentTaskCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      task.detail.isEmpty ? task.title : task.detail,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTheme.ts(
-                        fontSize: 11,
-                        height: 1.35,
-                        color: AppTheme.textTertiary,
+                    if (taskDescription.isNotEmpty)
+                      Text(
+                        taskDescription,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 11,
+                          height: 1.35,
+                          color: AppTheme.textTertiary,
+                        ),
                       ),
-                    ),
                     if (task.currentStage.isNotEmpty) ...[
                       const SizedBox(height: 7),
                       _StageChip(label: task.currentStage),
@@ -257,8 +259,10 @@ class _AgentTaskTimeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visibleItems =
-        items.length > 4 ? items.sublist(items.length - 4) : items;
+    final compactItems = _compactTimelineItems(items);
+    final visibleItems = compactItems.length > 4
+        ? compactItems.sublist(compactItems.length - 4)
+        : compactItems;
     return Column(
       children: [
         for (final item in visibleItems)
@@ -686,25 +690,114 @@ class _TimelineItem {
 
 String _timelineDetail(String eventType, _AgentTaskProgress task) {
   if (eventType == "agent_task_started") {
-    return task.detail.isEmpty ? "开始执行" : task.detail;
+    return _compactProgressText(
+      title: task.title,
+      detail: task.detail,
+      fallback: "开始执行",
+      maxLength: 64,
+    );
   }
   if (eventType == "agent_task_progress") {
     final stage = task.currentStage;
-    if (stage.isEmpty) {
-      return task.detail.isEmpty ? "状态更新" : task.detail;
+    final detail = _compactProgressText(
+      title: task.title,
+      detail: task.detail,
+      fallback: stage.isEmpty ? "状态更新" : stage,
+      maxLength: 72,
+    );
+    if (stage.isEmpty || detail.startsWith(stage)) {
+      return detail;
     }
-    if (task.detail.isEmpty) {
-      return stage;
-    }
-    return "$stage：${task.detail}";
+    return _truncateText("$stage：$detail", 84);
   }
   if (eventType == "agent_task_completed") {
-    return task.detail.isEmpty ? "任务完成" : task.detail;
+    return "任务完成";
   }
   if (eventType == "agent_task_failed") {
-    return task.detail.isEmpty ? "任务失败" : task.detail;
+    return _compactProgressText(
+      title: task.title,
+      detail: task.detail,
+      fallback: "任务失败",
+      maxLength: 84,
+    );
   }
-  return task.detail.isEmpty ? "状态更新" : task.detail;
+  return _compactProgressText(
+    title: task.title,
+    detail: task.detail,
+    fallback: "状态更新",
+    maxLength: 72,
+  );
+}
+
+String _taskDescription(_AgentTaskProgress task) {
+  if (task.status == "completed") {
+    return "已完成，产物已同步到求职资产";
+  }
+  if (task.status == "failed") {
+    return _compactProgressText(
+      title: task.title,
+      detail: task.detail,
+      fallback: "任务失败",
+      maxLength: 92,
+    );
+  }
+  return _compactProgressText(
+    title: task.title,
+    detail: task.detail,
+    fallback: task.status == "running" ? "正在处理任务" : "等待执行",
+    maxLength: 92,
+  );
+}
+
+List<_TimelineItem> _compactTimelineItems(List<_TimelineItem> items) {
+  final output = <_TimelineItem>[];
+  for (final item in items) {
+    if (output.isNotEmpty && output.last.detail == item.detail) {
+      output[output.length - 1] = item;
+      continue;
+    }
+    output.add(item);
+  }
+  return output;
+}
+
+String _compactProgressText({
+  required String title,
+  required String detail,
+  required String fallback,
+  required int maxLength,
+}) {
+  final normalizedTitle = _normalizeProgressText(title);
+  final normalizedDetail = _normalizeProgressText(detail);
+  if (normalizedTitle.isEmpty && normalizedDetail.isEmpty) {
+    return fallback;
+  }
+  if (normalizedDetail.isEmpty) {
+    return _truncateText(normalizedTitle, maxLength);
+  }
+  if (normalizedTitle.isEmpty) {
+    return _truncateText(normalizedDetail, maxLength);
+  }
+  final detailLooksVerbose =
+      normalizedDetail.length > maxLength || detail.contains("\n");
+  if (detailLooksVerbose || normalizedDetail.contains(normalizedTitle)) {
+    return _truncateText(normalizedTitle, maxLength);
+  }
+  return _truncateText("$normalizedTitle：$normalizedDetail", maxLength);
+}
+
+String _normalizeProgressText(String value) {
+  return value.trim().replaceAll(RegExp(r"\s+"), " ");
+}
+
+String _truncateText(String value, int maxLength) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  if (maxLength <= 1) {
+    return value.substring(0, maxLength);
+  }
+  return "${value.substring(0, maxLength - 1)}…";
 }
 
 String _titleForStatus(String status) {
