@@ -309,6 +309,49 @@ def test_session_artifact_content_endpoint_reads_ready_text(tmp_path: Path) -> N
         app.dependency_overrides.clear()
 
 
+def test_session_artifact_download_endpoint_streams_original_file(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="artifact-ok"))
+    repository = bundle.chat_service._session_repository  # noqa: SLF001
+    _add_test_text_artifact(
+        repository,
+        session_id="sess_artifact_download_api",
+        artifact_id="artifact_report_download",
+        content="# 报告\n\n下载内容",
+    )
+    _override_api_services(bundle)
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/sessions/sess_artifact_download_api/artifacts/artifact_report_download/download",
+            )
+
+        assert response.status_code == 200
+        assert response.content.decode("utf-8").startswith("# 报告")
+        assert response.headers["content-type"].startswith("text/markdown")
+        assert "attachment" in response.headers["content-disposition"]
+        assert "filename" in response.headers["content-disposition"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_session_artifact_download_endpoint_returns_404_for_missing_artifact(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="artifact-ok"))
+    bundle.chat_service._session_repository.create_session("sess_artifact_download_missing_api")  # noqa: SLF001
+    _override_api_services(bundle)
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/sessions/sess_artifact_download_missing_api/artifacts/artifact_missing/download",
+            )
+
+        assert response.status_code == 404
+        assert response.json()["code"] == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_session_artifact_content_endpoint_returns_404_for_missing_artifact(tmp_path: Path) -> None:
     bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="artifact-ok"))
     bundle.chat_service._session_repository.create_session("sess_artifact_missing_api")  # noqa: SLF001

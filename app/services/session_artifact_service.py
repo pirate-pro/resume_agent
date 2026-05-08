@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from base64 import b64decode
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -24,12 +25,21 @@ from app.schemas.chat import (
 )
 from app.services.answer_normalizer import AnswerNormalizer
 
-__all__ = ["SessionArtifactService"]
+__all__ = ["SessionArtifactDownload", "SessionArtifactService"]
 
 _logger = logging.getLogger(__name__)
 _SUPPORTED_ARTIFACT_EXTENSIONS = {".pdf", ".md", ".markdown", ".json", ".txt", ".png", ".jpg", ".jpeg", ".webp"}
 _MAX_UPLOAD_SIZE_BYTES = 12 * 1024 * 1024
 _MAX_UPLOAD_TOKEN_ESTIMATE = 60000
+
+
+@dataclass(frozen=True, slots=True)
+class SessionArtifactDownload:
+    """Resolved artifact file returned by the download endpoint."""
+
+    path: Path
+    filename: str
+    media_type: str
 
 
 class SessionArtifactService:
@@ -211,6 +221,36 @@ class SessionArtifactService:
             content=snippet,
         )
 
+    def get_session_artifact_download(
+        self,
+        session_id: str,
+        artifact_id: str,
+    ) -> SessionArtifactDownload:
+        normalized_session_id = _normalize_session_id(session_id)
+        normalized_artifact_id = _normalize_artifact_id(artifact_id)
+        artifact = self._session_repository.get_session_artifact(normalized_session_id, normalized_artifact_id)
+        if artifact is None:
+            raise SessionNotFoundError(
+                f"Session artifact not found: session_id={normalized_session_id} "
+                f"artifact_id={normalized_artifact_id}"
+            )
+
+        session_root = self._session_repository.get_session_root_path(normalized_session_id).resolve()
+        target = (session_root / artifact.storage_relpath).resolve()
+        if not target.is_relative_to(session_root):
+            raise ValidationError("Artifact storage path escapes session root.")
+        if not target.exists() or not target.is_file():
+            raise ValidationError(
+                f"Session artifact file is not available: session_id={normalized_session_id} "
+                f"artifact_id={normalized_artifact_id}"
+            )
+
+        return SessionArtifactDownload(
+            path=target,
+            filename=_download_filename(artifact.title, artifact.artifact_id),
+            media_type=artifact.media_type,
+        )
+
     def preview_workspace_file(
         self,
         session_id: str,
@@ -294,6 +334,13 @@ def _sanitize_title(raw: str) -> str:
     if not candidate:
         raise ValidationError("filename cannot be empty.")
     return candidate.replace("/", "_").replace("\\", "_")
+
+
+def _download_filename(title: str, artifact_id: str) -> str:
+    candidate = Path(str(title)).name.strip().replace("/", "_").replace("\\", "_")
+    if candidate:
+        return candidate
+    return f"{artifact_id}.bin"
 
 
 def _resolve_workspace_preview_path(workspace: Path, relative_path: str) -> Path:

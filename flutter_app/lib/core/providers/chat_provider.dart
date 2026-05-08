@@ -859,6 +859,34 @@ class ChatProvider extends ChangeNotifier {
     );
   }
 
+  Future<SessionArtifactContentView> readSessionArtifactContent(
+    String artifactId, {
+    int offset = 0,
+    int maxChars = 12000,
+  }) async {
+    final sessionId = _sessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      throw StateError("当前没有可预览 artifact 的会话。");
+    }
+    return _api.readSessionArtifactContent(
+      sessionId: sessionId,
+      artifactId: artifactId,
+      offset: offset,
+      maxChars: maxChars,
+    );
+  }
+
+  String? sessionArtifactDownloadUrl(String artifactId) {
+    final sessionId = _sessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      return null;
+    }
+    return _api.sessionArtifactDownloadUrl(
+      sessionId: sessionId,
+      artifactId: artifactId,
+    );
+  }
+
   Future<void> uploadSessionArtifact({
     required String filename,
     required Uint8List bytes,

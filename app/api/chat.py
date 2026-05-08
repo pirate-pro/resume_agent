@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.deps import (
     get_chat_service,
@@ -182,6 +182,21 @@ async def get_session_artifact_content(
             offset=offset,
             max_chars=max_chars,
         )
+    )
+
+
+@router.get("/sessions/{session_id}/artifacts/{artifact_id}/download")
+async def get_session_artifact_download(
+    session_id: str,
+    artifact_id: str,
+    service: SessionArtifactService = Depends(get_session_artifact_service),
+) -> FileResponse:
+    _logger.info("下载会话 artifact: session_id=%s artifact_id=%s", session_id, artifact_id)
+    download = service.get_session_artifact_download(session_id, artifact_id)
+    return FileResponse(
+        download.path,
+        media_type=download.media_type,
+        filename=download.filename,
     )
 
 

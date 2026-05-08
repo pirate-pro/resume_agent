@@ -11,8 +11,11 @@ import 'package:highlight/highlight.dart' as hl;
 import 'package:highlight/highlight.dart' show Node;
 
 import '../../core/models/api_models.dart';
+import '../../core/providers/career_assets_provider.dart';
 import '../../core/providers/chat_provider.dart';
 import '../theme/app_theme.dart';
+import '../utils/download_stub.dart'
+    if (dart.library.html) '../utils/download_web.dart';
 import 'run_progress_panel.dart';
 
 const double _bubbleMaxWidth = 780;
@@ -63,6 +66,18 @@ class _ChatBubbleState extends State<ChatBubble> {
   @override
   Widget build(BuildContext context) {
     final isUser = widget.message.isUser;
+    final presentation = isUser
+        ? null
+        : _CareerMessagePresentation.fromContent(widget.message.content);
+    final visibleContent = presentation?.content ?? widget.message.content;
+    final attachedArtifactIds =
+        _artifactIdsFromAnswerArtifacts(widget.message.artifacts);
+    final detectedAssets =
+        (presentation?.assets ?? const <_DetectedCareerAsset>[])
+            .where((asset) =>
+                asset.kind != _CareerAssetKind.artifact ||
+                !attachedArtifactIds.contains(asset.id))
+            .toList();
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: MouseRegion(
@@ -123,10 +138,10 @@ class _ChatBubbleState extends State<ChatBubble> {
                         if (widget.message.content.isNotEmpty)
                           const SizedBox(height: 2),
                       ],
-                      if (widget.message.content.isNotEmpty)
+                      if (visibleContent.isNotEmpty)
                         RepaintBoundary(
                           child: _MessageBody(
-                            content: widget.message.content,
+                            content: visibleContent,
                             isUser: isUser,
                             isStreaming: false,
                             answerFormat: widget.message.answerFormat,
@@ -134,6 +149,10 @@ class _ChatBubbleState extends State<ChatBubble> {
                             layoutHint: widget.message.layoutHint,
                           ),
                         ),
+                      if (detectedAssets.isNotEmpty) ...[
+                        SizedBox(height: visibleContent.isEmpty ? 0 : 12),
+                        _CareerAssetReferenceStrip(assets: detectedAssets),
+                      ],
                       if (widget.message.artifacts.isNotEmpty) ...[
                         const SizedBox(height: 8),
                         _ArtifactList(artifacts: widget.message.artifacts),
@@ -460,6 +479,10 @@ class _MessageBody extends StatelessWidget {
             layoutHint: layoutHint ?? 'paragraph',
           );
       }
+    }
+    final careerReport = _CareerReportPresentation.tryParse(resolved.content);
+    if (careerReport != null) {
+      return _CareerReportBody(report: careerReport);
     }
     switch (resolved.mode) {
       case _MessageRenderMode.markdownRendered:
@@ -1043,6 +1066,105 @@ class _PlainStepList extends StatelessWidget {
           if (index < items.items.length - 1) const SizedBox(height: 10),
         ],
       ],
+    );
+  }
+}
+
+class _CareerReportBody extends StatelessWidget {
+  final _CareerReportPresentation report;
+
+  const _CareerReportBody({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (report.lead.isNotEmpty) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppTheme.accent.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: AppTheme.accent.withValues(alpha: 0.18),
+              ),
+            ),
+            child: SelectableText(
+              report.lead,
+              style: AppTheme.ts(
+                fontSize: 13,
+                height: 1.55,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        for (var index = 0; index < report.sections.length; index++) ...[
+          _CareerReportSectionBlock(section: report.sections[index]),
+          if (index < report.sections.length - 1) const SizedBox(height: 12),
+        ],
+      ],
+    );
+  }
+}
+
+class _CareerReportSectionBlock extends StatelessWidget {
+  final _CareerReportSection section;
+
+  const _CareerReportSectionBlock({required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _careerSectionColor(section.title);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(13, 12, 13, 13),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceActive.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.86)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  _careerSectionIcon(section.title),
+                  size: 15,
+                  color: color,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  section.title,
+                  style: AppTheme.ts(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (section.body.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            _AssistantMarkdownBody(content: section.body),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -2933,6 +3055,173 @@ class _StreamingSegmentParser {
   }
 }
 
+class _CareerAssetReferenceStrip extends ConsumerWidget {
+  final List<_DetectedCareerAsset> assets;
+
+  const _CareerAssetReferenceStrip({required this.assets});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (assets.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceActive.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.86)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.inventory_2_outlined,
+                  size: 15, color: AppTheme.accent),
+              const SizedBox(width: 7),
+              Text(
+                "已创建的求职资产",
+                style: AppTheme.ts(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final asset in assets)
+                _CareerAssetReferenceCard(asset: asset),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CareerAssetReferenceCard extends ConsumerWidget {
+  final _DetectedCareerAsset asset;
+
+  const _CareerAssetReferenceCard({required this.asset});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final chat = ref.watch(chatProvider);
+    final sessionArtifact = asset.kind == _CareerAssetKind.artifact
+        ? _findSessionArtifact(chat.sessionArtifacts, asset.id)
+        : null;
+    final title = sessionArtifact?.title ?? asset.title;
+    final subtitle = asset.kind == _CareerAssetKind.artifact
+        ? (sessionArtifact == null
+            ? "资产编号 ${asset.id}"
+            : "${sessionArtifact.sizeDisplay} · ${_artifactStatusLabel(sessionArtifact.status)}")
+        : asset.id;
+
+    return Container(
+      width: 238,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.78),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: asset.color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(asset.icon, size: 15, color: asset.color),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      asset.label,
+                      style: AppTheme.ts(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: asset.color,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          SelectableText(
+            subtitle,
+            style: AppTheme.ts(
+              fontSize: 10.5,
+              color: AppTheme.textTertiary,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              if (asset.kind == _CareerAssetKind.artifact) ...[
+                _ArtifactActionButton(
+                  label: "预览",
+                  icon: Icons.visibility_outlined,
+                  onPressed: () =>
+                      _previewSessionArtifact(context, ref, asset.id),
+                ),
+                _ArtifactActionButton(
+                  label: "下载",
+                  icon: Icons.download_rounded,
+                  onPressed: () =>
+                      _downloadSessionArtifact(context, ref, asset.id),
+                ),
+              ] else
+                _ArtifactActionButton(
+                  label: "详情",
+                  icon: Icons.open_in_new_rounded,
+                  onPressed: () => _selectCareerAsset(context, ref, asset),
+                ),
+              _ArtifactActionButton(
+                label: "复制ID",
+                icon: Icons.content_copy_rounded,
+                onPressed: () => _copyText(context, asset.id, "资产编号已复制"),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ArtifactList extends StatelessWidget {
   final List<AnswerArtifactView> artifacts;
 
@@ -2972,29 +3261,25 @@ class _ArtifactCard extends ConsumerWidget {
       _ => Icons.insert_drive_file_rounded,
     };
     final artifactId = _artifactIdFromPath(artifact);
-    SessionArtifactView? sessionArtifact;
-    if (artifactId != null) {
-      for (final item in provider.sessionArtifacts) {
-        if (item.artifactId == artifactId) {
-          sessionArtifact = item;
-          break;
-        }
-      }
-    }
-    final displayPath = sessionArtifact == null
-        ? artifact.path
-        : "${sessionArtifact.title} (${sessionArtifact.artifactId})";
+    final sessionArtifact = artifactId == null
+        ? null
+        : _findSessionArtifact(provider.sessionArtifacts, artifactId);
+    final title =
+        sessionArtifact?.title ?? artifactId ?? _displayPathName(artifact.path);
+    final meta = sessionArtifact == null
+        ? (artifactId == null ? artifact.path : "资产编号 $artifactId")
+        : "${sessionArtifact.sizeDisplay} · ${_artifactStatusLabel(sessionArtifact.status)}";
     final isActiveArtifact =
         artifactId != null && provider.activeArtifactIds.contains(artifactId);
 
     return Container(
-      constraints: const BoxConstraints(maxWidth: 320),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      constraints: const BoxConstraints(maxWidth: 360),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
       decoration: BoxDecoration(
         color: isGenerated
             ? AppTheme.accent.withValues(alpha: 0.08)
             : AppTheme.surfaceActive,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color: isGenerated
               ? AppTheme.accent.withValues(alpha: 0.28)
@@ -3025,12 +3310,23 @@ class _ArtifactCard extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 3),
-                SelectableText(
-                  displayPath,
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: AppTheme.ts(
-                    fontSize: 12,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
                     color: AppTheme.textPrimary,
-                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                SelectableText(
+                  meta,
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    color: AppTheme.textTertiary,
+                    height: 1.35,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -3038,7 +3334,19 @@ class _ArtifactCard extends ConsumerWidget {
                   spacing: 4,
                   runSpacing: 4,
                   children: [
-                    if (artifactId != null)
+                    if (artifactId != null) ...[
+                      _ArtifactActionButton(
+                        label: "预览",
+                        icon: Icons.visibility_outlined,
+                        onPressed: () =>
+                            _previewSessionArtifact(context, ref, artifactId),
+                      ),
+                      _ArtifactActionButton(
+                        label: "下载",
+                        icon: Icons.download_rounded,
+                        onPressed: () =>
+                            _downloadSessionArtifact(context, ref, artifactId),
+                      ),
                       _ArtifactActionButton(
                         label: isActiveArtifact ? "已激活" : "激活资料",
                         icon: isActiveArtifact
@@ -3070,8 +3378,14 @@ class _ArtifactCard extends ConsumerWidget {
                             ),
                           );
                         },
-                      )
-                    else ...[
+                      ),
+                      _ArtifactActionButton(
+                        label: "复制ID",
+                        icon: Icons.content_copy_rounded,
+                        onPressed: () =>
+                            _copyText(context, artifactId, "资产编号已复制"),
+                      ),
+                    ] else ...[
                       _ArtifactActionButton(
                         label: "查看内容",
                         icon: Icons.visibility_outlined,
@@ -3081,18 +3395,8 @@ class _ArtifactCard extends ConsumerWidget {
                       _ArtifactActionButton(
                         label: "复制路径",
                         icon: Icons.content_copy_rounded,
-                        onPressed: () async {
-                          await Clipboard.setData(
-                            ClipboardData(text: artifact.path),
-                          );
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text("路径已复制"),
-                              duration: Duration(seconds: 1),
-                            ),
-                          );
-                        },
+                        onPressed: () =>
+                            _copyText(context, artifact.path, "路径已复制"),
                       ),
                     ],
                   ],
@@ -3140,6 +3444,112 @@ class _ArtifactActionButton extends StatelessWidget {
   }
 }
 
+Future<void> _previewSessionArtifact(
+  BuildContext context,
+  WidgetRef ref,
+  String artifactId,
+) async {
+  SessionArtifactContentView preview;
+  try {
+    preview = await ref.read(chatProvider).readSessionArtifactContent(
+          artifactId,
+        );
+  } catch (error) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("读取 artifact 预览失败: $error"),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    return;
+  }
+  if (!context.mounted) return;
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) => _SessionArtifactPreviewSheet(preview: preview),
+  );
+}
+
+Future<void> _downloadSessionArtifact(
+  BuildContext context,
+  WidgetRef ref,
+  String artifactId,
+) async {
+  final url = ref.read(chatProvider).sessionArtifactDownloadUrl(artifactId);
+  if (url == null || url.isEmpty) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("当前会话没有可下载的 artifact"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    return;
+  }
+  try {
+    openDownloadUrl(url);
+  } catch (_) {
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("下载链接已复制"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+}
+
+Future<void> _copyText(
+  BuildContext context,
+  String text,
+  String message,
+) async {
+  await Clipboard.setData(ClipboardData(text: text));
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      duration: const Duration(seconds: 1),
+    ),
+  );
+}
+
+Future<void> _selectCareerAsset(
+  BuildContext context,
+  WidgetRef ref,
+  _DetectedCareerAsset asset,
+) async {
+  final provider = ref.read(careerAssetsProvider);
+  await provider.ensureLoaded();
+  Object? record = _findCareerRecord(provider, asset);
+  if (record == null) {
+    await provider.refresh();
+    record = _findCareerRecord(provider, asset);
+  }
+  if (!context.mounted) return;
+  if (record == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("未找到求职资产 ${asset.id}"),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    return;
+  }
+  provider.setTab(_careerAssetsTabForKind(asset.kind));
+  provider.selectRecord(record);
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      content: Text("已在右侧求职资产面板定位"),
+      duration: Duration(seconds: 1),
+    ),
+  );
+}
+
 Future<void> _previewWorkspaceArtifact(
   BuildContext context,
   WidgetRef ref,
@@ -3165,6 +3575,137 @@ Future<void> _previewWorkspaceArtifact(
     backgroundColor: Colors.transparent,
     builder: (sheetContext) => _WorkspacePreviewSheet(preview: preview),
   );
+}
+
+class _SessionArtifactPreviewSheet extends StatelessWidget {
+  final SessionArtifactContentView preview;
+
+  const _SessionArtifactPreviewSheet({required this.preview});
+
+  @override
+  Widget build(BuildContext context) {
+    final contentHeight = MediaQuery.sizeOf(context).height * 0.82;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 960,
+            maxHeight: contentHeight,
+          ),
+          decoration: AppTheme.floatingPanelDecoration(
+            radius: 28,
+            alpha: 0.96,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 14, 12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: AppTheme.accent.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: AppTheme.accent.withValues(alpha: 0.22),
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.description_outlined,
+                        size: 18,
+                        color: AppTheme.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            preview.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTheme.ts(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          SelectableText(
+                            "资产编号 ${preview.artifactId}",
+                            style: AppTheme.ts(
+                              fontSize: 12,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: "关闭",
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                      color: AppTheme.textSecondary,
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _PreviewMetaChip(
+                      icon: Icons.text_snippet_outlined,
+                      label:
+                          "${preview.returnedChars}/${preview.totalChars} 字符",
+                    ),
+                    _PreviewMetaChip(
+                      icon: Icons.badge_outlined,
+                      label: preview.status,
+                    ),
+                    if (preview.truncated)
+                      const _PreviewMetaChip(
+                        icon: Icons.content_cut_rounded,
+                        label: "当前为截断预览",
+                      ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surface.withValues(alpha: 0.82),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: AppTheme.border),
+                    ),
+                    child: _MessageBody(
+                      content: preview.content,
+                      isUser: false,
+                      isStreaming: false,
+                      answerFormat: _artifactAnswerFormat(preview.mediaType),
+                      renderHint: _artifactRenderHint(preview.mediaType),
+                      layoutHint: 'paragraph',
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _WorkspacePreviewSheet extends StatelessWidget {
@@ -3347,6 +3888,410 @@ String? _artifactIdFromPath(AnswerArtifactView artifact) {
   }
   final value = artifact.path.substring(prefix.length).trim();
   return value.isEmpty ? null : value;
+}
+
+Set<String> _artifactIdsFromAnswerArtifacts(
+    List<AnswerArtifactView> artifacts) {
+  final output = <String>{};
+  for (final artifact in artifacts) {
+    final artifactId = _artifactIdFromPath(artifact);
+    if (artifactId != null) {
+      output.add(artifactId);
+    }
+  }
+  return output;
+}
+
+SessionArtifactView? _findSessionArtifact(
+  List<SessionArtifactView> artifacts,
+  String artifactId,
+) {
+  for (final artifact in artifacts) {
+    if (artifact.artifactId == artifactId) {
+      return artifact;
+    }
+  }
+  return null;
+}
+
+String _displayPathName(String path) {
+  final parts = path.split(RegExp(r'[\\/]'));
+  final last = parts.isEmpty ? path : parts.last.trim();
+  return last.isEmpty ? path : last;
+}
+
+String _artifactStatusLabel(String status) {
+  return switch (status) {
+    "ready" => "可预览",
+    "uploaded" => "待解析",
+    "failed" => "解析失败",
+    _ => status,
+  };
+}
+
+String _artifactAnswerFormat(String mediaType) {
+  if (mediaType.contains("markdown")) {
+    return "markdown";
+  }
+  return "plain_text";
+}
+
+String _artifactRenderHint(String mediaType) {
+  if (mediaType.contains("markdown")) {
+    return "markdown_document";
+  }
+  return "plain";
+}
+
+enum _CareerAssetKind {
+  artifact,
+  resumeProfile,
+  careerProfile,
+  jdAnalysis,
+  jobFitReport,
+  resumeVersion,
+}
+
+class _DetectedCareerAsset {
+  final _CareerAssetKind kind;
+  final String id;
+
+  const _DetectedCareerAsset({
+    required this.kind,
+    required this.id,
+  });
+
+  String get label => switch (kind) {
+        _CareerAssetKind.artifact => "文件",
+        _CareerAssetKind.resumeProfile => "简历画像",
+        _CareerAssetKind.careerProfile => "职业画像",
+        _CareerAssetKind.jdAnalysis => "JD 分析",
+        _CareerAssetKind.jobFitReport => "匹配报告",
+        _CareerAssetKind.resumeVersion => "简历版本",
+      };
+
+  String get title => switch (kind) {
+        _CareerAssetKind.artifact => id,
+        _ => label,
+      };
+
+  IconData get icon => switch (kind) {
+        _CareerAssetKind.artifact => Icons.description_outlined,
+        _CareerAssetKind.resumeProfile => Icons.badge_outlined,
+        _CareerAssetKind.careerProfile => Icons.track_changes_rounded,
+        _CareerAssetKind.jdAnalysis => Icons.article_outlined,
+        _CareerAssetKind.jobFitReport => Icons.fact_check_outlined,
+        _CareerAssetKind.resumeVersion => Icons.edit_note_rounded,
+      };
+
+  Color get color => switch (kind) {
+        _CareerAssetKind.artifact => AppTheme.accent,
+        _CareerAssetKind.resumeProfile => const Color(0xFF0F9B78),
+        _CareerAssetKind.careerProfile => const Color(0xFF2563EB),
+        _CareerAssetKind.jdAnalysis => const Color(0xFF7C3AED),
+        _CareerAssetKind.jobFitReport => const Color(0xFFB45309),
+        _CareerAssetKind.resumeVersion => const Color(0xFFDC2626),
+      };
+}
+
+class _CareerMessagePresentation {
+  final String content;
+  final List<_DetectedCareerAsset> assets;
+
+  const _CareerMessagePresentation({
+    required this.content,
+    required this.assets,
+  });
+
+  factory _CareerMessagePresentation.fromContent(String rawContent) {
+    final assets = _extractCareerAssets(rawContent);
+    final content = assets.isEmpty
+        ? rawContent.trim()
+        : _removeCareerAssetReferenceBlock(rawContent, assets);
+    return _CareerMessagePresentation(content: content, assets: assets);
+  }
+}
+
+List<_DetectedCareerAsset> _extractCareerAssets(String content) {
+  final byId = <String, _DetectedCareerAsset>{};
+  void collect(RegExp pattern, _CareerAssetKind kind) {
+    for (final match in pattern.allMatches(content)) {
+      final id = match.group(0)?.trim();
+      if (id == null || id.isEmpty) continue;
+      if (_isCareerAssetFieldName(id)) continue;
+      byId.putIfAbsent(id, () => _DetectedCareerAsset(kind: kind, id: id));
+    }
+  }
+
+  collect(RegExp(r'\bartifact_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
+      _CareerAssetKind.artifact);
+  collect(RegExp(r'\bresume_profile_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
+      _CareerAssetKind.resumeProfile);
+  collect(RegExp(r'\bcareer_profile_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
+      _CareerAssetKind.careerProfile);
+  collect(
+      RegExp(r'\bjd_[A-Za-z0-9][A-Za-z0-9_-]*\b'), _CareerAssetKind.jdAnalysis);
+  collect(RegExp(r'\bfit_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
+      _CareerAssetKind.jobFitReport);
+  collect(RegExp(r'\bresume_version_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
+      _CareerAssetKind.resumeVersion);
+  return byId.values.toList();
+}
+
+bool _isCareerAssetFieldName(String id) {
+  return {
+    "artifact_id",
+    "resume_profile_id",
+    "career_profile_id",
+    "jd_analysis",
+    "jd_analysis_id",
+    "fit_report_id",
+    "job_fit_report_id",
+    "resume_version_id",
+  }.contains(id);
+}
+
+String _removeCareerAssetReferenceBlock(
+  String content,
+  List<_DetectedCareerAsset> assets,
+) {
+  final lines =
+      content.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+  final output = <String>[];
+  var inAssetBlock = false;
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (_isCareerAssetBlockHeader(trimmed)) {
+      inAssetBlock = true;
+      continue;
+    }
+    if (inAssetBlock) {
+      if (trimmed.isEmpty) {
+        continue;
+      }
+      if (_lineContainsKnownAsset(trimmed, assets) ||
+          RegExp(r'^[-*•]\s*').hasMatch(trimmed)) {
+        continue;
+      }
+      inAssetBlock = false;
+    }
+    if (_isStandaloneAssetLine(trimmed, assets)) {
+      continue;
+    }
+    output.add(line);
+  }
+  return output.join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+}
+
+bool _isCareerAssetBlockHeader(String line) {
+  return RegExp(r'已创建.*(产品记录|求职资产)').hasMatch(line) ||
+      RegExp(r'^(产品记录|求职资产)[:：]?$').hasMatch(line);
+}
+
+bool _lineContainsKnownAsset(
+  String line,
+  List<_DetectedCareerAsset> assets,
+) {
+  return assets.any((asset) => line.contains(asset.id));
+}
+
+bool _isStandaloneAssetLine(
+  String line,
+  List<_DetectedCareerAsset> assets,
+) {
+  if (!_lineContainsKnownAsset(line, assets)) {
+    return false;
+  }
+  if (RegExp(r'^[-*•]\s*').hasMatch(line)) {
+    return true;
+  }
+  return RegExp(r'^(简历画像|诊断报告|职业档案|职业画像|JD 分析|匹配报告|简历版本|来源文件)[:：]')
+      .hasMatch(line);
+}
+
+Object? _findCareerRecord(
+  CareerAssetsProvider provider,
+  _DetectedCareerAsset asset,
+) {
+  if (asset.kind == _CareerAssetKind.resumeProfile) {
+    for (final record in provider.resumeProfiles) {
+      if (record.resumeProfileId == asset.id) return record;
+    }
+    return null;
+  }
+  if (asset.kind == _CareerAssetKind.careerProfile) {
+    for (final record in provider.careerProfiles) {
+      if (record.careerProfileId == asset.id) return record;
+    }
+    return null;
+  }
+  if (asset.kind == _CareerAssetKind.jdAnalysis) {
+    for (final record in provider.jdAnalyses) {
+      if (record.jdAnalysisId == asset.id) return record;
+    }
+    return null;
+  }
+  if (asset.kind == _CareerAssetKind.jobFitReport) {
+    for (final record in provider.jobFitReports) {
+      if (record.jobFitReportId == asset.id) return record;
+    }
+    return null;
+  }
+  if (asset.kind == _CareerAssetKind.resumeVersion) {
+    for (final record in provider.resumeVersions) {
+      if (record.resumeVersionId == asset.id) return record;
+    }
+    return null;
+  }
+  return null;
+}
+
+CareerAssetsTab _careerAssetsTabForKind(_CareerAssetKind kind) {
+  return switch (kind) {
+    _CareerAssetKind.resumeProfile => CareerAssetsTab.resumes,
+    _CareerAssetKind.careerProfile => CareerAssetsTab.profiles,
+    _CareerAssetKind.jdAnalysis => CareerAssetsTab.jobs,
+    _CareerAssetKind.jobFitReport => CareerAssetsTab.fitReports,
+    _CareerAssetKind.resumeVersion => CareerAssetsTab.versions,
+    _CareerAssetKind.artifact => CareerAssetsTab.all,
+  };
+}
+
+class _CareerReportPresentation {
+  final String lead;
+  final List<_CareerReportSection> sections;
+
+  const _CareerReportPresentation({
+    required this.lead,
+    required this.sections,
+  });
+
+  static _CareerReportPresentation? tryParse(String content) {
+    final normalized =
+        content.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
+    if (!_looksLikeCareerReport(normalized)) {
+      return null;
+    }
+    final leadLines = <String>[];
+    final sections = <_CareerReportSection>[];
+    String? currentTitle;
+    final currentBody = <String>[];
+
+    void flushSection() {
+      final title = currentTitle;
+      if (title == null) return;
+      sections.add(
+        _CareerReportSection(
+          title: title,
+          body: currentBody.join('\n').trim(),
+        ),
+      );
+      currentBody.clear();
+    }
+
+    for (final rawLine in normalized.split('\n')) {
+      final heading = _careerSectionHeading(rawLine);
+      if (heading != null) {
+        flushSection();
+        currentTitle = heading;
+        continue;
+      }
+      final trimmed = rawLine.trim();
+      if (currentTitle == null) {
+        if (trimmed == '---' || trimmed.isEmpty) {
+          continue;
+        }
+        leadLines.add(rawLine);
+      } else {
+        currentBody.add(rawLine);
+      }
+    }
+    flushSection();
+    if (sections.length < 2) {
+      return null;
+    }
+    return _CareerReportPresentation(
+      lead: leadLines.join('\n').trim(),
+      sections: sections,
+    );
+  }
+}
+
+class _CareerReportSection {
+  final String title;
+  final String body;
+
+  const _CareerReportSection({
+    required this.title,
+    required this.body,
+  });
+}
+
+bool _looksLikeCareerReport(String content) {
+  if (content.isEmpty) {
+    return false;
+  }
+  final hits =
+      _careerSectionTitles.where((title) => content.contains(title)).length;
+  return hits >= 2 &&
+      (content.contains("简历") ||
+          content.contains("诊断") ||
+          content.contains("JD") ||
+          content.contains("匹配"));
+}
+
+String? _careerSectionHeading(String line) {
+  var text = line.trim();
+  if (text.isEmpty) {
+    return null;
+  }
+  text = text
+      .replaceFirst(RegExp(r'^#{1,6}\s*'), '')
+      .replaceFirst(RegExp(r'^\d+[\.、]\s*'), '')
+      .replaceAll(RegExp(r'[:：]\s*$'), '')
+      .trim();
+  for (final title in _careerSectionTitles) {
+    if (text == title || text.startsWith("$title ")) {
+      return title;
+    }
+  }
+  return null;
+}
+
+const _careerSectionTitles = [
+  "诊断摘要",
+  "核心优势",
+  "风险点",
+  "关键改进建议",
+  "改进建议",
+  "匹配摘要",
+  "主要差距",
+  "简历优化方向",
+  "面试准备重点",
+];
+
+IconData _careerSectionIcon(String title) {
+  if (title.contains("优势")) return Icons.trending_up_rounded;
+  if (title.contains("风险") || title.contains("差距")) {
+    return Icons.warning_amber_rounded;
+  }
+  if (title.contains("建议") || title.contains("优化")) {
+    return Icons.auto_fix_high_rounded;
+  }
+  if (title.contains("面试")) return Icons.record_voice_over_outlined;
+  return Icons.summarize_outlined;
+}
+
+Color _careerSectionColor(String title) {
+  if (title.contains("优势")) return AppTheme.accent;
+  if (title.contains("风险") || title.contains("差距")) {
+    return const Color(0xFFB45309);
+  }
+  if (title.contains("建议") || title.contains("优化")) {
+    return const Color(0xFF2563EB);
+  }
+  if (title.contains("面试")) return const Color(0xFF7C3AED);
+  return AppTheme.textSecondary;
 }
 
 class _Cursor extends StatefulWidget {

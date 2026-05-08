@@ -242,6 +242,16 @@ class ApiService {
     );
   }
 
+  String sessionArtifactDownloadUrl({
+    required String sessionId,
+    required String artifactId,
+  }) {
+    return _uri(
+      "/api/sessions/${Uri.encodeComponent(sessionId)}/artifacts/"
+      "${Uri.encodeComponent(artifactId)}/download",
+    ).toString();
+  }
+
   // ── Career Product Assets ─────────────────────────────────────────────
 
   Future<List<ResumeProfileView>> listCareerResumeProfiles({
