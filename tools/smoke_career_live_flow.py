@@ -81,6 +81,7 @@ from app.tools.builtins import (
     WorkspaceWriteFileTool,
 )
 from app.tools.registry import ToolRegistry
+from tools.check_career_product_store import check_career_product_store
 
 
 @dataclass(slots=True)
@@ -110,6 +111,7 @@ class FlowReport:
     record_ids: dict[str, list[str]] = field(default_factory=dict)
     artifact_ids: list[str] = field(default_factory=list)
     tool_call_counts: dict[str, int] = field(default_factory=dict)
+    quality_findings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     last_events: list[str] = field(default_factory=list)
 
@@ -403,6 +405,12 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     if path_argument_leaked(stack.session_repository, report.session_id):
         report.errors.append("检测到工具调用参数中出现 path/file_path/workspace_path。")
 
+    quality_report = check_career_product_store(stack.data_dir, session_id=report.session_id)
+    report.quality_findings = [item.format() for item in quality_report.findings]
+    for finding in quality_report.findings:
+        if finding.severity == "error":
+            report.errors.append(f"产品数据一致性错误: {finding.format()}")
+
     report.success = not report.errors
     if report.errors:
         report.last_events = latest_event_summaries(stack.session_repository, report.session_id)
@@ -620,6 +628,10 @@ def print_report(reports: list[FlowReport]) -> None:
         print(f"  records: {json.dumps(item.record_ids, ensure_ascii=False)}")
         print(f"  artifacts: {item.artifact_ids}")
         print(f"  tool_call_counts: {item.tool_call_counts}")
+        if item.quality_findings:
+            print("  quality_findings:")
+            for finding in item.quality_findings:
+                print(f"    - {finding}")
         if item.errors:
             print("  errors:")
             for error in item.errors:

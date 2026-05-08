@@ -1,0 +1,250 @@
+"""Tests for CareerProductStore consistency checks."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from app.career.models import CareerProfile, CareerRecordStatus, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.store import CareerProductStore
+from app.domain.models import SessionArtifact
+from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from tools.check_career_product_store import check_career_product_store, main as checker_main
+
+
+def _now() -> datetime:
+    return datetime(2026, 5, 8, 8, 0, tzinfo=UTC)
+
+
+def _create_session_with_artifacts(tmp_path: Path, artifact_ids: list[str]) -> JsonlSessionRepository:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session("sess_alpha")
+    for artifact_id in artifact_ids:
+        _add_text_artifact(repository, artifact_id=artifact_id)
+    return repository
+
+
+def _add_text_artifact(repository: JsonlSessionRepository, *, artifact_id: str) -> None:
+    session_id = "sess_alpha"
+    root = repository.get_session_root_path(session_id)
+    artifact_dir = root / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    content_path = artifact_dir / "content.txt"
+    content = f"{artifact_id} content"
+    content_path.write_text(content, encoding="utf-8")
+    repository.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            kind="generated_file",
+            title=f"{artifact_id}.txt",
+            media_type="text/plain",
+            size_bytes=content_path.stat().st_size,
+            status="ready",
+            visibility="session_shared",
+            created_at=_now(),
+            updated_at=_now(),
+            storage_relpath=str(content_path.relative_to(root)),
+            text_relpath=str(content_path.relative_to(root)),
+            text_char_count=len(content),
+            token_estimate=4,
+            parsed_at=_now(),
+        )
+    )
+
+
+def _store(tmp_path: Path) -> CareerProductStore:
+    return CareerProductStore(root_dir=tmp_path / "career", clock=_now)
+
+
+def _save_clean_product_records(store: CareerProductStore) -> None:
+    store.save_resume_profile(
+        ResumeProfile(
+            resume_profile_id="resume_profile_alpha",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_resume",
+            evidence_refs=["artifact_resume", "artifact_diagnosis"],
+            created_at=_now(),
+            updated_at=_now(),
+            basic_info={"name": "候选人"},
+            skills=["Python"],
+            raw_text_artifact_id="artifact_resume",
+            diagnosis_artifact_id="artifact_diagnosis",
+        )
+    )
+    store.save_career_profile(
+        CareerProfile(
+            career_profile_id="career_profile_default",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id=None,
+            evidence_refs=["resume_profile_alpha", "artifact_resume"],
+            created_at=_now(),
+            updated_at=_now(),
+            career_goal="AI 应用开发",
+            target_roles=["后端开发"],
+        )
+    )
+    store.save_jd_analysis(
+        JDAnalysis(
+            jd_analysis_id="jd_alpha",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=["artifact_jd"],
+            created_at=_now(),
+            updated_at=_now(),
+            company="Example",
+            position="AI 工程师",
+        )
+    )
+    store.save_job_fit_report(
+        JobFitReport(
+            job_fit_report_id="fit_alpha",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=["resume_profile_alpha", "career_profile_default", "jd_alpha", "artifact_report"],
+            created_at=_now(),
+            updated_at=_now(),
+            jd_analysis_id="jd_alpha",
+            resume_profile_id="resume_profile_alpha",
+            career_profile_id="career_profile_default",
+            report_artifact_id="artifact_report",
+        )
+    )
+    store.save_resume_version(
+        ResumeVersion(
+            resume_version_id="resume_version_alpha",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_resume_version",
+            evidence_refs=["resume_profile_alpha", "jd_alpha", "fit_alpha", "artifact_resume_version"],
+            created_at=_now(),
+            updated_at=_now(),
+            base_resume_profile_id="resume_profile_alpha",
+            target_jd_analysis_id="jd_alpha",
+            title="AI 应用开发简历版本",
+            format="markdown",
+            artifact_id="artifact_resume_version",
+        )
+    )
+
+
+def test_career_product_store_checker_passes_clean_records(tmp_path: Path) -> None:
+    _create_session_with_artifacts(
+        tmp_path,
+        [
+            "artifact_resume",
+            "artifact_diagnosis",
+            "artifact_jd",
+            "artifact_report",
+            "artifact_resume_version",
+        ],
+    )
+    _save_clean_product_records(_store(tmp_path))
+
+    report = check_career_product_store(tmp_path, session_id="sess_alpha")
+
+    assert report.success
+    assert report.findings == []
+    assert report.counts["resume_profiles"] == 1
+    assert report.counts["resume_versions"] == 1
+
+
+def test_career_product_store_checker_reports_missing_refs_and_duplicates(tmp_path: Path) -> None:
+    _create_session_with_artifacts(tmp_path, ["artifact_jd"])
+    store = _store(tmp_path)
+    store.save_jd_analysis(
+        JDAnalysis(
+            jd_analysis_id="jd_alpha",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=["artifact_jd"],
+            created_at=_now(),
+            updated_at=_now(),
+        )
+    )
+    store.save_jd_analysis(
+        JDAnalysis(
+            jd_analysis_id="jd_beta",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=["artifact_jd"],
+            created_at=_now(),
+            updated_at=_now(),
+        )
+    )
+    store.save_job_fit_report(
+        JobFitReport(
+            job_fit_report_id="fit_orphan",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=[
+                "artifact_jd",
+                "artifact_missing_evidence",
+                "resume_profile_missing",
+                "career_profile_missing",
+                "jd_alpha",
+            ],
+            created_at=_now(),
+            updated_at=_now(),
+            jd_analysis_id="jd_alpha",
+            resume_profile_id="resume_profile_missing",
+            career_profile_id="career_profile_missing",
+            report_artifact_id="artifact_missing_report",
+        )
+    )
+
+    report = check_career_product_store(tmp_path, session_id="sess_alpha")
+    codes = {item.code for item in report.findings}
+
+    assert not report.success
+    assert "duplicate_jd_analysis_source" in codes
+    assert "missing_artifact_ref" in codes
+    assert "missing_product_ref" in codes
+
+
+def test_career_product_store_checker_reports_corrupt_json(tmp_path: Path) -> None:
+    _create_session_with_artifacts(tmp_path, ["artifact_resume"])
+    store = _store(tmp_path)
+    store.save_resume_profile(
+        ResumeProfile(
+            resume_profile_id="resume_profile_bad",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_resume",
+            evidence_refs=["artifact_resume"],
+            created_at=_now(),
+            updated_at=_now(),
+        )
+    )
+    path = tmp_path / "career" / "resumes" / "resume_profile_bad" / "profile.json"
+    path.write_text("{bad json", encoding="utf-8")
+
+    report = check_career_product_store(tmp_path, session_id="sess_alpha")
+
+    assert not report.success
+    assert [item.code for item in report.findings] == ["record_load_failed"]
+
+
+def test_career_product_store_checker_cli_outputs_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _create_session_with_artifacts(tmp_path, ["artifact_resume"])
+
+    exit_code = checker_main(["--data-dir", str(tmp_path), "--session-id", "sess_alpha", "--json"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["success"] is True
+    assert payload["counts"]["artifacts"] == 1
