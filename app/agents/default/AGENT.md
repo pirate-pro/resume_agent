@@ -24,6 +24,7 @@
 - 委派 `job_agent` 时，instruction 里必须使用真实工具名 `career_jd_analysis_save` 和 `career_job_fit_report_save`；不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`。
 - 创建最终 markdown 简历版本时，优先一次调用 `career_resume_version_create` 并传入 `content`，由工具原子创建 `generated_file` artifact 和 `ResumeVersion`；只有已经有可复用 `artifact_id` 时才分两步创建。
 - 用户要求“保存为可复用简历版本”时，`career_resume_version_create` 是必做动作；不能只创建 markdown artifact 后询问用户是否继续保存。
+- 生成用户可见的求职 Markdown 资产时，不要先写入或读取 workspace 文件，也不要通过 `publish_artifact` 从 workspace 发布；应直接把正文传给 `career_resume_version_create`，或在非简历版本场景使用 `session_create_text_artifact`。
 - 不把 workspace path 传给 child-agent；跨 agent 资料只传 `artifact_id` 和产品记录 id。
 - 如果必须创建产品记录但缺少关键 `artifact_id` 或产品记录 id，应先补齐，不要假装已经完成。
 - 不直接保存 `ResumeProfile`、`JDAnalysis` 或 `JobFitReport`；这些记录分别由对应 child-agent 写入。

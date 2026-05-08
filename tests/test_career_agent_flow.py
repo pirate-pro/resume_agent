@@ -946,6 +946,7 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     main_doc = Path("app/agents/default/AGENT.md").read_text(encoding="utf-8")
     resume_doc = Path("app/agents/resume_agent/AGENT.md").read_text(encoding="utf-8")
     job_doc = Path("app/agents/job_agent/AGENT.md").read_text(encoding="utf-8")
+    main_capability = load_agent_capability_registry(Path("app/config/agent_capabilities.json")).require("agent_main")
 
     assert "已有可用 `resume_profile_id`" in main_doc or "已经拿到可用 `resume_profile_id`" in main_doc
     assert "不要再次委派 `resume_agent`" in main_doc
@@ -955,9 +956,14 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`" in main_doc
     assert "优先一次调用 `career_resume_version_create` 并传入 `content`" in main_doc
     assert "`career_resume_version_create` 是必做动作" in main_doc
+    assert "不要先写入或读取 workspace 文件" in main_doc
     assert "不要向 `delegate_agents` 传 `depends_on`" in main_doc
     assert "child-agent id 不是工具名" in main_doc
     assert "`career_profile_merge.updates` 只使用这些字段" in main_doc
+    assert main_capability.allows_tool("career_resume_version_create")
+    assert not main_capability.allows_tool("workspace_write_file")
+    assert not main_capability.allows_tool("workspace_read_file")
+    assert not main_capability.allows_tool("publish_artifact")
     assert "必须确认 `career_resume_profile_save` 已成功" in resume_doc
     assert "不要因为定制简历、优化简历正文、提取能力标签而覆盖已有 `ResumeProfile`" in resume_doc
     assert "分数必须是 0 到 100 的整数" in job_doc

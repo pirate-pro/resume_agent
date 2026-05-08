@@ -464,6 +464,96 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
         )
 
 
+def test_get_tools_recover_from_invalid_id_format_when_session_record_is_unambiguous(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+    diagnosis_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历诊断.md")
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(registry, agent_id="job_agent", title="JD.txt", content="需要 RAG")
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_alpha",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(agent_id="job_agent"),
+    )
+    _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_alpha",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [
+                "resume_profile_alpha",
+                "career_profile_default",
+                "jd_alpha",
+                jd_artifact_id,
+                report_artifact_id,
+            ],
+            "jd_analysis_id": "jd_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+        },
+        _context(agent_id="job_agent"),
+    )
+
+    recovered = _execute(
+        registry,
+        "career_job_fit_report_get",
+        {"job_fit_report_id": "job_fit_report_alpha"},
+        _context(agent_id="agent_main"),
+    )
+    missing = _execute(
+        registry,
+        "career_resume_version_get",
+        {"resume_version_id": "version_alpha"},
+        _context(agent_id="agent_main"),
+    )
+
+    assert recovered["record_id"] == "fit_alpha"
+    assert recovered["requested_record_id"] == "job_fit_report_alpha"
+    assert recovered["invalid_id_format"] is True
+    assert recovered["resolved_from_invalid_id"] is True
+    assert missing["found"] is False
+    assert missing["invalid_id_format"] is True
+    assert "list tool" in missing["hint"]
+
+
+def test_resume_profile_save_accepts_single_string_for_list_fields(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+
+    payload = _execute(
+        registry,
+        "career_resume_profile_save",
+        {
+            "resume_profile_id": "resume_profile_string_list",
+            "source_artifact_id": resume_artifact_id,
+            "evidence_refs": [resume_artifact_id],
+            "skills": "Python / FastAPI",
+            "project_experience": "简历诊断 Agent",
+        },
+        _context(agent_id="resume_agent"),
+    )
+
+    assert payload["record"]["skills"] == ["Python / FastAPI"]
+    assert payload["record"]["project_experience"] == ["简历诊断 Agent"]
+
+
 def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")

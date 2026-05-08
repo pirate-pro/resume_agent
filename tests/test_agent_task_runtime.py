@@ -392,6 +392,22 @@ def test_delegate_agents_tool_returns_aggregated_results(tmp_path: Path) -> None
     assert all(item["target_agent_id"] == "resume_agent" for item in payload["results"])
 
 
+def test_delegate_agents_tool_returns_noop_for_empty_task_list(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.tool_registry.execute(
+        ToolCall(name="delegate_agents", arguments={"wait": True, "tasks": []}),
+        _source_context(),
+    )
+    payload = json.loads(result.content)
+
+    assert result.success is True
+    assert payload["status"] == "skipped"
+    assert payload["results"] == []
+    assert "target_agent_id" in payload["hint"]
+
+
 def test_agent_task_status_tool_returns_persisted_task_group(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_delegate")

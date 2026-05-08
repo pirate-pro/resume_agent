@@ -20,7 +20,6 @@ from app.tools.builtin_tools.session_artifact_helpers import (
     collect_text_hits,
     decide_artifact_access_plan,
     ensure_session_artifact_text_ready,
-    require_session_artifact,
 )
 
 
@@ -195,7 +194,14 @@ class SessionReadArtifactTool:
         offset = parse_non_negative_int(arguments.get("offset", 0), field_name="offset")
         max_chars = min(parse_positive_int(arguments.get("max_chars", 3000), field_name="max_chars"), 12000)
 
-        artifact = require_session_artifact(self._session_repository, session_id, artifact_id)
+        artifact = self._session_repository.get_session_artifact(session_id, artifact_id)
+        if artifact is None:
+            return _artifact_not_found_result(
+                "session_read_artifact",
+                self._session_repository,
+                session_id,
+                artifact_id,
+            )
         updated_artifact, text = ensure_session_artifact_text_ready(self._session_repository, session_id, artifact)
         snippet = text[offset : offset + max_chars] if offset < len(text) else ""
         payload = {
@@ -242,7 +248,14 @@ class SessionPlanArtifactAccessTool:
         artifact_id = require_non_empty_argument(arguments, "artifact_id")
         raw_goal = arguments.get("user_goal")
         user_goal = raw_goal.strip() if isinstance(raw_goal, str) and raw_goal.strip() else None
-        artifact = require_session_artifact(self._session_repository, session_id, artifact_id)
+        artifact = self._session_repository.get_session_artifact(session_id, artifact_id)
+        if artifact is None:
+            return _artifact_not_found_result(
+                "session_plan_artifact_access",
+                self._session_repository,
+                session_id,
+                artifact_id,
+            )
         plan = decide_artifact_access_plan(artifact=artifact, user_goal=user_goal)
         payload = {
             "artifact_id": artifact.artifact_id,
@@ -292,7 +305,14 @@ class SessionSearchArtifactTool:
         top_k = min(parse_positive_int(arguments.get("top_k", 3), field_name="top_k"), 8)
         window_chars = min(parse_positive_int(arguments.get("window_chars", 160), field_name="window_chars"), 800)
 
-        artifact = require_session_artifact(self._session_repository, session_id, artifact_id)
+        artifact = self._session_repository.get_session_artifact(session_id, artifact_id)
+        if artifact is None:
+            return _artifact_not_found_result(
+                "session_search_artifact",
+                self._session_repository,
+                session_id,
+                artifact_id,
+            )
         updated_artifact, text = ensure_session_artifact_text_ready(self._session_repository, session_id, artifact)
         hits = collect_text_hits(text=text, query=query, top_k=top_k, window_chars=window_chars)
         payload = {
@@ -316,6 +336,27 @@ def _normalize_artifact_title(raw: Any) -> str:
     if not title:
         raise ToolExecutionError("'title' must be a non-empty string.")
     return title
+
+
+def _artifact_not_found_result(
+    tool_name: str,
+    session_repository: SessionRepository,
+    session_id: str,
+    artifact_id: str,
+) -> ToolExecutionResult:
+    artifacts = session_repository.list_session_artifacts(session_id)
+    payload = {
+        "artifact_id": artifact_id,
+        "found": False,
+        "message": f"Session artifact not found: {artifact_id}",
+        "available_artifact_ids": [
+            item.artifact_id
+            for item in artifacts
+            if item.visibility == "session_shared"
+        ],
+        "hint": "Call session_list_artifacts and retry with an exact current-session artifact_id.",
+    }
+    return ToolExecutionResult(tool_name=tool_name, success=True, content=json.dumps(payload, ensure_ascii=False))
 
 
 def _require_text_content(raw: Any) -> str:

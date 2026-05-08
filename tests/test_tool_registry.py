@@ -855,6 +855,27 @@ def test_session_read_artifact_lazy_parse_uploaded_text(tmp_path: Path) -> None:
     assert updated.parsed_at is not None
 
 
+def test_session_read_artifact_returns_recoverable_not_found_payload(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_file_missing")
+    _add_text_artifact(session_repo, "sess_file_missing", "artifact_existing")
+
+    registry = _registry()
+    registry.register(SessionReadArtifactTool(session_repository=session_repo))
+
+    result = registry.execute(
+        ToolCall(name="session_read_artifact", arguments={"artifact_id": "artifact_missing"}),
+        context=_context("sess_file_missing"),
+    )
+    payload = json.loads(result.content)
+
+    assert result.success is True
+    assert payload["found"] is False
+    assert payload["artifact_id"] == "artifact_missing"
+    assert payload["available_artifact_ids"] == ["artifact_existing"]
+    assert "session_list_artifacts" in payload["hint"]
+
+
 def test_session_search_artifact_returns_hits(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_file_3")

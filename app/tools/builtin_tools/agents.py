@@ -76,7 +76,10 @@ class DelegateAgentsTool:
         if not wait:
             raise ToolExecutionError("delegate_agents currently supports wait=true only.")
         max_concurrency = min(parse_positive_int(arguments.get("max_concurrency", 3), "max_concurrency"), 8)
-        specs = _parse_task_specs(arguments.get("tasks"))
+        raw_tasks = arguments.get("tasks")
+        if isinstance(raw_tasks, list) and not raw_tasks:
+            return _empty_delegation_result()
+        specs = _parse_task_specs(raw_tasks)
         try:
             result = self._agent_task_runtime_provider().run_group(
                 AgentTaskGroupRequest(
@@ -93,6 +96,20 @@ class DelegateAgentsTool:
             success=True,
             content=json.dumps(result.to_payload(), ensure_ascii=False),
         )
+
+
+def _empty_delegation_result() -> ToolExecutionResult:
+    payload = {
+        "status": "skipped",
+        "results": [],
+        "message": "No tasks were delegated because tasks was empty.",
+        "hint": "Call delegate_agents only when at least one target_agent_id and instruction are ready.",
+    }
+    return ToolExecutionResult(
+        tool_name="delegate_agents",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
 
 
 class AgentTaskStatusTool:

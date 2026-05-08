@@ -226,24 +226,22 @@ class CareerResumeProfileGetTool:
         try:
             args = _require_arguments(arguments)
             record_id = _required_string(args.get("resume_profile_id"), field_name="resume_profile_id")
-            record = self._career_store.get_resume_profile(record_id)
+            record, extra = _get_record_or_current_session_single(
+                record_id,
+                session_id=run_context.session_id,
+                records=self._career_store.list_resume_profiles(),
+                getter=self._career_store.get_resume_profile,
+            )
             if record is None:
-                record = _single_current_session_record(
-                    self._career_store.list_resume_profiles(),
-                    run_context.session_id,
-                )
-                if record is None:
-                    return _not_found_result("career_resume_profile_get", "resume_profile", record_id)
-                return _record_result(
+                return _not_found_result(
                     "career_resume_profile_get",
                     "resume_profile",
-                    record.resume_profile_id,
-                    record,
-                    extra={"requested_record_id": record_id, "resolved_from_missing_id": True},
+                    record_id,
+                    extra=extra,
                 )
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        return _record_result("career_resume_profile_get", "resume_profile", record.resume_profile_id, record)
+        return _record_result("career_resume_profile_get", "resume_profile", record.resume_profile_id, record, extra=extra)
 
 
 class CareerResumeProfileListTool:
@@ -471,24 +469,17 @@ class CareerJDAnalysisGetTool:
         try:
             args = _require_arguments(arguments)
             record_id = _required_string(args.get("jd_analysis_id"), field_name="jd_analysis_id")
-            record = self._career_store.get_jd_analysis(record_id)
+            record, extra = _get_record_or_current_session_single(
+                record_id,
+                session_id=run_context.session_id,
+                records=self._career_store.list_jd_analyses(),
+                getter=self._career_store.get_jd_analysis,
+            )
             if record is None:
-                record = _single_current_session_record(
-                    self._career_store.list_jd_analyses(),
-                    run_context.session_id,
-                )
-                if record is None:
-                    return _not_found_result("career_jd_analysis_get", "jd_analysis", record_id)
-                return _record_result(
-                    "career_jd_analysis_get",
-                    "jd_analysis",
-                    record.jd_analysis_id,
-                    record,
-                    extra={"requested_record_id": record_id, "resolved_from_missing_id": True},
-                )
+                return _not_found_result("career_jd_analysis_get", "jd_analysis", record_id, extra=extra)
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        return _record_result("career_jd_analysis_get", "jd_analysis", record.jd_analysis_id, record)
+        return _record_result("career_jd_analysis_get", "jd_analysis", record.jd_analysis_id, record, extra=extra)
 
 
 class CareerJDAnalysisListTool:
@@ -653,24 +644,17 @@ class CareerJobFitReportGetTool:
         try:
             args = _require_arguments(arguments)
             record_id = _required_string(args.get("job_fit_report_id"), field_name="job_fit_report_id")
-            record = self._career_store.get_job_fit_report(record_id)
+            record, extra = _get_record_or_current_session_single(
+                record_id,
+                session_id=run_context.session_id,
+                records=self._career_store.list_job_fit_reports(),
+                getter=self._career_store.get_job_fit_report,
+            )
             if record is None:
-                record = _single_current_session_record(
-                    self._career_store.list_job_fit_reports(),
-                    run_context.session_id,
-                )
-                if record is None:
-                    return _not_found_result("career_job_fit_report_get", "job_fit_report", record_id)
-                return _record_result(
-                    "career_job_fit_report_get",
-                    "job_fit_report",
-                    record.job_fit_report_id,
-                    record,
-                    extra={"requested_record_id": record_id, "resolved_from_missing_id": True},
-                )
+                return _not_found_result("career_job_fit_report_get", "job_fit_report", record_id, extra=extra)
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        return _record_result("career_job_fit_report_get", "job_fit_report", record.job_fit_report_id, record)
+        return _record_result("career_job_fit_report_get", "job_fit_report", record.job_fit_report_id, record, extra=extra)
 
 
 class CareerJobFitReportListTool:
@@ -838,24 +822,17 @@ class CareerResumeVersionGetTool:
         try:
             args = _require_arguments(arguments)
             record_id = _required_string(args.get("resume_version_id"), field_name="resume_version_id")
-            record = self._career_store.get_resume_version(record_id)
+            record, extra = _get_record_or_current_session_single(
+                record_id,
+                session_id=run_context.session_id,
+                records=self._career_store.list_resume_versions(),
+                getter=self._career_store.get_resume_version,
+            )
             if record is None:
-                record = _single_current_session_record(
-                    self._career_store.list_resume_versions(),
-                    run_context.session_id,
-                )
-                if record is None:
-                    return _not_found_result("career_resume_version_get", "resume_version", record_id)
-                return _record_result(
-                    "career_resume_version_get",
-                    "resume_version",
-                    record.resume_version_id,
-                    record,
-                    extra={"requested_record_id": record_id, "resolved_from_missing_id": True},
-                )
+                return _not_found_result("career_resume_version_get", "resume_version", record_id, extra=extra)
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        return _record_result("career_resume_version_get", "resume_version", record.resume_version_id, record)
+        return _record_result("career_resume_version_get", "resume_version", record.resume_version_id, record, extra=extra)
 
 
 class CareerResumeVersionListTool:
@@ -1032,6 +1009,8 @@ def _normalize_career_profile_update_value(field_name: str, value: Any) -> Any:
 def _optional_list(raw: Any, *, field_name: str) -> list[Any]:
     if raw is None:
         return []
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
     if not isinstance(raw, list):
         raise ToolExecutionError(f"'{field_name}' must be a list.")
     return list(raw)
@@ -1086,6 +1065,8 @@ def _normalize_evidence_ref(raw: str) -> str:
 def _optional_string_list(raw: Any, *, field_name: str) -> list[str]:
     if raw is None:
         return []
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
     if not isinstance(raw, list):
         raise ToolExecutionError(f"'{field_name}' must be a list of strings.")
     output: list[str] = []
@@ -1146,6 +1127,36 @@ def _single_current_session_record(records: list[Any], session_id: str) -> Any |
     if len(matches) == 1:
         return matches[0]
     return None
+
+
+def _get_record_or_current_session_single(
+    requested_record_id: str,
+    *,
+    session_id: str,
+    records: list[Any],
+    getter: Callable[[str], Any | None],
+) -> tuple[Any | None, dict[str, Any]]:
+    try:
+        record = getter(requested_record_id)
+    except ValidationError:
+        record = None
+        invalid_id_format = True
+    else:
+        invalid_id_format = False
+    if record is not None:
+        return record, {}
+    extra: dict[str, Any] = {"requested_record_id": requested_record_id}
+    if invalid_id_format:
+        extra["invalid_id_format"] = True
+    fallback = _single_current_session_record(records, session_id)
+    if fallback is None:
+        extra["hint"] = "Call the corresponding list tool to get a valid current-session record id."
+        return None, extra
+    if invalid_id_format:
+        extra["resolved_from_invalid_id"] = True
+    else:
+        extra["resolved_from_missing_id"] = True
+    return fallback, extra
 
 
 def _find_current_session_record(records: list[Any], session_id: str, predicate: Callable[[Any], bool]) -> Any | None:
@@ -1233,13 +1244,21 @@ def _record_result(
     return ToolExecutionResult(tool_name=tool_name, success=True, content=json.dumps(payload, ensure_ascii=False))
 
 
-def _not_found_result(tool_name: str, record_type: str, record_id: str) -> ToolExecutionResult:
+def _not_found_result(
+    tool_name: str,
+    record_type: str,
+    record_id: str,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> ToolExecutionResult:
     payload = {
         "record_type": record_type,
         "record_id": record_id,
         "found": False,
         "message": f"{record_type} not found: {record_id}",
     }
+    if extra:
+        payload.update(extra)
     return ToolExecutionResult(tool_name=tool_name, success=True, content=json.dumps(payload, ensure_ascii=False))
 
 

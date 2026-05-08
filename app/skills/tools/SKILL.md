@@ -15,12 +15,12 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
 7. `memory_explain(content, tags=[], source="memory_explain_tool")`：dry-run 解释一段内容会如何被 admission/classification/policy 处理，不写入记忆。
 8. `memory_forget(query, limit=5, hard_delete=false, reason?)`：先检索后遗忘，删除/作废符合查询的记忆。
 9. `memory_update(query, new_content, new_tags=[], limit=3)`：更新一条唯一命中的记忆；若多条命中会返回候选，不会自动修改。
-10. `workspace_write_file(path, content)`：写入当前 agent 的私有 workspace 文件。
-11. `workspace_read_file(path)`：读取当前 agent workspace 文件。
-12. `session_list_artifacts()`：列出当前会话共享 artifact 及 active 状态。
-13. `session_plan_artifact_access(artifact_id, user_goal?)`：基于 artifact 元数据给出推荐访问策略（直读/先检索后精读等）。
-14. `session_read_artifact(artifact_id, offset=0, max_chars=3000)`：读取 artifact 文本内容，若未解析会懒解析。
-15. `session_search_artifact(artifact_id, query, top_k=3, window_chars=160)`：在 artifact 中检索关键词并返回片段。
+10. `session_list_artifacts()`：列出当前会话共享 artifact 及 active 状态。
+11. `session_plan_artifact_access(artifact_id, user_goal?)`：基于 artifact 元数据给出推荐访问策略（直读/先检索后精读等）。
+12. `session_read_artifact(artifact_id, offset=0, max_chars=3000)`：读取 artifact 文本内容，若未解析会懒解析。
+13. `session_search_artifact(artifact_id, query, top_k=3, window_chars=160)`：在 artifact 中检索关键词并返回片段。
+14. `workspace_write_file(path, content)`：仅当当前工具列表明确提供该工具时可用，写入当前 agent 的私有 workspace 文件。
+15. `workspace_read_file(path)`：仅当当前工具列表明确提供该工具时可用，读取当前 agent workspace 文件。
 
 规则：
 
@@ -45,7 +45,9 @@ description: Tool usage policy and invocation checklist. Use whenever tool calls
 - 使用 `memory_update` 时：
   - 只有在目标唯一明确时才执行更新。
   - 当返回 `ambiguous_match` 时，先让用户确认目标后再重试。
+- 只有当前工具列表里明确出现 workspace 工具时才可以调用 workspace 工具；不要根据本说明假定工具一定可用。
 - workspace 工具必须使用相对路径，不允许路径逃逸。
-- workspace 是 agent 私有中间产物，不要把 workspace path 当作 child-agent 可访问资料。
+- workspace 是 agent 私有中间产物，不要把 workspace path 当作 child-agent 可访问资料，也不要把 workspace 文件作为用户可见求职 Markdown 资产的事实源。
+- 生成用户可见求职 Markdown 时，优先使用无路径工具：简历版本用 `career_resume_version_create(content=...)`，其他文本资产用 `session_create_text_artifact(content=...)`。
 - 文件/资料读取优先用会话 artifact 工具（`session_*_artifact`），而不是盲猜内容。
 - 对大文件优先采用“先检索再精读”的策略，避免一次性注入过长上下文。
