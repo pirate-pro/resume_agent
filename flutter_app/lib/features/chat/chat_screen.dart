@@ -11,10 +11,11 @@ import '../../shared/widgets/input_bar.dart';
 
 const double _messageRailMaxWidth = 1160;
 const double _messageListTopPadding = 114;
-const double _messageListBottomPadding = 292;
+const double _messageListBottomPadding = 96;
+const double _messageViewportBottomInset = 192;
 const double _headerDockFadeHeight = 92;
 const double _composerDockFadeHeight = 132;
-const double _jumpToBottomButtonBottom = 108;
+const double _jumpToBottomButtonBottom = _messageViewportBottomInset + 12;
 const double _jumpToBottomThreshold = 140;
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -107,11 +108,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Stack(
       children: [
-        Positioned.fill(
-          child: hasMessages
-              ? _ChatMessageLayer(scrollCtrl: _scrollCtrl)
-              : const _WelcomeScreen(),
-        ),
+        if (hasMessages)
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: _messageViewportBottomInset,
+            child: _ChatMessageLayer(scrollCtrl: _scrollCtrl),
+          )
+        else
+          const Positioned.fill(child: _WelcomeScreen()),
         Positioned(
           left: 0,
           right: 0,
@@ -196,6 +202,7 @@ class _ChatHeaderLayer extends ConsumerWidget {
     );
     final themeMode = ref.watch(themeModeProvider);
     final isDarkMode = themeMode == ThemeMode.dark;
+    final compactHeader = MediaQuery.sizeOf(context).width < 620;
 
     return _HeaderDock(
       child: Padding(
@@ -214,9 +221,9 @@ class _ChatHeaderLayer extends ConsumerWidget {
                 ],
                 Expanded(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
+                    padding: EdgeInsets.symmetric(
+                      horizontal: compactHeader ? 12 : 16,
+                      vertical: compactHeader ? 8 : 10,
                     ),
                     decoration: AppTheme.floatingPanelDecoration(
                       radius: 24,
@@ -230,28 +237,32 @@ class _ChatHeaderLayer extends ConsumerWidget {
                           children: [
                             Text(
                               "Single Agent Runtime",
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: AppTheme.ts(
-                                fontSize: 13.5,
+                                fontSize: compactHeader ? 12.5 : 13.5,
                                 fontWeight: FontWeight.w700,
                                 color: AppTheme.textPrimary,
                               ),
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              "对话 · 工具 · 记忆",
-                              style: AppTheme.ts(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                color: AppTheme.textTertiary,
+                            if (!compactHeader) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                "对话 · 工具 · 记忆",
+                                style: AppTheme.ts(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: AppTheme.textTertiary,
+                                ),
                               ),
-                            ),
+                            ],
                           ],
                         ),
                         const Spacer(),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 5,
+                          padding: EdgeInsets.symmetric(
+                            horizontal: compactHeader ? 4 : 6,
+                            vertical: compactHeader ? 4 : 5,
                           ),
                           decoration: BoxDecoration(
                             color: AppTheme.surface.withValues(
@@ -265,17 +276,20 @@ class _ChatHeaderLayer extends ConsumerWidget {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              _HealthBadge(reachable: reachable),
+                              compactHeader
+                                  ? _HealthDot(reachable: reachable)
+                                  : _HealthBadge(reachable: reachable),
                               if (showCareerAssetsToggle) ...[
-                                _HeaderDivider(),
+                                if (!compactHeader) _HeaderDivider(),
                                 _HeaderButton(
                                   icon: Icons.work_outline_rounded,
                                   active: isCareerAssetsPanelOpen,
+                                  size: compactHeader ? 34 : 38,
                                   tooltip: '求职资产',
                                   onTap: onCareerAssetsToggle,
                                 ),
                               ],
-                              if (showDebugToggle) ...[
+                              if (showDebugToggle && !compactHeader) ...[
                                 _HeaderDivider(),
                                 _HeaderButton(
                                   icon: isDebugPanelOpen
@@ -285,11 +299,12 @@ class _ChatHeaderLayer extends ConsumerWidget {
                                   onTap: onDebugToggle,
                                 ),
                               ],
-                              _HeaderDivider(),
+                              if (!compactHeader) _HeaderDivider(),
                               _HeaderButton(
                                 icon: isDarkMode
                                     ? Icons.light_mode_rounded
                                     : Icons.dark_mode_rounded,
+                                size: compactHeader ? 34 : 38,
                                 tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
                                 onTap: () => ref
                                     .read(themeModeProvider.notifier)
@@ -560,6 +575,31 @@ class _HealthBadge extends StatelessWidget {
   }
 }
 
+class _HealthDot extends StatelessWidget {
+  final bool reachable;
+
+  const _HealthDot({required this.reachable});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = reachable ? AppTheme.accent : AppTheme.danger;
+    return Tooltip(
+      message: reachable ? "在线" : "离线",
+      child: Container(
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.2)),
+        ),
+        child: Icon(Icons.circle, size: 8, color: color),
+      ),
+    );
+  }
+}
+
 class _HeaderDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -577,12 +617,14 @@ class _HeaderButton extends StatelessWidget {
   final bool active;
   final VoidCallback? onTap;
   final String? tooltip;
+  final double size;
 
   const _HeaderButton({
     required this.icon,
     required this.onTap,
     this.active = false,
     this.tooltip,
+    this.size = 38,
   });
 
   @override
@@ -593,8 +635,8 @@ class _HeaderButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         onTap: onTap,
         child: Container(
-          width: 38,
-          height: 38,
+          width: size,
+          height: size,
           decoration: BoxDecoration(
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.16)
