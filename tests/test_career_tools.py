@@ -270,6 +270,17 @@ def test_resume_profile_tool_uses_context_source_and_rejects_store_owned_fields(
         {"career_profile_id": "career_profile_default"},
         _context(agent_id="agent_main"),
     )
+    duplicate_payload = _execute(
+        registry,
+        "career_resume_profile_save",
+        {
+            "resume_profile_id": "resume_profile_duplicate",
+            "source_artifact_id": resume_artifact_id,
+            "evidence_refs": [resume_artifact_id],
+            "basic_info": {"name": "重复候选人"},
+        },
+        _context(agent_id="resume_agent"),
+    )
 
     assert payload["source_session_id"] == "sess_career"
     assert payload["record"]["diagnosis_artifact_id"] == diagnosis_artifact_id
@@ -279,6 +290,8 @@ def test_resume_profile_tool_uses_context_source_and_rejects_store_owned_fields(
     assert fallback_loaded["requested_record_id"] == "resume_profile_guessed"
     assert fallback_loaded["resolved_from_missing_id"] is True
     assert missing_career_profile["found"] is False
+    assert duplicate_payload["record_id"] == "resume_profile_alpha"
+    assert duplicate_payload["idempotent_reused"] is True
 
     with pytest.raises(ToolExecutionError):
         registry.execute(
@@ -359,6 +372,18 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
         },
         _context(agent_id="job_agent"),
     )
+    duplicate_jd_payload = _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_beta",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "company": "Other Co",
+            "position": "重复岗位",
+        },
+        _context(agent_id="job_agent"),
+    )
     fit_payload = _execute(
         registry,
         "career_job_fit_report_save",
@@ -382,12 +407,36 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
         },
         _context(agent_id="job_agent"),
     )
+    duplicate_fit_payload = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_beta",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [
+                "resume_profile_alpha",
+                "career_profile_default",
+                "jd_alpha",
+                jd_artifact_id,
+                report_artifact_id,
+            ],
+            "jd_analysis_id": "jd_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+        },
+        _context(agent_id="job_agent"),
+    )
 
     assert jd_payload["record"]["source_artifact_id"] == jd_artifact_id
+    assert duplicate_jd_payload["record_id"] == "jd_alpha"
+    assert duplicate_jd_payload["idempotent_reused"] is True
     assert fit_payload["record"]["source_artifact_id"] == jd_artifact_id
     assert fit_payload["record"]["report_artifact_id"] == report_artifact_id
     assert fit_payload["record"]["overall_score"] == 82
     assert fit_payload["record"]["score_breakdown"] == {"skills": 80, "projects": 85, "growth": 90}
+    assert duplicate_fit_payload["record_id"] == "fit_alpha"
+    assert duplicate_fit_payload["idempotent_reused"] is True
 
     with pytest.raises(ToolExecutionError):
         registry.execute(
@@ -491,6 +540,20 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
         },
         _context(agent_id="agent_main"),
     )
+    duplicate_version_payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "resume_version_id": "zhangsan_ai_app_dev_duplicate",
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "AI 应用开发简历版本重复",
+            "artifact_id": resume_version_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha", resume_version_artifact_id],
+            "change_summary": ["重复调用应复用原版本"],
+        },
+        _context(agent_id="agent_main"),
+    )
     version_fallback_payload = _execute(
         registry,
         "career_resume_version_get",
@@ -546,6 +609,8 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
     assert version_payload["record"]["format"] == "markdown"
     assert version_payload["record"]["resume_version_id"] == "resume_version_zhangsan_ai_app_dev"
     assert version_payload["record"]["source_artifact_id"] == resume_version_artifact_id
+    assert duplicate_version_payload["record_id"] == "resume_version_zhangsan_ai_app_dev"
+    assert duplicate_version_payload["idempotent_reused"] is True
     assert alias_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
     assert inferred_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
     assert version_fallback_payload["record_id"] == "resume_version_zhangsan_ai_app_dev"

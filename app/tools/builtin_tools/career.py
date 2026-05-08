@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
@@ -141,6 +142,19 @@ class CareerResumeProfileSaveTool:
                 args.get("diagnosis_artifact_id"),
                 field_name="diagnosis_artifact_id",
             )
+            existing = _find_current_session_record(
+                self._career_store.list_resume_profiles(),
+                run_context.session_id,
+                lambda item: item.source_artifact_id == source_artifact_id,
+            )
+            if existing is not None:
+                return _record_result(
+                    "career_resume_profile_save",
+                    "resume_profile",
+                    existing.resume_profile_id,
+                    existing,
+                    extra={"idempotent_reused": True},
+                )
             record = ResumeProfile(
                 resume_profile_id=_optional_prefixed_id(args.get("resume_profile_id"), "resume_profile")
                 or _new_id("resume_profile"),
@@ -379,6 +393,19 @@ class CareerJDAnalysisSaveTool:
                 args,
                 "source_artifact_id",
             )
+            existing = _find_current_session_record(
+                self._career_store.list_jd_analyses(),
+                run_context.session_id,
+                lambda item: item.source_artifact_id == source_artifact_id,
+            )
+            if existing is not None:
+                return _record_result(
+                    "career_jd_analysis_save",
+                    "jd_analysis",
+                    existing.jd_analysis_id,
+                    existing,
+                    extra={"idempotent_reused": True},
+                )
             record = JDAnalysis(
                 jd_analysis_id=_optional_prefixed_id(args.get("jd_analysis_id"), "jd") or _new_id("jd"),
                 status=CareerRecordStatus.ACTIVE,
@@ -530,6 +557,29 @@ class CareerJobFitReportSaveTool:
                 args,
                 "report_artifact_id",
             )
+            jd_analysis_id = _required_string(args.get("jd_analysis_id"), field_name="jd_analysis_id")
+            resume_profile_id = _required_string(args.get("resume_profile_id"), field_name="resume_profile_id")
+            career_profile_id = _required_string(args.get("career_profile_id"), field_name="career_profile_id")
+            existing = _find_current_session_record(
+                self._career_store.list_job_fit_reports(),
+                run_context.session_id,
+                lambda item: (
+                    item.jd_analysis_id == jd_analysis_id
+                    and item.resume_profile_id == resume_profile_id
+                    and (
+                        item.report_artifact_id == report_artifact_id
+                        or item.source_artifact_id == source_artifact_id
+                    )
+                ),
+            )
+            if existing is not None:
+                return _record_result(
+                    "career_job_fit_report_save",
+                    "job_fit_report",
+                    existing.job_fit_report_id,
+                    existing,
+                    extra={"idempotent_reused": True},
+                )
             record = JobFitReport(
                 job_fit_report_id=_optional_prefixed_id(args.get("job_fit_report_id"), "fit") or _new_id("fit"),
                 status=CareerRecordStatus.ACTIVE,
@@ -538,9 +588,9 @@ class CareerJobFitReportSaveTool:
                 evidence_refs=_required_string_list(args.get("evidence_refs"), field_name="evidence_refs"),
                 created_at=_now(),
                 updated_at=_now(),
-                jd_analysis_id=_required_string(args.get("jd_analysis_id"), field_name="jd_analysis_id"),
-                resume_profile_id=_required_string(args.get("resume_profile_id"), field_name="resume_profile_id"),
-                career_profile_id=_required_string(args.get("career_profile_id"), field_name="career_profile_id"),
+                jd_analysis_id=jd_analysis_id,
+                resume_profile_id=resume_profile_id,
+                career_profile_id=career_profile_id,
                 overall_score=_optional_score(args.get("overall_score"), field_name="overall_score", default=0),
                 score_breakdown=_optional_score_breakdown(args.get("score_breakdown")),
                 matched_evidence=_optional_list(args.get("matched_evidence"), field_name="matched_evidence"),
@@ -670,6 +720,25 @@ class CareerResumeVersionCreateTool:
                 "artifact_id",
             )
             evidence_refs = _required_string_list(args.get("evidence_refs"), field_name="evidence_refs")
+            base_resume_profile_id = _resolve_resume_version_base_profile_id(args, evidence_refs)
+            target_jd_analysis_id = _optional_prefixed_id(args.get("target_jd_analysis_id"), "jd")
+            existing = _find_current_session_record(
+                self._career_store.list_resume_versions(),
+                run_context.session_id,
+                lambda item: (
+                    item.artifact_id == artifact_id
+                    and item.base_resume_profile_id == base_resume_profile_id
+                    and item.target_jd_analysis_id == target_jd_analysis_id
+                ),
+            )
+            if existing is not None:
+                return _record_result(
+                    "career_resume_version_create",
+                    "resume_version",
+                    existing.resume_version_id,
+                    existing,
+                    extra={"idempotent_reused": True},
+                )
             record = ResumeVersion(
                 resume_version_id=_optional_prefixed_id(args.get("resume_version_id"), "resume_version")
                 or _new_id("resume_version"),
@@ -679,8 +748,8 @@ class CareerResumeVersionCreateTool:
                 evidence_refs=evidence_refs,
                 created_at=_now(),
                 updated_at=_now(),
-                base_resume_profile_id=_resolve_resume_version_base_profile_id(args, evidence_refs),
-                target_jd_analysis_id=_optional_prefixed_id(args.get("target_jd_analysis_id"), "jd"),
+                base_resume_profile_id=base_resume_profile_id,
+                target_jd_analysis_id=target_jd_analysis_id,
                 title=_required_string(args.get("title"), field_name="title"),
                 format="markdown",
                 artifact_id=artifact_id,
@@ -984,6 +1053,13 @@ def _single_current_session_record(records: list[Any], session_id: str) -> Any |
     matches = [record for record in records if getattr(record, "source_session_id", None) == session_id]
     if len(matches) == 1:
         return matches[0]
+    return None
+
+
+def _find_current_session_record(records: list[Any], session_id: str, predicate: Callable[[Any], bool]) -> Any | None:
+    for record in records:
+        if getattr(record, "source_session_id", None) == session_id and predicate(record):
+            return record
     return None
 
 
