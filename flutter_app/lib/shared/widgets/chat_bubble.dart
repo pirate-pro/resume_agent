@@ -1168,6 +1168,8 @@ class _CareerReportSectionBlock extends StatelessWidget {
             const SizedBox(height: 10),
             if (_isSummarySection(section.title))
               _CareerSummarySection(body: body)
+            else if (_isRiskSection(section.title))
+              _CareerRiskListSection(body: body)
             else if (_isInsightGridSection(section.title))
               _CareerInsightGridSection(
                 body: body,
@@ -1294,8 +1296,8 @@ class _CareerSummarySection extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                SelectableText(
-                  field.value,
+                _CompactMarkdownBody(
+                  content: field.value,
                   style: AppTheme.ts(
                     fontSize: 12.5,
                     height: 1.4,
@@ -1307,6 +1309,113 @@ class _CareerSummarySection extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _CareerRiskListSection extends StatelessWidget {
+  final String body;
+
+  const _CareerRiskListSection({required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    final risks = _careerRiskItems(body);
+    if (risks.isEmpty) {
+      return _AssistantMarkdownBody(content: body);
+    }
+    return Column(
+      children: [
+        for (var index = 0; index < risks.length; index++) ...[
+          _CareerRiskCard(risk: risks[index]),
+          if (index < risks.length - 1) const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _CareerRiskCard extends StatelessWidget {
+  final _CareerRiskItem risk;
+
+  const _CareerRiskCard({required this.risk});
+
+  @override
+  Widget build(BuildContext context) {
+    final level = _careerRiskLevel(risk.level);
+    final visual = _careerItemVisual(
+      "${risk.title} ${risk.detail}",
+      fallbackColor: level.color,
+      fallbackIcon: level.icon,
+    );
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(11, 10, 11, 11),
+      decoration: BoxDecoration(
+        color: level.color.withValues(alpha: AppTheme.isDark ? 0.08 : 0.055),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: level.color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: level.color.withValues(alpha: 0.13),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: level.color.withValues(alpha: 0.18)),
+            ),
+            child: Icon(visual.icon, size: 15, color: level.color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        risk.title.isEmpty ? "待补风险" : risk.title,
+                        style: AppTheme.ts(
+                          fontSize: 12.8,
+                          height: 1.3,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _CareerMiniBadge(
+                      label: level.label,
+                      color: level.color,
+                      filled: true,
+                    ),
+                  ],
+                ),
+                if (visual.label.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  _CareerMiniBadge(label: visual.label, color: visual.color),
+                ],
+                if (risk.detail.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _CompactMarkdownBody(
+                    content: risk.detail,
+                    style: AppTheme.ts(
+                      fontSize: 12,
+                      height: 1.55,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1420,6 +1529,11 @@ class _CareerReportItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final visual = _careerItemVisual(
+      "${item.title} ${item.detail}",
+      fallbackColor: color,
+      fallbackIcon: icon,
+    );
     return Container(
       width: double.infinity,
       padding: EdgeInsets.fromLTRB(10, dense ? 9 : 10, 10, dense ? 9 : 10),
@@ -1436,25 +1550,21 @@ class _CareerReportItemCard extends StatelessWidget {
             height: 24,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
+              color: visual.color.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: visual.color.withValues(alpha: 0.12)),
             ),
-            child: item.title.isEmpty
-                ? Icon(icon, size: 13, color: color)
-                : Text(
-                    index.toString(),
-                    style: AppTheme.ts(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w800,
-                      color: color,
-                    ),
-                  ),
+            child: Icon(visual.icon, size: 13, color: visual.color),
           ),
           const SizedBox(width: 9),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (visual.label.isNotEmpty) ...[
+                  _CareerMiniBadge(label: visual.label, color: visual.color),
+                  const SizedBox(height: 6),
+                ],
                 if (item.title.isNotEmpty) ...[
                   SelectableText(
                     item.title,
@@ -1468,8 +1578,8 @@ class _CareerReportItemCard extends StatelessWidget {
                   if (item.detail.isNotEmpty) const SizedBox(height: 5),
                 ],
                 if (item.detail.isNotEmpty)
-                  SelectableText(
-                    item.detail,
+                  _CompactMarkdownBody(
+                    content: item.detail,
                     style: AppTheme.ts(
                       fontSize: 12,
                       height: 1.5,
@@ -1481,6 +1591,60 @@ class _CareerReportItemCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CareerMiniBadge extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool filled;
+
+  const _CareerMiniBadge({
+    required this.label,
+    required this.color,
+    this.filled = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: filled ? 0.14 : 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border:
+            Border.all(color: color.withValues(alpha: filled ? 0.22 : 0.14)),
+      ),
+      child: Text(
+        label,
+        style: AppTheme.ts(
+          fontSize: 10,
+          height: 1.1,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactMarkdownBody extends StatelessWidget {
+  final String content;
+  final TextStyle style;
+
+  const _CompactMarkdownBody({
+    required this.content,
+    required this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GptMarkdown(
+      content,
+      style: style,
+      useDollarSignsForLatex: false,
+      onLinkTap: (url, title) => _copyInlineMarkdownLink(context, url),
     );
   }
 }
@@ -1497,6 +1661,42 @@ class _CareerSectionItem {
   final String detail;
 
   const _CareerSectionItem({required this.title, required this.detail});
+}
+
+class _CareerRiskItem {
+  final String title;
+  final String level;
+  final String detail;
+
+  const _CareerRiskItem({
+    required this.title,
+    required this.level,
+    required this.detail,
+  });
+}
+
+class _CareerItemVisual {
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const _CareerItemVisual({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
+}
+
+class _CareerRiskLevel {
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const _CareerRiskLevel({
+    required this.label,
+    required this.icon,
+    required this.color,
+  });
 }
 
 class _AssistantMarkdownBody extends StatelessWidget {
@@ -4600,12 +4800,12 @@ bool _isInsightGridSection(String title) {
   return title.contains("优势");
 }
 
+bool _isRiskSection(String title) {
+  return title.contains("风险") || title.contains("差距");
+}
+
 bool _isActionListSection(String title) {
-  return title.contains("风险") ||
-      title.contains("差距") ||
-      title.contains("建议") ||
-      title.contains("优化") ||
-      title.contains("面试");
+  return title.contains("建议") || title.contains("优化") || title.contains("面试");
 }
 
 List<_CareerSummaryField> _careerSummaryFields(String body) {
@@ -4637,7 +4837,7 @@ List<_CareerSectionItem> _careerSectionItems(String body) {
   final current = <String>[];
 
   void flush() {
-    final value = current.join(" ").trim();
+    final value = current.join("\n").trim();
     if (value.isNotEmpty) {
       groups.add(value);
     }
@@ -4670,10 +4870,11 @@ List<_CareerSectionItem> _careerSectionItems(String body) {
 }
 
 _CareerSectionItem _careerSectionItemFromText(String text) {
-  final normalized = _stripMarkdownInline(text).trim();
+  final normalized = text.trim();
   final separator = RegExp(r"[:：]").firstMatch(normalized);
   if (separator != null && separator.start > 0 && separator.start <= 36) {
-    final title = normalized.substring(0, separator.start).trim();
+    final title =
+        _stripMarkdownInline(normalized.substring(0, separator.start)).trim();
     final detail = normalized.substring(separator.end).trim();
     return _CareerSectionItem(title: title, detail: detail);
   }
@@ -4686,7 +4887,7 @@ String _normalizeCareerReportLine(String value) {
       .replaceFirst(RegExp(r"^#{1,6}\s*"), "")
       .replaceFirst(RegExp(r"^(\d+[\.\)、]|[-*•])\s+"), "")
       .trim();
-  return _stripMarkdownInline(withoutMarker).replaceAll(RegExp(r"\s+"), " ");
+  return withoutMarker.replaceAll(RegExp(r"[ \t]+"), " ");
 }
 
 String _stripMarkdownInline(String value) {
@@ -4700,6 +4901,232 @@ String _stripMarkdownInline(String value) {
         (match) => match.group(1) ?? "",
       )
       .trim();
+}
+
+List<_CareerRiskItem> _careerRiskItems(String body) {
+  final risks = <_CareerRiskItem>[];
+  final fallbackItems = <_CareerSectionItem>[];
+
+  for (final rawLine in body.split("\n")) {
+    final line = _normalizeCareerReportLine(rawLine);
+    if (line.isEmpty || _isMarkdownTableDivider(line)) {
+      continue;
+    }
+    final risk = _riskItemFromPipeLine(line);
+    if (risk != null) {
+      risks.add(risk);
+      continue;
+    }
+    if (!_isMarkdownTableHeader(line)) {
+      fallbackItems.add(_careerSectionItemFromText(line));
+    }
+  }
+
+  if (risks.isNotEmpty) {
+    return risks;
+  }
+
+  return fallbackItems
+      .where((item) => item.title.isNotEmpty || item.detail.isNotEmpty)
+      .map(
+        (item) => _CareerRiskItem(
+          title: item.title.isEmpty
+              ? _riskTitleFromDetail(item.detail)
+              : item.title,
+          level: _riskLevelFromText("${item.title} ${item.detail}"),
+          detail: item.title.isEmpty ? item.detail : item.detail,
+        ),
+      )
+      .toList();
+}
+
+_CareerRiskItem? _riskItemFromPipeLine(String line) {
+  var normalized = line
+      .replaceFirst(RegExp(r"^\|"), "")
+      .replaceFirst(RegExp(r"\|$"), "")
+      .trim();
+  normalized = normalized
+      .replaceFirst(RegExp(r"^\[[^\]]*(风险项|等级|说明)[^\]]*\]\s*\|?\s*"), "")
+      .trim();
+  if (_isMarkdownTableHeader(normalized)) {
+    return null;
+  }
+  final delimiter = normalized.contains("|") ? "|" : "｜";
+  final parts = normalized
+      .split(delimiter)
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList();
+  if (parts.length < 3) {
+    return null;
+  }
+  final title = _stripMarkdownInline(parts[0]).trim();
+  final level = _stripMarkdownInline(parts[1]).trim();
+  final detail = parts.sublist(2).join(" | ").trim();
+  if (title.isEmpty || detail.isEmpty) {
+    return null;
+  }
+  return _CareerRiskItem(title: title, level: level, detail: detail);
+}
+
+bool _isMarkdownTableHeader(String line) {
+  final compact = _stripMarkdownInline(line).replaceAll(" ", "");
+  return compact.contains("风险项") &&
+      compact.contains("等级") &&
+      compact.contains("说明");
+}
+
+bool _isMarkdownTableDivider(String line) {
+  return RegExp(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$").hasMatch(line);
+}
+
+String _riskTitleFromDetail(String detail) {
+  final clean = _stripMarkdownInline(detail).trim();
+  final separator = RegExp(r"[，,。；;]").firstMatch(clean);
+  if (separator == null || separator.start < 4) {
+    return clean.length > 18 ? "${clean.substring(0, 18)}..." : clean;
+  }
+  return clean.substring(0, separator.start).trim();
+}
+
+String _riskLevelFromText(String text) {
+  if (RegExp(r"(高风险|严重|高\s*[｜|:]|等级[:：]?\s*高)").hasMatch(text)) {
+    return "高";
+  }
+  if (RegExp(r"(低风险|轻微|低\s*[｜|:]|等级[:：]?\s*低)").hasMatch(text)) {
+    return "低";
+  }
+  if (RegExp(r"(中风险|中等|中\s*[｜|:]|等级[:：]?\s*中)").hasMatch(text)) {
+    return "中";
+  }
+  return "中";
+}
+
+_CareerRiskLevel _careerRiskLevel(String value) {
+  final normalized = value.trim();
+  if (normalized.contains("高")) {
+    return const _CareerRiskLevel(
+      label: "高风险",
+      icon: Icons.priority_high_rounded,
+      color: Color(0xFFDC2626),
+    );
+  }
+  if (normalized.contains("低")) {
+    return const _CareerRiskLevel(
+      label: "低风险",
+      icon: Icons.info_outline_rounded,
+      color: Color(0xFF0F766E),
+    );
+  }
+  return const _CareerRiskLevel(
+    label: "中风险",
+    icon: Icons.warning_amber_rounded,
+    color: Color(0xFFB45309),
+  );
+}
+
+_CareerItemVisual _careerItemVisual(
+  String text, {
+  required Color fallbackColor,
+  required IconData fallbackIcon,
+}) {
+  final value = _stripMarkdownInline(text).toLowerCase();
+  if (_containsAny(value, [
+    "python",
+    "fastapi",
+    "postgres",
+    "redis",
+    "mysql",
+    "elasticsearch",
+    "pydantic",
+    "技术栈",
+    "后端"
+  ])) {
+    return const _CareerItemVisual(
+      label: "技术栈",
+      icon: Icons.terminal_rounded,
+      color: Color(0xFF0F9B78),
+    );
+  }
+  if (_containsAny(value,
+      ["pytest", "mypy", "测试", "覆盖率", "ci", "cd", "github actions", "质量"])) {
+    return const _CareerItemVisual(
+      label: "质量验证",
+      icon: Icons.verified_outlined,
+      color: Color(0xFF2563EB),
+    );
+  }
+  if (_containsAny(value, [
+    "架构",
+    "runtime",
+    "langchain",
+    "agent",
+    "multi-agent",
+    "工具调用",
+    "事件",
+    "审计",
+    "jsonl"
+  ])) {
+    return const _CareerItemVisual(
+      label: "架构能力",
+      icon: Icons.account_tree_rounded,
+      color: Color(0xFF7C3AED),
+    );
+  }
+  if (_containsAny(value, ["性能", "延迟", "失败率", "吞吐", "压测", "压力", "优化", "效率"])) {
+    return const _CareerItemVisual(
+      label: "性能优化",
+      icon: Icons.speed_rounded,
+      color: Color(0xFFB45309),
+    );
+  }
+  if (_containsAny(value, ["项目", "成果", "量化", "指标", "贡献", "落地", "实践"])) {
+    return const _CareerItemVisual(
+      label: "项目成果",
+      icon: Icons.insights_rounded,
+      color: Color(0xFF0E7490),
+    );
+  }
+  if (_containsAny(value, ["模型", "机器学习", "训练", "mlops", "算法", "llm"])) {
+    return const _CareerItemVisual(
+      label: "模型经验",
+      icon: Icons.psychology_alt_outlined,
+      color: Color(0xFFB45309),
+    );
+  }
+  if (_containsAny(value, ["简历", "表达", "描述", "措辞", "补充", "改写"])) {
+    return const _CareerItemVisual(
+      label: "表达优化",
+      icon: Icons.edit_note_rounded,
+      color: Color(0xFF2563EB),
+    );
+  }
+  if (_containsAny(value, ["岗位", "jd", "匹配", "筛选", "投递"])) {
+    return const _CareerItemVisual(
+      label: "岗位匹配",
+      icon: Icons.work_outline_rounded,
+      color: Color(0xFF0F766E),
+    );
+  }
+  return _CareerItemVisual(
+    label: "",
+    icon: fallbackIcon,
+    color: fallbackColor,
+  );
+}
+
+bool _containsAny(String value, List<String> keywords) {
+  return keywords.any((keyword) => value.contains(keyword.toLowerCase()));
+}
+
+void _copyInlineMarkdownLink(BuildContext context, String url) {
+  Clipboard.setData(ClipboardData(text: url));
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(url.isEmpty ? "链接为空" : "链接已复制"),
+      duration: const Duration(seconds: 1),
+    ),
+  );
 }
 
 bool _looksLikeCareerReport(String content) {
