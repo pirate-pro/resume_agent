@@ -19,6 +19,7 @@ import '../utils/download_stub.dart'
 import 'run_progress_panel.dart';
 
 const double _bubbleMaxWidth = 780;
+const double _userBubbleMaxWidth = 560;
 const int _richMarkdownMaxChars = 6000;
 const int _richMarkdownMaxLines = 160;
 const int _streamStructuredMaxChars = 3200;
@@ -66,6 +67,7 @@ class _ChatBubbleState extends State<ChatBubble> {
   @override
   Widget build(BuildContext context) {
     final isUser = widget.message.isUser;
+    final maxBubbleWidth = isUser ? _userBubbleMaxWidth : _bubbleMaxWidth;
     final presentation = isUser
         ? null
         : _CareerMessagePresentation.fromContent(widget.message.content);
@@ -84,43 +86,46 @@ class _ChatBubbleState extends State<ChatBubble> {
         onEnter: (_) => setState(() => _hovering = true),
         onExit: (_) => setState(() => _hovering = false),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+          constraints: BoxConstraints(maxWidth: maxBubbleWidth),
           margin: EdgeInsets.only(
-            left: isUser ? 60 : 0,
-            right: isUser ? 0 : 60,
-            top: 8,
-            bottom: 10,
+            left: isUser ? 160 : 0,
+            right: isUser ? 8 : 60,
+            top: isUser ? 12 : 8,
+            bottom: isUser ? 16 : 10,
           ),
           child: Column(
             crossAxisAlignment:
                 isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8, left: 6, right: 6),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _Avatar(isUser: isUser),
-                    const SizedBox(width: 8),
-                    Text(
-                      isUser ? "你" : "Assistant",
-                      style: AppTheme.ts(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.textSecondary),
-                    ),
-                    if (_hovering && !isUser) ...[
+              if (!isUser)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8, left: 6, right: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const _Avatar(isUser: false),
                       const SizedBox(width: 8),
-                      _CopyButton(text: widget.message.content),
+                      Text(
+                        "Assistant",
+                        style: AppTheme.ts(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textSecondary),
+                      ),
+                      if (_hovering) ...[
+                        const SizedBox(width: 8),
+                        _CopyButton(text: widget.message.content),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
               ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+                constraints: BoxConstraints(maxWidth: maxBubbleWidth),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isUser ? 16 : 18,
+                    vertical: isUser ? 12 : 14,
+                  ),
                   decoration: isUser
                       ? AppTheme.userBubbleDecoration
                       : AppTheme.assistantBubbleDecoration,

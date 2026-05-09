@@ -16,7 +16,7 @@ class AppTheme {
     accent: Color(0xFF10A37F),
     accentHover: Color(0xFF0E8C6C),
     danger: Color(0xFFEF4444),
-    userBubble: Color(0xFF2A323D),
+    userBubble: Color(0xFF202832),
     assistantBubble: Color(0xFF171C22),
     shellGradientA: Color(0xFF091017),
     shellGradientB: Color(0xFF0D1218),
@@ -37,7 +37,7 @@ class AppTheme {
     accent: Color(0xFF0F9B78),
     accentHover: Color(0xFF0D8466),
     danger: Color(0xFFDC2626),
-    userBubble: Color(0xFFE4ECF6),
+    userBubble: Color(0xFFF3F7FB),
     assistantBubble: Color(0xFFFFFFFF),
     shellGradientA: Color(0xFFF9FBFC),
     shellGradientB: Color(0xFFF1F6F7),
@@ -248,13 +248,26 @@ class AppTheme {
 
   static BoxDecoration get userBubbleDecoration => BoxDecoration(
         color: userBubble,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(19),
+          topRight: Radius.circular(19),
+          bottomLeft: Radius.circular(19),
+          bottomRight: Radius.circular(9),
+        ),
         border: Border.all(
           color: isDark
-              ? border.withValues(alpha: 0.36)
-              : border.withValues(alpha: 0.54),
+              ? borderLight.withValues(alpha: 0.34)
+              : borderLight.withValues(alpha: 0.58),
           width: 0.6,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: _activePalette.panelShadow
+                .withValues(alpha: isDark ? 0.12 : 0.18),
+            blurRadius: isDark ? 14 : 12,
+            offset: const Offset(0, 5),
+          ),
+        ],
       );
 
   static BoxDecoration get assistantBubbleDecoration => BoxDecoration(

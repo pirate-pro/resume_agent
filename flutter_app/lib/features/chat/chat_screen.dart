@@ -11,11 +11,11 @@ import '../../shared/widgets/input_bar.dart';
 
 const double _messageRailMaxWidth = 1160;
 const double _messageListTopPadding = 114;
-const double _messageListBottomPadding = 96;
-const double _messageViewportBottomInset = 192;
+const double _messageListBottomPadding = 62;
+const double _messageViewportBottomInset = 122;
 const double _headerDockFadeHeight = 92;
-const double _composerDockFadeHeight = 132;
-const double _jumpToBottomButtonBottom = _messageViewportBottomInset + 12;
+const double _composerDockFadeHeight = 86;
+const double _jumpToBottomButtonBottom = 108;
 const double _jumpToBottomThreshold = 140;
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -1055,35 +1055,27 @@ class _ComposerDock extends StatelessWidget {
         IgnorePointer(
           child: SizedBox(
             height: _composerDockFadeHeight,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    AppTheme.bg.withValues(alpha: 0),
-                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.2 : 0.12),
-                    AppTheme.bg
-                        .withValues(alpha: AppTheme.isDark ? 0.78 : 0.64),
-                    AppTheme.bg
-                        .withValues(alpha: AppTheme.isDark ? 0.96 : 0.92),
-                  ],
-                  stops: const [0, 0.32, 0.72, 1],
-                ),
-              ),
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: Container(
-                  width: 280,
-                  height: 1,
-                  margin: const EdgeInsets.only(bottom: 74),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 940),
+                child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
                       colors: [
-                        AppTheme.border.withValues(alpha: 0),
-                        AppTheme.borderLight.withValues(alpha: 0.55),
-                        AppTheme.border.withValues(alpha: 0),
+                        AppTheme.bg.withValues(alpha: 0),
+                        AppTheme.bg.withValues(
+                          alpha: AppTheme.isDark ? 0.12 : 0.06,
+                        ),
+                        AppTheme.bg.withValues(
+                          alpha: AppTheme.isDark ? 0.54 : 0.34,
+                        ),
+                        AppTheme.bg.withValues(
+                          alpha: AppTheme.isDark ? 0.88 : 0.72,
+                        ),
                       ],
+                      stops: const [0, 0.38, 0.74, 1],
                     ),
                   ),
                 ),
