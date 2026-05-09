@@ -11,8 +11,7 @@ import '../../shared/widgets/input_bar.dart';
 
 const double _messageRailMaxWidth = 1160;
 const double _messageListTopPadding = 114;
-const double _messageListBottomPadding = 42;
-const double _messageViewportBottomInset = 108;
+const double _messageListBottomPadding = 128;
 const double _headerDockFadeHeight = 92;
 const double _jumpToBottomButtonBottom = 92;
 const double _jumpToBottomThreshold = 140;
@@ -112,7 +111,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             left: 0,
             right: 0,
             top: 0,
-            bottom: _messageViewportBottomInset,
+            bottom: 0,
             child: _ChatMessageLayer(scrollCtrl: _scrollCtrl),
           )
         else
