@@ -1655,11 +1655,10 @@ class _CompactMarkdownBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GptMarkdown(
-      content,
+    return _AppMarkdownBody(
+      content: content,
       style: style,
-      useDollarSignsForLatex: false,
-      onLinkTap: (url, title) => _copyInlineMarkdownLink(context, url),
+      compact: true,
     );
   }
 }
@@ -1676,6 +1675,13 @@ class _CareerSectionItem {
   final String detail;
 
   const _CareerSectionItem({required this.title, required this.detail});
+}
+
+class _CareerLabelValue {
+  final String label;
+  final String value;
+
+  const _CareerLabelValue({required this.label, required this.value});
 }
 
 class _CareerRiskItem {
@@ -1721,16 +1727,46 @@ class _AssistantMarkdownBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final enableLatex = _looksLikeLatex(content);
-    return GptMarkdown(
-      content,
+    return _AppMarkdownBody(
+      content: content,
       style: AppTheme.ts(
         fontSize: 15,
         color: AppTheme.textPrimary,
         height: 1.65,
       ),
+      enableLatex: _looksLikeLatex(content),
+    );
+  }
+}
+
+class _AppMarkdownBody extends StatelessWidget {
+  final String content;
+  final TextStyle style;
+  final bool compact;
+  final bool enableLatex;
+
+  const _AppMarkdownBody({
+    required this.content,
+    required this.style,
+    this.compact = false,
+    this.enableLatex = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (compact) {
+      return GptMarkdown(
+        content,
+        style: style,
+        useDollarSignsForLatex: enableLatex,
+        onLinkTap: (url, title) => _copyInlineMarkdownLink(context, url),
+      );
+    }
+    return GptMarkdown(
+      content,
+      style: style,
       useDollarSignsForLatex: enableLatex,
-      onLinkTap: (url, title) => _copyLink(context, url),
+      onLinkTap: (url, title) => _copyInlineMarkdownLink(context, url),
       codeBuilder: (context, name, code, closed) {
         return _CodeBlockCard(
           language: name,
@@ -1751,16 +1787,6 @@ class _AssistantMarkdownBody extends StatelessWidget {
           textStyle: textStyle,
         );
       },
-    );
-  }
-
-  void _copyLink(BuildContext context, String url) {
-    Clipboard.setData(ClipboardData(text: url));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(url.isEmpty ? "链接为空" : "链接已复制"),
-        duration: const Duration(seconds: 1),
-      ),
     );
   }
 }
@@ -2242,93 +2268,12 @@ class _StreamingTextBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final lines = content.split('\n');
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final line in lines) _buildLine(line),
-      ],
-    );
-  }
-
-  Widget _buildLine(String line) {
-    final trimmed = line.trimRight();
-    if (trimmed.isEmpty) {
-      return const SizedBox(height: 10);
-    }
-    if (trimmed.startsWith('### ')) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Text(
-          trimmed.substring(4),
-          style: AppTheme.ts(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
-            height: 1.45,
-          ),
-        ),
-      );
-    }
-    if (trimmed.startsWith('## ')) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Text(
-          trimmed.substring(3),
-          style: AppTheme.ts(
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
-            height: 1.45,
-          ),
-        ),
-      );
-    }
-    if (trimmed.startsWith('# ')) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 4),
-        child: Text(
-          trimmed.substring(2),
-          style: AppTheme.ts(
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            color: AppTheme.textPrimary,
-            height: 1.4,
-          ),
-        ),
-      );
-    }
-    if (trimmed.startsWith('>')) {
-      return Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.only(left: 12),
-        decoration: BoxDecoration(
-          border: Border(
-            left: BorderSide(
-              color: AppTheme.accent.withValues(alpha: 0.45),
-              width: 3,
-            ),
-          ),
-        ),
-        child: SelectableText(
-          trimmed.replaceFirst(RegExp(r'^>\s?'), ''),
-          style: AppTheme.ts(
-            fontSize: 15,
-            color: AppTheme.textSecondary,
-            height: 1.65,
-          ),
-        ),
-      );
-    }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: SelectableText(
-        trimmed,
-        style: AppTheme.ts(
-          fontSize: 15,
-          color: AppTheme.textPrimary,
-          height: 1.65,
-        ),
+    return _AppMarkdownBody(
+      content: content,
+      style: AppTheme.ts(
+        fontSize: 15,
+        color: AppTheme.textPrimary,
+        height: 1.65,
       ),
     );
   }
@@ -4849,20 +4794,15 @@ bool _isActionListSection(String title) {
 List<_CareerSummaryField> _careerSummaryFields(String body) {
   final fields = <_CareerSummaryField>[];
   for (final rawLine in body.split("\n")) {
-    final line = _normalizeCareerReportLine(rawLine);
+    final line = _careerDisplayLine(rawLine);
     if (line.isEmpty) {
       continue;
     }
-    final separator = RegExp(r"[:：]").firstMatch(line);
-    if (separator == null || separator.start == 0 || separator.start > 16) {
+    final field = _splitCareerLabelValue(line, maxLabelChars: 24);
+    if (field == null) {
       continue;
     }
-    final label = line.substring(0, separator.start).trim();
-    final value = line.substring(separator.end).trim();
-    if (label.isEmpty || value.isEmpty) {
-      continue;
-    }
-    fields.add(_CareerSummaryField(label: label, value: value));
+    fields.add(_CareerSummaryField(label: field.label, value: field.value));
     if (fields.length >= 8) {
       break;
     }
@@ -4888,7 +4828,7 @@ List<_CareerSectionItem> _careerSectionItems(String body) {
       continue;
     }
     final startsItem = RegExp(r"^(\d+[\.\)、]|[-*•])\s+").hasMatch(trimmed);
-    final line = _normalizeCareerReportLine(rawLine);
+    final line = _careerDisplayLine(rawLine);
     if (line.isEmpty) {
       continue;
     }
@@ -4899,7 +4839,7 @@ List<_CareerSectionItem> _careerSectionItems(String body) {
   }
   flush();
   if (groups.isEmpty && body.trim().isNotEmpty) {
-    groups.add(_normalizeCareerReportLine(body));
+    groups.add(_careerDisplayBlock(body));
   }
   return groups
       .where((item) => item.isNotEmpty)
@@ -4909,29 +4849,96 @@ List<_CareerSectionItem> _careerSectionItems(String body) {
 
 _CareerSectionItem _careerSectionItemFromText(String text) {
   final normalized = text.trim();
-  final separator = RegExp(r"[:：]").firstMatch(normalized);
-  if (separator != null && separator.start > 0 && separator.start <= 36) {
-    final title =
-        _stripMarkdownInline(normalized.substring(0, separator.start)).trim();
-    final detail = normalized.substring(separator.end).trim();
-    return _CareerSectionItem(title: title, detail: detail);
+  final field = _splitCareerLabelValue(normalized, maxLabelChars: 36);
+  if (field != null) {
+    return _CareerSectionItem(title: field.label, detail: field.value);
   }
   return _CareerSectionItem(title: "", detail: normalized);
 }
 
 String _normalizeCareerReportLine(String value) {
-  final withoutMarker = value
+  return _stripMarkdownInline(_careerDisplayLine(value))
+      .replaceAll(RegExp(r"[ \t]+"), " ")
+      .trim();
+}
+
+String _careerDisplayLine(String value) {
+  return value
       .trim()
       .replaceFirst(RegExp(r"^#{1,6}\s*"), "")
       .replaceFirst(RegExp(r"^(\d+[\.\)、]|[-*•])\s+"), "")
       .trim();
-  return withoutMarker.replaceAll(RegExp(r"[ \t]+"), " ");
+}
+
+String _careerDisplayBlock(String value) {
+  return value
+      .replaceAll("\r\n", "\n")
+      .replaceAll("\r", "\n")
+      .split("\n")
+      .map(_careerDisplayLine)
+      .where((line) => line.isNotEmpty)
+      .join("\n")
+      .trim();
+}
+
+_CareerLabelValue? _splitCareerLabelValue(
+  String line, {
+  required int maxLabelChars,
+}) {
+  final normalized = line.trim();
+  if (normalized.isEmpty) {
+    return null;
+  }
+  final boldLabelPatterns = [
+    RegExp(r"^\*\*([^*\n:：]{1,48})[:：]\*\*\s*(.+)$", dotAll: true),
+    RegExp(r"^__([^_\n:：]{1,48})[:：]__\s*(.+)$", dotAll: true),
+    RegExp(r"^\*\*([^*\n]{1,48})\*\*\s*[:：]\s*(.+)$", dotAll: true),
+    RegExp(r"^__([^_\n]{1,48})__\s*[:：]\s*(.+)$", dotAll: true),
+  ];
+  for (final pattern in boldLabelPatterns) {
+    final match = pattern.firstMatch(normalized);
+    if (match == null) {
+      continue;
+    }
+    final label = _stripMarkdownInline(match.group(1) ?? "").trim();
+    final value = _cleanCareerMarkdownValue(match.group(2) ?? "");
+    if (label.isNotEmpty && label.length <= maxLabelChars && value.isNotEmpty) {
+      return _CareerLabelValue(label: label, value: value);
+    }
+  }
+  final separator = RegExp(r"[:：]").firstMatch(normalized);
+  if (separator == null || separator.start == 0) {
+    return null;
+  }
+  final label =
+      _stripMarkdownInline(normalized.substring(0, separator.start)).trim();
+  final value = _cleanCareerMarkdownValue(normalized.substring(separator.end));
+  if (label.isEmpty || label.length > maxLabelChars || value.isEmpty) {
+    return null;
+  }
+  return _CareerLabelValue(label: label, value: value);
+}
+
+String _cleanCareerMarkdownValue(String value) {
+  return value
+      .trim()
+      .replaceFirst(RegExp(r"^(\*\*|__)\s*"), "")
+      .replaceFirst(RegExp(r"\s*(\*\*|__)$"), "")
+      .trim();
 }
 
 String _stripMarkdownInline(String value) {
   return value
       .replaceAllMapped(
         RegExp(r"\*\*([^*]+)\*\*"),
+        (match) => match.group(1) ?? "",
+      )
+      .replaceAllMapped(
+        RegExp(r"__([^_]+)__"),
+        (match) => match.group(1) ?? "",
+      )
+      .replaceAllMapped(
+        RegExp(r"\[([^\]]+)\]\([^)]+\)"),
         (match) => match.group(1) ?? "",
       )
       .replaceAllMapped(
@@ -4946,17 +4953,18 @@ List<_CareerRiskItem> _careerRiskItems(String body) {
   final fallbackItems = <_CareerSectionItem>[];
 
   for (final rawLine in body.split("\n")) {
-    final line = _normalizeCareerReportLine(rawLine);
-    if (line.isEmpty || _isMarkdownTableDivider(line)) {
+    final displayLine = _careerDisplayLine(rawLine);
+    final plainLine = _normalizeCareerReportLine(rawLine);
+    if (displayLine.isEmpty || _isMarkdownTableDivider(displayLine)) {
       continue;
     }
-    final risk = _riskItemFromPipeLine(line);
+    final risk = _riskItemFromPipeLine(displayLine);
     if (risk != null) {
       risks.add(risk);
       continue;
     }
-    if (!_isMarkdownTableHeader(line)) {
-      fallbackItems.add(_careerSectionItemFromText(line));
+    if (!_isMarkdownTableHeader(plainLine)) {
+      fallbackItems.add(_careerSectionItemFromText(displayLine));
     }
   }
 
@@ -5000,7 +5008,7 @@ _CareerRiskItem? _riskItemFromPipeLine(String line) {
   }
   final title = _stripMarkdownInline(parts[0]).trim();
   final level = _stripMarkdownInline(parts[1]).trim();
-  final detail = parts.sublist(2).join(" | ").trim();
+  final detail = _cleanCareerMarkdownValue(parts.sublist(2).join(" | "));
   if (title.isEmpty || detail.isEmpty) {
     return null;
   }

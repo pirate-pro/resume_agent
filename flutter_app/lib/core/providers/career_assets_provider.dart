@@ -91,6 +91,7 @@ class CareerAssetsProvider extends ChangeNotifier {
   bool _isPreviewLoading = false;
   String? _previewError;
   SessionArtifactContentView? _preview;
+  final Map<String, String> _artifactPreviewErrors = {};
   Timer? _recentRecordTimer;
   Set<String> _recentRecordIds = {};
 
@@ -111,6 +112,8 @@ class CareerAssetsProvider extends ChangeNotifier {
   bool get isPreviewLoading => _isPreviewLoading;
   String? get previewError => _previewError;
   SessionArtifactContentView? get preview => _preview;
+  Map<String, String> get artifactPreviewErrors =>
+      Map.unmodifiable(_artifactPreviewErrors);
   Set<String> get recentRecordIds => Set.unmodifiable(_recentRecordIds);
 
   List<ResumeProfileView> get resumeProfiles =>
@@ -228,6 +231,11 @@ class CareerAssetsProvider extends ChangeNotifier {
         sessionId: normalizedSessionId,
         artifactId: normalizedArtifactId,
       );
+      _clearArtifactPreviewError(
+        normalizedSessionId,
+        normalizedArtifactId,
+        notify: false,
+      );
     } catch (error, stackTrace) {
       FlutterError.reportError(
         FlutterErrorDetails(
@@ -238,10 +246,68 @@ class CareerAssetsProvider extends ChangeNotifier {
         ),
       );
       _previewError = error.toString();
+      _setArtifactPreviewError(
+        normalizedSessionId,
+        normalizedArtifactId,
+        _previewError!,
+        notify: false,
+      );
     } finally {
       _isPreviewLoading = false;
       notifyListeners();
     }
+  }
+
+  Future<SessionArtifactContentView> loadArtifactPreview({
+    required String sourceSessionId,
+    required String artifactId,
+  }) async {
+    final normalizedSessionId = sourceSessionId.trim();
+    final normalizedArtifactId = artifactId.trim();
+    if (normalizedSessionId.isEmpty || normalizedArtifactId.isEmpty) {
+      throw ArgumentError("缺少 artifact 预览所需的会话或 artifact id");
+    }
+    try {
+      final preview = await _api.readSessionArtifactContent(
+        sessionId: normalizedSessionId,
+        artifactId: normalizedArtifactId,
+      );
+      _clearArtifactPreviewError(normalizedSessionId, normalizedArtifactId);
+      return preview;
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: "career assets",
+          context: ErrorDescription("load career artifact preview"),
+        ),
+      );
+      _setArtifactPreviewError(
+        normalizedSessionId,
+        normalizedArtifactId,
+        error.toString(),
+      );
+      rethrow;
+    }
+  }
+
+  String artifactDownloadUrl({
+    required String sourceSessionId,
+    required String artifactId,
+  }) {
+    return _api.sessionArtifactDownloadUrl(
+      sessionId: sourceSessionId.trim(),
+      artifactId: artifactId.trim(),
+    );
+  }
+
+  String? artifactPreviewError({
+    required String sourceSessionId,
+    required String artifactId,
+  }) {
+    return _artifactPreviewErrors[
+        _artifactPreviewKey(sourceSessionId.trim(), artifactId.trim())];
   }
 
   bool _selectionStillExists() {
@@ -280,6 +346,32 @@ class CareerAssetsProvider extends ChangeNotifier {
       _recentRecordIds = {};
       notifyListeners();
     });
+  }
+
+  void _setArtifactPreviewError(
+    String sourceSessionId,
+    String artifactId,
+    String error, {
+    bool notify = true,
+  }) {
+    _artifactPreviewErrors[_artifactPreviewKey(sourceSessionId, artifactId)] =
+        error;
+    if (notify) notifyListeners();
+  }
+
+  void _clearArtifactPreviewError(
+    String sourceSessionId,
+    String artifactId, {
+    bool notify = true,
+  }) {
+    final removed = _artifactPreviewErrors.remove(
+      _artifactPreviewKey(sourceSessionId, artifactId),
+    );
+    if (removed != null && notify) notifyListeners();
+  }
+
+  String _artifactPreviewKey(String sourceSessionId, String artifactId) {
+    return "$sourceSessionId::$artifactId";
   }
 
   bool _selectionMatchesTab(
