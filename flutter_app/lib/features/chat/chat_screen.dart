@@ -11,7 +11,8 @@ import '../../shared/widgets/input_bar.dart';
 
 const double _messageRailMaxWidth = 1160;
 const double _messageListTopPadding = 114;
-const double _messageListBottomPadding = 128;
+const double _messageListBottomPadding = 92;
+const double _messageBottomContentFadeHeight = 128;
 const double _headerDockFadeHeight = 92;
 const double _jumpToBottomButtonBottom = 92;
 const double _jumpToBottomThreshold = 140;
@@ -112,7 +113,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             right: 0,
             top: 0,
             bottom: 0,
-            child: _ChatMessageLayer(scrollCtrl: _scrollCtrl),
+            child: _MessageBottomFade(
+              child: _ChatMessageLayer(scrollCtrl: _scrollCtrl),
+            ),
           )
         else
           const Positioned.fill(child: _WelcomeScreen()),
@@ -978,6 +981,36 @@ class _MessageListState extends State<_MessageList> {
     return events
         .where((event) => event.type.startsWith("agent_task_"))
         .toList();
+  }
+}
+
+class _MessageBottomFade extends StatelessWidget {
+  final Widget child;
+
+  const _MessageBottomFade({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return ShaderMask(
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (bounds) {
+        final fadeStart =
+            ((bounds.height - _messageBottomContentFadeHeight) / bounds.height)
+                .clamp(0.0, 1.0)
+                .toDouble();
+        return LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: const [
+            Colors.white,
+            Colors.white,
+            Colors.transparent,
+          ],
+          stops: [0, fadeStart, 1],
+        ).createShader(bounds);
+      },
+      child: child,
+    );
   }
 }
 
