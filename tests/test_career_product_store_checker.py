@@ -27,14 +27,19 @@ def _create_session_with_artifacts(tmp_path: Path, artifact_ids: list[str]) -> J
     return repository
 
 
-def _add_text_artifact(repository: JsonlSessionRepository, *, artifact_id: str) -> None:
+def _add_text_artifact(
+    repository: JsonlSessionRepository,
+    *,
+    artifact_id: str,
+    content: str | None = None,
+) -> None:
     session_id = "sess_alpha"
     root = repository.get_session_root_path(session_id)
     artifact_dir = root / "artifacts" / artifact_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
     content_path = artifact_dir / "content.txt"
-    content = f"{artifact_id} content"
-    content_path.write_text(content, encoding="utf-8")
+    artifact_content = content or f"{artifact_id} content"
+    content_path.write_text(artifact_content, encoding="utf-8")
     repository.add_or_update_session_artifact(
         SessionArtifact(
             artifact_id=artifact_id,
@@ -49,7 +54,7 @@ def _add_text_artifact(repository: JsonlSessionRepository, *, artifact_id: str) 
             updated_at=_now(),
             storage_relpath=str(content_path.relative_to(root)),
             text_relpath=str(content_path.relative_to(root)),
-            text_char_count=len(content),
+            text_char_count=len(artifact_content),
             token_estimate=4,
             parsed_at=_now(),
         )
@@ -248,3 +253,57 @@ def test_career_product_store_checker_cli_outputs_json(
     assert exit_code == 0
     assert payload["success"] is True
     assert payload["counts"]["artifacts"] == 1
+
+
+def test_career_product_store_checker_rejects_resume_version_placeholder_and_unverified_metrics(
+    tmp_path: Path,
+) -> None:
+    repository = _create_session_with_artifacts(
+        tmp_path,
+        [
+            "artifact_resume",
+            "artifact_diagnosis",
+            "artifact_jd",
+            "artifact_report",
+            "artifact_resume_version",
+            "artifact_resume_version_bad",
+        ],
+    )
+    _add_text_artifact(
+        repository,
+        artifact_id="artifact_resume_version_bad",
+        content="项目成果：检索命中率 85%+，端到端时延 <2s。",
+    )
+    store = _store(tmp_path)
+    _save_clean_product_records(store)
+    store.save_resume_version(
+        ResumeVersion(
+            resume_version_id="resume_version_bad",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_resume_version_bad",
+            evidence_refs=[
+                "resume_profile_alpha",
+                "jd_alpha",
+                "fit_alpha",
+                "artifact_resume",
+                "artifact_resume_version_bad",
+            ],
+            created_at=_now(),
+            updated_at=_now(),
+            base_resume_profile_id="resume_profile_alpha",
+            target_jd_analysis_id="jd_alpha",
+            title="含占位的简历版本",
+            format="markdown",
+            artifact_id="artifact_resume_version_bad",
+            change_summary=["补充项目量化指标占位"],
+            risk_notes=["量化指标需替换为真实数据"],
+        )
+    )
+
+    report = check_career_product_store(tmp_path, session_id="sess_alpha")
+    codes = {item.code for item in report.findings}
+
+    assert not report.success
+    assert "resume_version_placeholder_text" in codes
+    assert "resume_version_unverified_metric" in codes

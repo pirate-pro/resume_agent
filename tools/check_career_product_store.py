@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -109,6 +110,7 @@ class _ArtifactIndex:
     session_ids: set[str]
     artifact_ids: set[str]
     artifact_to_session: dict[str, str]
+    artifact_texts: dict[str, str]
     available: bool
 
 
@@ -143,6 +145,7 @@ def check_career_product_store(
     _check_direct_references(scoped_records, artifact_index, findings)
     _check_evidence_references(scoped_records, artifact_index, findings)
     _check_duplicate_products(scoped_records, findings)
+    _check_resume_version_quality(scoped_records.resume_versions, artifact_index, findings)
 
     counts = {
         "sessions": len(artifact_index.session_ids),
@@ -189,6 +192,7 @@ def _load_artifact_index(
             session_ids=set(),
             artifact_ids=set(),
             artifact_to_session={},
+            artifact_texts={},
             available=False,
         )
     repository = JsonlSessionRepository(data_dir=data_dir)
@@ -221,6 +225,7 @@ def _load_artifact_index(
 
     artifact_ids: set[str] = set()
     artifact_to_session: dict[str, str] = {}
+    artifact_texts: dict[str, str] = {}
     for item_session_id in session_ids:
         try:
             artifacts = repository.list_session_artifacts(item_session_id)
@@ -237,6 +242,19 @@ def _load_artifact_index(
         for artifact in artifacts:
             artifact_ids.add(artifact.artifact_id)
             artifact_to_session[artifact.artifact_id] = artifact.session_id
+            if artifact.text_relpath is not None:
+                text_path = repository.get_session_root_path(item_session_id) / artifact.text_relpath
+                try:
+                    artifact_texts[artifact.artifact_id] = text_path.read_text(encoding="utf-8", errors="replace")
+                except OSError as exc:
+                    findings.append(
+                        CareerStoreCheckFinding(
+                            severity="warning",
+                            code="artifact_text_read_failed",
+                            message=f"读取 artifact 文本失败: {exc}",
+                            reference=artifact.artifact_id,
+                        )
+                    )
 
     if not session_ids:
         findings.append(
@@ -251,6 +269,7 @@ def _load_artifact_index(
         session_ids=set(session_ids),
         artifact_ids=artifact_ids,
         artifact_to_session=artifact_to_session,
+        artifact_texts=artifact_texts,
         available=bool(session_ids),
     )
 
@@ -618,6 +637,116 @@ def _check_duplicate_products(
         lambda item: item.resume_version_id,
         findings,
     )
+
+
+def _check_resume_version_quality(
+    records: Sequence[ResumeVersion],
+    artifact_index: _ArtifactIndex,
+    findings: list[CareerStoreCheckFinding],
+) -> None:
+    for record in records:
+        metadata_text = "\n".join(
+            [
+                *record.change_summary,
+                *record.keyword_strategy,
+                *record.risk_notes,
+            ]
+        )
+        placeholder = _first_placeholder_term(metadata_text)
+        if placeholder is not None:
+            findings.append(
+                CareerStoreCheckFinding(
+                    severity="error",
+                    code="resume_version_placeholder_text",
+                    message=f"ResumeVersion 元数据包含占位或需替换表达: {placeholder}",
+                    record_type="resume_version",
+                    record_id=record.resume_version_id,
+                    reference=placeholder,
+                )
+            )
+
+        content = artifact_index.artifact_texts.get(record.artifact_id, "")
+        if not content:
+            continue
+        placeholder = _first_placeholder_term(content)
+        if placeholder is not None:
+            findings.append(
+                CareerStoreCheckFinding(
+                    severity="error",
+                    code="resume_version_placeholder_text",
+                    message=f"ResumeVersion artifact 包含占位或需替换表达: {placeholder}",
+                    record_type="resume_version",
+                    record_id=record.resume_version_id,
+                    reference=record.artifact_id,
+                )
+            )
+
+        evidence_text = _resume_version_evidence_text(record, artifact_index)
+        for metric in _high_risk_resume_metrics(content):
+            if metric not in evidence_text:
+                findings.append(
+                    CareerStoreCheckFinding(
+                        severity="error",
+                        code="resume_version_unverified_metric",
+                        message=f"定制简历包含未在源 artifact 中出现的量化指标: {metric}",
+                        record_type="resume_version",
+                        record_id=record.resume_version_id,
+                        reference=record.artifact_id,
+                    )
+                )
+
+
+def _first_placeholder_term(text: str) -> str | None:
+    patterns = [
+        r"占位",
+        r"替换为真实数据",
+        r"待填",
+        r"待补",
+        r"待完善",
+        r"\bTODO\b",
+        r"\bTBD\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match is not None:
+            return match.group(0)
+    return None
+
+
+def _resume_version_evidence_text(record: ResumeVersion, artifact_index: _ArtifactIndex) -> str:
+    artifact_refs = [
+        ref
+        for ref in record.evidence_refs
+        if ref.startswith("artifact_") and ref != record.artifact_id
+    ]
+    if record.source_artifact_id is not None and record.source_artifact_id != record.artifact_id:
+        artifact_refs.append(record.source_artifact_id)
+    seen: set[str] = set()
+    texts: list[str] = []
+    for artifact_id in artifact_refs:
+        if artifact_id in seen:
+            continue
+        seen.add(artifact_id)
+        text = artifact_index.artifact_texts.get(artifact_id)
+        if text:
+            texts.append(text)
+    return "\n".join(texts)
+
+
+def _high_risk_resume_metrics(text: str) -> list[str]:
+    patterns = [
+        r"\b\d+(?:\.\d+)?\s*(?:%|％)\+?",
+        r"[<≤]\s*\d+(?:\.\d+)?\s*(?:ms|s|秒|毫秒)\b",
+        r"\b\d+(?:\.\d+)?\s*(?:QPS|qps)\b",
+        r"\b\d+(?:\.\d+)?\s*(?:万|千)?\s*(?:并发|请求/秒|次/秒)\b",
+    ]
+    metrics: list[str] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            value = re.sub(r"\s+", "", match.group(0))
+            if value not in metrics:
+                metrics.append(value)
+    return metrics
 
 
 def _check_duplicate_key(

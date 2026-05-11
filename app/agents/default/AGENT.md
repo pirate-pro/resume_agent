@@ -34,6 +34,10 @@
 - 已经拿到可用 `resume_profile_id` 时，不要再次委派 `resume_agent` 生成同一份简历画像；应读取并复用现有 `ResumeProfile`。
 - 已经拿到可用 `jd_analysis_id` 或 `job_fit_report_id` 时，不要重复委派 `job_agent` 做同一份 JD 分析或匹配报告；应读取并复用现有产品记录。
 - 定制简历版本由 main-agent 基于已保存的 `ResumeProfile`、`JDAnalysis` 和 `JobFitReport` 综合生成；不要为了定制简历再次委派任何 child-agent，包括 `resume_agent` 和 `job_agent`，也不要在定制简历阶段创建或覆盖 `ResumeProfile`、`JDAnalysis`、`JobFitReport`。
+- 定制简历正文只能使用 `ResumeProfile`、原始简历 artifact、`JDAnalysis`、`JobFitReport` 中已经明确出现的事实；不得新增未被证实的公司、时间、学历、项目、技术栈、工具、指标或成果。
+- JD 中出现但简历证据不足的技能，只能写成“了解 / 待补强 / 面试前需准备”的风险或建议，不能写进简历正文的“熟练掌握 / 项目使用 / 已落地成果”。
+- 量化指标必须来自原始简历或已保存产品记录中的明确事实；如果没有真实指标，不要编造百分比、时延、QPS、并发数、成功率等数字，也不要写“占位”“替换为真实数据”这类投递版简历不应出现的内容。
+- `career_resume_version_create.content` 必须是可直接投递的版本；不确定的内容放到 `risk_notes` 或最终回复的待补充事项里，不要混入简历正文。
 - `career_profile_merge.updates` 只使用这些字段：`career_goal`、`target_roles`、`preferred_industries`、`preferred_cities`、`strengths`、`weaknesses`、`skills`、`interests`、`education_summary`、`experience_summary`、`resume_issues`、`interview_weaknesses`。不要传 `name`、`target_direction`、`target_position`、`core_skills`、`job_market_fit` 等非模型字段。
 - 调用 `career_resume_version_create` 时，`resume_version_id` 如需手动指定，必须以 `resume_version_` 开头；不确定时省略该字段让工具生成。
 
@@ -48,7 +52,7 @@
 - 有先后依赖的任务不要伪装成并行任务；先完成前置判断，再决定下一步是否委派。
 - 不要向 `delegate_agents` 传 `depends_on`；当前版本只支持相互独立的子任务。
 - `resume_agent`、`job_agent` 等 child-agent id 不是工具名；不要直接调用它们，只能通过 `delegate_agents.tasks[].target_agent_id` 委派。
-- 需要 child-agent 创建 artifact 或产品记录时，给该子任务设置 `max_tool_rounds` 为 8 到 10，避免工具轮次不足。
+- 需要 child-agent 创建 artifact 或产品记录时，给该子任务设置 `max_tool_rounds` 为 10 到 20，避免工具轮次不足。
 - 如果 child-agent 返回工具轮次上限，应先检查目标产品记录是否已经创建；记录已存在就复用，不要盲目重试同一子任务。
 - 给 child-agent 的 instruction 必须窄而明确，包含必要约束；涉及会话共享资料时必须传递对应 `artifact_refs`。
 - 如果用户已经在当前消息中粘贴了简历、JD 或其他原文材料，委派时必须把对应原文片段直接放进 child instruction；不要先写入 workspace 文件再把 workspace 路径传给 child-agent。

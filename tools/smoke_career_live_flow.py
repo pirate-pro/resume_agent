@@ -114,6 +114,12 @@ class FlowReport:
     quality_findings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     last_events: list[str] = field(default_factory=list)
+    failed_stage: str | None = None
+    missing_records: list[str] = field(default_factory=list)
+    failed_tools: list[str] = field(default_factory=list)
+    consistency_errors: list[str] = field(default_factory=list)
+    quality_gate_passed: bool | None = None
+    quality_error_codes: list[str] = field(default_factory=list)
 
 
 def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
@@ -254,16 +260,18 @@ def run_live_flow(
         elapsed_seconds=0.0,
     )
     started = time.perf_counter()
+    current_stage = "初始化"
     try:
         stack.session_repository.create_session(session_id)
         add_resume_artifact(stack.session_repository, session_id=session_id, artifact_id=resume_artifact_id)
         stack.session_repository.set_active_artifact_ids(session_id, [resume_artifact_id])
 
+        current_stage = "简历诊断与画像沉淀"
         report.turns.append(
             run_turn(
                 stack=stack,
                 session_id=session_id,
-                name="简历诊断与画像沉淀",
+                name=current_stage,
                 message=(
                     "我上传了一份简历，请读取并诊断这份简历，沉淀结构化简历画像，"
                     f"并更新职业画像。简历 artifact_id 是 {resume_artifact_id}。"
@@ -273,11 +281,12 @@ def run_live_flow(
                 progress=progress,
             )
         )
+        current_stage = "JD 匹配分析"
         report.turns.append(
             run_turn(
                 stack=stack,
                 session_id=session_id,
-                name="JD 匹配分析",
+                name=current_stage,
                 message=(
                     "这是目标 JD：公司招聘 AI 应用开发工程师，要求 Python、FastAPI、RAG、Agent "
                     "工程经验，熟悉向量检索和后端服务落地。请先把这段 JD 沉淀为 artifact，"
@@ -288,11 +297,12 @@ def run_live_flow(
                 progress=progress,
             )
         )
+        current_stage = "定制简历版本"
         report.turns.append(
             run_turn(
                 stack=stack,
                 session_id=session_id,
-                name="定制简历版本",
+                name=current_stage,
                 message=(
                     "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport，生成一版 markdown "
                     "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
@@ -307,8 +317,9 @@ def run_live_flow(
             )
         )
     except Exception as exc:  # noqa: BLE001
+        report.failed_stage = current_stage
         report.errors.append(str(exc) or exc.__class__.__name__)
-        _progress(progress, run_index, f"异常：{report.errors[-1]}")
+        _progress(progress, run_index, f"异常：stage={current_stage} error={report.errors[-1]}")
 
     report.elapsed_seconds = time.perf_counter() - started
     inspect_flow_outputs(stack=stack, report=report)
@@ -390,11 +401,15 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     }
     for key in required:
         if not record_ids[key]:
+            report.missing_records.append(key)
             report.errors.append(f"缺少产品记录: {key}")
 
     failed_tool_results = failed_tool_result_payloads(stack.session_repository, report.session_id)
     for payload in failed_tool_results:
-        report.errors.append(f"工具失败: {payload.get('tool_name')} -> {payload.get('content')}")
+        tool_name = str(payload.get("tool_name") or "unknown")
+        if tool_name not in report.failed_tools:
+            report.failed_tools.append(tool_name)
+        report.errors.append(f"工具失败: {tool_name} -> {payload.get('content')}")
 
     if any("Tool call limit reached" in turn.answer for turn in report.turns):
         report.errors.append("达到工具调用轮次上限，未得到完整最终回答。")
@@ -406,12 +421,19 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
         report.errors.append("检测到工具调用参数中出现 path/file_path/workspace_path。")
 
     quality_report = check_career_product_store(stack.data_dir, session_id=report.session_id)
+    report.quality_gate_passed = quality_report.success
     report.quality_findings = [item.format() for item in quality_report.findings]
     for finding in quality_report.findings:
         if finding.severity == "error":
-            report.errors.append(f"产品数据一致性错误: {finding.format()}")
+            formatted = finding.format()
+            if finding.code not in report.quality_error_codes:
+                report.quality_error_codes.append(finding.code)
+            report.consistency_errors.append(formatted)
+            report.errors.append(f"产品数据一致性错误: {formatted}")
 
     report.success = not report.errors
+    if report.errors and report.failed_stage is None:
+        report.failed_stage = infer_failure_stage(report)
     if report.errors:
         report.last_events = latest_event_summaries(stack.session_repository, report.session_id)
 
@@ -428,6 +450,37 @@ def _record_touches_session(
     if session_started_at is None or record.updated_at < session_started_at:
         return False
     return bool(set(record.evidence_refs).intersection(artifact_ids))
+
+
+def infer_failure_stage(report: FlowReport) -> str:
+    missing = set(report.missing_records)
+    if missing.intersection({"resume_profiles", "career_profiles"}):
+        return "简历诊断与画像沉淀"
+    if missing.intersection({"jd_analyses", "job_fit_reports"}):
+        return "JD 匹配分析"
+    if "resume_versions" in missing:
+        return "定制简历版本"
+    if report.failed_tools:
+        return infer_stage_from_tool(report.failed_tools[0])
+    if report.consistency_errors:
+        return "产品数据一致性检查"
+    if any("工具调用轮次上限" in error or "Tool call limit reached" in error for error in report.errors):
+        return "工具轮次控制"
+    if any("path/file_path/workspace_path" in error for error in report.errors):
+        return "工具参数边界检查"
+    return "结果检查"
+
+
+def infer_stage_from_tool(tool_name: str) -> str:
+    if tool_name in {"career_resume_profile_save", "career_profile_merge"}:
+        return "简历诊断与画像沉淀"
+    if tool_name in {"career_jd_analysis_save", "career_job_fit_report_save"}:
+        return "JD 匹配分析"
+    if tool_name == "career_resume_version_create":
+        return "定制简历版本"
+    if tool_name == "delegate_agents":
+        return "multi-agent 委派"
+    return "工具执行"
 
 
 def add_resume_artifact(repository: JsonlSessionRepository, *, session_id: str, artifact_id: str) -> None:
@@ -576,6 +629,28 @@ def _compact_json(value: Any) -> str:
         return str(value)[:240]
 
 
+def _compact_text(value: str, max_chars: int) -> str:
+    normalized = " ".join(value.replace("\r\n", "\n").replace("\r", "\n").split())
+    if len(normalized) <= max_chars:
+        return normalized
+    return f"{normalized[:max_chars].rstrip()}..."
+
+
+def _preview_list(values: list[str], *, limit: int) -> str:
+    if not values:
+        return "[]"
+    visible = values[:limit]
+    suffix = "" if len(values) <= limit else f", ... +{len(values) - limit}"
+    return "[" + ", ".join(visible) + suffix + "]"
+
+
+def _record_counts(record_ids: dict[str, list[str]]) -> str:
+    if not record_ids:
+        return "{}"
+    counts = {key: len(value) for key, value in sorted(record_ids.items())}
+    return json.dumps(counts, ensure_ascii=False, sort_keys=True)
+
+
 async def run_all(args: argparse.Namespace) -> list[FlowReport]:
     settings = Settings.load()
     root_data_dir = Path(args.data_dir)
@@ -623,19 +698,37 @@ def print_report(reports: list[FlowReport]) -> None:
         print(f"data_dir: {item.data_dir}")
         print(f"elapsed: {item.elapsed_seconds:.2f}s")
         for turn in item.turns:
-            print(f"  [{turn.name}] {turn.elapsed_seconds:.2f}s tools={turn.tool_calls}")
-            print(f"    answer: {turn.answer[:240]}")
-        print(f"  records: {json.dumps(item.record_ids, ensure_ascii=False)}")
-        print(f"  artifacts: {item.artifact_ids}")
-        print(f"  tool_call_counts: {item.tool_call_counts}")
+            print(f"  [{turn.name}] {turn.elapsed_seconds:.2f}s tools={_preview_list(turn.tool_calls, limit=8)}")
+            print(f"    answer_preview: {_compact_text(turn.answer, 120)}")
+        print(f"  record_counts: {_record_counts(item.record_ids)}")
+        print(f"  artifact_count: {len(item.artifact_ids)} ids={_preview_list(item.artifact_ids, limit=8)}")
+        print(f"  tool_call_counts: {_compact_json(item.tool_call_counts)}")
+        if item.quality_gate_passed is not None:
+            gate = "通过" if item.quality_gate_passed else "失败"
+            print(f"  质量门禁: {gate} error_codes={_preview_list(item.quality_error_codes, limit=6)}")
+        if not item.success:
+            print("  失败摘要:")
+            print(f"    失败阶段: {item.failed_stage or '未定位'}")
+            print(f"    缺失产品记录: {_preview_list(item.missing_records, limit=8)}")
+            print(f"    失败工具: {_preview_list(item.failed_tools, limit=8)}")
+            if item.quality_error_codes:
+                print(f"    质量错误码: {_preview_list(item.quality_error_codes, limit=6)}")
+            if item.consistency_errors:
+                print(f"    一致性错误: {_preview_list(item.consistency_errors, limit=3)}")
+            if item.errors:
+                print(f"    关键错误: {_preview_list(item.errors, limit=3)}")
         if item.quality_findings:
             print("  quality_findings:")
-            for finding in item.quality_findings:
-                print(f"    - {finding}")
+            for finding in item.quality_findings[:8]:
+                print(f"    - {_compact_text(finding, 260)}")
+            if len(item.quality_findings) > 8:
+                print(f"    - ... +{len(item.quality_findings) - 8} more")
         if item.errors:
-            print("  errors:")
-            for error in item.errors:
-                print(f"    - {error}")
+            print("  errors_detail:")
+            for error in item.errors[:5]:
+                print(f"    - {_compact_text(error, 260)}")
+            if len(item.errors) > 5:
+                print(f"    - ... +{len(item.errors) - 5} more")
         if item.last_events:
             print("  last_events:")
             for event in item.last_events:
