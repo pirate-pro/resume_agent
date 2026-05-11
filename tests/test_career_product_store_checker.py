@@ -8,7 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from app.career.models import CareerProfile, CareerRecordStatus, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import (
+    CareerApplication,
+    CareerProfile,
+    CareerRecordStatus,
+    JDAnalysis,
+    JobFitReport,
+    ResumeProfile,
+    ResumeVersion,
+)
 from app.career.store import CareerProductStore
 from app.domain.models import SessionArtifact
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
@@ -138,6 +146,36 @@ def _save_clean_product_records(store: CareerProductStore) -> None:
             artifact_id="artifact_resume_version",
         )
     )
+    store.save_career_application(
+        CareerApplication(
+            application_id="application_alpha",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=[
+                "artifact_jd",
+                "resume_profile_alpha",
+                "career_profile_default",
+                "jd_alpha",
+                "fit_alpha",
+                "resume_version_alpha",
+            ],
+            created_at=_now(),
+            updated_at=_now(),
+            company="Example",
+            position="AI 工程师",
+            stage="ready_to_apply",
+            priority="high",
+            resume_profile_id="resume_profile_alpha",
+            career_profile_id="career_profile_default",
+            jd_analysis_id="jd_alpha",
+            job_fit_report_id="fit_alpha",
+            resume_version_ids=["resume_version_alpha"],
+            summary="Example · AI 工程师，已准备投递。",
+            next_actions=["确认投递渠道"],
+            risks=["RAG 项目细节需补充"],
+        )
+    )
 
 
 def test_career_product_store_checker_passes_clean_records(tmp_path: Path) -> None:
@@ -159,6 +197,7 @@ def test_career_product_store_checker_passes_clean_records(tmp_path: Path) -> No
     assert report.findings == []
     assert report.counts["resume_profiles"] == 1
     assert report.counts["resume_versions"] == 1
+    assert report.counts["career_applications"] == 1
 
 
 def test_career_product_store_checker_reports_missing_refs_and_duplicates(tmp_path: Path) -> None:
@@ -215,6 +254,49 @@ def test_career_product_store_checker_reports_missing_refs_and_duplicates(tmp_pa
     assert "duplicate_jd_analysis_source" in codes
     assert "missing_artifact_ref" in codes
     assert "missing_product_ref" in codes
+
+
+def test_career_product_store_checker_reports_application_quality_and_duplicates(tmp_path: Path) -> None:
+    _create_session_with_artifacts(
+        tmp_path,
+        [
+            "artifact_resume",
+            "artifact_diagnosis",
+            "artifact_jd",
+            "artifact_report",
+            "artifact_resume_version",
+        ],
+    )
+    store = _store(tmp_path)
+    _save_clean_product_records(store)
+    store.save_career_application(
+        CareerApplication(
+            application_id="application_beta",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=["artifact_jd", "resume_profile_missing", "jd_missing"],
+            created_at=_now(),
+            updated_at=_now(),
+            company="Example",
+            position="AI 工程师",
+            stage="ready_to_apply",
+            priority="medium",
+            resume_profile_id="resume_profile_missing",
+            jd_analysis_id="jd_missing",
+            job_fit_report_id="fit_missing",
+            resume_version_ids=["resume_version_missing"],
+            summary="这里是占位摘要，待替换为真实数据。",
+        )
+    )
+
+    report = check_career_product_store(tmp_path, session_id="sess_alpha")
+    codes = {item.code for item in report.findings}
+
+    assert not report.success
+    assert "career_application_placeholder_text" in codes
+    assert "duplicate_career_application_source" in codes
+    assert "missing_product_ref" not in codes
 
 
 def test_career_product_store_checker_reports_corrupt_json(tmp_path: Path) -> None:

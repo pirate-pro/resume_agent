@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence, TypeVar
 
-from app.career.models import CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
 from app.career.store import CareerProductStore
 from app.core.errors import AppError, StorageError
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
@@ -26,7 +26,7 @@ __all__ = [
     "main",
 ]
 
-CareerRecord = ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion
+CareerRecord = ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication
 _RecordT = TypeVar("_RecordT", bound=CareerRecord)
 
 
@@ -94,6 +94,7 @@ class _CareerRecords:
     jd_analyses: list[JDAnalysis]
     job_fit_reports: list[JobFitReport]
     resume_versions: list[ResumeVersion]
+    career_applications: list[CareerApplication]
 
     def all_records(self) -> list[CareerRecord]:
         return [
@@ -102,6 +103,7 @@ class _CareerRecords:
             *self.jd_analyses,
             *self.job_fit_reports,
             *self.resume_versions,
+            *self.career_applications,
         ]
 
 
@@ -146,6 +148,7 @@ def check_career_product_store(
     _check_evidence_references(scoped_records, artifact_index, findings)
     _check_duplicate_products(scoped_records, findings)
     _check_resume_version_quality(scoped_records.resume_versions, artifact_index, findings)
+    _check_career_application_quality(scoped_records.career_applications, findings)
 
     counts = {
         "sessions": len(artifact_index.session_ids),
@@ -155,6 +158,7 @@ def check_career_product_store(
         "jd_analyses": len(scoped_records.jd_analyses),
         "job_fit_reports": len(scoped_records.job_fit_reports),
         "resume_versions": len(scoped_records.resume_versions),
+        "career_applications": len(scoped_records.career_applications),
     }
     return CareerStoreCheckReport(
         data_dir=resolved_data_dir,
@@ -294,6 +298,7 @@ def _load_records(
             jd_analyses=[],
             job_fit_reports=[],
             resume_versions=[],
+            career_applications=[],
         )
     store = CareerProductStore(root_dir=career_dir)
     return _CareerRecords(
@@ -320,6 +325,11 @@ def _load_records(
         resume_versions=_load_record_list(
             "resume_version",
             lambda: store.list_resume_versions(include_archived=include_archived),
+            findings,
+        ),
+        career_applications=_load_record_list(
+            "career_application",
+            lambda: store.list_career_applications(include_archived=include_archived),
             findings,
         ),
     )
@@ -358,6 +368,7 @@ def _filter_records_by_session(
         jd_analyses=_filter_record_list(records.jd_analyses, session_id, artifact_to_session),
         job_fit_reports=_filter_record_list(records.job_fit_reports, session_id, artifact_to_session),
         resume_versions=_filter_record_list(records.resume_versions, session_id, artifact_to_session),
+        career_applications=_filter_record_list(records.career_applications, session_id, artifact_to_session),
     )
 
 
@@ -555,6 +566,8 @@ def _check_evidence_references(
                         )
                     )
             else:
+                if isinstance(record, CareerApplication):
+                    continue
                 bucket = _product_bucket_for_ref(ref)
                 if bucket is not None:
                     _check_product_ref(
@@ -637,6 +650,22 @@ def _check_duplicate_products(
         lambda item: item.resume_version_id,
         findings,
     )
+    _check_duplicate_key(
+        "career_application",
+        records.career_applications,
+        "duplicate_career_application_source",
+        "同一 session/source_artifact_id/company/position 下存在多个 CareerApplication。",
+        lambda item: (
+            item.source_session_id,
+            item.source_artifact_id,
+            item.company,
+            item.position,
+        )
+        if item.source_artifact_id
+        else None,
+        lambda item: item.application_id,
+        findings,
+    )
 
 
 def _check_resume_version_quality(
@@ -694,6 +723,27 @@ def _check_resume_version_quality(
                         reference=record.artifact_id,
                     )
                 )
+
+
+def _check_career_application_quality(
+    records: Sequence[CareerApplication],
+    findings: list[CareerStoreCheckFinding],
+) -> None:
+    for record in records:
+        placeholder = _first_placeholder_term(
+            "\n".join([record.summary, record.notes, *record.next_actions, *record.risks])
+        )
+        if placeholder is not None:
+            findings.append(
+                CareerStoreCheckFinding(
+                    severity="error",
+                    code="career_application_placeholder_text",
+                    message=f"CareerApplication 包含占位或需替换表达: {placeholder}",
+                    record_type="career_application",
+                    record_id=record.application_id,
+                    reference=placeholder,
+                )
+            )
 
 
 def _first_placeholder_term(text: str) -> str | None:
@@ -849,10 +899,13 @@ def _product_id_index(records: _CareerRecords) -> dict[str, set[str]]:
         "jd_analysis": {item.jd_analysis_id for item in records.jd_analyses},
         "job_fit_report": {item.job_fit_report_id for item in records.job_fit_reports},
         "resume_version": {item.resume_version_id for item in records.resume_versions},
+        "career_application": {item.application_id for item in records.career_applications},
     }
 
 
 def _product_bucket_for_ref(ref: str) -> str | None:
+    if ref.startswith("application_"):
+        return "career_application"
     if ref.startswith("resume_profile_"):
         return "resume_profile"
     if ref.startswith("career_profile_"):
@@ -867,6 +920,8 @@ def _product_bucket_for_ref(ref: str) -> str | None:
 
 
 def _record_type(record: CareerRecord) -> str:
+    if isinstance(record, CareerApplication):
+        return "career_application"
     if isinstance(record, ResumeProfile):
         return "resume_profile"
     if isinstance(record, CareerProfile):
@@ -879,6 +934,8 @@ def _record_type(record: CareerRecord) -> str:
 
 
 def _record_id(record: CareerRecord) -> str:
+    if isinstance(record, CareerApplication):
+        return record.application_id
     if isinstance(record, ResumeProfile):
         return record.resume_profile_id
     if isinstance(record, CareerProfile):
