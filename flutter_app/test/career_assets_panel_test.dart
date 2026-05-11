@@ -56,10 +56,13 @@ void main() {
 
     expect(find.text('张明'), findsOneWidget);
     expect(find.text('resume_profile_zhangming_003'), findsNothing);
-    expect(find.text('当前诊断'), findsOneWidget);
+    expect(find.text('当前诊断'), findsNothing);
     expect(find.text('可预览'), findsOneWidget);
     expect(find.text('详情'), findsOneWidget);
     expect(find.text('预览诊断'), findsOneWidget);
+    expect(find.text('3 版'), findsOneWidget);
+    expect(find.text('当前版本 · 2 版历史已收起'), findsOneWidget);
+    expect(find.text('查看'), findsOneWidget);
     expect(find.text('历史 3'), findsOneWidget);
 
     await tester.tap(find.text('详情'));
@@ -69,6 +72,11 @@ void main() {
     await tester.pump();
     expect(previewedArtifactId, 'artifact_diagnosis_001');
 
+    historyOpened = false;
+    await tester.tap(find.text('查看'));
+    expect(historyOpened, isTrue);
+
+    historyOpened = false;
     await tester.tap(find.text('历史 3'));
     expect(historyOpened, isTrue);
   });

@@ -2,13 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_highlight/themes/atom-one-dark.dart';
-import 'package:flutter_highlight/themes/atom-one-light.dart';
-import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
-import 'package:highlight/highlight.dart' as hl;
-import 'package:highlight/highlight.dart' show Node;
 
 import '../../core/models/api_models.dart';
 import '../../core/providers/career_assets_provider.dart';
@@ -16,6 +10,8 @@ import '../../core/providers/chat_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/download_stub.dart'
     if (dart.library.html) '../utils/download_web.dart';
+import 'career_report.dart';
+import 'markdown_body.dart';
 import 'run_progress_panel.dart';
 
 const double _bubbleMaxWidth = 780;
@@ -27,8 +23,6 @@ const int _streamStructuredMaxLines = 90;
 const int _richMarkdownMaxCodeFences = 4;
 const int _largeMessageChunkChars = 1600;
 const int _streamingTailPreviewChars = 2200;
-const int _autoCollapseCodeLines = 40;
-const int _collapsedCodePreviewLines = 24;
 const double _streamingSkeletonWidth = 280;
 const int _leadParagraphMaxChars = 110;
 
@@ -293,12 +287,35 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
 
   @override
   Widget build(BuildContext context) {
+    final steps = _ThinkingStep.fromLines(widget.lines);
+    final visibleSteps =
+        steps.length > 5 ? steps.sublist(steps.length - 5) : steps;
+    final runningCount = steps.where((step) => step.kind == "running").length;
+    final failedCount = steps.where((step) => step.kind == "failed").length;
+    final completedCount =
+        steps.where((step) => step.kind == "completed").length;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.54),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppTheme.surface.withValues(alpha: AppTheme.isDark ? 0.58 : 0.9),
+            AppTheme.surfaceHover
+                .withValues(alpha: AppTheme.isDark ? 0.16 : 0.34),
+          ],
+        ),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border.withValues(alpha: 0.84)),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.68)),
+        boxShadow: [
+          BoxShadow(
+            color:
+                Colors.black.withValues(alpha: AppTheme.isDark ? 0.18 : 0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -307,31 +324,55 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
             borderRadius: BorderRadius.circular(14),
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
               child: Row(
                 children: [
                   Container(
-                    width: 22,
-                    height: 22,
+                    width: 28,
+                    height: 28,
                     decoration: BoxDecoration(
                       color: AppTheme.accent.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(999),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppTheme.accent.withValues(alpha: 0.16),
+                      ),
                     ),
                     child: Icon(
                       _expanded
                           ? Icons.expand_more_rounded
                           : Icons.chevron_right_rounded,
-                      size: 15,
+                      size: 17,
                       color: AppTheme.accent,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Text("执行过程",
-                      style: AppTheme.ts(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.textSecondary)),
-                  const Spacer(),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "执行动态",
+                          style: AppTheme.ts(
+                            fontSize: 12.2,
+                            height: 1.15,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          "正在整理上下文、工具结果和最终回答",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTheme.ts(
+                            fontSize: 10.5,
+                            color: AppTheme.textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -340,11 +381,14 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
                       borderRadius: BorderRadius.circular(999),
                       border: Border.all(color: AppTheme.border),
                     ),
-                    child: Text("${widget.lines.length} 条",
-                        style: AppTheme.ts(
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.textTertiary)),
+                    child: Text(
+                      "${steps.length} 条",
+                      style: AppTheme.ts(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -356,22 +400,411 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: widget.lines
-                    .map((l) => Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(l,
-                              style: AppTheme.ts(
-                                  fontSize: 11.5,
-                                  color: AppTheme.textSecondary,
-                                  height: 1.45)),
-                        ))
-                    .toList(),
+                children: [
+                  Wrap(
+                    spacing: 7,
+                    runSpacing: 7,
+                    children: [
+                      _ThinkingSummaryChip(
+                        icon: Icons.check_circle_outline_rounded,
+                        label: "$completedCount 已完成",
+                        color: AppTheme.accentHover,
+                      ),
+                      if (runningCount > 0)
+                        const _ThinkingSummaryChip(
+                          icon: Icons.sync_rounded,
+                          label: "处理中",
+                          color: Color(0xFF2563EB),
+                        ),
+                      if (failedCount > 0)
+                        _ThinkingSummaryChip(
+                          icon: Icons.error_outline_rounded,
+                          label: "$failedCount 失败",
+                          color: AppTheme.danger,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 9),
+                  for (var index = 0; index < visibleSteps.length; index++)
+                    Padding(
+                      padding: EdgeInsets.only(
+                        bottom: index == visibleSteps.length - 1 ? 0 : 8,
+                      ),
+                      child: _ThinkingStepCard(step: visibleSteps[index]),
+                    ),
+                ],
               ),
             ),
         ],
       ),
     );
   }
+}
+
+class _ThinkingStepCard extends StatelessWidget {
+  final _ThinkingStep step;
+
+  const _ThinkingStepCard({required this.step});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 9),
+      decoration: BoxDecoration(
+        color:
+            AppTheme.surface.withValues(alpha: AppTheme.isDark ? 0.48 : 0.82),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: step.color.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: step.color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: step.color.withValues(alpha: 0.15)),
+            ),
+            child: Icon(step.icon, size: 14, color: step.color),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        step.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 11.7,
+                          height: 1.2,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    _ThinkingStatusPill(step: step),
+                  ],
+                ),
+                if (step.detail.isNotEmpty) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    step.detail,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.ts(
+                      fontSize: 10.8,
+                      height: 1.38,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.schedule_rounded,
+                      size: 11.5,
+                      color: AppTheme.textTertiary,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      step.timeLabel,
+                      style: AppTheme.ts(
+                        fontSize: 10,
+                        height: 1.1,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+                if (step.kind == "running") ...[
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      minHeight: 3,
+                      color: step.color,
+                      backgroundColor: step.color.withValues(alpha: 0.1),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ThinkingStatusPill extends StatelessWidget {
+  final _ThinkingStep step;
+
+  const _ThinkingStatusPill({required this.step});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: step.color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: step.color.withValues(alpha: 0.14)),
+      ),
+      child: Text(
+        step.statusLabel,
+        style: AppTheme.ts(
+          fontSize: 10,
+          height: 1.1,
+          fontWeight: FontWeight.w800,
+          color: step.color,
+        ),
+      ),
+    );
+  }
+}
+
+class _ThinkingSummaryChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _ThinkingSummaryChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.13)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: AppTheme.ts(
+              fontSize: 10.5,
+              height: 1.1,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ThinkingStep {
+  final String kind;
+  final String title;
+  final String detail;
+  final String statusLabel;
+  final String timeLabel;
+  final IconData icon;
+  final Color color;
+
+  const _ThinkingStep({
+    required this.kind,
+    required this.title,
+    required this.detail,
+    required this.statusLabel,
+    required this.timeLabel,
+    required this.icon,
+    required this.color,
+  });
+
+  static List<_ThinkingStep> fromLines(List<String> lines) {
+    return lines.map(_ThinkingStep.fromLine).toList();
+  }
+
+  factory _ThinkingStep.fromLine(String line) {
+    final parsed = _parseThinkingLine(line);
+    final body = parsed.body;
+    if (body.startsWith("开始执行")) {
+      return _ThinkingStep(
+        kind: "completed",
+        title: "开始执行任务",
+        detail: "已创建运行上下文",
+        statusLabel: "已开始",
+        timeLabel: parsed.timeLabel,
+        icon: Icons.play_arrow_rounded,
+        color: AppTheme.accentHover,
+      );
+    }
+    if (body.startsWith("模型思考:") || body.startsWith("模型思考：")) {
+      return _ThinkingStep(
+        kind: "running",
+        title: "模型正在规划",
+        detail: _truncateText(
+          body.replaceFirst(RegExp(r"模型思考[:：]\s*"), ""),
+          110,
+        ),
+        statusLabel: "规划中",
+        timeLabel: parsed.timeLabel,
+        icon: Icons.psychology_alt_outlined,
+        color: const Color(0xFF7C3AED),
+      );
+    }
+    if (body.startsWith("调用工具 ")) {
+      final name = body.replaceFirst("调用工具 ", "").trim();
+      return _ThinkingStep(
+        kind: "running",
+        title: _thinkingToolActionName(name),
+        detail: _thinkingToolDetail(name, completed: false),
+        statusLabel: "运行中",
+        timeLabel: parsed.timeLabel,
+        icon: Icons.build_circle_outlined,
+        color: const Color(0xFF2563EB),
+      );
+    }
+    if (body.startsWith("工具成功 ")) {
+      final name = body.replaceFirst("工具成功 ", "").trim();
+      return _ThinkingStep(
+        kind: "completed",
+        title: _thinkingToolActionName(name),
+        detail: _thinkingToolDetail(name, completed: true),
+        statusLabel: "已完成",
+        timeLabel: parsed.timeLabel,
+        icon: Icons.check_circle_outline_rounded,
+        color: AppTheme.accentHover,
+      );
+    }
+    if (body.startsWith("工具失败 ")) {
+      final name = body.replaceFirst("工具失败 ", "").trim();
+      return _ThinkingStep(
+        kind: "failed",
+        title: _thinkingToolActionName(name),
+        detail: "工具返回失败，系统会保留已完成结果",
+        statusLabel: "失败",
+        timeLabel: parsed.timeLabel,
+        icon: Icons.error_outline_rounded,
+        color: AppTheme.danger,
+      );
+    }
+    if (body.startsWith("执行完成")) {
+      return _ThinkingStep(
+        kind: "completed",
+        title: "执行完成",
+        detail: "正在整理最终回答",
+        statusLabel: "完成",
+        timeLabel: parsed.timeLabel,
+        icon: Icons.flag_outlined,
+        color: AppTheme.accentHover,
+      );
+    }
+    return _ThinkingStep(
+      kind: "running",
+      title: "处理中",
+      detail: _truncateText(body, 110),
+      statusLabel: "进行中",
+      timeLabel: parsed.timeLabel,
+      icon: Icons.sync_rounded,
+      color: const Color(0xFF2563EB),
+    );
+  }
+}
+
+class _ParsedThinkingLine {
+  final String timeLabel;
+  final String body;
+
+  const _ParsedThinkingLine({required this.timeLabel, required this.body});
+}
+
+_ParsedThinkingLine _parseThinkingLine(String line) {
+  final match = RegExp(r"^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$").firstMatch(line);
+  if (match == null) {
+    return _ParsedThinkingLine(timeLabel: "--:--:--", body: line.trim());
+  }
+  return _ParsedThinkingLine(
+    timeLabel: match.group(1) ?? "--:--:--",
+    body: (match.group(2) ?? "").trim(),
+  );
+}
+
+String _truncateText(String value, int maxLength) {
+  final normalized = value.trim().replaceAll(RegExp(r"\s+"), " ");
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  if (maxLength <= 1) {
+    return normalized.substring(0, maxLength);
+  }
+  return "${normalized.substring(0, maxLength - 1)}…";
+}
+
+String _thinkingToolActionName(String name) {
+  return switch (name.trim()) {
+    "delegate_agents" => "委派协作 Agent",
+    "agent_task_status" => "检查协作任务状态",
+    "session_list_artifacts" => "查看会话文件",
+    "session_plan_artifact_access" => "规划文件读取",
+    "session_read_artifact" => "读取文件内容",
+    "session_search_artifact" => "搜索文件内容",
+    "session_create_text_artifact" => "创建文本资料",
+    "publish_artifact" => "发布用户可见文件",
+    "career_resume_profile_save" => "保存简历画像",
+    "career_profile_merge" => "更新职业画像",
+    "career_jd_analysis_save" => "保存 JD 分析",
+    "career_job_fit_report_save" => "保存岗位匹配报告",
+    "career_resume_version_create" => "生成简历版本",
+    "memory_search" => "检索记忆",
+    "memory_write" => "写入记忆",
+    _ => _fallbackThinkingToolActionName(name),
+  };
+}
+
+String _thinkingToolDetail(String name, {required bool completed}) {
+  final action = completed ? "已返回结果" : "正在执行";
+  return switch (name.trim()) {
+    "delegate_agents" => completed ? "协作 Agent 已接收任务" : "正在分配子任务",
+    "agent_task_status" => completed ? "已同步协作进度" : "正在读取协作进度",
+    "session_read_artifact" => completed ? "文件内容已读取" : "正在读取用户资料",
+    "session_search_artifact" => completed ? "已找到相关片段" : "正在检索资料内容",
+    "career_resume_profile_save" => completed ? "简历画像已保存" : "正在沉淀简历画像",
+    "career_profile_merge" => completed ? "职业画像已更新" : "正在合并职业画像",
+    "career_jd_analysis_save" => completed ? "JD 分析已保存" : "正在保存 JD 分析",
+    "career_job_fit_report_save" => completed ? "匹配报告已保存" : "正在保存匹配报告",
+    _ => "$action 系统能力",
+  };
+}
+
+String _fallbackThinkingToolActionName(String name) {
+  final normalized = name.trim();
+  if (normalized.isEmpty || normalized == "unknown") {
+    return "执行系统工具";
+  }
+  final parts = normalized
+      .split(RegExp(r"[_\-.]+"))
+      .where((part) => part.trim().isNotEmpty)
+      .toList();
+  if (parts.isEmpty) {
+    return "执行系统工具";
+  }
+  final last = parts.last;
+  final readable = last.length <= 12 ? last : "${last.substring(0, 12)}…";
+  return "执行 $readable 操作";
 }
 
 class _Avatar extends StatelessWidget {
@@ -485,13 +918,12 @@ class _MessageBody extends StatelessWidget {
           );
       }
     }
-    final careerReport = _CareerReportPresentation.tryParse(resolved.content);
-    if (careerReport != null) {
-      return _CareerReportBody(report: careerReport);
+    if (CareerReportView.canRender(resolved.content)) {
+      return CareerReportView(content: resolved.content);
     }
     switch (resolved.mode) {
       case _MessageRenderMode.markdownRendered:
-        return _AssistantMarkdownBody(content: resolved.content);
+        return AssistantMarkdownBody(content: resolved.content);
       case _MessageRenderMode.markdownStructured:
         return _StructuredMarkdownBody(content: resolved.content);
       case _MessageRenderMode.markdownSource:
@@ -1075,727 +1507,6 @@ class _PlainStepList extends StatelessWidget {
   }
 }
 
-class _CareerReportBody extends StatelessWidget {
-  final _CareerReportPresentation report;
-
-  const _CareerReportBody({required this.report});
-
-  @override
-  Widget build(BuildContext context) {
-    final reportTitle = _careerReportDisplayTitle(report);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _CareerReportHeader(
-            title: reportTitle, sectionCount: report.sections.length),
-        const SizedBox(height: 12),
-        if (report.lead.isNotEmpty) ...[
-          _CareerReportLeadBlock(content: report.lead),
-          const SizedBox(height: 14),
-        ],
-        for (var index = 0; index < report.sections.length; index++) ...[
-          _CareerReportSectionBlock(section: report.sections[index]),
-          if (index < report.sections.length - 1) const SizedBox(height: 12),
-        ],
-      ],
-    );
-  }
-}
-
-class _CareerReportSectionBlock extends StatelessWidget {
-  final _CareerReportSection section;
-
-  const _CareerReportSectionBlock({required this.section});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _careerSectionColor(section.title);
-    final body = section.body.trim();
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(13, 12, 13, 13),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceActive.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.border.withValues(alpha: 0.86)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 26,
-                height: 26,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(
-                  _careerSectionIcon(section.title),
-                  size: 15,
-                  color: color,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  section.title,
-                  style: AppTheme.ts(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.textPrimary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (section.body.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            if (_isSummarySection(section.title))
-              _CareerSummarySection(body: body)
-            else if (_isRiskSection(section.title))
-              _CareerRiskListSection(body: body)
-            else if (_isInsightGridSection(section.title))
-              _CareerInsightGridSection(
-                body: body,
-                color: color,
-                icon: _careerSectionIcon(section.title),
-              )
-            else if (_isActionListSection(section.title))
-              _CareerActionListSection(
-                body: body,
-                color: color,
-                icon: _careerSectionIcon(section.title),
-              )
-            else
-              _AssistantMarkdownBody(content: body),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _CareerReportHeader extends StatelessWidget {
-  final String title;
-  final int sectionCount;
-
-  const _CareerReportHeader({
-    required this.title,
-    required this.sectionCount,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
-      decoration: BoxDecoration(
-        color: AppTheme.accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.18)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: AppTheme.accent.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(10),
-              border:
-                  Border.all(color: AppTheme.accent.withValues(alpha: 0.22)),
-            ),
-            child: Icon(
-              Icons.fact_check_outlined,
-              size: 18,
-              color: AppTheme.accent,
-            ),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: AppTheme.ts(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.textPrimary,
-                    height: 1.2,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  "$sectionCount 个分析模块 · 已整理为结构化报告",
-                  style: AppTheme.ts(
-                    fontSize: 12,
-                    color: AppTheme.textSecondary,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CareerReportLeadBlock extends StatelessWidget {
-  final String content;
-
-  const _CareerReportLeadBlock({required this.content});
-
-  @override
-  Widget build(BuildContext context) {
-    final normalized = _careerLeadContent(content);
-    if (normalized.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppTheme.accent.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: AppTheme.accent.withValues(alpha: 0.18),
-        ),
-      ),
-      child: _CompactMarkdownBody(
-        content: normalized,
-        style: AppTheme.ts(
-          fontSize: 13,
-          height: 1.55,
-          fontWeight: FontWeight.w600,
-          color: AppTheme.textPrimary,
-        ),
-      ),
-    );
-  }
-}
-
-class _CareerSummarySection extends StatelessWidget {
-  final String body;
-
-  const _CareerSummarySection({required this.body});
-
-  @override
-  Widget build(BuildContext context) {
-    final fields = _careerSummaryFields(body);
-    if (fields.isEmpty) {
-      return _AssistantMarkdownBody(content: body);
-    }
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        for (final field in fields)
-          Container(
-            constraints: const BoxConstraints(minWidth: 180, maxWidth: 310),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-            decoration: BoxDecoration(
-              color: AppTheme.bg.withValues(alpha: 0.34),
-              borderRadius: BorderRadius.circular(9),
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  field.label,
-                  style: AppTheme.ts(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.textTertiary,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                _CompactMarkdownBody(
-                  content: field.value,
-                  style: AppTheme.ts(
-                    fontSize: 12.5,
-                    height: 1.4,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textPrimary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _CareerRiskListSection extends StatelessWidget {
-  final String body;
-
-  const _CareerRiskListSection({required this.body});
-
-  @override
-  Widget build(BuildContext context) {
-    final risks = _careerRiskItems(body);
-    if (risks.isEmpty) {
-      return _AssistantMarkdownBody(content: body);
-    }
-    return Column(
-      children: [
-        for (var index = 0; index < risks.length; index++) ...[
-          _CareerRiskCard(risk: risks[index]),
-          if (index < risks.length - 1) const SizedBox(height: 8),
-        ],
-      ],
-    );
-  }
-}
-
-class _CareerRiskCard extends StatelessWidget {
-  final _CareerRiskItem risk;
-
-  const _CareerRiskCard({required this.risk});
-
-  @override
-  Widget build(BuildContext context) {
-    final level = _careerRiskLevel(risk.level);
-    final visual = _careerItemVisual(
-      "${risk.title} ${risk.detail}",
-      fallbackColor: level.color,
-      fallbackIcon: level.icon,
-    );
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(11, 10, 11, 11),
-      decoration: BoxDecoration(
-        color: level.color.withValues(alpha: AppTheme.isDark ? 0.08 : 0.055),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: level.color.withValues(alpha: 0.24)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: level.color.withValues(alpha: 0.13),
-              borderRadius: BorderRadius.circular(9),
-              border: Border.all(color: level.color.withValues(alpha: 0.18)),
-            ),
-            child: Icon(visual.icon, size: 15, color: level.color),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        risk.title.isEmpty ? "待补风险" : risk.title,
-                        style: AppTheme.ts(
-                          fontSize: 12.8,
-                          height: 1.3,
-                          fontWeight: FontWeight.w800,
-                          color: AppTheme.textPrimary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _CareerMiniBadge(
-                      label: level.label,
-                      color: level.color,
-                      filled: true,
-                    ),
-                  ],
-                ),
-                if (visual.label.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  _CareerMiniBadge(label: visual.label, color: visual.color),
-                ],
-                if (risk.detail.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _CompactMarkdownBody(
-                    content: risk.detail,
-                    style: AppTheme.ts(
-                      fontSize: 12,
-                      height: 1.55,
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CareerInsightGridSection extends StatelessWidget {
-  final String body;
-  final Color color;
-  final IconData icon;
-
-  const _CareerInsightGridSection({
-    required this.body,
-    required this.color,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final items = _careerSectionItems(body);
-    if (items.isEmpty) {
-      return _AssistantMarkdownBody(content: body);
-    }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final useGrid = constraints.maxWidth >= 560 && items.length > 1;
-        if (!useGrid) {
-          return Column(
-            children: [
-              for (var index = 0; index < items.length; index++) ...[
-                _CareerReportItemCard(
-                  item: items[index],
-                  color: color,
-                  icon: icon,
-                  index: index + 1,
-                  dense: false,
-                ),
-                if (index < items.length - 1) const SizedBox(height: 8),
-              ],
-            ],
-          );
-        }
-        return Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (var index = 0; index < items.length; index++)
-              SizedBox(
-                width: (constraints.maxWidth - 8) / 2,
-                child: _CareerReportItemCard(
-                  item: items[index],
-                  color: color,
-                  icon: icon,
-                  index: index + 1,
-                  dense: true,
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _CareerActionListSection extends StatelessWidget {
-  final String body;
-  final Color color;
-  final IconData icon;
-
-  const _CareerActionListSection({
-    required this.body,
-    required this.color,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final items = _careerSectionItems(body);
-    if (items.isEmpty) {
-      return _AssistantMarkdownBody(content: body);
-    }
-    return Column(
-      children: [
-        for (var index = 0; index < items.length; index++) ...[
-          _CareerReportItemCard(
-            item: items[index],
-            color: color,
-            icon: icon,
-            index: index + 1,
-            dense: false,
-          ),
-          if (index < items.length - 1) const SizedBox(height: 8),
-        ],
-      ],
-    );
-  }
-}
-
-class _CareerReportItemCard extends StatelessWidget {
-  final _CareerSectionItem item;
-  final Color color;
-  final IconData icon;
-  final int index;
-  final bool dense;
-
-  const _CareerReportItemCard({
-    required this.item,
-    required this.color,
-    required this.icon,
-    required this.index,
-    required this.dense,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final visual = _careerItemVisual(
-      "${item.title} ${item.detail}",
-      fallbackColor: color,
-      fallbackIcon: icon,
-    );
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.fromLTRB(10, dense ? 9 : 10, 10, dense ? 9 : 10),
-      decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.64),
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(color: AppTheme.border.withValues(alpha: 0.9)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: visual.color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: visual.color.withValues(alpha: 0.12)),
-            ),
-            child: Icon(visual.icon, size: 13, color: visual.color),
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (visual.label.isNotEmpty) ...[
-                  _CareerMiniBadge(label: visual.label, color: visual.color),
-                  const SizedBox(height: 6),
-                ],
-                if (item.title.isNotEmpty) ...[
-                  SelectableText(
-                    item.title,
-                    style: AppTheme.ts(
-                      fontSize: 12.5,
-                      height: 1.35,
-                      fontWeight: FontWeight.w800,
-                      color: AppTheme.textPrimary,
-                    ),
-                  ),
-                  if (item.detail.isNotEmpty) const SizedBox(height: 5),
-                ],
-                if (item.detail.isNotEmpty)
-                  _CompactMarkdownBody(
-                    content: item.detail,
-                    style: AppTheme.ts(
-                      fontSize: 12,
-                      height: 1.5,
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CareerMiniBadge extends StatelessWidget {
-  final String label;
-  final Color color;
-  final bool filled;
-
-  const _CareerMiniBadge({
-    required this.label,
-    required this.color,
-    this.filled = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: filled ? 0.14 : 0.08),
-        borderRadius: BorderRadius.circular(999),
-        border:
-            Border.all(color: color.withValues(alpha: filled ? 0.22 : 0.14)),
-      ),
-      child: Text(
-        label,
-        style: AppTheme.ts(
-          fontSize: 10,
-          height: 1.1,
-          fontWeight: FontWeight.w700,
-          color: color,
-        ),
-      ),
-    );
-  }
-}
-
-class _CompactMarkdownBody extends StatelessWidget {
-  final String content;
-  final TextStyle style;
-
-  const _CompactMarkdownBody({
-    required this.content,
-    required this.style,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return _AppMarkdownBody(
-      content: content,
-      style: style,
-      compact: true,
-    );
-  }
-}
-
-class _CareerSummaryField {
-  final String label;
-  final String value;
-
-  const _CareerSummaryField({required this.label, required this.value});
-}
-
-class _CareerSectionItem {
-  final String title;
-  final String detail;
-
-  const _CareerSectionItem({required this.title, required this.detail});
-}
-
-class _CareerLabelValue {
-  final String label;
-  final String value;
-
-  const _CareerLabelValue({required this.label, required this.value});
-}
-
-class _CareerRiskItem {
-  final String title;
-  final String level;
-  final String detail;
-
-  const _CareerRiskItem({
-    required this.title,
-    required this.level,
-    required this.detail,
-  });
-}
-
-class _CareerItemVisual {
-  final String label;
-  final IconData icon;
-  final Color color;
-
-  const _CareerItemVisual({
-    required this.label,
-    required this.icon,
-    required this.color,
-  });
-}
-
-class _CareerRiskLevel {
-  final String label;
-  final IconData icon;
-  final Color color;
-
-  const _CareerRiskLevel({
-    required this.label,
-    required this.icon,
-    required this.color,
-  });
-}
-
-class _AssistantMarkdownBody extends StatelessWidget {
-  final String content;
-
-  const _AssistantMarkdownBody({required this.content});
-
-  @override
-  Widget build(BuildContext context) {
-    return _AppMarkdownBody(
-      content: content,
-      style: AppTheme.ts(
-        fontSize: 15,
-        color: AppTheme.textPrimary,
-        height: 1.65,
-      ),
-      enableLatex: _looksLikeLatex(content),
-    );
-  }
-}
-
-class _AppMarkdownBody extends StatelessWidget {
-  final String content;
-  final TextStyle style;
-  final bool compact;
-  final bool enableLatex;
-
-  const _AppMarkdownBody({
-    required this.content,
-    required this.style,
-    this.compact = false,
-    this.enableLatex = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (compact) {
-      return GptMarkdown(
-        content,
-        style: style,
-        useDollarSignsForLatex: enableLatex,
-        onLinkTap: (url, title) => _copyInlineMarkdownLink(context, url),
-      );
-    }
-    return GptMarkdown(
-      content,
-      style: style,
-      useDollarSignsForLatex: enableLatex,
-      onLinkTap: (url, title) => _copyInlineMarkdownLink(context, url),
-      codeBuilder: (context, name, code, closed) {
-        return _CodeBlockCard(
-          language: name,
-          code: code,
-          closed: closed,
-        );
-      },
-      tableBuilder: (context, tableRows, textStyle, config) {
-        return _MarkdownTableCard(
-          tableRows: tableRows,
-          textStyle: textStyle,
-        );
-      },
-      latexBuilder: (context, tex, textStyle, inline) {
-        return _LatexBlock(
-          tex: tex,
-          inline: inline,
-          textStyle: textStyle,
-        );
-      },
-    );
-  }
-}
-
 class _StructuredMarkdownBody extends StatelessWidget {
   final String content;
 
@@ -1811,7 +1522,7 @@ class _StructuredMarkdownBody extends StatelessWidget {
     for (final segment in segments) {
       children.add(
         segment.isCode
-            ? _CodeBlockCard(
+            ? CodeBlockCard(
                 language: segment.language,
                 code: segment.content,
                 closed: segment.closed,
@@ -1848,7 +1559,7 @@ class _StreamingMarkdownBody extends StatelessWidget {
     for (final segment in segments) {
       children.add(
         segment.isCode
-            ? _CodeBlockCard(
+            ? CodeBlockCard(
                 language: segment.language,
                 code: segment.content,
                 closed: segment.closed,
@@ -1926,7 +1637,7 @@ class _LargeMessagePreview extends StatelessWidget {
             spacing: 10,
             runSpacing: 8,
             children: [
-              _CodeCopyButton(text: content, label: '复制全文'),
+              CodeCopyButton(text: content, label: '复制全文'),
             ],
           ),
         ],
@@ -1954,7 +1665,7 @@ class _StructuredSourceBody extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        _CodeBlockCard(
+        CodeBlockCard(
           language: 'markdown',
           code: content,
           closed: true,
@@ -1975,178 +1686,10 @@ class _SingleCodeBlockBody extends StatelessWidget {
     if (parsed == null) {
       return _StructuredSourceBody(content: content);
     }
-    return _CodeBlockCard(
+    return CodeBlockCard(
       language: parsed.$1,
       code: parsed.$2,
       closed: true,
-    );
-  }
-}
-
-class _MarkdownTableCard extends StatelessWidget {
-  final List<CustomTableRow> tableRows;
-  final TextStyle textStyle;
-
-  const _MarkdownTableCard({
-    required this.tableRows,
-    required this.textStyle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final normalizedRows = _normalizeTableRows(tableRows);
-    if (normalizedRows.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    final schemaRow = normalizedRows.firstWhere(
-      (row) => row.fields.isNotEmpty,
-      orElse: () => normalizedRows.first,
-    );
-    final columnCount = schemaRow.fields.length;
-    if (columnCount == 0) {
-      return const SizedBox.shrink();
-    }
-    final displayRows = normalizedRows
-        .map(
-          (row) => CustomTableRow(
-            isHeader: row.isHeader,
-            fields: row.fields.take(columnCount).toList(),
-          ),
-        )
-        .toList();
-    final numericColumns = List<bool>.generate(
-      columnCount,
-      (columnIndex) => _looksLikeNumericTableColumn(displayRows, columnIndex),
-    );
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.zero,
-        child: UnconstrainedBox(
-          alignment: Alignment.centerLeft,
-          constrainedAxis: Axis.vertical,
-          child: IntrinsicWidth(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: AppTheme.surface.withValues(alpha: 0.58),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppTheme.border),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppTheme.isDark
-                        ? Colors.black.withValues(alpha: 0.10)
-                        : Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 18,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Table(
-                  defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-                  defaultColumnWidth: const IntrinsicColumnWidth(),
-                  children: [
-                    for (var rowIndex = 0;
-                        rowIndex < displayRows.length;
-                        rowIndex += 1)
-                      TableRow(
-                        decoration: BoxDecoration(
-                          color: displayRows[rowIndex].isHeader
-                              ? AppTheme.accent.withValues(
-                                  alpha: AppTheme.isDark ? 0.18 : 0.12,
-                                )
-                              : rowIndex.isEven
-                                  ? AppTheme.surface.withValues(alpha: 0.96)
-                                  : AppTheme.surfaceActive.withValues(
-                                      alpha: AppTheme.isDark ? 0.34 : 0.72,
-                                    ),
-                        ),
-                        children: [
-                          for (var columnIndex = 0;
-                              columnIndex < columnCount;
-                              columnIndex += 1)
-                            _MarkdownTableCell(
-                              text: columnIndex <
-                                      displayRows[rowIndex].fields.length
-                                  ? displayRows[rowIndex]
-                                      .fields[columnIndex]
-                                      .data
-                                  : '',
-                              textStyle: textStyle,
-                              isHeader: displayRows[rowIndex].isHeader,
-                              alignRight: columnIndex <
-                                      displayRows[rowIndex].fields.length
-                                  ? displayRows[rowIndex]
-                                              .fields[columnIndex]
-                                              .alignment ==
-                                          TextAlign.right ||
-                                      numericColumns[columnIndex]
-                                  : numericColumns[columnIndex],
-                              showRightBorder: columnIndex < columnCount - 1,
-                              showBottomBorder:
-                                  rowIndex < displayRows.length - 1,
-                            ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MarkdownTableCell extends StatelessWidget {
-  final String text;
-  final TextStyle textStyle;
-  final bool isHeader;
-  final bool alignRight;
-  final bool showRightBorder;
-  final bool showBottomBorder;
-
-  const _MarkdownTableCell({
-    required this.text,
-    required this.textStyle,
-    required this.isHeader,
-    required this.alignRight,
-    required this.showRightBorder,
-    required this.showBottomBorder,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cellStyle = textStyle.copyWith(
-      fontSize: isHeader ? 13.5 : 14,
-      fontWeight: isHeader ? FontWeight.w700 : FontWeight.w500,
-      height: 1.55,
-      color: isHeader ? AppTheme.textPrimary : AppTheme.textSecondary,
-    );
-    return Container(
-      alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-      decoration: BoxDecoration(
-        border: Border(
-          right: showRightBorder
-              ? BorderSide(color: AppTheme.border)
-              : BorderSide.none,
-          bottom: showBottomBorder
-              ? BorderSide(color: AppTheme.border)
-              : BorderSide.none,
-        ),
-      ),
-      child: SelectableText.rich(
-        TextSpan(
-          style: cellStyle,
-          children: _buildPlainInlineSpans(text, cellStyle),
-        ),
-        textAlign: alignRight ? TextAlign.right : TextAlign.left,
-      ),
     );
   }
 }
@@ -2273,7 +1816,7 @@ class _StreamingTextBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _AppMarkdownBody(
+    return AppMarkdownBody(
       content: content,
       style: AppTheme.ts(
         fontSize: 15,
@@ -2370,489 +1913,6 @@ class _SkeletonLine extends StatelessWidget {
       ),
     );
   }
-}
-
-class _LatexBlock extends StatelessWidget {
-  final String tex;
-  final bool inline;
-  final TextStyle textStyle;
-
-  const _LatexBlock({
-    required this.tex,
-    required this.inline,
-    required this.textStyle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final widget = Math.tex(
-      tex,
-      mathStyle: inline ? MathStyle.text : MathStyle.display,
-      textStyle: textStyle.copyWith(color: AppTheme.textPrimary),
-      onErrorFallback: (error) {
-        return SelectableText(
-          tex,
-          style: textStyle.copyWith(
-            color: AppTheme.textSecondary,
-            fontFamily: 'monospace',
-          ),
-        );
-      },
-    );
-    if (inline) {
-      return widget;
-    }
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: widget,
-      ),
-    );
-  }
-}
-
-class _CodeBlockCard extends StatefulWidget {
-  final String language;
-  final String code;
-  final bool closed;
-
-  const _CodeBlockCard({
-    required this.language,
-    required this.code,
-    required this.closed,
-  });
-
-  @override
-  State<_CodeBlockCard> createState() => _CodeBlockCardState();
-}
-
-class _CodeBlockCardState extends State<_CodeBlockCard> {
-  bool _expanded = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final codeText = widget.code.trimRight();
-    final lines = (codeText.isEmpty ? const [''] : codeText.split('\n'));
-    final shouldCollapse =
-        widget.closed && lines.length > _autoCollapseCodeLines;
-    final visibleLines = shouldCollapse && !_expanded
-        ? lines.take(_collapsedCodePreviewLines).toList()
-        : lines;
-    final lineNumbers = List<String>.generate(
-      visibleLines.length,
-      (index) => '${index + 1}',
-    ).join('\n');
-    final visibleCodeText = visibleLines.join('\n');
-    final codeTheme = _codeHighlightTheme();
-    final rootStyle = (codeTheme['root'] ?? const TextStyle()).merge(
-      AppTheme.ts(
-        fontSize: 13,
-        height: 1.6,
-      ).copyWith(fontFamily: 'monospace'),
-    );
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      decoration: BoxDecoration(
-        color: _codeSurfaceColor(),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-            decoration: BoxDecoration(
-              color: _codeHeaderColor(),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(14),
-              ),
-              border: Border(bottom: BorderSide(color: AppTheme.border)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppTheme.surfaceActive,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    widget.language.trim().isEmpty
-                        ? 'code'
-                        : widget.language.trim(),
-                    style: AppTheme.ts(
-                      fontSize: 11,
-                      color: AppTheme.isDark
-                          ? const Color(0xFFC5D1DD)
-                          : const Color(0xFF445468),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                if (!widget.closed) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    '生成中',
-                    style: AppTheme.ts(
-                      fontSize: 11,
-                      color: AppTheme.accent,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-                if (shouldCollapse) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    _expanded
-                        ? '已展开 ${lines.length} 行'
-                        : '预览 ${visibleLines.length}/${lines.length} 行',
-                    style: AppTheme.ts(
-                      fontSize: 11,
-                      color: AppTheme.textTertiary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-                const Spacer(),
-                _CodeCopyButton(text: codeText),
-              ],
-            ),
-          ),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.fromLTRB(12, 12, 14, 14),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(
-                  lineNumbers,
-                  style: AppTheme.ts(
-                    fontSize: 13,
-                    color: AppTheme.isDark
-                        ? const Color(0xFF6D7A88)
-                        : const Color(0xFF8A96A3),
-                    height: 1.6,
-                  ).copyWith(fontFamily: 'monospace'),
-                ),
-                Container(
-                  width: 1,
-                  height: (visibleLines.length * 22)
-                      .toDouble()
-                      .clamp(24, 1200)
-                      .toDouble(),
-                  margin: const EdgeInsets.symmetric(horizontal: 12),
-                  color: AppTheme.border,
-                ),
-                SelectableText.rich(
-                  TextSpan(
-                    style: rootStyle,
-                    children: _buildHighlightedCodeSpans(
-                      visibleCodeText,
-                      widget.language,
-                      codeTheme,
-                      rootStyle,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (shouldCollapse)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () => setState(() => _expanded = !_expanded),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppTheme.textPrimary,
-                    textStyle: AppTheme.ts(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  icon: Icon(
-                    _expanded
-                        ? Icons.expand_less_rounded
-                        : Icons.expand_more_rounded,
-                    size: 16,
-                  ),
-                  label: Text(_expanded ? '收起代码' : '展开完整代码'),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CodeCopyButton extends StatelessWidget {
-  final String text;
-  final String label;
-
-  const _CodeCopyButton({
-    required this.text,
-    this.label = '复制',
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextButton.icon(
-      onPressed: () {
-        Clipboard.setData(ClipboardData(text: text));
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('代码已复制'),
-            duration: Duration(seconds: 1),
-          ),
-        );
-      },
-      style: TextButton.styleFrom(
-        foregroundColor: AppTheme.textSecondary,
-        textStyle: AppTheme.ts(fontSize: 12, fontWeight: FontWeight.w600),
-      ),
-      icon: const Icon(Icons.content_copy_rounded, size: 14),
-      label: Text(label),
-    );
-  }
-}
-
-Map<String, TextStyle> _codeHighlightTheme() {
-  return AppTheme.isDark ? atomOneDarkTheme : atomOneLightTheme;
-}
-
-Color _codeSurfaceColor() {
-  return AppTheme.isDark ? const Color(0xFF171C22) : const Color(0xFFF5F8FC);
-}
-
-Color _codeHeaderColor() {
-  return AppTheme.isDark
-      ? Colors.white.withValues(alpha: 0.04)
-      : const Color(0xFFEFF3F8);
-}
-
-List<InlineSpan> _buildHighlightedCodeSpans(
-  String source,
-  String language,
-  Map<String, TextStyle> theme,
-  TextStyle rootStyle,
-) {
-  final normalizedLanguage = _normalizeHighlightLanguage(language);
-  final result = _safeParseHighlightedCode(source, normalizedLanguage);
-  final nodes = result.nodes;
-  if (nodes == null || nodes.isEmpty) {
-    return [TextSpan(text: source, style: rootStyle)];
-  }
-  return _convertHighlightNodes(nodes, theme, rootStyle);
-}
-
-hl.Result _safeParseHighlightedCode(String source, String? language) {
-  try {
-    return hl.highlight.parse(
-      source,
-      language: language,
-      autoDetection: language == null,
-    );
-  } catch (_) {
-    return hl.highlight.parse(
-      source,
-      autoDetection: true,
-    );
-  }
-}
-
-List<InlineSpan> _convertHighlightNodes(
-  List<Node> nodes,
-  Map<String, TextStyle> theme,
-  TextStyle rootStyle,
-) {
-  List<InlineSpan> traverse(List<Node> input, TextStyle inheritedStyle) {
-    final spans = <InlineSpan>[];
-    for (final node in input) {
-      final nodeStyle = node.className == null
-          ? inheritedStyle
-          : inheritedStyle.merge(theme[node.className!]);
-      if (node.value != null) {
-        spans.add(
-          TextSpan(
-            text: node.value,
-            style: nodeStyle,
-          ),
-        );
-        continue;
-      }
-      final children = node.children;
-      if (children == null || children.isEmpty) {
-        continue;
-      }
-      spans.add(
-        TextSpan(
-          style: nodeStyle,
-          children: traverse(children, nodeStyle),
-        ),
-      );
-    }
-    return spans;
-  }
-
-  return traverse(nodes, rootStyle);
-}
-
-String? _normalizeHighlightLanguage(String language) {
-  final normalized = language.trim().toLowerCase();
-  if (normalized.isEmpty || normalized == 'text' || normalized == 'plaintext') {
-    return null;
-  }
-  const aliases = <String, String>{
-    'py': 'python',
-    'js': 'javascript',
-    'ts': 'typescript',
-    'shell': 'bash',
-    'sh': 'bash',
-    'zsh': 'bash',
-    'md': 'markdown',
-    'yml': 'yaml',
-    'rb': 'ruby',
-    'rs': 'rust',
-    'kt': 'kotlin',
-    'c++': 'cpp',
-    'c#': 'csharp',
-    'objc': 'objectivec',
-  };
-  return aliases[normalized] ?? normalized;
-}
-
-bool _looksLikeNumericTableColumn(List<CustomTableRow> rows, int columnIndex) {
-  final values = <String>[];
-  for (final row in rows) {
-    if (row.isHeader || columnIndex >= row.fields.length) {
-      continue;
-    }
-    final value = row.fields[columnIndex].data.trim();
-    if (value.isNotEmpty) {
-      values.add(value);
-    }
-  }
-  if (values.isEmpty) {
-    return false;
-  }
-  final numericLikeCount = values.where(_looksLikeNumericTableCell).length;
-  return numericLikeCount >= ((values.length + 1) ~/ 2);
-}
-
-List<CustomTableRow> _trimEmptyTableColumns(List<CustomTableRow> rows) {
-  if (rows.isEmpty) {
-    return const [];
-  }
-  final maxColumns = rows.fold<int>(
-    0,
-    (maxCount, row) =>
-        row.fields.length > maxCount ? row.fields.length : maxCount,
-  );
-  if (maxColumns == 0) {
-    return const [];
-  }
-
-  var start = 0;
-  var end = maxColumns - 1;
-
-  while (start <= end && _isTableColumnEmpty(rows, start)) {
-    start += 1;
-  }
-  while (end >= start && _isTableColumnEmpty(rows, end)) {
-    end -= 1;
-  }
-
-  if (start > end) {
-    return const [];
-  }
-
-  return rows
-      .map(
-        (row) => CustomTableRow(
-          isHeader: row.isHeader,
-          fields: row.fields.sublist(
-            start.clamp(0, row.fields.length),
-            end + 1 > row.fields.length ? row.fields.length : end + 1,
-          ),
-        ),
-      )
-      .toList();
-}
-
-List<CustomTableRow> _normalizeTableRows(List<CustomTableRow> rows) {
-  final trimmedRows = rows
-      .map((row) {
-        final normalizedFields = row.fields
-            .map(
-              (field) => CustomTableField(
-                data: field.data.trim(),
-                alignment: field.alignment,
-              ),
-            )
-            .toList();
-        var end = normalizedFields.length;
-        while (end > 0 &&
-            _normalizedTableCellValue(normalizedFields[end - 1].data).isEmpty) {
-          end -= 1;
-        }
-        var start = 0;
-        while (start < end &&
-            _normalizedTableCellValue(normalizedFields[start].data).isEmpty) {
-          start += 1;
-        }
-        return CustomTableRow(
-          isHeader: row.isHeader,
-          fields: normalizedFields.sublist(start, end),
-        );
-      })
-      .where((row) => row.fields.isNotEmpty)
-      .toList();
-  return _trimEmptyTableColumns(trimmedRows);
-}
-
-bool _isTableColumnEmpty(List<CustomTableRow> rows, int columnIndex) {
-  for (final row in rows) {
-    if (columnIndex >= row.fields.length) {
-      continue;
-    }
-    if (_normalizedTableCellValue(row.fields[columnIndex].data).isNotEmpty) {
-      return false;
-    }
-  }
-  return true;
-}
-
-String _normalizedTableCellValue(String value) {
-  return value
-      .replaceAll(RegExp(r'[\u00A0\u200B-\u200D\uFEFF]'), '')
-      .replaceAll('&nbsp;', '')
-      .replaceAll(RegExp(r'[\s\r\n\t]+'), '')
-      .replaceAll(RegExp(r'^[:\-|]+$'), '')
-      .trim();
-}
-
-bool _looksLikeNumericTableCell(String value) {
-  final normalized = value.replaceAll(',', '').replaceAll('，', '').trim();
-  if (normalized.isEmpty) {
-    return false;
-  }
-  final patterns = <RegExp>[
-    RegExp(r'^[¥￥$]?\d+(\.\d+)?([万千百十亿])?([/%])?$'),
-    RegExp(
-        r'^约?[¥￥$]?\d+(\.\d+)?\s*[-~～]\s*[¥￥$]?\d+(\.\d+)?([万千百十亿])?([/%])?$'),
-    RegExp(r'^\d+\s*[-~～]\s*\d+([/%])?$'),
-    RegExp(r'^\d+(\.\d+)?\s*(元|万元|天|晚|小时|km|公里|人|项)$'),
-  ];
-  return patterns.any((pattern) => pattern.hasMatch(normalized));
 }
 
 bool _shouldDegradeRichMarkdown(String content) {
@@ -3560,32 +2620,88 @@ class _CareerAssetReferenceStrip extends ConsumerWidget {
     if (assets.isEmpty) {
       return const SizedBox.shrink();
     }
+    final chat = ref.watch(chatProvider);
+    final nextAction = _careerAssetRecommendedAction(assets);
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 11),
       decoration: BoxDecoration(
-        color: AppTheme.surfaceActive.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.border.withValues(alpha: 0.86)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppTheme.surfaceActive
+                .withValues(alpha: AppTheme.isDark ? 0.48 : 0.78),
+            AppTheme.surfaceHover
+                .withValues(alpha: AppTheme.isDark ? 0.12 : 0.28),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.72)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.inventory_2_outlined,
-                  size: 15, color: AppTheme.accent),
-              const SizedBox(width: 7),
-              Text(
-                "已创建的求职资产",
-                style: AppTheme.ts(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w800,
-                  color: AppTheme.textPrimary,
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(
+                    color: AppTheme.accent.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Icon(
+                  Icons.inventory_2_outlined,
+                  size: 15,
+                  color: AppTheme.accent,
                 ),
               ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "已创建的求职资产",
+                      style: AppTheme.ts(
+                        fontSize: 12.6,
+                        height: 1.15,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      "结果已整理为可预览、可继续处理的资产",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 10.8,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              _CareerAssetCountBadge(count: assets.length),
             ],
           ),
+          if (nextAction != null) ...[
+            const SizedBox(height: 10),
+            _CareerAssetNextStepCard(
+              action: nextAction,
+              enabled: !chat.isStreaming,
+              onPressed: () async {
+                await ref.read(chatProvider).sendMessage(nextAction.prompt);
+              },
+            ),
+          ],
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -3601,6 +2717,161 @@ class _CareerAssetReferenceStrip extends ConsumerWidget {
   }
 }
 
+class _CareerAssetCountBadge extends StatelessWidget {
+  final int count;
+
+  const _CareerAssetCountBadge({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.09),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.13)),
+      ),
+      child: Text(
+        "$count 项",
+        style: AppTheme.ts(
+          fontSize: 10.5,
+          height: 1.1,
+          fontWeight: FontWeight.w800,
+          color: AppTheme.accent,
+        ),
+      ),
+    );
+  }
+}
+
+class _CareerAssetNextStepCard extends StatelessWidget {
+  final _CareerAssetRecommendedAction action;
+  final bool enabled;
+  final Future<void> Function() onPressed;
+
+  const _CareerAssetNextStepCard({
+    required this.action,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: action.color.withValues(alpha: AppTheme.isDark ? 0.08 : 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: action.color.withValues(alpha: 0.15)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: action.color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border:
+                      Border.all(color: action.color.withValues(alpha: 0.16)),
+                ),
+                child: Icon(action.icon, size: 15, color: action.color),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      action.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 11.8,
+                        height: 1.2,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      action.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 10.8,
+                        height: 1.38,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          Align(
+            alignment: Alignment.centerRight,
+            child: _CareerAssetRunActionButton(
+              label: action.buttonLabel,
+              icon: action.buttonIcon,
+              enabled: enabled,
+              onPressed: onPressed,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CareerAssetRunActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool enabled;
+  final Future<void> Function() onPressed;
+
+  const _CareerAssetRunActionButton({
+    required this.label,
+    required this.icon,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: enabled ? () => unawaited(onPressed()) : null,
+      style: TextButton.styleFrom(
+        foregroundColor: enabled ? AppTheme.accent : AppTheme.textTertiary,
+        backgroundColor: enabled
+            ? AppTheme.accent.withValues(alpha: 0.12)
+            : AppTheme.textTertiary.withValues(alpha: 0.06),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        side: BorderSide(
+          color: (enabled ? AppTheme.accent : AppTheme.textTertiary)
+              .withValues(alpha: 0.18),
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        textStyle: AppTheme.ts(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      icon: Icon(icon, size: 14),
+      label: Text(label),
+    );
+  }
+}
+
 class _CareerAssetReferenceCard extends ConsumerWidget {
   final _DetectedCareerAsset asset;
 
@@ -3609,23 +2880,39 @@ class _CareerAssetReferenceCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final chat = ref.watch(chatProvider);
+    final careerAssets = ref.watch(careerAssetsProvider);
     final sessionArtifact = asset.kind == _CareerAssetKind.artifact
         ? _findSessionArtifact(chat.sessionArtifacts, asset.id)
         : null;
-    final title = sessionArtifact?.title ?? asset.title;
-    final subtitle = asset.kind == _CareerAssetKind.artifact
-        ? (sessionArtifact == null
-            ? "资产编号 ${asset.id}"
-            : "${sessionArtifact.sizeDisplay} · ${_artifactStatusLabel(sessionArtifact.status)}")
-        : asset.id;
+    final careerRecord = asset.kind == _CareerAssetKind.artifact
+        ? null
+        : _findCareerRecord(careerAssets, asset);
+    final title = _careerAssetReferenceTitle(
+      asset,
+      sessionArtifact: sessionArtifact,
+      careerRecord: careerRecord,
+    );
+    final subtitle = _careerAssetReferenceSubtitle(
+      asset,
+      sessionArtifact: sessionArtifact,
+      careerRecord: careerRecord,
+    );
 
     return Container(
-      width: 238,
-      padding: const EdgeInsets.all(10),
+      width: 252,
+      padding: const EdgeInsets.fromLTRB(11, 11, 11, 10),
       decoration: BoxDecoration(
         color: AppTheme.surface.withValues(alpha: 0.78),
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(color: AppTheme.border),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.borderLight.withValues(alpha: 0.78)),
+        boxShadow: [
+          BoxShadow(
+            color:
+                Colors.black.withValues(alpha: AppTheme.isDark ? 0.08 : 0.025),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3672,8 +2959,10 @@ class _CareerAssetReferenceCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 7),
-          SelectableText(
+          Text(
             subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: AppTheme.ts(
               fontSize: 10.5,
               color: AppTheme.textTertiary,
@@ -3708,7 +2997,7 @@ class _CareerAssetReferenceCard extends ConsumerWidget {
                   onPressed: () => _selectCareerAsset(context, ref, asset),
                 ),
               _ArtifactActionButton(
-                label: "复制 ID",
+                label: "复制",
                 icon: Icons.content_copy_rounded,
                 onPressed: () => _copyText(context, asset.id, "资产编号已复制"),
               ),
@@ -3735,6 +3024,79 @@ class _ArtifactList extends StatelessWidget {
           .toList(),
     );
   }
+}
+
+String _careerAssetReferenceTitle(
+  _DetectedCareerAsset asset, {
+  required SessionArtifactView? sessionArtifact,
+  required Object? careerRecord,
+}) {
+  if (sessionArtifact != null) {
+    return sessionArtifact.title;
+  }
+  if (careerRecord is ResumeProfileView) {
+    return careerRecord.displayName;
+  }
+  if (careerRecord is CareerProfileView) {
+    return careerRecord.careerGoal.trim().isEmpty
+        ? "职业画像"
+        : careerRecord.careerGoal.trim();
+  }
+  if (careerRecord is JDAnalysisView) {
+    return careerRecord.displayTitle;
+  }
+  if (careerRecord is JobFitReportView) {
+    return careerRecord.recommendation.trim().isEmpty
+        ? "岗位匹配报告"
+        : "匹配报告 · ${careerRecord.recommendation.trim()}";
+  }
+  if (careerRecord is ResumeVersionView) {
+    return careerRecord.title.trim().isEmpty ? "简历版本" : careerRecord.title;
+  }
+  if (asset.kind == _CareerAssetKind.artifact) {
+    return _shortAssetId(asset.id);
+  }
+  return asset.label;
+}
+
+String _careerAssetReferenceSubtitle(
+  _DetectedCareerAsset asset, {
+  required SessionArtifactView? sessionArtifact,
+  required Object? careerRecord,
+}) {
+  if (sessionArtifact != null) {
+    return "${sessionArtifact.sizeDisplay} · ${_artifactStatusLabel(sessionArtifact.status)}";
+  }
+  if (careerRecord is ResumeProfileView) {
+    return "${careerRecord.skills.length} 技能 · ${careerRecord.projectExperience.length} 项目 · ${careerRecord.workExperience.length} 经历";
+  }
+  if (careerRecord is CareerProfileView) {
+    final roles = careerRecord.targetRoles.take(2).join(" / ");
+    return roles.isEmpty ? "产品记录 · 可在右侧面板查看" : roles;
+  }
+  if (careerRecord is JDAnalysisView) {
+    final keywords = careerRecord.keywords.take(3).join(" / ");
+    return keywords.isEmpty ? "JD 分析 · 可在右侧面板查看" : keywords;
+  }
+  if (careerRecord is JobFitReportView) {
+    return "整体匹配 ${careerRecord.overallScore}/100";
+  }
+  if (careerRecord is ResumeVersionView) {
+    return careerRecord.format.trim().isEmpty
+        ? "简历版本 · 可预览下载"
+        : "${careerRecord.format} · 可预览下载";
+  }
+  if (asset.kind == _CareerAssetKind.artifact) {
+    return "文件资产 · 点击预览或下载";
+  }
+  return "产品记录 · 可在右侧求职资产面板查看";
+}
+
+String _shortAssetId(String value) {
+  if (value.length <= 18) {
+    return value;
+  }
+  return "${value.substring(0, 10)}...${value.substring(value.length - 4)}";
 }
 
 class _ArtifactCard extends ConsumerWidget {
@@ -3981,7 +3343,12 @@ Future<void> _previewSessionArtifact(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (sheetContext) => _SessionArtifactPreviewSheet(preview: preview),
+    builder: (sheetContext) => _SessionArtifactPreviewSheet(
+      preview: preview,
+      onDownload: () => _downloadSessionArtifact(sheetContext, ref, artifactId),
+      onCopyContent: () => _copyText(sheetContext, preview.content, "预览内容已复制"),
+      onCopyId: () => _copyText(sheetContext, preview.artifactId, "文件编号已复制"),
+    ),
   );
 }
 
@@ -4091,130 +3458,607 @@ Future<void> _previewWorkspaceArtifact(
 
 class _SessionArtifactPreviewSheet extends StatelessWidget {
   final SessionArtifactContentView preview;
+  final Future<void> Function() onDownload;
+  final Future<void> Function() onCopyContent;
+  final Future<void> Function() onCopyId;
 
-  const _SessionArtifactPreviewSheet({required this.preview});
+  const _SessionArtifactPreviewSheet({
+    required this.preview,
+    required this.onDownload,
+    required this.onCopyContent,
+    required this.onCopyId,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final contentHeight = MediaQuery.sizeOf(context).height * 0.82;
+    final size = MediaQuery.sizeOf(context);
+    final contentHeight = size.height * 0.88;
+    final isCareerReport = CareerReportView.canRender(preview.content);
+    final maxReaderWidth = isCareerReport ? 900.0 : 780.0;
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      top: false,
+      child: Align(
+        alignment: Alignment.bottomCenter,
         child: Container(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           constraints: BoxConstraints(
-            maxWidth: 960,
+            maxWidth: 980,
             maxHeight: contentHeight,
           ),
           decoration: AppTheme.floatingPanelDecoration(
-            radius: 28,
+            radius: 26,
             alpha: 0.96,
           ),
+          clipBehavior: Clip.antiAlias,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 14, 12),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: AppTheme.accent.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: AppTheme.accent.withValues(alpha: 0.22),
-                        ),
-                      ),
-                      child: Icon(
-                        Icons.description_outlined,
-                        size: 18,
-                        color: AppTheme.accent,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            preview.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppTheme.ts(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          SelectableText(
-                            "资产编号 ${preview.artifactId}",
-                            style: AppTheme.ts(
-                              fontSize: 12,
-                              color: AppTheme.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: "关闭",
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded),
-                      color: AppTheme.textSecondary,
-                    ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _PreviewMetaChip(
-                      icon: Icons.text_snippet_outlined,
-                      label:
-                          "${preview.returnedChars}/${preview.totalChars} 字符",
-                    ),
-                    _PreviewMetaChip(
-                      icon: Icons.badge_outlined,
-                      label: preview.status,
-                    ),
-                    if (preview.truncated)
-                      const _PreviewMetaChip(
-                        icon: Icons.content_cut_rounded,
-                        label: "当前为截断预览",
-                      ),
-                  ],
-                ),
+              _SessionPreviewHeader(
+                preview: preview,
+                isCareerReport: isCareerReport,
+                onDownload: onDownload,
+                onCopyContent: onCopyContent,
+                onCopyId: onCopyId,
               ),
               Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                  child: Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surface.withValues(alpha: 0.82),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: AppTheme.border),
-                    ),
-                    child: _MessageBody(
-                      content: preview.content,
-                      isUser: false,
-                      isStreaming: false,
-                      answerFormat: _artifactAnswerFormat(preview.mediaType),
-                      renderHint: _artifactRenderHint(preview.mediaType),
-                      layoutHint: 'paragraph',
-                    ),
-                  ),
+                child: _SessionPreviewReaderStage(
+                  preview: preview,
+                  isCareerReport: isCareerReport,
+                  maxReaderWidth: maxReaderWidth,
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SessionPreviewReaderStage extends StatelessWidget {
+  final SessionArtifactContentView preview;
+  final bool isCareerReport;
+  final double maxReaderWidth;
+
+  const _SessionPreviewReaderStage({
+    required this.preview,
+    required this.isCareerReport,
+    required this.maxReaderWidth,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 760;
+        final horizontalPadding = wide ? 28.0 : 14.0;
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      AppTheme.bg
+                          .withValues(alpha: AppTheme.isDark ? 0.2 : 0.48),
+                      AppTheme.surfaceHover
+                          .withValues(alpha: AppTheme.isDark ? 0.08 : 0.3),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Scrollbar(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  wide ? 24 : 16,
+                  horizontalPadding,
+                  wide ? 42 : 28,
+                ),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxReaderWidth),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (preview.truncated) ...[
+                          const _SessionPreviewNotice(),
+                          const SizedBox(height: 12),
+                        ],
+                        _SessionReaderSurface(
+                          isCareerReport: isCareerReport,
+                          child: isCareerReport
+                              ? CareerReportView(
+                                  content: preview.content,
+                                  readerMode: true,
+                                )
+                              : _MessageBody(
+                                  content: preview.content,
+                                  isUser: false,
+                                  isStreaming: false,
+                                  answerFormat:
+                                      _artifactAnswerFormat(preview.mediaType),
+                                  renderHint:
+                                      _artifactRenderHint(preview.mediaType),
+                                  layoutHint: 'paragraph',
+                                ),
+                        ),
+                        const SizedBox(height: 10),
+                        _SessionReaderFootnote(
+                          artifactId: preview.artifactId,
+                          characterLabel:
+                              "${preview.returnedChars}/${preview.totalChars} 字符",
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const _SessionPreviewEdgeFade(alignment: Alignment.topCenter),
+            const _SessionPreviewEdgeFade(alignment: Alignment.bottomCenter),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SessionReaderSurface extends StatelessWidget {
+  final bool isCareerReport;
+  final Widget child;
+
+  const _SessionReaderSurface({
+    required this.isCareerReport,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final padding = EdgeInsets.fromLTRB(
+      isCareerReport ? 14 : 18,
+      isCareerReport ? 14 : 18,
+      isCareerReport ? 14 : 18,
+      isCareerReport ? 16 : 20,
+    );
+    return Container(
+      width: double.infinity,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: AppTheme.isDark ? 0.68 : 0.9),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppTheme.borderLight.withValues(alpha: 0.64)),
+        boxShadow: [
+          BoxShadow(
+            color:
+                Colors.black.withValues(alpha: AppTheme.isDark ? 0.14 : 0.055),
+            blurRadius: 26,
+            offset: const Offset(0, 16),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            height: isCareerReport ? 4 : 3,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppTheme.accent.withValues(alpha: 0.72),
+                  const Color(0xFF2563EB)
+                      .withValues(alpha: AppTheme.isDark ? 0.44 : 0.34),
+                  AppTheme.accent.withValues(alpha: 0.12),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: padding,
+            child: child,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionReaderFootnote extends StatelessWidget {
+  final String artifactId;
+  final String characterLabel;
+
+  const _SessionReaderFootnote({
+    required this.artifactId,
+    required this.characterLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.center,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        alignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          _PreviewMetaChip(
+            icon: Icons.short_text_rounded,
+            label: characterLabel,
+          ),
+          _PreviewMetaChip(
+            icon: Icons.fingerprint_rounded,
+            label: "文件 ${_shortAssetId(artifactId)}",
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionPreviewEdgeFade extends StatelessWidget {
+  final Alignment alignment;
+
+  const _SessionPreviewEdgeFade({required this.alignment});
+
+  @override
+  Widget build(BuildContext context) {
+    final isTop = alignment == Alignment.topCenter;
+    return IgnorePointer(
+      child: Align(
+        alignment: alignment,
+        child: Container(
+          height: isTop ? 18 : 34,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: isTop ? Alignment.topCenter : Alignment.bottomCenter,
+              end: isTop ? Alignment.bottomCenter : Alignment.topCenter,
+              colors: [
+                AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.46 : 0.66),
+                AppTheme.bg.withValues(alpha: 0),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SessionPreviewHeader extends StatelessWidget {
+  final SessionArtifactContentView preview;
+  final bool isCareerReport;
+  final Future<void> Function() onDownload;
+  final Future<void> Function() onCopyContent;
+  final Future<void> Function() onCopyId;
+
+  const _SessionPreviewHeader({
+    required this.preview,
+    required this.isCareerReport,
+    required this.onDownload,
+    required this.onCopyContent,
+    required this.onCopyId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final title = preview.title.trim().isEmpty ? "文件预览" : preview.title;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 15, 14, 14),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.96),
+        border: Border(
+          bottom: BorderSide(color: AppTheme.border.withValues(alpha: 0.64)),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: AppTheme.isDark ? 0.1 : 0.03),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 700;
+          final titleBlock = _SessionPreviewTitleBlock(
+            title: title,
+            isCareerReport: isCareerReport,
+            preview: preview,
+          );
+          final actions = _SessionPreviewActionCluster(
+            onDownload: onDownload,
+            onCopyContent: onCopyContent,
+            onCopyId: onCopyId,
+            onClose: () => Navigator.of(context).pop(),
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _SessionPreviewIcon(isCareerReport: isCareerReport),
+                    const SizedBox(width: 12),
+                    Expanded(child: titleBlock),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: actions,
+                ),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _SessionPreviewIcon(isCareerReport: isCareerReport),
+              const SizedBox(width: 12),
+              Expanded(child: titleBlock),
+              const SizedBox(width: 14),
+              actions,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _SessionPreviewIcon extends StatelessWidget {
+  final bool isCareerReport;
+
+  const _SessionPreviewIcon({required this.isCareerReport});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.11),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.2)),
+      ),
+      child: Icon(
+        isCareerReport ? Icons.fact_check_outlined : Icons.article_outlined,
+        size: 19,
+        color: AppTheme.accent,
+      ),
+    );
+  }
+}
+
+class _SessionPreviewTitleBlock extends StatelessWidget {
+  final String title;
+  final bool isCareerReport;
+  final SessionArtifactContentView preview;
+
+  const _SessionPreviewTitleBlock({
+    required this.title,
+    required this.isCareerReport,
+    required this.preview,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          isCareerReport ? "报告阅读器" : "文档预览",
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppTheme.ts(
+            fontSize: 10.5,
+            height: 1.1,
+            fontWeight: FontWeight.w800,
+            color: AppTheme.accent,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: AppTheme.ts(
+            fontSize: 15.5,
+            height: 1.22,
+            fontWeight: FontWeight.w800,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 9),
+        Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          children: [
+            _PreviewMetaChip(
+              icon: isCareerReport
+                  ? Icons.dashboard_customize_outlined
+                  : Icons.notes_rounded,
+              label: isCareerReport ? "报告阅读" : "Markdown 预览",
+            ),
+            _PreviewMetaChip(
+              icon: Icons.short_text_rounded,
+              label: "${preview.returnedChars}/${preview.totalChars} 字符",
+            ),
+            _PreviewMetaChip(
+              icon: Icons.fingerprint_rounded,
+              label: "文件 ${_shortAssetId(preview.artifactId)}",
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _SessionPreviewActionCluster extends StatelessWidget {
+  final Future<void> Function() onDownload;
+  final Future<void> Function() onCopyContent;
+  final Future<void> Function() onCopyId;
+  final VoidCallback onClose;
+
+  const _SessionPreviewActionCluster({
+    required this.onDownload,
+    required this.onCopyContent,
+    required this.onCopyId,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.34 : 0.58),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.7)),
+      ),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          _SessionPreviewPrimaryButton(
+            icon: Icons.download_rounded,
+            label: "下载",
+            onTap: onDownload,
+          ),
+          _SessionPreviewIconButton(
+            icon: Icons.content_copy_rounded,
+            tooltip: "复制内容",
+            onTap: onCopyContent,
+          ),
+          _SessionPreviewIconButton(
+            icon: Icons.tag_rounded,
+            tooltip: "复制文件编号",
+            onTap: onCopyId,
+          ),
+          _SessionPreviewIconButton(
+            icon: Icons.close_rounded,
+            tooltip: "关闭",
+            onTap: () async => onClose(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SessionPreviewPrimaryButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Future<void> Function() onTap;
+
+  const _SessionPreviewPrimaryButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      onPressed: () => unawaited(onTap()),
+      style: TextButton.styleFrom(
+        foregroundColor: AppTheme.accent,
+        backgroundColor: AppTheme.accent.withValues(alpha: 0.13),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        side: BorderSide(color: AppTheme.accent.withValues(alpha: 0.23)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle: AppTheme.ts(
+          fontSize: 11.5,
+          height: 1,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      icon: Icon(icon, size: 15),
+      label: Text(label),
+    );
+  }
+}
+
+class _SessionPreviewIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final Future<void> Function() onTap;
+
+  const _SessionPreviewIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => unawaited(onTap()),
+          child: Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: AppTheme.surface.withValues(alpha: 0.82),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.border),
+            ),
+            child: Icon(icon, size: 16, color: AppTheme.textSecondary),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SessionPreviewNotice extends StatelessWidget {
+  const _SessionPreviewNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFB45309)
+            .withValues(alpha: AppTheme.isDark ? 0.11 : 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border:
+            Border.all(color: const Color(0xFFB45309).withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.content_cut_rounded,
+            size: 15,
+            color: Color(0xFFB45309),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "当前为预览片段，下载原文件可查看完整内容。",
+              style: AppTheme.ts(
+                fontSize: 11.2,
+                height: 1.35,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -4509,6 +4353,114 @@ class _DetectedCareerAsset {
       };
 }
 
+class _CareerAssetRecommendedAction {
+  final String title;
+  final String description;
+  final String buttonLabel;
+  final String prompt;
+  final IconData icon;
+  final IconData buttonIcon;
+  final Color color;
+
+  const _CareerAssetRecommendedAction({
+    required this.title,
+    required this.description,
+    required this.buttonLabel,
+    required this.prompt,
+    required this.icon,
+    required this.buttonIcon,
+    required this.color,
+  });
+}
+
+_CareerAssetRecommendedAction? _careerAssetRecommendedAction(
+  List<_DetectedCareerAsset> assets,
+) {
+  final fitReport = _firstAssetOfKind(assets, _CareerAssetKind.jobFitReport);
+  if (fitReport != null) {
+    return _CareerAssetRecommendedAction(
+      title: "建议下一步：生成定制简历",
+      description: "基于匹配报告把优势、项目和关键词转成可投递版本。",
+      buttonLabel: "生成定制简历",
+      prompt:
+          "请基于匹配报告 ${fitReport.id} 生成一版面向目标岗位的中文 Markdown 定制简历。要求：只使用已有简历事实，不编造经历；突出与 JD 匹配的项目、技能和量化结果；最后列出改动摘要。",
+      icon: Icons.edit_note_rounded,
+      buttonIcon: Icons.auto_awesome_rounded,
+      color: const Color(0xFFB45309),
+    );
+  }
+
+  final resumeProfile =
+      _firstAssetOfKind(assets, _CareerAssetKind.resumeProfile);
+  final jdAnalysis = _firstAssetOfKind(assets, _CareerAssetKind.jdAnalysis);
+  if (resumeProfile != null && jdAnalysis != null) {
+    return _CareerAssetRecommendedAction(
+      title: "建议下一步：生成匹配报告",
+      description: "把简历画像和 JD 分析合并，产出岗位匹配结论和风险建议。",
+      buttonLabel: "生成匹配报告",
+      prompt:
+          "请基于简历画像 ${resumeProfile.id} 和 JD 分析 ${jdAnalysis.id} 生成岗位匹配报告，并沉淀为可复用求职资产。",
+      icon: Icons.fact_check_outlined,
+      buttonIcon: Icons.play_arrow_rounded,
+      color: AppTheme.accent,
+    );
+  }
+
+  final resumeVersion =
+      _firstAssetOfKind(assets, _CareerAssetKind.resumeVersion);
+  if (resumeVersion != null) {
+    return _CareerAssetRecommendedAction(
+      title: "建议下一步：检查可投递性",
+      description: "对已生成版本做投递前检查，确认关键词、风险和表达是否到位。",
+      buttonLabel: "检查简历",
+      prompt:
+          "请基于简历版本 ${resumeVersion.id} 做一次投递前检查，重点看岗位关键词覆盖、项目表达、量化结果、风险点和可读性，并给出修改建议。",
+      icon: Icons.rule_rounded,
+      buttonIcon: Icons.search_rounded,
+      color: const Color(0xFFDC2626),
+    );
+  }
+
+  if (resumeProfile != null) {
+    return _CareerAssetRecommendedAction(
+      title: "建议下一步：匹配目标岗位",
+      description: "继续提供 JD 后，可以基于这份画像生成岗位匹配报告。",
+      buttonLabel: "准备匹配 JD",
+      prompt:
+          "我想基于简历画像 ${resumeProfile.id} 匹配一个目标岗位。请告诉我需要提供哪些 JD 信息，并在我提供后生成 JD 分析和匹配报告。",
+      icon: Icons.route_outlined,
+      buttonIcon: Icons.arrow_forward_rounded,
+      color: const Color(0xFF0F9B78),
+    );
+  }
+
+  if (jdAnalysis != null) {
+    return _CareerAssetRecommendedAction(
+      title: "建议下一步：补齐候选人证据",
+      description: "先把 JD 需求转成简历证据清单，方便后续匹配画像。",
+      buttonLabel: "生成证据清单",
+      prompt: "请基于 JD 分析 ${jdAnalysis.id} 提炼一份候选人需要补齐的简历证据清单，按硬性要求、加分项、风险项分组。",
+      icon: Icons.checklist_rounded,
+      buttonIcon: Icons.play_arrow_rounded,
+      color: const Color(0xFF7C3AED),
+    );
+  }
+
+  return null;
+}
+
+_DetectedCareerAsset? _firstAssetOfKind(
+  List<_DetectedCareerAsset> assets,
+  _CareerAssetKind kind,
+) {
+  for (final asset in assets) {
+    if (asset.kind == kind) {
+      return asset;
+    }
+  }
+  return null;
+}
+
 class _CareerMessagePresentation {
   final String content;
   final List<_DetectedCareerAsset> assets;
@@ -4670,581 +4622,6 @@ CareerAssetsTab _careerAssetsTabForKind(_CareerAssetKind kind) {
     _CareerAssetKind.resumeVersion => CareerAssetsTab.versions,
     _CareerAssetKind.artifact => CareerAssetsTab.all,
   };
-}
-
-class _CareerReportPresentation {
-  final String lead;
-  final List<_CareerReportSection> sections;
-
-  const _CareerReportPresentation({
-    required this.lead,
-    required this.sections,
-  });
-
-  static _CareerReportPresentation? tryParse(String content) {
-    final normalized =
-        content.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
-    if (!_looksLikeCareerReport(normalized)) {
-      return null;
-    }
-    final leadLines = <String>[];
-    final sections = <_CareerReportSection>[];
-    String? currentTitle;
-    final currentBody = <String>[];
-
-    void flushSection() {
-      final title = currentTitle;
-      if (title == null) return;
-      sections.add(
-        _CareerReportSection(
-          title: title,
-          body: currentBody.join('\n').trim(),
-        ),
-      );
-      currentBody.clear();
-    }
-
-    for (final rawLine in normalized.split('\n')) {
-      final heading = _careerSectionHeading(rawLine);
-      if (heading != null) {
-        flushSection();
-        currentTitle = heading;
-        continue;
-      }
-      final trimmed = rawLine.trim();
-      if (currentTitle == null) {
-        if (trimmed == '---' || trimmed.isEmpty) {
-          continue;
-        }
-        leadLines.add(rawLine);
-      } else {
-        currentBody.add(rawLine);
-      }
-    }
-    flushSection();
-    if (sections.length < 2) {
-      return null;
-    }
-    return _CareerReportPresentation(
-      lead: leadLines.join('\n').trim(),
-      sections: sections,
-    );
-  }
-}
-
-class _CareerReportSection {
-  final String title;
-  final String body;
-
-  const _CareerReportSection({
-    required this.title,
-    required this.body,
-  });
-}
-
-String _careerReportDisplayTitle(_CareerReportPresentation report) {
-  final joinedTitles =
-      report.sections.map((section) => section.title).join(" ");
-  if (joinedTitles.contains("匹配") || joinedTitles.contains("差距")) {
-    return "岗位匹配报告";
-  }
-  if (joinedTitles.contains("JD")) {
-    return "JD 分析报告";
-  }
-  if (joinedTitles.contains("优化")) {
-    return "简历优化报告";
-  }
-  return "简历诊断报告";
-}
-
-String _careerLeadContent(String content) {
-  final lines =
-      content.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n");
-  final output = <String>[];
-  for (final rawLine in lines) {
-    final trimmed = rawLine.trim();
-    if (trimmed.isEmpty || trimmed == "---") {
-      continue;
-    }
-    final heading = trimmed.replaceFirst(RegExp(r"^#{1,6}\s*"), "").trim();
-    final duplicatedReportTitle = trimmed.startsWith("#") &&
-        (heading.contains("诊断报告") ||
-            heading.contains("匹配报告") ||
-            heading.contains("分析报告") ||
-            heading.contains("优化报告"));
-    if (duplicatedReportTitle) {
-      continue;
-    }
-    output.add(rawLine);
-  }
-  return output.join("\n").trim();
-}
-
-bool _isSummarySection(String title) {
-  return title.contains("摘要");
-}
-
-bool _isInsightGridSection(String title) {
-  return title.contains("优势");
-}
-
-bool _isRiskSection(String title) {
-  return title.contains("风险") || title.contains("差距");
-}
-
-bool _isActionListSection(String title) {
-  return title.contains("建议") || title.contains("优化") || title.contains("面试");
-}
-
-List<_CareerSummaryField> _careerSummaryFields(String body) {
-  final fields = <_CareerSummaryField>[];
-  for (final rawLine in body.split("\n")) {
-    final line = _careerDisplayLine(rawLine);
-    if (line.isEmpty) {
-      continue;
-    }
-    final field = _splitCareerLabelValue(line, maxLabelChars: 24);
-    if (field == null) {
-      continue;
-    }
-    fields.add(_CareerSummaryField(label: field.label, value: field.value));
-    if (fields.length >= 8) {
-      break;
-    }
-  }
-  return fields;
-}
-
-List<_CareerSectionItem> _careerSectionItems(String body) {
-  final groups = <String>[];
-  final current = <String>[];
-
-  void flush() {
-    final value = current.join("\n").trim();
-    if (value.isNotEmpty) {
-      groups.add(value);
-    }
-    current.clear();
-  }
-
-  for (final rawLine in body.split("\n")) {
-    final trimmed = rawLine.trim();
-    if (trimmed.isEmpty) {
-      continue;
-    }
-    final startsItem = RegExp(r"^(\d+[\.\)、]|[-*•])\s+").hasMatch(trimmed);
-    final line = _careerDisplayLine(rawLine);
-    if (line.isEmpty) {
-      continue;
-    }
-    if (startsItem) {
-      flush();
-    }
-    current.add(line);
-  }
-  flush();
-  if (groups.isEmpty && body.trim().isNotEmpty) {
-    groups.add(_careerDisplayBlock(body));
-  }
-  return groups
-      .where((item) => item.isNotEmpty)
-      .map(_careerSectionItemFromText)
-      .toList();
-}
-
-_CareerSectionItem _careerSectionItemFromText(String text) {
-  final normalized = text.trim();
-  final field = _splitCareerLabelValue(normalized, maxLabelChars: 36);
-  if (field != null) {
-    return _CareerSectionItem(title: field.label, detail: field.value);
-  }
-  return _CareerSectionItem(title: "", detail: normalized);
-}
-
-String _normalizeCareerReportLine(String value) {
-  return _stripMarkdownInline(_careerDisplayLine(value))
-      .replaceAll(RegExp(r"[ \t]+"), " ")
-      .trim();
-}
-
-String _careerDisplayLine(String value) {
-  return value
-      .trim()
-      .replaceFirst(RegExp(r"^#{1,6}\s*"), "")
-      .replaceFirst(RegExp(r"^(\d+[\.\)、]|[-*•])\s+"), "")
-      .trim();
-}
-
-String _careerDisplayBlock(String value) {
-  return value
-      .replaceAll("\r\n", "\n")
-      .replaceAll("\r", "\n")
-      .split("\n")
-      .map(_careerDisplayLine)
-      .where((line) => line.isNotEmpty)
-      .join("\n")
-      .trim();
-}
-
-_CareerLabelValue? _splitCareerLabelValue(
-  String line, {
-  required int maxLabelChars,
-}) {
-  final normalized = line.trim();
-  if (normalized.isEmpty) {
-    return null;
-  }
-  final boldLabelPatterns = [
-    RegExp(r"^\*\*([^*\n:：]{1,48})[:：]\*\*\s*(.+)$", dotAll: true),
-    RegExp(r"^__([^_\n:：]{1,48})[:：]__\s*(.+)$", dotAll: true),
-    RegExp(r"^\*\*([^*\n]{1,48})\*\*\s*[:：]\s*(.+)$", dotAll: true),
-    RegExp(r"^__([^_\n]{1,48})__\s*[:：]\s*(.+)$", dotAll: true),
-  ];
-  for (final pattern in boldLabelPatterns) {
-    final match = pattern.firstMatch(normalized);
-    if (match == null) {
-      continue;
-    }
-    final label = _stripMarkdownInline(match.group(1) ?? "").trim();
-    final value = _cleanCareerMarkdownValue(match.group(2) ?? "");
-    if (label.isNotEmpty && label.length <= maxLabelChars && value.isNotEmpty) {
-      return _CareerLabelValue(label: label, value: value);
-    }
-  }
-  final separator = RegExp(r"[:：]").firstMatch(normalized);
-  if (separator == null || separator.start == 0) {
-    return null;
-  }
-  final label =
-      _stripMarkdownInline(normalized.substring(0, separator.start)).trim();
-  final value = _cleanCareerMarkdownValue(normalized.substring(separator.end));
-  if (label.isEmpty || label.length > maxLabelChars || value.isEmpty) {
-    return null;
-  }
-  return _CareerLabelValue(label: label, value: value);
-}
-
-String _cleanCareerMarkdownValue(String value) {
-  return value
-      .trim()
-      .replaceFirst(RegExp(r"^(\*\*|__)\s*"), "")
-      .replaceFirst(RegExp(r"\s*(\*\*|__)$"), "")
-      .trim();
-}
-
-String _stripMarkdownInline(String value) {
-  return value
-      .replaceAllMapped(
-        RegExp(r"\*\*([^*]+)\*\*"),
-        (match) => match.group(1) ?? "",
-      )
-      .replaceAllMapped(
-        RegExp(r"__([^_]+)__"),
-        (match) => match.group(1) ?? "",
-      )
-      .replaceAllMapped(
-        RegExp(r"\[([^\]]+)\]\([^)]+\)"),
-        (match) => match.group(1) ?? "",
-      )
-      .replaceAllMapped(
-        RegExp(r"`([^`]+)`"),
-        (match) => match.group(1) ?? "",
-      )
-      .trim();
-}
-
-List<_CareerRiskItem> _careerRiskItems(String body) {
-  final risks = <_CareerRiskItem>[];
-  final fallbackItems = <_CareerSectionItem>[];
-
-  for (final rawLine in body.split("\n")) {
-    final displayLine = _careerDisplayLine(rawLine);
-    final plainLine = _normalizeCareerReportLine(rawLine);
-    if (displayLine.isEmpty || _isMarkdownTableDivider(displayLine)) {
-      continue;
-    }
-    final risk = _riskItemFromPipeLine(displayLine);
-    if (risk != null) {
-      risks.add(risk);
-      continue;
-    }
-    if (!_isMarkdownTableHeader(plainLine)) {
-      fallbackItems.add(_careerSectionItemFromText(displayLine));
-    }
-  }
-
-  if (risks.isNotEmpty) {
-    return risks;
-  }
-
-  return fallbackItems
-      .where((item) => item.title.isNotEmpty || item.detail.isNotEmpty)
-      .map(
-        (item) => _CareerRiskItem(
-          title: item.title.isEmpty
-              ? _riskTitleFromDetail(item.detail)
-              : item.title,
-          level: _riskLevelFromText("${item.title} ${item.detail}"),
-          detail: item.title.isEmpty ? item.detail : item.detail,
-        ),
-      )
-      .toList();
-}
-
-_CareerRiskItem? _riskItemFromPipeLine(String line) {
-  var normalized = line
-      .replaceFirst(RegExp(r"^\|"), "")
-      .replaceFirst(RegExp(r"\|$"), "")
-      .trim();
-  normalized = normalized
-      .replaceFirst(RegExp(r"^\[[^\]]*(风险项|等级|说明)[^\]]*\]\s*\|?\s*"), "")
-      .trim();
-  if (_isMarkdownTableHeader(normalized)) {
-    return null;
-  }
-  final delimiter = normalized.contains("|") ? "|" : "｜";
-  final parts = normalized
-      .split(delimiter)
-      .map((item) => item.trim())
-      .where((item) => item.isNotEmpty)
-      .toList();
-  if (parts.length < 3) {
-    return null;
-  }
-  final title = _stripMarkdownInline(parts[0]).trim();
-  final level = _stripMarkdownInline(parts[1]).trim();
-  final detail = _cleanCareerMarkdownValue(parts.sublist(2).join(" | "));
-  if (title.isEmpty || detail.isEmpty) {
-    return null;
-  }
-  return _CareerRiskItem(title: title, level: level, detail: detail);
-}
-
-bool _isMarkdownTableHeader(String line) {
-  final compact = _stripMarkdownInline(line).replaceAll(" ", "");
-  return compact.contains("风险项") &&
-      compact.contains("等级") &&
-      compact.contains("说明");
-}
-
-bool _isMarkdownTableDivider(String line) {
-  return RegExp(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$").hasMatch(line);
-}
-
-String _riskTitleFromDetail(String detail) {
-  final clean = _stripMarkdownInline(detail).trim();
-  final separator = RegExp(r"[，,。；;]").firstMatch(clean);
-  if (separator == null || separator.start < 4) {
-    return clean.length > 18 ? "${clean.substring(0, 18)}..." : clean;
-  }
-  return clean.substring(0, separator.start).trim();
-}
-
-String _riskLevelFromText(String text) {
-  if (RegExp(r"(高风险|严重|高\s*[｜|:]|等级[:：]?\s*高)").hasMatch(text)) {
-    return "高";
-  }
-  if (RegExp(r"(低风险|轻微|低\s*[｜|:]|等级[:：]?\s*低)").hasMatch(text)) {
-    return "低";
-  }
-  if (RegExp(r"(中风险|中等|中\s*[｜|:]|等级[:：]?\s*中)").hasMatch(text)) {
-    return "中";
-  }
-  return "中";
-}
-
-_CareerRiskLevel _careerRiskLevel(String value) {
-  final normalized = value.trim();
-  if (normalized.contains("高")) {
-    return const _CareerRiskLevel(
-      label: "高风险",
-      icon: Icons.priority_high_rounded,
-      color: Color(0xFFDC2626),
-    );
-  }
-  if (normalized.contains("低")) {
-    return const _CareerRiskLevel(
-      label: "低风险",
-      icon: Icons.info_outline_rounded,
-      color: Color(0xFF0F766E),
-    );
-  }
-  return const _CareerRiskLevel(
-    label: "中风险",
-    icon: Icons.warning_amber_rounded,
-    color: Color(0xFFB45309),
-  );
-}
-
-_CareerItemVisual _careerItemVisual(
-  String text, {
-  required Color fallbackColor,
-  required IconData fallbackIcon,
-}) {
-  final value = _stripMarkdownInline(text).toLowerCase();
-  if (_containsAny(value, [
-    "python",
-    "fastapi",
-    "postgres",
-    "redis",
-    "mysql",
-    "elasticsearch",
-    "pydantic",
-    "技术栈",
-    "后端"
-  ])) {
-    return const _CareerItemVisual(
-      label: "技术栈",
-      icon: Icons.terminal_rounded,
-      color: Color(0xFF0F9B78),
-    );
-  }
-  if (_containsAny(value,
-      ["pytest", "mypy", "测试", "覆盖率", "ci", "cd", "github actions", "质量"])) {
-    return const _CareerItemVisual(
-      label: "质量验证",
-      icon: Icons.verified_outlined,
-      color: Color(0xFF2563EB),
-    );
-  }
-  if (_containsAny(value, [
-    "架构",
-    "runtime",
-    "langchain",
-    "agent",
-    "multi-agent",
-    "工具调用",
-    "事件",
-    "审计",
-    "jsonl"
-  ])) {
-    return const _CareerItemVisual(
-      label: "架构能力",
-      icon: Icons.account_tree_rounded,
-      color: Color(0xFF7C3AED),
-    );
-  }
-  if (_containsAny(value, ["性能", "延迟", "失败率", "吞吐", "压测", "压力", "优化", "效率"])) {
-    return const _CareerItemVisual(
-      label: "性能优化",
-      icon: Icons.speed_rounded,
-      color: Color(0xFFB45309),
-    );
-  }
-  if (_containsAny(value, ["项目", "成果", "量化", "指标", "贡献", "落地", "实践"])) {
-    return const _CareerItemVisual(
-      label: "项目成果",
-      icon: Icons.insights_rounded,
-      color: Color(0xFF0E7490),
-    );
-  }
-  if (_containsAny(value, ["模型", "机器学习", "训练", "mlops", "算法", "llm"])) {
-    return const _CareerItemVisual(
-      label: "模型经验",
-      icon: Icons.psychology_alt_outlined,
-      color: Color(0xFFB45309),
-    );
-  }
-  if (_containsAny(value, ["简历", "表达", "描述", "措辞", "补充", "改写"])) {
-    return const _CareerItemVisual(
-      label: "表达优化",
-      icon: Icons.edit_note_rounded,
-      color: Color(0xFF2563EB),
-    );
-  }
-  if (_containsAny(value, ["岗位", "jd", "匹配", "筛选", "投递"])) {
-    return const _CareerItemVisual(
-      label: "岗位匹配",
-      icon: Icons.work_outline_rounded,
-      color: Color(0xFF0F766E),
-    );
-  }
-  return _CareerItemVisual(
-    label: "",
-    icon: fallbackIcon,
-    color: fallbackColor,
-  );
-}
-
-bool _containsAny(String value, List<String> keywords) {
-  return keywords.any((keyword) => value.contains(keyword.toLowerCase()));
-}
-
-void _copyInlineMarkdownLink(BuildContext context, String url) {
-  Clipboard.setData(ClipboardData(text: url));
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(url.isEmpty ? "链接为空" : "链接已复制"),
-      duration: const Duration(seconds: 1),
-    ),
-  );
-}
-
-bool _looksLikeCareerReport(String content) {
-  if (content.isEmpty) {
-    return false;
-  }
-  final hits =
-      _careerSectionTitles.where((title) => content.contains(title)).length;
-  return hits >= 2 &&
-      (content.contains("简历") ||
-          content.contains("诊断") ||
-          content.contains("JD") ||
-          content.contains("匹配"));
-}
-
-String? _careerSectionHeading(String line) {
-  var text = line.trim();
-  if (text.isEmpty) {
-    return null;
-  }
-  text = text
-      .replaceFirst(RegExp(r'^#{1,6}\s*'), '')
-      .replaceFirst(RegExp(r'^\d+[\.、]\s*'), '')
-      .replaceAll(RegExp(r'[:：]\s*$'), '')
-      .trim();
-  for (final title in _careerSectionTitles) {
-    if (text == title || text.startsWith("$title ")) {
-      return title;
-    }
-  }
-  return null;
-}
-
-const _careerSectionTitles = [
-  "诊断摘要",
-  "核心优势",
-  "风险点",
-  "关键改进建议",
-  "改进建议",
-  "匹配摘要",
-  "主要差距",
-  "简历优化方向",
-  "面试准备重点",
-];
-
-IconData _careerSectionIcon(String title) {
-  if (title.contains("优势")) return Icons.trending_up_rounded;
-  if (title.contains("风险") || title.contains("差距")) {
-    return Icons.warning_amber_rounded;
-  }
-  if (title.contains("建议") || title.contains("优化")) {
-    return Icons.auto_fix_high_rounded;
-  }
-  if (title.contains("面试")) return Icons.record_voice_over_outlined;
-  return Icons.summarize_outlined;
-}
-
-Color _careerSectionColor(String title) {
-  if (title.contains("优势")) return AppTheme.accent;
-  if (title.contains("风险") || title.contains("差距")) {
-    return const Color(0xFFB45309);
-  }
-  if (title.contains("建议") || title.contains("优化")) {
-    return const Color(0xFF2563EB);
-  }
-  if (title.contains("面试")) return const Color(0xFF7C3AED);
-  return AppTheme.textSecondary;
 }
 
 class _Cursor extends StatefulWidget {
