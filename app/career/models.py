@@ -13,12 +13,14 @@ from app.core.errors import ValidationError
 from app.core.time import normalize_app_datetime
 
 __all__ = [
+    "CareerApplication",
     "CareerProfile",
     "CareerRecordStatus",
     "JDAnalysis",
     "JobFitReport",
     "ResumeProfile",
     "ResumeVersion",
+    "validate_application_id",
     "validate_artifact_id",
     "validate_career_profile_id",
     "validate_evidence_refs",
@@ -38,6 +40,7 @@ class CareerRecordStatus(str, Enum):
 
 
 _ID_PATTERNS = {
+    "application_id": re.compile(r"^application_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     "artifact_id": re.compile(r"^artifact_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     "career_profile_id": re.compile(r"^career_profile_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     "fit_id": re.compile(r"^fit_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
@@ -47,6 +50,7 @@ _ID_PATTERNS = {
     "session_ref": re.compile(r"^sess_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
 }
 _EVIDENCE_REF_PATTERNS = (
+    _ID_PATTERNS["application_id"],
     _ID_PATTERNS["artifact_id"],
     _ID_PATTERNS["career_profile_id"],
     _ID_PATTERNS["fit_id"],
@@ -56,6 +60,17 @@ _EVIDENCE_REF_PATTERNS = (
     _ID_PATTERNS["session_ref"],
 )
 _RECOMMENDATIONS = {"recommended", "cautious", "not_recommended"}
+_APPLICATION_STAGES = {
+    "draft",
+    "analyzing",
+    "ready_to_apply",
+    "applied",
+    "interviewing",
+    "offer",
+    "rejected",
+    "paused",
+}
+_APPLICATION_PRIORITIES = {"high", "medium", "low"}
 
 
 @dataclass(slots=True)
@@ -366,6 +381,91 @@ class ResumeVersion:
         )
 
 
+@dataclass(slots=True)
+class CareerApplication:
+    """A user-visible project for one target job application."""
+
+    application_id: str
+    status: CareerRecordStatus
+    source_session_id: str
+    source_artifact_id: str | None
+    evidence_refs: list[str]
+    created_at: datetime
+    updated_at: datetime
+    company: str = ""
+    position: str = ""
+    location: str = ""
+    job_url: str = ""
+    stage: str = "draft"
+    priority: str = "medium"
+    resume_profile_id: str | None = None
+    career_profile_id: str | None = None
+    jd_analysis_id: str | None = None
+    job_fit_report_id: str | None = None
+    resume_version_ids: list[str] = field(default_factory=list)
+    summary: str = ""
+    next_actions: list[str] = field(default_factory=list)
+    risks: list[str] = field(default_factory=list)
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        self.application_id = validate_application_id(self.application_id)
+        _normalize_record_metadata(self)
+        self.company = _normalize_text("company", self.company, allow_empty=True)
+        self.position = _normalize_text("position", self.position, allow_empty=True)
+        self.location = _normalize_text("location", self.location, allow_empty=True)
+        self.job_url = _normalize_text("job_url", self.job_url, allow_empty=True)
+        self.stage = _normalize_application_stage(self.stage)
+        self.priority = _normalize_application_priority(self.priority)
+        self.resume_profile_id = _normalize_optional_id(
+            "resume_profile_id",
+            self.resume_profile_id,
+            "resume_profile_id",
+        )
+        self.career_profile_id = _normalize_optional_id(
+            "career_profile_id",
+            self.career_profile_id,
+            "career_profile_id",
+        )
+        self.jd_analysis_id = _normalize_optional_id("jd_analysis_id", self.jd_analysis_id, "jd_id")
+        self.job_fit_report_id = _normalize_optional_id(
+            "job_fit_report_id",
+            self.job_fit_report_id,
+            "fit_id",
+        )
+        self.resume_version_ids = _normalize_resume_version_ids(self.resume_version_ids)
+        self.summary = _normalize_text("summary", self.summary, allow_empty=True)
+        self.next_actions = _normalize_string_list("next_actions", self.next_actions)
+        self.risks = _normalize_string_list("risks", self.risks)
+        self.notes = _normalize_text("notes", self.notes, allow_empty=True)
+
+    def copy(self) -> Self:
+        return type(self)(
+            application_id=self.application_id,
+            status=self.status,
+            source_session_id=self.source_session_id,
+            source_artifact_id=self.source_artifact_id,
+            evidence_refs=list(self.evidence_refs),
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            company=self.company,
+            position=self.position,
+            location=self.location,
+            job_url=self.job_url,
+            stage=self.stage,
+            priority=self.priority,
+            resume_profile_id=self.resume_profile_id,
+            career_profile_id=self.career_profile_id,
+            jd_analysis_id=self.jd_analysis_id,
+            job_fit_report_id=self.job_fit_report_id,
+            resume_version_ids=list(self.resume_version_ids),
+            summary=self.summary,
+            next_actions=list(self.next_actions),
+            risks=list(self.risks),
+            notes=self.notes,
+        )
+
+
 def _normalize_record_metadata(record: object) -> None:
     status = getattr(record, "status")
     source_session_id = getattr(record, "source_session_id")
@@ -403,6 +503,10 @@ def _normalize_status(value: CareerRecordStatus | str) -> CareerRecordStatus:
 
 def validate_artifact_id(value: str) -> str:
     return _validate_id("artifact_id", value, "artifact_id")
+
+
+def validate_application_id(value: str) -> str:
+    return _validate_id("application_id", value, "application_id")
 
 
 def validate_career_profile_id(value: str) -> str:
@@ -443,6 +547,11 @@ def _normalize_optional_id(field_name: str, value: str | None, pattern_name: str
     if pattern_name == "jd_id":
         return validate_jd_id(value)
     return _validate_id(field_name, value, pattern_name)
+
+
+def _normalize_resume_version_ids(values: list[str]) -> list[str]:
+    ids = _normalize_string_list("resume_version_ids", values)
+    return [validate_resume_version_id(item) for item in ids]
 
 
 def _normalize_optional_artifact_id(field_name: str, value: str | None) -> str | None:
@@ -548,4 +657,18 @@ def _normalize_recommendation(value: str) -> str:
     normalized = _require_non_empty("recommendation", value).lower()
     if normalized not in _RECOMMENDATIONS:
         raise ValidationError(f"recommendation is invalid: {normalized}")
+    return normalized
+
+
+def _normalize_application_stage(value: str) -> str:
+    normalized = _require_non_empty("stage", value).lower()
+    if normalized not in _APPLICATION_STAGES:
+        raise ValidationError(f"stage is invalid: {normalized}")
+    return normalized
+
+
+def _normalize_application_priority(value: str) -> str:
+    normalized = _require_non_empty("priority", value).lower()
+    if normalized not in _APPLICATION_PRIORITIES:
+        raise ValidationError(f"priority is invalid: {normalized}")
     return normalized

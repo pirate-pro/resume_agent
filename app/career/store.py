@@ -11,12 +11,14 @@ from uuid import uuid4
 
 from app.core.time import app_now, from_app_iso, normalize_app_datetime, to_app_iso
 from app.career.models import (
+    CareerApplication,
     CareerProfile,
     CareerRecordStatus,
     JDAnalysis,
     JobFitReport,
     ResumeProfile,
     ResumeVersion,
+    validate_application_id,
     validate_artifact_id,
     validate_career_profile_id,
     validate_evidence_refs,
@@ -29,7 +31,15 @@ from app.core.errors import StorageError, ValidationError
 
 __all__ = ["CareerProductStore"]
 
-_RecordT = TypeVar("_RecordT", ResumeProfile, CareerProfile, JDAnalysis, JobFitReport, ResumeVersion)
+_RecordT = TypeVar(
+    "_RecordT",
+    ResumeProfile,
+    CareerProfile,
+    JDAnalysis,
+    JobFitReport,
+    ResumeVersion,
+    CareerApplication,
+)
 
 _CAREER_PROFILE_STRING_FIELDS = {
     "career_goal",
@@ -47,6 +57,21 @@ _CAREER_PROFILE_LIST_FIELDS = {
     "resume_issues",
     "interview_weaknesses",
 }
+_CAREER_APPLICATION_STRING_FIELDS = {
+    "stage",
+    "priority",
+    "resume_profile_id",
+    "career_profile_id",
+    "jd_analysis_id",
+    "job_fit_report_id",
+    "summary",
+    "notes",
+}
+_CAREER_APPLICATION_LIST_FIELDS = {
+    "resume_version_ids",
+    "next_actions",
+    "risks",
+}
 
 
 class CareerProductStore:
@@ -61,7 +86,14 @@ class CareerProductStore:
         self._resumes_dir = self._root_dir / "resumes"
         self._jobs_dir = self._root_dir / "jobs"
         self._versions_dir = self._root_dir / "versions"
-        for path in (self._profiles_dir, self._resumes_dir, self._jobs_dir, self._versions_dir):
+        self._applications_dir = self._root_dir / "applications"
+        for path in (
+            self._profiles_dir,
+            self._resumes_dir,
+            self._jobs_dir,
+            self._versions_dir,
+            self._applications_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
     def _now(self) -> datetime:
@@ -263,6 +295,77 @@ class CareerProductStore:
             return None
         return self.save_resume_version(replace(record, status=CareerRecordStatus.ARCHIVED))
 
+    def save_career_application(self, record: CareerApplication) -> CareerApplication:
+        if not isinstance(record, CareerApplication):
+            raise ValidationError("record must be CareerApplication.")
+        validated = record.copy()
+        path = self._career_application_path(validated.application_id)
+        stamped = _stamp_record(validated, _read_record(path, _career_application_from_payload), self._now())
+        _write_json_payload(path, _career_application_to_payload(stamped))
+        return stamped.copy()
+
+    def get_career_application(self, application_id: str) -> CareerApplication | None:
+        return _read_record(
+            self._career_application_path(validate_application_id(application_id)),
+            _career_application_from_payload,
+        )
+
+    def list_career_applications(self, *, include_archived: bool = False) -> list[CareerApplication]:
+        records = [
+            _read_record_required(path, _career_application_from_payload)
+            for path in sorted(self._applications_dir.glob("*.json"))
+        ]
+        return _filter_and_sort(records, include_archived=include_archived)
+
+    def archive_career_application(self, application_id: str) -> CareerApplication | None:
+        record = self.get_career_application(application_id)
+        if record is None:
+            return None
+        return self.save_career_application(replace(record, status=CareerRecordStatus.ARCHIVED))
+
+    def merge_career_application(
+        self,
+        application_id: str,
+        *,
+        updates: dict[str, Any],
+        evidence_refs: list[str],
+        source_artifact_id: str | None = None,
+    ) -> CareerApplication:
+        record = self.get_career_application(application_id)
+        if record is None:
+            raise ValidationError(f"CareerApplication not found: {application_id}")
+        normalized_updates = _normalize_update_payload(updates)
+        normalized_evidence_refs = _validate_evidence_refs(evidence_refs)
+        if not normalized_evidence_refs:
+            raise ValidationError("evidence_refs are required for CareerApplication merge.")
+        normalized_source_artifact_id = _normalize_optional_artifact_id(source_artifact_id)
+
+        values: dict[str, Any] = {}
+        for field_name, raw_value in normalized_updates.items():
+            if field_name in _CAREER_APPLICATION_STRING_FIELDS:
+                if raw_value is None:
+                    continue
+                if not isinstance(raw_value, str):
+                    raise ValidationError(f"{field_name} must be a string.")
+                normalized = raw_value.strip()
+                if normalized:
+                    values[field_name] = _normalize_application_string_update(field_name, normalized)
+                continue
+            if field_name in _CAREER_APPLICATION_LIST_FIELDS:
+                if raw_value is None:
+                    continue
+                additions = _normalize_application_list_update(field_name, raw_value)
+                if additions:
+                    values[field_name] = _merge_string_lists(getattr(record, field_name), additions)
+                continue
+            raise ValidationError(f"Unsupported CareerApplication merge field: {field_name}")
+
+        values["evidence_refs"] = _merge_string_lists(record.evidence_refs, normalized_evidence_refs)
+        if normalized_source_artifact_id is not None and record.source_artifact_id is None:
+            values["source_artifact_id"] = normalized_source_artifact_id
+        updated = replace(record, **values)
+        return self.save_career_application(updated)
+
     def _career_profile_path(self, career_profile_id: str) -> Path:
         return self._profiles_dir / f"{career_profile_id}.json"
 
@@ -281,6 +384,9 @@ class CareerProductStore:
 
     def _resume_version_path(self, resume_version_id: str) -> Path:
         return self._versions_dir / f"{resume_version_id}.json"
+
+    def _career_application_path(self, application_id: str) -> Path:
+        return self._applications_dir / f"{application_id}.json"
 
 
 def _resume_profile_to_payload(record: ResumeProfile) -> dict[str, Any]:
@@ -470,7 +576,56 @@ def _resume_version_from_payload(payload: dict[str, Any]) -> ResumeVersion:
     )
 
 
-def _base_payload(record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion) -> dict[str, Any]:
+def _career_application_to_payload(record: CareerApplication) -> dict[str, Any]:
+    payload = _base_payload(record)
+    payload.update(
+        {
+            "application_id": record.application_id,
+            "company": record.company,
+            "position": record.position,
+            "location": record.location,
+            "job_url": record.job_url,
+            "stage": record.stage,
+            "priority": record.priority,
+            "resume_profile_id": record.resume_profile_id,
+            "career_profile_id": record.career_profile_id,
+            "jd_analysis_id": record.jd_analysis_id,
+            "job_fit_report_id": record.job_fit_report_id,
+            "resume_version_ids": record.resume_version_ids,
+            "summary": record.summary,
+            "next_actions": record.next_actions,
+            "risks": record.risks,
+            "notes": record.notes,
+        }
+    )
+    return payload
+
+
+def _career_application_from_payload(payload: dict[str, Any]) -> CareerApplication:
+    return CareerApplication(
+        application_id=payload["application_id"],
+        **_base_kwargs(payload),
+        company=payload.get("company", ""),
+        position=payload.get("position", ""),
+        location=payload.get("location", ""),
+        job_url=payload.get("job_url", ""),
+        stage=payload.get("stage", "draft"),
+        priority=payload.get("priority", "medium"),
+        resume_profile_id=payload.get("resume_profile_id"),
+        career_profile_id=payload.get("career_profile_id"),
+        jd_analysis_id=payload.get("jd_analysis_id"),
+        job_fit_report_id=payload.get("job_fit_report_id"),
+        resume_version_ids=payload.get("resume_version_ids", []),
+        summary=payload.get("summary", ""),
+        next_actions=payload.get("next_actions", []),
+        risks=payload.get("risks", []),
+        notes=payload.get("notes", ""),
+    )
+
+
+def _base_payload(
+    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication,
+) -> dict[str, Any]:
     return {
         "status": record.status.value,
         "source_session_id": record.source_session_id,
@@ -590,6 +745,25 @@ def _normalize_string_list(field_name: str, values: list[Any]) -> list[str]:
         output.append(item)
         seen.add(item)
     return output
+
+
+def _normalize_application_string_update(field_name: str, value: str) -> str:
+    if field_name == "resume_profile_id":
+        return validate_resume_profile_id(value)
+    if field_name == "career_profile_id":
+        return validate_career_profile_id(value)
+    if field_name == "jd_analysis_id":
+        return validate_jd_id(value)
+    if field_name == "job_fit_report_id":
+        return validate_fit_id(value)
+    return value
+
+
+def _normalize_application_list_update(field_name: str, value: Any) -> list[str]:
+    additions = _normalize_string_list(field_name, value)
+    if field_name == "resume_version_ids":
+        return [validate_resume_version_id(item) for item in additions]
+    return additions
 
 
 def _merge_string_lists(existing: list[str], additions: list[str]) -> list[str]:

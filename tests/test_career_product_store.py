@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 
 from app.career.models import (
+    CareerApplication,
     CareerProfile,
     CareerRecordStatus,
     JDAnalysis,
@@ -116,6 +117,40 @@ def _resume_version(record_id: str = "resume_version_alpha") -> ResumeVersion:
     )
 
 
+def _career_application(record_id: str = "application_alpha") -> CareerApplication:
+    return CareerApplication(
+        application_id=record_id,
+        status=CareerRecordStatus.ACTIVE,
+        source_session_id="sess_alpha",
+        source_artifact_id="artifact_jd",
+        evidence_refs=[
+            "artifact_jd",
+            "resume_profile_alpha",
+            "career_profile_default",
+            "jd_alpha",
+            "fit_alpha",
+            "resume_version_alpha",
+        ],
+        created_at=_now(),
+        updated_at=_now(),
+        company="Example Co",
+        position="AI 应用开发工程师",
+        location="上海",
+        job_url="https://example.com/jobs/agent-backend",
+        stage="ready_to_apply",
+        priority="high",
+        resume_profile_id="resume_profile_alpha",
+        career_profile_id="career_profile_default",
+        jd_analysis_id="jd_alpha",
+        job_fit_report_id="fit_alpha",
+        resume_version_ids=["resume_version_alpha"],
+        summary="Example Co · AI 应用开发工程师，建议优先投递。",
+        next_actions=["确认投递渠道", "准备 Agent 架构问题"],
+        risks=["RAG 项目细节需补充"],
+        notes="项目轻量备注",
+    )
+
+
 def test_career_store_persists_all_record_types_across_instances(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.save_resume_profile(_resume_profile())
@@ -123,6 +158,7 @@ def test_career_store_persists_all_record_types_across_instances(tmp_path: Path)
     store.save_jd_analysis(_jd_analysis())
     store.save_job_fit_report(_job_fit_report())
     store.save_resume_version(_resume_version())
+    store.save_career_application(_career_application())
 
     reloaded = _store(tmp_path)
 
@@ -131,6 +167,7 @@ def test_career_store_persists_all_record_types_across_instances(tmp_path: Path)
     jd = reloaded.get_jd_analysis("jd_alpha")
     fit = reloaded.get_job_fit_report("fit_alpha")
     version = reloaded.get_resume_version("resume_version_alpha")
+    application = reloaded.get_career_application("application_alpha")
 
     assert resume is not None
     assert resume.basic_info["name"] == "候选人"
@@ -144,6 +181,11 @@ def test_career_store_persists_all_record_types_across_instances(tmp_path: Path)
     assert fit.report_artifact_id == "artifact_fit_report"
     assert version is not None
     assert version.artifact_id == "artifact_resume_version"
+    assert application is not None
+    assert application.company == "Example Co"
+    assert application.stage == "ready_to_apply"
+    assert application.priority == "high"
+    assert application.resume_version_ids == ["resume_version_alpha"]
     assert not list((tmp_path / "career").rglob("*.md"))
 
 
@@ -161,6 +203,22 @@ def test_career_store_lists_active_records_and_archives(tmp_path: Path) -> None:
     assert [record.resume_profile_id for record in active_records] == ["resume_profile_beta"]
     assert {record.resume_profile_id for record in all_records} == {"resume_profile_alpha", "resume_profile_beta"}
     assert store.archive_resume_profile("resume_profile_missing") is None
+
+
+def test_career_store_lists_active_applications_and_archives(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.save_career_application(_career_application("application_alpha"))
+    store.save_career_application(_career_application("application_beta"))
+
+    archived = store.archive_career_application("application_alpha")
+    active_records = store.list_career_applications()
+    all_records = store.list_career_applications(include_archived=True)
+
+    assert archived is not None
+    assert archived.status == CareerRecordStatus.ARCHIVED
+    assert [record.application_id for record in active_records] == ["application_beta"]
+    assert {record.application_id for record in all_records} == {"application_alpha", "application_beta"}
+    assert store.archive_career_application("application_missing") is None
 
 
 def test_career_store_owns_record_timestamps(tmp_path: Path) -> None:
@@ -251,11 +309,89 @@ def test_career_profile_merge_rejects_unknown_fields_and_missing_evidence(tmp_pa
         )
 
 
+def test_career_application_merge_preserves_project_and_appends_lists(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.save_career_application(_career_application())
+
+    updated = store.merge_career_application(
+        "application_alpha",
+        updates={
+            "stage": "applied",
+            "priority": "medium",
+            "resume_version_ids": ["resume_version_alpha", "resume_version_beta"],
+            "summary": "已投递 Example Co · AI 应用开发工程师。",
+            "next_actions": ["确认投递渠道", "等待 HR 反馈"],
+            "risks": ["RAG 项目细节需补充", "消息队列经验需准备"],
+            "notes": "2026-05-11 已投递。",
+        },
+        evidence_refs=["resume_version_beta", "artifact_resume_version"],
+        source_artifact_id="artifact_jd",
+    )
+
+    assert updated.stage == "applied"
+    assert updated.priority == "medium"
+    assert updated.resume_version_ids == ["resume_version_alpha", "resume_version_beta"]
+    assert updated.summary == "已投递 Example Co · AI 应用开发工程师。"
+    assert updated.next_actions == ["确认投递渠道", "准备 Agent 架构问题", "等待 HR 反馈"]
+    assert updated.risks == ["RAG 项目细节需补充", "消息队列经验需准备"]
+    assert updated.notes == "2026-05-11 已投递。"
+    assert updated.evidence_refs == [
+        "artifact_jd",
+        "resume_profile_alpha",
+        "career_profile_default",
+        "jd_alpha",
+        "fit_alpha",
+        "resume_version_alpha",
+        "resume_version_beta",
+        "artifact_resume_version",
+    ]
+
+
+def test_career_application_merge_rejects_unknown_fields_and_missing_evidence(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.save_career_application(_career_application())
+
+    with pytest.raises(ValidationError):
+        store.merge_career_application(
+            "application_alpha",
+            updates={"company": "不允许通过 merge 更新"},
+            evidence_refs=["artifact_jd"],
+        )
+    with pytest.raises(ValidationError):
+        store.merge_career_application(
+            "application_alpha",
+            updates={"stage": "applied"},
+            evidence_refs=[],
+        )
+    with pytest.raises(ValidationError):
+        store.merge_career_application(
+            "application_missing",
+            updates={"stage": "applied"},
+            evidence_refs=["artifact_jd"],
+        )
+    with pytest.raises(ValidationError):
+        store.merge_career_application(
+            "application_alpha",
+            updates={"resume_version_ids": ["resume_version_alpha", "bad_version_id"]},
+            evidence_refs=["artifact_jd"],
+        )
+
+
 def test_career_models_validate_ids_status_and_evidence_format(tmp_path: Path) -> None:
     store = _store(tmp_path)
 
     with pytest.raises(ValidationError):
         store.save_resume_profile(_resume_profile("resume-alpha"))
+    with pytest.raises(ValidationError):
+        store.save_career_application(_career_application("career_application_alpha"))
+    with pytest.raises(ValidationError):
+        bad_stage = _career_application("application_bad_stage")
+        bad_stage.stage = "unknown"
+        store.save_career_application(bad_stage)
+    with pytest.raises(ValidationError):
+        bad_priority = _career_application("application_bad_priority")
+        bad_priority.priority = "urgent"
+        store.save_career_application(bad_priority)
     with pytest.raises(ValidationError):
         ResumeProfile(
             resume_profile_id="resume_profile_alpha",
@@ -348,6 +484,20 @@ def test_career_store_rejects_schema_type_mismatch_on_read(tmp_path: Path) -> No
         store.get_career_profile()
     with pytest.raises(StorageError):
         store.list_career_profiles()
+
+
+def test_career_store_rejects_application_schema_type_mismatch_on_read(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.save_career_application(_career_application("application_bad_schema"))
+    path = tmp_path / "career" / "applications" / "application_bad_schema.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["resume_version_ids"] = "resume_version_alpha"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(StorageError):
+        store.get_career_application("application_bad_schema")
+    with pytest.raises(StorageError):
+        store.list_career_applications()
 
 
 def test_career_store_rejects_base_schema_type_mismatch_on_read(tmp_path: Path) -> None:
