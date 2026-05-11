@@ -118,7 +118,7 @@ def test_context_assembler_injects_invokable_agent_catalog_for_main_agent(tmp_pa
     assert "Do not create workspace files only to pass their paths to child agents" in bundle.system_prompt
     assert "Do not pass depends_on to delegate_agents" in bundle.system_prompt
     assert "Child agent ids such as resume_agent/job_agent are not tool names" in bundle.system_prompt
-    assert "Use max_tool_rounds 8-10 for child tasks that must create artifacts or product records" in bundle.system_prompt
+    assert "Use max_tool_rounds 10-20 for child tasks that must create artifacts or product records" in bundle.system_prompt
     assert "do not invent ids" in bundle.system_prompt
     assert any(definition.name == "delegate_agents" for definition in bundle.tool_definitions)
 

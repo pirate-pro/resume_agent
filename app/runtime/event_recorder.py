@@ -99,6 +99,65 @@ _TOOL_LABELS = {
     "career_resume_version_list": "列出简历版本",
 }
 
+_AGENT_TOTAL_STEPS = {
+    "resume_agent": 7,
+    "job_agent": 7,
+    "agent_main": 6,
+}
+
+_AGENT_PHASE_DEFAULTS = {
+    "resume_agent": "resume_analysis",
+    "job_agent": "job_analysis",
+    "agent_main": "orchestration",
+}
+
+_AGENT_NEXT_ACTIONS = {
+    "resume_agent": {
+        1: "读取简历文件",
+        2: "提取基础信息和经历",
+        3: "识别技能栈和项目亮点",
+        4: "诊断风险和缺口",
+        5: "生成诊断报告",
+        6: "保存简历画像",
+        7: "等待主控汇总",
+    },
+    "job_agent": {
+        1: "读取 JD 资料",
+        2: "提取岗位要求",
+        3: "读取简历画像",
+        4: "计算匹配信号",
+        5: "生成风险和建议",
+        6: "保存匹配报告",
+        7: "等待主控汇总",
+    },
+    "agent_main": {
+        1: "准备上下文",
+        2: "拆分任务",
+        3: "委派子 Agent",
+        4: "汇总子结果",
+        5: "更新产品记录",
+        6: "整理最终答复",
+    },
+}
+
+_TOOL_PROGRESS_HINTS = {
+    "session_list_artifacts": ("artifact_context", 1, "正在确认本轮可用资料", "读取目标文件"),
+    "session_plan_artifact_access": ("artifact_context", 1, "正在规划资料读取范围", "读取目标文件"),
+    "session_read_artifact": ("artifact_reading", 2, "正在读取文件内容", "提取结构化信息"),
+    "session_search_artifact": ("artifact_reading", 2, "正在检索文件中的关键信息", "提取结构化信息"),
+    "session_create_text_artifact": ("report_generation", 6, "正在生成可预览报告文件", "保存产品记录"),
+    "career_resume_profile_save": ("resume_profile", 7, "正在保存简历画像", "等待主控汇总"),
+    "career_resume_profile_get": ("resume_profile", 3, "正在读取简历画像", "继续匹配分析"),
+    "career_profile_get": ("career_profile", 3, "正在读取职业画像", "继续匹配分析"),
+    "career_profile_merge": ("career_profile", 5, "正在更新职业画像", "整理最终答复"),
+    "career_jd_analysis_save": ("jd_analysis", 4, "正在保存 JD 分析", "计算岗位匹配"),
+    "career_jd_analysis_get": ("jd_analysis", 4, "正在读取 JD 分析", "计算岗位匹配"),
+    "career_job_fit_report_save": ("job_fit", 6, "正在保存岗位匹配报告", "等待主控汇总"),
+    "career_job_fit_report_get": ("job_fit", 6, "正在读取岗位匹配报告", "整理最终答复"),
+    "career_resume_version_create": ("resume_version", 6, "正在生成定制简历版本", "整理最终答复"),
+    "memory_search": ("context_lookup", 2, "正在检索可复用上下文", "继续任务分析"),
+}
+
 
 class EventRecorder:
     """Create and append normalized events into session logs."""
@@ -206,76 +265,215 @@ def _progress_payload(event: EventRecord) -> dict[str, Any] | None:
     source_payload = event.payload if isinstance(event.payload, dict) else {}
 
     if event.type == "run_started":
-        return {
-            **base,
-            "stage": "started",
-            "status": "running",
-            "title": "启动 agent",
-            "detail": "子 agent 已启动，正在装载上下文",
-        }
+        return _with_progress_context(
+            base,
+            event.agent_id,
+            {
+                "stage": "started",
+                "status": "running",
+                "title": "启动 agent",
+                "detail": "子 agent 已启动，正在装载上下文",
+            },
+            phase=_agent_phase(event.agent_id),
+            step_index=1,
+            current_action=f"{_agent_display_name(event.agent_id)}已启动，正在准备运行环境",
+        )
     if event.type == "memory_retrieval":
-        return {
-            **base,
-            "stage": "context",
-            "status": "running",
-            "title": "装载上下文",
-            "detail": "已读取可用上下文",
-        }
+        return _with_progress_context(
+            base,
+            event.agent_id,
+            {
+                "stage": "context",
+                "status": "running",
+                "title": "装载上下文",
+                "detail": "已读取可用上下文",
+            },
+            phase="context_lookup",
+            step_index=2,
+            current_action="正在读取会话资料、历史上下文和可用工具",
+        )
     if event.type == "assistant_thinking":
-        return {
-            **base,
-            "stage": "planning",
-            "status": "running",
-            "title": "规划任务",
-            "detail": "已形成下一步处理计划",
-        }
+        return _with_progress_context(
+            base,
+            event.agent_id,
+            {
+                "stage": "planning",
+                "status": "running",
+                "title": "规划任务",
+                "detail": "已形成下一步处理计划",
+            },
+            phase=_agent_phase(event.agent_id),
+            step_index=3,
+            current_action=_planning_action(event.agent_id),
+        )
     if event.type == "tool_call":
         tool_name = _payload_text(source_payload, "name", fallback="tool")
-        return {
-            **base,
-            "stage": "tool_call",
-            "status": "running",
-            "title": _tool_label(tool_name),
-            "detail": f"正在执行：{_tool_label(tool_name)}",
-            "tool_name": tool_name,
-            "tool_call_id": _payload_text(source_payload, "tool_call_id"),
-        }
+        context = _tool_progress_context(event.agent_id, tool_name, completed=False)
+        return _with_progress_context(
+            base,
+            event.agent_id,
+            {
+                "stage": "tool_call",
+                "status": "running",
+                "title": context["title"],
+                "detail": context["detail"],
+                "tool_name": tool_name,
+                "tool_call_id": _payload_text(source_payload, "tool_call_id"),
+            },
+            phase=context["phase"],
+            step_index=context["step_index"],
+            current_action=context["current_action"],
+            next_action=context["next_action"],
+        )
     if event.type == "tool_result":
         tool_name = _payload_text(source_payload, "tool_name", fallback="tool")
         success = source_payload.get("success") is True
         content = str(source_payload.get("content", ""))
         refs = _extract_refs(content)
-        return {
-            **base,
-            "stage": "tool_result",
-            "status": "running" if success else "failed",
-            "title": _tool_label(tool_name),
-            "detail": f"{_tool_label(tool_name)}{'完成' if success else '失败'}",
-            "tool_name": tool_name,
-            "tool_call_id": _payload_text(source_payload, "tool_call_id"),
-            "artifact_refs": [item for item in refs if item.startswith("artifact_")],
-            "product_refs": [item for item in refs if not item.startswith("artifact_")],
-        }
+        context = _tool_progress_context(event.agent_id, tool_name, completed=True, success=success)
+        return _with_progress_context(
+            base,
+            event.agent_id,
+            {
+                "stage": "tool_result",
+                "status": "running" if success else "failed",
+                "title": context["title"],
+                "detail": context["detail"],
+                "tool_name": tool_name,
+                "tool_call_id": _payload_text(source_payload, "tool_call_id"),
+                "artifact_refs": [item for item in refs if item.startswith("artifact_")],
+                "product_refs": [item for item in refs if not item.startswith("artifact_")],
+            },
+            phase=context["phase"],
+            step_index=context["step_index"],
+            current_action=context["current_action"],
+            next_action=context["next_action"],
+        )
     if event.type == "assistant_message":
         refs = _extract_refs(str(source_payload.get("content", "")))
-        return {
-            **base,
-            "stage": "summary",
-            "status": "running",
-            "title": "汇总结果",
-            "detail": "子 agent 已生成阶段结果",
-            "artifact_refs": [item for item in refs if item.startswith("artifact_")],
-            "product_refs": [item for item in refs if not item.startswith("artifact_")],
-        }
+        total_steps = _agent_total_steps(event.agent_id)
+        return _with_progress_context(
+            base,
+            event.agent_id,
+            {
+                "stage": "summary",
+                "status": "running",
+                "title": "汇总结果",
+                "detail": "子 agent 已生成阶段结果",
+                "artifact_refs": [item for item in refs if item.startswith("artifact_")],
+                "product_refs": [item for item in refs if not item.startswith("artifact_")],
+            },
+            phase="summary",
+            step_index=max(1, total_steps - 1),
+            current_action="已生成阶段结果，正在把产物交回主控流程",
+            next_action="等待主控 Agent 汇总最终答复",
+        )
     if event.type == "run_finished":
-        return {
-            **base,
-            "stage": "finished",
-            "status": "completed",
-            "title": "结束运行",
-            "detail": "子 agent 运行结束，等待主流程汇总",
-        }
+        return _with_progress_context(
+            base,
+            event.agent_id,
+            {
+                "stage": "finished",
+                "status": "completed",
+                "title": "结束运行",
+                "detail": "子 agent 运行结束，等待主流程汇总",
+            },
+            phase="finished",
+            step_index=_agent_total_steps(event.agent_id),
+            current_action="子 Agent 已完成本轮任务",
+            next_action="主控 Agent 正在整理最终结果",
+        )
     return None
+
+
+def _with_progress_context(
+    base: dict[str, Any],
+    agent_id: str,
+    payload: dict[str, Any],
+    *,
+    phase: str,
+    step_index: int,
+    current_action: str,
+    next_action: str | None = None,
+) -> dict[str, Any]:
+    total_steps = _agent_total_steps(agent_id)
+    normalized_step = min(max(step_index, 1), total_steps)
+    return {
+        **base,
+        **payload,
+        "phase": phase,
+        "step_index": normalized_step,
+        "total_steps": total_steps,
+        "current_action": current_action,
+        "next_action": next_action or _next_action(agent_id, normalized_step),
+    }
+
+
+def _tool_progress_context(
+    agent_id: str,
+    tool_name: str,
+    *,
+    completed: bool,
+    success: bool = True,
+) -> dict[str, Any]:
+    phase, step_index, current_action, next_action = _tool_hint(agent_id, tool_name)
+    label = _tool_label(tool_name)
+    if completed:
+        status_text = "已完成" if success else "失败"
+        detail = f"{label}{status_text}：{current_action}"
+        action = f"{label}{status_text}"
+    else:
+        detail = current_action
+        action = current_action
+    return {
+        "phase": phase,
+        "step_index": step_index,
+        "title": label,
+        "detail": detail,
+        "current_action": action,
+        "next_action": next_action,
+    }
+
+
+def _tool_hint(agent_id: str, tool_name: str) -> tuple[str, int, str, str]:
+    if tool_name in _TOOL_PROGRESS_HINTS:
+        return _TOOL_PROGRESS_HINTS[tool_name]
+    if agent_id == "resume_agent":
+        return ("resume_analysis", 4, f"正在执行 {_tool_label(tool_name)}", "继续诊断简历亮点和风险")
+    if agent_id == "job_agent":
+        return ("job_analysis", 4, f"正在执行 {_tool_label(tool_name)}", "继续分析岗位匹配信号")
+    return ("orchestration", 3, f"正在执行 {_tool_label(tool_name)}", "继续汇总任务结果")
+
+
+def _agent_total_steps(agent_id: str) -> int:
+    return _AGENT_TOTAL_STEPS.get(agent_id, 6)
+
+
+def _agent_phase(agent_id: str) -> str:
+    return _AGENT_PHASE_DEFAULTS.get(agent_id, "agent_work")
+
+
+def _next_action(agent_id: str, step_index: int) -> str:
+    plan = _AGENT_NEXT_ACTIONS.get(agent_id) or _AGENT_NEXT_ACTIONS["agent_main"]
+    return plan.get(step_index, "继续处理任务")
+
+
+def _planning_action(agent_id: str) -> str:
+    if agent_id == "resume_agent":
+        return "正在规划简历解析、诊断报告和画像保存步骤"
+    if agent_id == "job_agent":
+        return "正在规划 JD 分析、匹配计算和报告保存步骤"
+    return "正在规划下一步工具调用和任务编排"
+
+
+def _agent_display_name(agent_id: str) -> str:
+    if agent_id == "resume_agent":
+        return "简历分析 Agent"
+    if agent_id == "job_agent":
+        return "岗位匹配 Agent"
+    if agent_id == "agent_main":
+        return "主控 Agent"
+    return agent_id
 
 
 def _payload_text(payload: dict[str, Any], key: str, *, fallback: str = "") -> str:

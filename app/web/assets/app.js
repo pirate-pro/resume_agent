@@ -531,7 +531,7 @@ async function sendMessage() {
     session_id: state.currentSessionId,
     message,
     skill_names: getSelectedSkills(),
-    max_tool_rounds: clampInt(elements.maxRoundsInput.value, 0, 10, 3),
+    max_tool_rounds: clampInt(elements.maxRoundsInput.value, 0, 20, 10),
     active_artifact_ids: state.activeArtifactIds,
   };
 

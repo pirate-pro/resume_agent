@@ -91,7 +91,7 @@ def build_assembly_plan(
                     "- Do not delegate tasks with unresolved sequential dependencies; resolve prerequisites first.\n"
                     "- Do not pass depends_on to delegate_agents; this version only supports independent child tasks.\n"
                     "- Child agent ids such as resume_agent/job_agent are not tool names; never call them directly. Use delegate_agents with tasks[].target_agent_id.\n"
-                    "- Use max_tool_rounds 8-10 for child tasks that must create artifacts or product records.\n"
+                    "- Use max_tool_rounds 10-20 for child tasks that must create artifacts or product records.\n"
                     "- Product record ids must come from tool results, child-agent results, or list tools; do not invent ids.\n"
                     "- Keep each child instruction narrow, include constraints, and pass artifact_refs when shared artifacts matter.\n"
                     "- If the source material is pasted in the current user message, include the relevant source text directly in the child instruction.\n"

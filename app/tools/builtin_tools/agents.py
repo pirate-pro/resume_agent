@@ -48,10 +48,10 @@ class DelegateAgentsTool:
                                 "artifact_refs": {"type": "array", "items": {"type": "string"}},
                                 "max_tool_rounds": {
                                     "type": "integer",
-                                    "default": 8,
+                                    "default": 10,
                                     "minimum": 0,
-                                    "maximum": 10,
-                                    "description": "Use 8-10 when the child must create artifacts or product records.",
+                                    "maximum": 20,
+                                    "description": "Use 10-20 when the child must create artifacts or product records.",
                                 },
                             },
                             "required": ["target_agent_id", "instruction"],
@@ -203,7 +203,7 @@ def _parse_task_specs(raw: Any) -> list[AgentTaskSpec]:
                     instruction=_required_string(item.get("instruction"), field_name="instruction"),
                     constraints=_optional_string_list(item.get("constraints"), field_name="constraints"),
                     artifact_refs=_optional_string_list(item.get("artifact_refs"), field_name="artifact_refs"),
-                    max_tool_rounds=_parse_max_tool_rounds(item.get("max_tool_rounds", 8)),
+                    max_tool_rounds=_parse_max_tool_rounds(item.get("max_tool_rounds", 10)),
                     depends_on=[],
                 )
             )
@@ -237,6 +237,6 @@ def _optional_string_list(
 
 
 def _parse_max_tool_rounds(raw: Any) -> int:
-    if not isinstance(raw, int) or raw < 0 or raw > 10:
-        raise ToolExecutionError("'max_tool_rounds' must be an integer in range 0..10.")
+    if not isinstance(raw, int) or raw < 0 or raw > 20:
+        raise ToolExecutionError("'max_tool_rounds' must be an integer in range 0..20.")
     return raw

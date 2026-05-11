@@ -33,7 +33,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     message: str
     skill_names: list[str] = Field(default_factory=list)
-    max_tool_rounds: int = Field(default=3, ge=0, le=10)
+    max_tool_rounds: int = Field(default=10, ge=0, le=20)
     active_artifact_ids: list[str] | None = None
     entry_agent_id: str = "agent_main"
     trace_level: Literal["basic", "verbose"] = "basic"

@@ -415,6 +415,9 @@ def test_child_agent_tool_events_are_projected_as_safe_task_progress(tmp_path: P
     assert "需要保密的完整指令" not in payload_text
     assert "不要展示的搜索词" not in payload_text
     assert "memory_search" in payload_text
+    assert "current_action" in payload_text
+    assert "next_action" in payload_text
+    assert "正在检索可复用上下文" in payload_text
     assert "artifact_progress_001" in payload_text
     assert "resume_profile_progress_001" in payload_text
 
@@ -424,6 +427,9 @@ def test_child_agent_tool_events_are_projected_as_safe_task_progress(tmp_path: P
         assert event.payload["child_run_id"] == event.run_id
         assert event.payload["target_agent_id"] == "resume_agent"
         assert "detail" in event.payload
+        assert event.payload["total_steps"] == 7
+        assert 1 <= event.payload["step_index"] <= 7
+        assert event.payload["phase"]
 
 
 def test_same_target_child_prompt_only_receives_its_own_assigned_task(tmp_path: Path) -> None:
@@ -497,7 +503,7 @@ def test_delegate_agents_tool_returns_aggregated_results(tmp_path: Path) -> None
     task_properties = definition.parameters_schema["properties"]["tasks"]["items"]["properties"]
 
     assert "depends_on" not in task_properties
-    assert task_properties["max_tool_rounds"]["default"] == 8
+    assert task_properties["max_tool_rounds"]["default"] == 10
 
     result = bundle.tool_registry.execute(
         ToolCall(

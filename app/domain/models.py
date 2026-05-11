@@ -322,8 +322,8 @@ class AgentRunInput:
         for skill_name in self.skill_names:
             normalized_skill_names.append(_require_non_empty("skill_name", skill_name))
         self.skill_names = normalized_skill_names
-        if self.max_tool_rounds < 0 or self.max_tool_rounds > 10:
-            raise ValidationError("max_tool_rounds must be in range 0..10.")
+        if self.max_tool_rounds < 0 or self.max_tool_rounds > 20:
+            raise ValidationError("max_tool_rounds must be in range 0..20.")
 
 
 @dataclass(slots=True)

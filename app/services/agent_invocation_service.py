@@ -35,7 +35,7 @@ class AgentInvocationRequest:
     constraints: list[str] = field(default_factory=list)
     artifact_refs: list[str] = field(default_factory=list)
     skill_names: list[str] = field(default_factory=list)
-    max_tool_rounds: int = 2
+    max_tool_rounds: int = 10
     task_id: str | None = None
     child_run_id: str | None = None
 
@@ -47,8 +47,8 @@ class AgentInvocationRequest:
         self.constraints = _normalize_string_list("constraints", self.constraints)
         self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
         self.skill_names = _normalize_optional_string_list("skill_names", self.skill_names)
-        if self.max_tool_rounds < 0 or self.max_tool_rounds > 10:
-            raise ValidationError("max_tool_rounds must be in range 0..10.")
+        if self.max_tool_rounds < 0 or self.max_tool_rounds > 20:
+            raise ValidationError("max_tool_rounds must be in range 0..20.")
         if self.task_id is not None:
             self.task_id = _require_non_empty("task_id", self.task_id)
         if self.child_run_id is not None:

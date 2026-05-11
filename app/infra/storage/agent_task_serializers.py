@@ -82,7 +82,7 @@ def task_from_payload(payload: dict[str, Any]) -> AgentTaskRecord:
         constraints=[str(item) for item in payload.get("constraints", []) if str(item).strip()],
         artifact_refs=[str(item) for item in payload.get("artifact_refs", []) if str(item).strip()],
         skill_names=[str(item) for item in payload.get("skill_names", []) if str(item).strip()],
-        max_tool_rounds=int(payload.get("max_tool_rounds", 2)),
+        max_tool_rounds=int(payload.get("max_tool_rounds", 10)),
         status=str(payload["status"]),
         child_run_id=_payload_optional_string(payload.get("child_run_id")),
         summary=_payload_optional_string(payload.get("summary")),
