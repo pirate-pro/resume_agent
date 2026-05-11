@@ -220,6 +220,50 @@ void main() {
     expect(find.text('M7 匹配报告.md'), findsOneWidget);
     expect(find.textContaining('整体匹配度'), findsOneWidget);
   });
+
+  testWidgets('求职项目工作台快捷动作发送受控提示词', (tester) async {
+    final api = _FakeCareerApiService();
+    final provider = CareerAssetsProvider(api);
+    final prompts = <String>[];
+    await provider.refresh();
+    provider.setTab(CareerAssetsTab.applications);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 420,
+              height: 760,
+              child: CareerAssetList(
+                provider: provider,
+                onApplicationPromptAction: (prompt) async {
+                  prompts.add(prompt);
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('详情'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('生成定制简历'), findsOneWidget);
+    expect(find.text('投递前检查'), findsOneWidget);
+    expect(find.text('面试准备'), findsOneWidget);
+
+    await tester.tap(find.text('生成定制简历'));
+    await tester.pumpAndSettle();
+
+    expect(prompts, hasLength(1));
+    expect(prompts.single, contains('application_zhangming_staragent_001'));
+    expect(prompts.single, contains('resume_profile_zhangming_003'));
+    expect(prompts.single, contains('career_resume_version_create'));
+    expect(prompts.single, contains('career_application_merge'));
+    expect(prompts.single, contains('不要重新解析简历'));
+  });
 }
 
 class _FakeCareerApiService extends ApiService {

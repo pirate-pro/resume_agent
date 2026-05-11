@@ -37,6 +37,9 @@ class _CareerAssetsPanelState extends ConsumerState<CareerAssetsPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final isChatStreaming = ref.watch(
+      chatProvider.select((provider) => provider.isStreaming),
+    );
     ref.listen<bool>(
       chatProvider.select((provider) => provider.isStreaming),
       (previous, next) {
@@ -67,7 +70,14 @@ class _CareerAssetsPanelState extends ConsumerState<CareerAssetsPanel> {
             provider: provider,
             onChanged: provider.setTab,
           ),
-          Expanded(child: _CareerAssetsBody(provider: provider)),
+          Expanded(
+            child: _CareerAssetsBody(
+              provider: provider,
+              onApplicationPromptAction: (prompt) =>
+                  ref.read(chatProvider).sendMessage(prompt),
+              applicationPromptActionEnabled: !isChatStreaming,
+            ),
+          ),
         ],
       ),
     );
@@ -201,8 +211,14 @@ class CareerAssetTabBar extends StatelessWidget {
 
 class _CareerAssetsBody extends StatelessWidget {
   final CareerAssetsProvider provider;
+  final ApplicationPromptActionCallback? onApplicationPromptAction;
+  final bool applicationPromptActionEnabled;
 
-  const _CareerAssetsBody({required this.provider});
+  const _CareerAssetsBody({
+    required this.provider,
+    required this.onApplicationPromptAction,
+    required this.applicationPromptActionEnabled,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -225,7 +241,11 @@ class _CareerAssetsBody extends StatelessWidget {
         children: [
           _CareerAssetsOverview(provider: provider),
           const SizedBox(height: 10),
-          CareerAssetList(provider: provider),
+          CareerAssetList(
+            provider: provider,
+            onApplicationPromptAction: onApplicationPromptAction,
+            applicationPromptActionEnabled: applicationPromptActionEnabled,
+          ),
         ],
       ),
     );
@@ -234,8 +254,15 @@ class _CareerAssetsBody extends StatelessWidget {
 
 class CareerAssetList extends StatelessWidget {
   final CareerAssetsProvider provider;
+  final ApplicationPromptActionCallback? onApplicationPromptAction;
+  final bool applicationPromptActionEnabled;
 
-  const CareerAssetList({super.key, required this.provider});
+  const CareerAssetList({
+    super.key,
+    required this.provider,
+    this.onApplicationPromptAction,
+    this.applicationPromptActionEnabled = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -443,7 +470,13 @@ class CareerAssetList extends StatelessWidget {
     Object record,
   ) {
     provider.selectRecord(record);
-    _showCareerRecordDetail(context, provider, record);
+    _showCareerRecordDetail(
+      context,
+      provider,
+      record,
+      onApplicationPromptAction: onApplicationPromptAction,
+      applicationPromptActionEnabled: applicationPromptActionEnabled,
+    );
   }
 
   void _showHistory(
@@ -468,13 +501,23 @@ class CareerAssetList extends StatelessWidget {
   }
 }
 
+typedef ApplicationPromptActionCallback = Future<void> Function(String prompt);
+
 void _showCareerRecordDetail(
   BuildContext context,
   CareerAssetsProvider provider,
-  Object record,
-) {
+  Object record, {
+  ApplicationPromptActionCallback? onApplicationPromptAction,
+  bool applicationPromptActionEnabled = true,
+}) {
   if (record is CareerApplicationView) {
-    _showCareerApplicationWorkspaceSheet(context, provider, record);
+    _showCareerApplicationWorkspaceSheet(
+      context,
+      provider,
+      record,
+      onApplicationPromptAction: onApplicationPromptAction,
+      applicationPromptActionEnabled: applicationPromptActionEnabled,
+    );
     return;
   }
   _showCareerAssetDetailSheet(
@@ -1096,8 +1139,10 @@ void _showCareerAssetHistorySheet(
 void _showCareerApplicationWorkspaceSheet(
   BuildContext context,
   CareerAssetsProvider provider,
-  CareerApplicationView record,
-) {
+  CareerApplicationView record, {
+  ApplicationPromptActionCallback? onApplicationPromptAction,
+  bool applicationPromptActionEnabled = true,
+}) {
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -1109,6 +1154,8 @@ void _showCareerApplicationWorkspaceSheet(
         child: _CareerApplicationWorkspaceSheet(
           provider: provider,
           initialRecord: record,
+          onApplicationPromptAction: onApplicationPromptAction,
+          applicationPromptActionEnabled: applicationPromptActionEnabled,
         ),
       );
     },
@@ -1236,10 +1283,14 @@ class _CareerAssetDetailSheet extends StatelessWidget {
 class _CareerApplicationWorkspaceSheet extends StatelessWidget {
   final CareerAssetsProvider provider;
   final CareerApplicationView initialRecord;
+  final ApplicationPromptActionCallback? onApplicationPromptAction;
+  final bool applicationPromptActionEnabled;
 
   const _CareerApplicationWorkspaceSheet({
     required this.provider,
     required this.initialRecord,
+    required this.onApplicationPromptAction,
+    required this.applicationPromptActionEnabled,
   });
 
   @override
@@ -1274,6 +1325,9 @@ class _CareerApplicationWorkspaceSheet extends StatelessWidget {
                       provider: provider,
                       record: record,
                       linked: linked,
+                      onApplicationPromptAction: onApplicationPromptAction,
+                      applicationPromptActionEnabled:
+                          applicationPromptActionEnabled,
                     ),
                     const SizedBox(height: 10),
                     _ApplicationLinkedAssetsSection(
@@ -1494,11 +1548,15 @@ class _ApplicationWorkspaceActions extends StatelessWidget {
   final CareerAssetsProvider provider;
   final CareerApplicationView record;
   final _ApplicationLinkedRecords linked;
+  final ApplicationPromptActionCallback? onApplicationPromptAction;
+  final bool applicationPromptActionEnabled;
 
   const _ApplicationWorkspaceActions({
     required this.provider,
     required this.record,
     required this.linked,
+    required this.onApplicationPromptAction,
+    required this.applicationPromptActionEnabled,
   });
 
   @override
@@ -1513,10 +1571,45 @@ class _ApplicationWorkspaceActions extends StatelessWidget {
         spacing: 8,
         runSpacing: 8,
         children: [
+          if (onApplicationPromptAction != null) ...[
+            _AssetActionButton(
+              label: "生成定制简历",
+              icon: Icons.auto_fix_high_rounded,
+              primary: true,
+              onTap: () => _runApplicationPromptAction(
+                context,
+                onApplicationPromptAction: onApplicationPromptAction,
+                enabled: applicationPromptActionEnabled,
+                prompt: _buildCustomResumePrompt(record),
+                startedMessage: "已开始生成定制简历",
+              ),
+            ),
+            _AssetActionButton(
+              label: "投递前检查",
+              icon: Icons.fact_check_rounded,
+              onTap: () => _runApplicationPromptAction(
+                context,
+                onApplicationPromptAction: onApplicationPromptAction,
+                enabled: applicationPromptActionEnabled,
+                prompt: _buildApplicationChecklistPrompt(record),
+                startedMessage: "已开始投递前检查",
+              ),
+            ),
+            _AssetActionButton(
+              label: "面试准备",
+              icon: Icons.psychology_alt_outlined,
+              onTap: () => _runApplicationPromptAction(
+                context,
+                onApplicationPromptAction: onApplicationPromptAction,
+                enabled: applicationPromptActionEnabled,
+                prompt: _buildInterviewPrepPrompt(record),
+                startedMessage: "已开始生成面试准备方案",
+              ),
+            ),
+          ],
           _AssetActionButton(
             label: "更新进展",
             icon: Icons.edit_note_rounded,
-            primary: true,
             onTap: () => _showCareerApplicationUpdateSheet(
               context,
               provider,
@@ -1568,6 +1661,143 @@ class _ApplicationWorkspaceActions extends StatelessWidget {
       ),
     );
   }
+}
+
+void _runApplicationPromptAction(
+  BuildContext context, {
+  required ApplicationPromptActionCallback? onApplicationPromptAction,
+  required bool enabled,
+  required String prompt,
+  required String startedMessage,
+}) {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  if (onApplicationPromptAction == null) {
+    messenger?.showSnackBar(
+      const SnackBar(
+        content: Text("当前入口暂不可用"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    return;
+  }
+  if (!enabled) {
+    messenger?.showSnackBar(
+      const SnackBar(
+        content: Text("当前任务正在执行，完成后再发起新动作"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    return;
+  }
+
+  final navigator = Navigator.of(context);
+  if (navigator.canPop()) {
+    navigator.pop();
+  }
+  messenger?.hideCurrentSnackBar();
+  messenger?.showSnackBar(
+    SnackBar(
+      content: Text(startedMessage),
+      duration: const Duration(seconds: 1),
+    ),
+  );
+  try {
+    final future = onApplicationPromptAction(prompt);
+    unawaited(
+      future.catchError((Object error) {
+        messenger?.hideCurrentSnackBar();
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text("动作发送失败：$error"),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }),
+    );
+  } catch (error) {
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text("动作发送失败：$error"),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+}
+
+String _buildCustomResumePrompt(CareerApplicationView record) {
+  return '''
+请执行求职项目动作：生成或更新定制简历。
+
+项目信息：
+${_applicationPromptContext(record)}
+
+执行要求：
+1. 先读取 CareerApplication，并复用其中的 ResumeProfile、CareerProfile、JDAnalysis 和 JobFitReport。
+2. 不要重新解析简历，不要重复分析 JD，不要重新创建 ResumeProfile、JDAnalysis 或 JobFitReport。
+3. 基于已有事实生成一版可直接投递的 Markdown 简历，不能编造公司、时间、学历、项目、技术栈或量化指标。
+4. 必须调用 career_resume_version_create 保存 ResumeVersion；content 传最终简历正文。
+5. 保存成功后，必须调用 career_application_merge，把新的 resume_version_id 合并到当前求职项目的 resume_version_ids，并更新 summary、next_actions、risks。
+6. 最终回复请说明 resume_version_id、artifact_id、主要改动和仍需用户补充的风险项。
+''';
+}
+
+String _buildApplicationChecklistPrompt(CareerApplicationView record) {
+  return '''
+请执行求职项目动作：投递前检查。
+
+项目信息：
+${_applicationPromptContext(record)}
+
+执行要求：
+1. 读取 CareerApplication，并检查关联的 ResumeProfile、CareerProfile、JDAnalysis、JobFitReport 和最新 ResumeVersion。
+2. 判断是否适合现在投递，给出「可以投递 / 建议暂缓 / 需要补充后投递」之一。
+3. 检查重点包括：硬性要求、关键词覆盖、简历事实风险、JD 高风险点、定制简历是否存在、下一步行动是否明确。
+4. 如果需要用户可复用的检查结果，请调用 session_create_text_artifact 创建 Markdown 检查报告。
+5. 必须调用 career_application_merge 更新 summary、next_actions、risks；不要创建新的 ResumeProfile、JDAnalysis 或 JobFitReport。
+6. 最终回复请给出投递结论、关键风险、下一步行动，以及本次更新的 application_id。
+''';
+}
+
+String _buildInterviewPrepPrompt(CareerApplicationView record) {
+  return '''
+请执行求职项目动作：生成面试准备方案。
+
+项目信息：
+${_applicationPromptContext(record)}
+
+执行要求：
+1. 读取 CareerApplication，并复用关联的 ResumeProfile、CareerProfile、JDAnalysis 和 JobFitReport。
+2. 基于岗位要求、匹配报告短板和用户已有经历，整理面试准备重点。
+3. 输出应包含：高优先级准备项、技术追问方向、项目表达话术、风险短板补齐、可直接练习的问题清单。
+4. 如生成用户可复用的 Markdown 方案，请调用 session_create_text_artifact 创建 artifact。
+5. 必须调用 career_application_merge 更新 next_actions、risks 或 notes；不要写 memory，不要创建新的 ResumeProfile、JDAnalysis 或 JobFitReport。
+6. 最终回复请说明面试准备重点和下一步最该做的 3 件事。
+''';
+}
+
+String _applicationPromptContext(CareerApplicationView record) {
+  final lines = <String>[
+    "- application_id: ${record.applicationId}",
+    if (record.company.trim().isNotEmpty) "- company: ${record.company.trim()}",
+    if (record.position.trim().isNotEmpty)
+      "- position: ${record.position.trim()}",
+    if (record.location.trim().isNotEmpty)
+      "- location: ${record.location.trim()}",
+    "- stage: ${record.stage}",
+    "- priority: ${record.priority}",
+    if (record.resumeProfileId?.trim().isNotEmpty == true)
+      "- resume_profile_id: ${record.resumeProfileId!.trim()}",
+    if (record.careerProfileId?.trim().isNotEmpty == true)
+      "- career_profile_id: ${record.careerProfileId!.trim()}",
+    if (record.jdAnalysisId?.trim().isNotEmpty == true)
+      "- jd_analysis_id: ${record.jdAnalysisId!.trim()}",
+    if (record.jobFitReportId?.trim().isNotEmpty == true)
+      "- job_fit_report_id: ${record.jobFitReportId!.trim()}",
+    if (record.resumeVersionIds.isNotEmpty)
+      "- resume_version_ids: ${record.resumeVersionIds.join(', ')}",
+  ];
+  return lines.join("\n");
 }
 
 class _ApplicationLinkedAssetsSection extends StatelessWidget {
