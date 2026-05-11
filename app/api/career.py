@@ -26,7 +26,9 @@ from app.career.models import (
     ResumeVersion,
 )
 from app.career.store import CareerProductStore
+from app.core.errors import ValidationError
 from app.schemas.career import (
+    CareerApplicationUpdateRequest,
     CareerApplicationView,
     CareerProfileView,
     JDAnalysisView,
@@ -218,6 +220,39 @@ def get_career_application(
         record_id=application_id,
     )
     return ok(career_application_view(record))
+
+
+@router.patch("/applications/{application_id}", response_model=StandardResponse[CareerApplicationView])
+def update_career_application(
+    application_id: str,
+    request: CareerApplicationUpdateRequest,
+    store: CareerProductStore = Depends(get_career_product_store),
+) -> StandardResponse[CareerApplicationView]:
+    _require_visible(
+        store.get_career_application(application_id),
+        include_archived=False,
+        record_type="CareerApplication",
+        record_id=application_id,
+    )
+    updates = _career_application_updates(request)
+    evidence_refs = request.evidence_refs or [application_id]
+    record = store.merge_career_application(
+        application_id,
+        updates=updates,
+        evidence_refs=evidence_refs,
+        source_artifact_id=request.source_artifact_id,
+    )
+    return ok(career_application_view(record))
+
+
+def _career_application_updates(request: CareerApplicationUpdateRequest) -> dict[str, object]:
+    updates = request.model_dump(
+        include={"stage", "priority", "summary", "next_actions", "risks", "notes"},
+        exclude_none=True,
+    )
+    if not updates:
+        raise ValidationError("CareerApplication update must include at least one editable field.")
+    return updates
 
 
 def _require_visible(

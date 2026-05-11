@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "CareerApplicationUpdateRequest",
     "CareerApplicationView",
     "CareerProfileView",
     "JDAnalysisView",
@@ -114,3 +115,14 @@ class CareerApplicationView(CareerRecordMetaView):
     next_actions: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     notes: str = ""
+
+
+class CareerApplicationUpdateRequest(BaseModel):
+    stage: str | None = None
+    priority: str | None = None
+    summary: str | None = None
+    next_actions: list[str] | None = None
+    risks: list[str] | None = None
+    notes: str | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    source_artifact_id: str | None = None

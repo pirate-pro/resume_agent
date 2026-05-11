@@ -223,6 +223,36 @@ class CareerAssetsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<CareerApplicationView> updateCareerApplication({
+    required String applicationId,
+    String? stage,
+    String? priority,
+    String? summary,
+    List<String>? nextActions,
+    List<String>? risks,
+    String? notes,
+    List<String> evidenceRefs = const [],
+    String? sourceArtifactId,
+  }) async {
+    final updated = await _api.updateCareerApplication(
+      applicationId: applicationId,
+      stage: stage,
+      priority: priority,
+      summary: summary,
+      nextActions: nextActions,
+      risks: risks,
+      notes: notes,
+      evidenceRefs: evidenceRefs,
+      sourceArtifactId: sourceArtifactId,
+    );
+    _upsertCareerApplication(updated);
+    if (_selection?.recordId == updated.applicationId) {
+      _selection = CareerAssetSelection.fromRecord(updated);
+    }
+    notifyListeners();
+    return updated;
+  }
+
   Future<void> previewArtifact({
     required String sourceSessionId,
     required String artifactId,
@@ -347,6 +377,19 @@ class CareerAssetsProvider extends ChangeNotifier {
       ..._resumeVersions.map((item) => item.resumeVersionId),
       ..._careerApplications.map((item) => item.applicationId),
     };
+  }
+
+  void _upsertCareerApplication(CareerApplicationView record) {
+    final index = _careerApplications.indexWhere(
+      (item) => item.applicationId == record.applicationId,
+    );
+    if (index >= 0) {
+      final next = [..._careerApplications];
+      next[index] = record;
+      _careerApplications = next;
+      return;
+    }
+    _careerApplications = [record, ..._careerApplications];
   }
 
   void _markRecentlyCreatedRecords(Set<String> recordIds) {

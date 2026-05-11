@@ -175,6 +175,59 @@ def test_career_api_filters_archived_records_by_default(tmp_path: Path) -> None:
         app.dependency_overrides.clear()
 
 
+def test_career_api_updates_application_status_with_self_evidence(tmp_path: Path) -> None:
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=_TickingClock())
+    _seed_active_records(store)
+    _override_career_store(store)
+
+    try:
+        with TestClient(app) as client:
+            response = client.patch(
+                "/api/career/applications/application_alpha",
+                json={
+                    "stage": "applied",
+                    "priority": "medium",
+                    "next_actions": ["准备一面自我介绍"],
+                    "risks": ["RAG 项目指标需要准备口径"],
+                    "notes": "用户手动更新投递状态。",
+                },
+            )
+
+        assert response.status_code == 200
+        payload = _data(response)
+        assert payload["stage"] == "applied"
+        assert payload["priority"] == "medium"
+        assert payload["next_actions"] == ["完善 RAG 面试题", "准备一面自我介绍"]
+        assert payload["risks"] == ["RAG 经验表达需要补证据", "RAG 项目指标需要准备口径"]
+        assert payload["notes"] == "用户手动更新投递状态。"
+        assert payload["evidence_refs"] == [
+            "resume_profile_alpha",
+            "career_profile_default",
+            "jd_alpha",
+            "fit_alpha",
+            "application_alpha",
+        ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_career_api_rejects_empty_application_update(tmp_path: Path) -> None:
+    store = CareerProductStore(root_dir=tmp_path / "career")
+    _seed_active_records(store)
+    _override_career_store(store)
+
+    try:
+        with TestClient(app) as client:
+            response = client.patch("/api/career/applications/application_alpha", json={})
+
+        assert response.status_code == 400
+        payload = response.json()
+        assert payload["code"] == 400
+        assert "at least one editable field" in payload["msg"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def _seed_active_records(store: CareerProductStore) -> None:
     _seed_resume_profile(store, "resume_profile_alpha")
     store.save_career_profile(_career_profile())

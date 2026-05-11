@@ -317,6 +317,38 @@ class ApiService {
         .toList();
   }
 
+  Future<CareerApplicationView> updateCareerApplication({
+    required String applicationId,
+    String? stage,
+    String? priority,
+    String? summary,
+    List<String>? nextActions,
+    List<String>? risks,
+    String? notes,
+    List<String> evidenceRefs = const [],
+    String? sourceArtifactId,
+  }) async {
+    final body = <String, dynamic>{};
+    if (stage != null) body["stage"] = stage;
+    if (priority != null) body["priority"] = priority;
+    if (summary != null) body["summary"] = summary;
+    if (nextActions != null) body["next_actions"] = nextActions;
+    if (risks != null) body["risks"] = risks;
+    if (notes != null) body["notes"] = notes;
+    if (evidenceRefs.isNotEmpty) body["evidence_refs"] = evidenceRefs;
+    if (sourceArtifactId != null && sourceArtifactId.trim().isNotEmpty) {
+      body["source_artifact_id"] = sourceArtifactId.trim();
+    }
+    final resp = await http.patch(
+      _uri("/api/career/applications/${Uri.encodeComponent(applicationId)}"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    return CareerApplicationView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
   Uri _careerUri(String path, bool includeArchived) {
     return _uri("/api/career$path").replace(
       queryParameters: {"include_archived": includeArchived.toString()},
