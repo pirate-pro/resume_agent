@@ -65,6 +65,7 @@ _REF_PATTERNS = (
     re.compile(r"\bjd_[A-Za-z0-9][A-Za-z0-9_-]*\b"),
     re.compile(r"\bfit_[A-Za-z0-9][A-Za-z0-9_-]*\b"),
     re.compile(r"\bresume_version_[A-Za-z0-9][A-Za-z0-9_-]*\b"),
+    re.compile(r"\bapplication_[A-Za-z0-9][A-Za-z0-9_-]*\b"),
 )
 
 _REF_FIELD_NAMES = {
@@ -74,6 +75,7 @@ _REF_FIELD_NAMES = {
     "jd_analysis_id",
     "job_fit_report_id",
     "resume_version_id",
+    "application_id",
 }
 
 _TOOL_LABELS = {
@@ -97,6 +99,10 @@ _TOOL_LABELS = {
     "career_resume_version_create": "生成简历版本",
     "career_resume_version_get": "读取简历版本",
     "career_resume_version_list": "列出简历版本",
+    "career_application_create": "创建求职项目",
+    "career_application_get": "读取求职项目",
+    "career_application_list": "列出求职项目",
+    "career_application_merge": "更新求职项目",
 }
 
 _AGENT_TOTAL_STEPS = {
@@ -155,6 +161,10 @@ _TOOL_PROGRESS_HINTS = {
     "career_job_fit_report_save": ("job_fit", 6, "正在保存岗位匹配报告", "等待主控汇总"),
     "career_job_fit_report_get": ("job_fit", 6, "正在读取岗位匹配报告", "整理最终答复"),
     "career_resume_version_create": ("resume_version", 6, "正在生成定制简历版本", "整理最终答复"),
+    "career_application_create": ("application_project", 5, "正在创建求职项目", "整理最终答复"),
+    "career_application_get": ("application_project", 5, "正在读取求职项目", "整理最终答复"),
+    "career_application_list": ("application_project", 5, "正在列出求职项目", "整理最终答复"),
+    "career_application_merge": ("application_project", 5, "正在更新求职项目", "整理最终答复"),
     "memory_search": ("context_lookup", 2, "正在检索可复用上下文", "继续任务分析"),
 }
 

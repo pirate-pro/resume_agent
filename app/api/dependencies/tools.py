@@ -10,6 +10,10 @@ from app.api.dependencies.managers import get_agent_capability_registry, get_mem
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.tools.builtins import (
     AgentTaskStatusTool,
+    CareerApplicationCreateTool,
+    CareerApplicationGetTool,
+    CareerApplicationListTool,
+    CareerApplicationMergeTool,
     CareerJobFitReportGetTool,
     CareerJobFitReportListTool,
     CareerJobFitReportSaveTool,
@@ -109,6 +113,20 @@ def get_tool_registry() -> ToolRegistry:
     )
     registry.register(CareerResumeVersionGetTool(career_store=get_career_product_store()))
     registry.register(CareerResumeVersionListTool(career_store=get_career_product_store()))
+    registry.register(
+        CareerApplicationCreateTool(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(CareerApplicationGetTool(career_store=get_career_product_store()))
+    registry.register(CareerApplicationListTool(career_store=get_career_product_store()))
+    registry.register(
+        CareerApplicationMergeTool(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        )
+    )
     return registry
 
 

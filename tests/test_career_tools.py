@@ -15,6 +15,10 @@ from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.models import MemoryScope
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
 from app.tools.builtins import (
+    CareerApplicationCreateTool,
+    CareerApplicationGetTool,
+    CareerApplicationListTool,
+    CareerApplicationMergeTool,
     CareerJobFitReportGetTool,
     CareerJobFitReportListTool,
     CareerJobFitReportSaveTool,
@@ -68,6 +72,10 @@ def _capability_registry() -> AgentCapabilityRegistry:
                     "career_resume_version_create",
                     "career_resume_version_get",
                     "career_resume_version_list",
+                    "career_application_create",
+                    "career_application_get",
+                    "career_application_list",
+                    "career_application_merge",
                 ],
                 allowed_skills=["*"],
                 default_skills=["base"],
@@ -139,6 +147,10 @@ def _registry(tmp_path: Path) -> tuple[ToolRegistry, JsonlSessionRepository]:
     registry.register(CareerResumeVersionCreateTool(career_store=career_store, session_repository=session_repository))
     registry.register(CareerResumeVersionGetTool(career_store=career_store))
     registry.register(CareerResumeVersionListTool(career_store=career_store))
+    registry.register(CareerApplicationCreateTool(career_store=career_store, session_repository=session_repository))
+    registry.register(CareerApplicationGetTool(career_store=career_store))
+    registry.register(CareerApplicationListTool(career_store=career_store))
+    registry.register(CareerApplicationMergeTool(career_store=career_store, session_repository=session_repository))
     return registry, session_repository
 
 
@@ -774,6 +786,193 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
                     "artifact_id": resume_version_artifact_id,
                     "evidence_refs": ["resume_profile_alpha", resume_version_artifact_id],
                 },
+            ),
+            context=_context(agent_id="job_agent"),
+        )
+
+
+def test_main_agent_creates_gets_lists_and_merges_career_application(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="张三简历.txt")
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="张三简历诊断.md",
+        content="# 简历诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="星河智能 JD.txt",
+        content="星河智能招聘 AI Agent 后端工程师，需要 Python、FastAPI、RAG。",
+    )
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="星河智能匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    version_artifact_id = _create_text_artifact(
+        registry,
+        title="星河智能定制简历.md",
+        content="# 定制简历",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_star_agent",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "company": "星河智能",
+            "position": "AI Agent 后端工程师",
+            "required_skills": ["Python", "FastAPI", "RAG"],
+        },
+        _context(agent_id="job_agent"),
+    )
+    _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_star_agent",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [
+                "resume_profile_alpha",
+                "career_profile_default",
+                "jd_star_agent",
+                jd_artifact_id,
+                report_artifact_id,
+            ],
+            "jd_analysis_id": "jd_star_agent",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "overall_score": 77,
+            "recommendation": "cautious",
+            "report_artifact_id": report_artifact_id,
+        },
+        _context(agent_id="job_agent"),
+    )
+    version_payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "resume_version_id": "star_agent_resume",
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_star_agent",
+            "title": "星河智能定制简历",
+            "artifact_id": version_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "jd_star_agent", version_artifact_id],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    application_payload = _execute(
+        registry,
+        "career_application_create",
+        {
+            "job_fit_report_id": "fit_star_agent",
+            "resume_version_ids": [version_payload["record_id"]],
+            "stage": "ready_to_apply",
+            "priority": "high",
+            "summary": "候选人与岗位整体匹配，但需要补强 RAG 证据。",
+            "next_actions": ["完善 RAG 项目说明"],
+            "evidence_refs": ["job_fit_report:fit_star_agent"],
+        },
+        _context(agent_id="agent_main"),
+    )
+    duplicate_payload = _execute(
+        registry,
+        "career_application_create",
+        {
+            "job_fit_report_id": "fit_star_agent",
+            "evidence_refs": ["fit_star_agent"],
+        },
+        _context(agent_id="agent_main"),
+    )
+    loaded_payload = _execute(
+        registry,
+        "career_application_get",
+        {"application_id": application_payload["record_id"]},
+        _context(agent_id="agent_main"),
+    )
+    list_payload = _execute(
+        registry,
+        "career_application_list",
+        {},
+        _context(agent_id="agent_main"),
+    )
+    merged_payload = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application_payload["record_id"],
+            "updates": json.dumps(
+                {
+                    "stage": "applied",
+                    "next_actions": ["等待 HR 反馈"],
+                    "risks": ["RAG 项目证据不足"],
+                    "notes": "已投递第一版定制简历。",
+                },
+                ensure_ascii=False,
+            ),
+            "evidence_refs": [version_payload["record_id"], report_artifact_id],
+        },
+        _context(agent_id="agent_main"),
+    )
+    fallback_payload = _execute(
+        registry,
+        "career_application_get",
+        {"application_id": "application_missing"},
+        _context(agent_id="agent_main"),
+    )
+
+    assert application_payload["record"]["company"] == "星河智能"
+    assert application_payload["record"]["position"] == "AI Agent 后端工程师"
+    assert application_payload["record"]["source_artifact_id"] == jd_artifact_id
+    assert application_payload["record"]["resume_profile_id"] == "resume_profile_alpha"
+    assert application_payload["record"]["career_profile_id"] == "career_profile_default"
+    assert application_payload["record"]["jd_analysis_id"] == "jd_star_agent"
+    assert application_payload["record"]["job_fit_report_id"] == "fit_star_agent"
+    assert application_payload["record"]["resume_version_ids"] == [version_payload["record_id"]]
+    assert {"fit_star_agent", "jd_star_agent", jd_artifact_id, report_artifact_id}.issubset(
+        set(application_payload["record"]["evidence_refs"])
+    )
+    assert duplicate_payload["record_id"] == application_payload["record_id"]
+    assert duplicate_payload["idempotent_reused"] is True
+    assert loaded_payload["record"]["company"] == "星河智能"
+    assert [record["application_id"] for record in list_payload["records"]] == [application_payload["record_id"]]
+    assert merged_payload["record"]["stage"] == "applied"
+    assert "等待 HR 反馈" in merged_payload["record"]["next_actions"]
+    assert "RAG 项目证据不足" in merged_payload["record"]["risks"]
+    assert fallback_payload["record_id"] == application_payload["record_id"]
+    assert fallback_payload["resolved_from_missing_id"] is True
+
+    with pytest.raises(ToolExecutionError, match="Unsupported CareerApplication merge field"):
+        registry.execute(
+            ToolCall(
+                name="career_application_merge",
+                arguments={
+                    "application_id": application_payload["record_id"],
+                    "updates": {"company": "不允许覆盖公司"},
+                    "evidence_refs": ["fit_star_agent"],
+                },
+            ),
+            context=_context(agent_id="agent_main"),
+        )
+    with pytest.raises(ToolExecutionError, match="not allowed"):
+        registry.execute(
+            ToolCall(
+                name="career_application_create",
+                arguments={"job_fit_report_id": "fit_star_agent", "evidence_refs": ["fit_star_agent"]},
             ),
             context=_context(agent_id="job_agent"),
         )

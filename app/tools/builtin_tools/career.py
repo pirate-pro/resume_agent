@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.career.models import (
+    CareerApplication,
     CareerProfile,
     CareerRecordStatus,
     JDAnalysis,
@@ -26,6 +27,10 @@ from app.tools.builtin_tools.common import validate_context
 from app.tools.builtin_tools.session_artifact_helpers import require_session_artifact
 
 __all__ = [
+    "CareerApplicationCreateTool",
+    "CareerApplicationGetTool",
+    "CareerApplicationListTool",
+    "CareerApplicationMergeTool",
     "CareerJobFitReportGetTool",
     "CareerJobFitReportListTool",
     "CareerJobFitReportSaveTool",
@@ -88,6 +93,10 @@ _CAREER_PROFILE_IGNORED_UPDATE_FIELDS = {
 _EVIDENCE_REF_TYPE_ALIASES = {
     "artifact": "artifact",
     "artifact_id": "artifact",
+    "application": "application",
+    "application_id": "application",
+    "career_application": "application",
+    "career_application_id": "application",
     "career_profile": "career_profile",
     "career_profile_id": "career_profile",
     "fit": "fit",
@@ -858,6 +867,286 @@ class CareerResumeVersionListTool:
         return _list_result("career_resume_version_list", "resume_version", records)
 
 
+class CareerApplicationCreateTool:
+    """Create one user-visible career application project."""
+
+    def __init__(self, career_store: CareerProductStore, session_repository: SessionRepository) -> None:
+        self._career_store = career_store
+        self._session_repository = session_repository
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="career_application_create",
+            description=(
+                "Create a career application project that links reusable career product records. "
+                "Use this after JD analysis, job fit report, or resume version records exist. "
+                "When jd_analysis_id or job_fit_report_id is provided, company, position, source_artifact_id, "
+                "resume_profile_id, and career_profile_id can be inferred from existing product records."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "application_id": {"type": "string"},
+                    "company": {"type": "string"},
+                    "position": {"type": "string"},
+                    "location": {"type": "string"},
+                    "job_url": {"type": "string"},
+                    "stage": {
+                        "type": "string",
+                        "enum": [
+                            "draft",
+                            "analyzing",
+                            "ready_to_apply",
+                            "applied",
+                            "interviewing",
+                            "offer",
+                            "rejected",
+                            "paused",
+                        ],
+                        "default": "draft",
+                    },
+                    "priority": {"type": "string", "enum": ["high", "medium", "low"], "default": "medium"},
+                    "resume_profile_id": {"type": "string"},
+                    "career_profile_id": {"type": "string"},
+                    "jd_analysis_id": {"type": "string"},
+                    "job_fit_report_id": {"type": "string"},
+                    "resume_version_ids": {"type": "array", "items": {"type": "string"}},
+                    "summary": {"type": "string"},
+                    "next_actions": {"type": "array", "items": {"type": "string"}},
+                    "risks": {"type": "array", "items": {"type": "string"}},
+                    "notes": {"type": "string"},
+                    "source_artifact_id": {"type": "string"},
+                    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["evidence_refs"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = validate_context(context)
+        try:
+            args = _require_arguments(arguments)
+            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
+            source_artifact_id = _optional_current_artifact(
+                self._session_repository,
+                run_context.session_id,
+                args.get("source_artifact_id"),
+                field_name="source_artifact_id",
+            )
+            job_fit_report_id = _optional_prefixed_id(args.get("job_fit_report_id"), "fit")
+            jd_analysis_id = _optional_prefixed_id(args.get("jd_analysis_id"), "jd")
+            resume_profile_id = _optional_prefixed_id(args.get("resume_profile_id"), "resume_profile")
+            career_profile_id = _optional_prefixed_id(args.get("career_profile_id"), "career_profile")
+            resume_version_ids = _optional_prefixed_id_list(
+                args.get("resume_version_ids"),
+                prefix="resume_version",
+                field_name="resume_version_ids",
+            )
+
+            fit_record = self._career_store.get_job_fit_report(job_fit_report_id) if job_fit_report_id else None
+            if fit_record is not None:
+                jd_analysis_id = jd_analysis_id or fit_record.jd_analysis_id
+                resume_profile_id = resume_profile_id or fit_record.resume_profile_id
+                career_profile_id = career_profile_id or fit_record.career_profile_id
+                source_artifact_id = source_artifact_id or fit_record.source_artifact_id
+                evidence_refs = _append_evidence_refs(
+                    evidence_refs,
+                    fit_record.job_fit_report_id,
+                    fit_record.jd_analysis_id,
+                    fit_record.resume_profile_id,
+                    fit_record.career_profile_id,
+                    fit_record.source_artifact_id,
+                    fit_record.report_artifact_id,
+                )
+
+            jd_record = self._career_store.get_jd_analysis(jd_analysis_id) if jd_analysis_id else None
+            if jd_record is not None:
+                source_artifact_id = source_artifact_id or jd_record.source_artifact_id
+                evidence_refs = _append_evidence_refs(
+                    evidence_refs,
+                    jd_record.jd_analysis_id,
+                    jd_record.source_artifact_id,
+                )
+
+            company = _optional_string(args.get("company")) or (jd_record.company if jd_record is not None else "")
+            position = _optional_string(args.get("position")) or (jd_record.position if jd_record is not None else "")
+            evidence_refs = _append_evidence_refs(
+                evidence_refs,
+                source_artifact_id,
+                resume_profile_id,
+                career_profile_id,
+                jd_analysis_id,
+                job_fit_report_id,
+                *resume_version_ids,
+            )
+
+            existing = _find_current_session_record(
+                self._career_store.list_career_applications(),
+                run_context.session_id,
+                lambda item: _is_same_application_project(
+                    item,
+                    company=company,
+                    position=position,
+                    jd_analysis_id=jd_analysis_id,
+                    job_fit_report_id=job_fit_report_id,
+                ),
+            )
+            if existing is not None:
+                return _record_result(
+                    "career_application_create",
+                    "career_application",
+                    existing.application_id,
+                    existing,
+                    extra={"idempotent_reused": True},
+                )
+
+            record = CareerApplication(
+                application_id=_optional_prefixed_id(args.get("application_id"), "application")
+                or _new_application_id(company=company, position=position),
+                status=CareerRecordStatus.ACTIVE,
+                source_session_id=run_context.session_id,
+                source_artifact_id=source_artifact_id,
+                evidence_refs=evidence_refs,
+                created_at=_now(),
+                updated_at=_now(),
+                company=company,
+                position=position,
+                location=_optional_string(args.get("location")) or "",
+                job_url=_optional_string(args.get("job_url")) or "",
+                stage=_optional_string(args.get("stage")) or "draft",
+                priority=_optional_string(args.get("priority")) or "medium",
+                resume_profile_id=resume_profile_id,
+                career_profile_id=career_profile_id,
+                jd_analysis_id=jd_analysis_id,
+                job_fit_report_id=job_fit_report_id,
+                resume_version_ids=resume_version_ids,
+                summary=_optional_string(args.get("summary")) or "",
+                next_actions=_optional_string_list(args.get("next_actions"), field_name="next_actions"),
+                risks=_optional_string_list(args.get("risks"), field_name="risks"),
+                notes=_optional_string(args.get("notes")) or "",
+            )
+            saved = self._career_store.save_career_application(record)
+        except (StorageError, ValidationError) as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        return _record_result("career_application_create", "career_application", saved.application_id, saved)
+
+
+class CareerApplicationGetTool:
+    """Read one career application project."""
+
+    def __init__(self, career_store: CareerProductStore) -> None:
+        self._career_store = career_store
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="career_application_get",
+            description="Read a saved career application project by application_id.",
+            parameters_schema={
+                "type": "object",
+                "properties": {"application_id": {"type": "string"}},
+                "required": ["application_id"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = validate_context(context)
+        try:
+            args = _require_arguments(arguments)
+            record_id = _required_string(args.get("application_id"), field_name="application_id")
+            record, extra = _get_record_or_current_session_single(
+                record_id,
+                session_id=run_context.session_id,
+                records=self._career_store.list_career_applications(),
+                getter=self._career_store.get_career_application,
+            )
+            if record is None:
+                return _not_found_result("career_application_get", "career_application", record_id, extra=extra)
+        except (StorageError, ValidationError) as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        return _record_result("career_application_get", "career_application", record.application_id, record, extra=extra)
+
+
+class CareerApplicationListTool:
+    """List career application projects."""
+
+    def __init__(self, career_store: CareerProductStore) -> None:
+        self._career_store = career_store
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="career_application_list",
+            description="List saved career application projects.",
+            parameters_schema={
+                "type": "object",
+                "properties": {"include_archived": {"type": "boolean", "default": False}},
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        _ = validate_context(context)
+        args = _require_arguments(arguments)
+        records = self._career_store.list_career_applications(
+            include_archived=_optional_bool(args.get("include_archived"))
+        )
+        return _list_result("career_application_list", "career_application", records)
+
+
+class CareerApplicationMergeTool:
+    """Merge evidence-backed updates into one career application project."""
+
+    def __init__(self, career_store: CareerProductStore, session_repository: SessionRepository) -> None:
+        self._career_store = career_store
+        self._session_repository = session_repository
+
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="career_application_merge",
+            description=(
+                "Merge evidence-backed updates into a career application project. "
+                "Allowed update fields: stage, priority, resume_profile_id, career_profile_id, jd_analysis_id, "
+                "job_fit_report_id, resume_version_ids, summary, next_actions, risks, notes."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "application_id": {"type": "string"},
+                    "updates": {
+                        "type": "object",
+                        "description": (
+                            "Only use allowed CareerApplication fields: stage, priority, resume_profile_id, "
+                            "career_profile_id, jd_analysis_id, job_fit_report_id, resume_version_ids, summary, "
+                            "next_actions, risks, notes."
+                        ),
+                    },
+                    "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                    "source_artifact_id": {"type": "string"},
+                },
+                "required": ["application_id", "updates", "evidence_refs"],
+            },
+        )
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        run_context = validate_context(context)
+        try:
+            args = _require_arguments(arguments)
+            record_id = _required_string(args.get("application_id"), field_name="application_id")
+            source_artifact_id = _optional_current_artifact(
+                self._session_repository,
+                run_context.session_id,
+                args.get("source_artifact_id"),
+                field_name="source_artifact_id",
+            )
+            record = self._career_store.merge_career_application(
+                record_id,
+                updates=_required_dict(args.get("updates"), field_name="updates"),
+                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
+                source_artifact_id=source_artifact_id,
+            )
+        except (StorageError, ValidationError) as exc:
+            raise ToolExecutionError(str(exc)) from exc
+        return _record_result("career_application_merge", "career_application", record.application_id, record)
+
+
 def _require_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(arguments, dict):
         raise ToolExecutionError("Tool arguments must be an object.")
@@ -959,6 +1248,50 @@ def _resolve_resume_version_base_profile_id(arguments: dict[str, Any], evidence_
     raise ToolExecutionError("'base_resume_profile_id' must be a non-empty string.")
 
 
+def _optional_prefixed_id_list(raw: Any, *, prefix: str, field_name: str) -> list[str]:
+    values = _optional_string_list(raw, field_name=field_name)
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _optional_prefixed_id(value, prefix)
+        if normalized is None:
+            raise ToolExecutionError(f"each '{field_name}' item must be a valid {prefix}_ id.")
+        if normalized in seen:
+            continue
+        output.append(normalized)
+        seen.add(normalized)
+    return output
+
+
+def _append_evidence_refs(evidence_refs: list[str], *refs: str | None) -> list[str]:
+    output = list(evidence_refs)
+    seen = set(output)
+    for ref in refs:
+        if ref is None:
+            continue
+        normalized = _normalize_evidence_ref(ref)
+        if normalized in seen:
+            continue
+        output.append(normalized)
+        seen.add(normalized)
+    return output
+
+
+def _is_same_application_project(
+    record: CareerApplication,
+    *,
+    company: str,
+    position: str,
+    jd_analysis_id: str | None,
+    job_fit_report_id: str | None,
+) -> bool:
+    if job_fit_report_id is not None and record.job_fit_report_id == job_fit_report_id:
+        return True
+    if jd_analysis_id is not None and record.jd_analysis_id == jd_analysis_id:
+        return True
+    return bool(company and position and record.company == company and record.position == position)
+
+
 def _required_dict(raw: Any, *, field_name: str) -> dict[str, Any]:
     if isinstance(raw, str):
         try:
@@ -1046,6 +1379,8 @@ def _normalize_evidence_ref(raw: str) -> str:
     if kind is None or not record_id:
         return value
     if kind == "artifact" and record_id.startswith("artifact_"):
+        return record_id
+    if kind == "application" and record_id.startswith("application_"):
         return record_id
     if kind == "career_profile" and record_id.startswith("career_profile_"):
         return record_id
@@ -1215,6 +1550,13 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+def _new_application_id(*, company: str, position: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{company}_{position}").strip("_").lower()
+    if slug:
+        return f"application_{slug[:80]}_{uuid4().hex[:8]}"
+    return _new_id("application")
+
+
 def _now() -> datetime:
     return app_now()
 
@@ -1223,7 +1565,7 @@ def _record_result(
     tool_name: str,
     record_type: str,
     record_id: str,
-    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion,
+    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication,
     *,
     extra: dict[str, Any] | None = None,
 ) -> ToolExecutionResult:
@@ -1265,7 +1607,14 @@ def _not_found_result(
 def _list_result(
     tool_name: str,
     record_type: str,
-    records: list[ResumeProfile] | list[CareerProfile] | list[JDAnalysis] | list[JobFitReport] | list[ResumeVersion],
+    records: (
+        list[ResumeProfile]
+        | list[CareerProfile]
+        | list[JDAnalysis]
+        | list[JobFitReport]
+        | list[ResumeVersion]
+        | list[CareerApplication]
+    ),
 ) -> ToolExecutionResult:
     payload = {
         "record_type": record_type,
@@ -1274,7 +1623,9 @@ def _list_result(
     return ToolExecutionResult(tool_name=tool_name, success=True, content=json.dumps(payload, ensure_ascii=False))
 
 
-def _record_to_payload(record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion) -> dict[str, Any]:
+def _record_to_payload(
+    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication,
+) -> dict[str, Any]:
     base: dict[str, Any] = {
         "status": record.status.value,
         "source_session_id": record.source_session_id,
@@ -1354,17 +1705,39 @@ def _record_to_payload(record: ResumeProfile | CareerProfile | JDAnalysis | JobF
             }
         )
         return base
+    if isinstance(record, ResumeVersion):
+        base.update(
+            {
+                "resume_version_id": record.resume_version_id,
+                "base_resume_profile_id": record.base_resume_profile_id,
+                "target_jd_analysis_id": record.target_jd_analysis_id,
+                "title": record.title,
+                "format": record.format,
+                "artifact_id": record.artifact_id,
+                "change_summary": record.change_summary,
+                "keyword_strategy": record.keyword_strategy,
+                "risk_notes": record.risk_notes,
+            }
+        )
+        return base
     base.update(
         {
-            "resume_version_id": record.resume_version_id,
-            "base_resume_profile_id": record.base_resume_profile_id,
-            "target_jd_analysis_id": record.target_jd_analysis_id,
-            "title": record.title,
-            "format": record.format,
-            "artifact_id": record.artifact_id,
-            "change_summary": record.change_summary,
-            "keyword_strategy": record.keyword_strategy,
-            "risk_notes": record.risk_notes,
+            "application_id": record.application_id,
+            "company": record.company,
+            "position": record.position,
+            "location": record.location,
+            "job_url": record.job_url,
+            "stage": record.stage,
+            "priority": record.priority,
+            "resume_profile_id": record.resume_profile_id,
+            "career_profile_id": record.career_profile_id,
+            "jd_analysis_id": record.jd_analysis_id,
+            "job_fit_report_id": record.job_fit_report_id,
+            "resume_version_ids": record.resume_version_ids,
+            "summary": record.summary,
+            "next_actions": record.next_actions,
+            "risks": record.risks,
+            "notes": record.notes,
         }
     )
     return base

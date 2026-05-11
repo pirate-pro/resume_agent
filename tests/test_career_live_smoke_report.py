@@ -1,5 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
+
+import pytest
 
 from app.career.models import CareerProfile, CareerRecordStatus, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
 from app.career.store import CareerProductStore
@@ -7,10 +10,20 @@ from app.domain.models import SessionArtifact
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.core.time import app_now
 
-from tools.smoke_career_live_flow import FlowReport, TurnReport, infer_failure_stage, inspect_flow_outputs, print_report
+from tools.smoke_career_live_flow import (
+    FlowReport,
+    LiveStack,
+    TurnReport,
+    infer_failure_stage,
+    inspect_flow_outputs,
+    print_report,
+)
 
 
-def test_live_smoke_report_prints_concise_failure_summary(capsys, tmp_path: Path) -> None:
+def test_live_smoke_report_prints_concise_failure_summary(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
     report = FlowReport(
         run_index=1,
         session_id="sess_live_career_test",
@@ -102,7 +115,7 @@ def test_live_smoke_fails_when_checker_rejects_resume_version(tmp_path: Path) ->
         success=False,
         elapsed_seconds=0,
     )
-    stack = SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path)
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
 
     inspect_flow_outputs(stack=stack, report=report)
 

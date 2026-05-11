@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from app.tools.builtin_tools import (
     AgentTaskStatusTool,
+    CareerApplicationCreateTool,
+    CareerApplicationGetTool,
+    CareerApplicationListTool,
+    CareerApplicationMergeTool,
     CareerJobFitReportGetTool,
     CareerJobFitReportListTool,
     CareerJobFitReportSaveTool,
@@ -41,6 +45,10 @@ from app.tools.builtin_tools import (
 __all__ = [
     "DelegateAgentsTool",
     "AgentTaskStatusTool",
+    "CareerApplicationCreateTool",
+    "CareerApplicationGetTool",
+    "CareerApplicationListTool",
+    "CareerApplicationMergeTool",
     "CareerJobFitReportGetTool",
     "CareerJobFitReportListTool",
     "CareerJobFitReportSaveTool",
