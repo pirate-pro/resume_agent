@@ -80,4 +80,92 @@ void main() {
     await tester.tap(find.text('历史 3'));
     expect(historyOpened, isTrue);
   });
+
+  testWidgets('求职项目卡片展示项目阶段并优先预览匹配报告', (tester) async {
+    String? previewedArtifactId;
+    final record = CareerApplicationView(
+      meta: CareerRecordMetaView(
+        status: 'active',
+        sourceSessionId: 'sess_demo',
+        sourceArtifactId: 'artifact_jd_001',
+        evidenceRefs: const ['artifact_jd_001'],
+        createdAt: DateTime(2026, 5, 8, 13, 20),
+        updatedAt: DateTime(2026, 5, 8, 14, 28),
+      ),
+      applicationId: 'application_zhangming_staragent_001',
+      company: '星河智能',
+      position: 'AI Agent 后端工程师',
+      location: '上海',
+      jobUrl: '',
+      stage: 'ready_to_apply',
+      priority: 'high',
+      resumeProfileId: 'resume_profile_zhangming_003',
+      careerProfileId: 'career_profile_default',
+      jdAnalysisId: 'jd_zhangming_staragent_001',
+      jobFitReportId: 'fit_zhangming_staragent_001',
+      resumeVersionIds: const ['resume_version_zhangming_staragent_001'],
+      summary: '匹配度较高，可进入投递准备。',
+      nextActions: const ['复核定制简历事实准确性'],
+      risks: const ['RAG 证据需要补充'],
+      notes: '',
+    );
+    final fitReport = JobFitReportView(
+      meta: CareerRecordMetaView(
+        status: 'active',
+        sourceSessionId: 'sess_demo',
+        sourceArtifactId: 'artifact_jd_001',
+        evidenceRefs: const ['artifact_jd_001'],
+        createdAt: DateTime(2026, 5, 8, 13, 20),
+        updatedAt: DateTime(2026, 5, 8, 14, 28),
+      ),
+      jobFitReportId: 'fit_zhangming_staragent_001',
+      jdAnalysisId: 'jd_zhangming_staragent_001',
+      resumeProfileId: 'resume_profile_zhangming_003',
+      careerProfileId: 'career_profile_default',
+      overallScore: 82,
+      scoreBreakdown: const {},
+      matchedEvidence: const [],
+      gaps: const [],
+      resumeOptimizationDirection: const [],
+      interviewPreparationFocus: const [],
+      recommendation: 'recommended',
+      reportArtifactId: 'artifact_fit_report_001',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 340,
+              child: CareerApplicationCard(
+                record: record,
+                fitReport: fitReport,
+                latestResumeVersion: null,
+                selected: false,
+                highlighted: false,
+                onDetails: () {},
+                onPreviewArtifact: (artifactId) async {
+                  previewedArtifactId = artifactId;
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('求职项目'), findsOneWidget);
+    expect(find.text('星河智能 · AI Agent 后端工程师'), findsOneWidget);
+    expect(find.text('可投递'), findsOneWidget);
+    expect(find.text('高优先级'), findsOneWidget);
+    expect(find.text('5 项资料'), findsOneWidget);
+    expect(find.text('预览报告'), findsOneWidget);
+    expect(find.textContaining('匹配度较高'), findsOneWidget);
+    expect(find.textContaining('复核定制简历'), findsOneWidget);
+
+    await tester.tap(find.text('预览报告'));
+    await tester.pump();
+    expect(previewedArtifactId, 'artifact_fit_report_001');
+  });
 }

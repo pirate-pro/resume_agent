@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Protocol, cast
 
-from app.career.models import CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
 from app.domain.models import EventRecord, MemoryItem, SessionMeta
 from app.schemas.chat import (
     AnswerArtifactView,
@@ -18,6 +18,7 @@ from app.schemas.chat import (
     ToolCallView,
 )
 from app.schemas.career import (
+    CareerApplicationView,
     CareerProfileView,
     JDAnalysisView,
     JobFitReportView,
@@ -27,6 +28,7 @@ from app.schemas.career import (
 from app.services.answer_normalizer import AnswerFormat, LayoutHint, RenderHint, SourceKind
 
 __all__ = [
+    "career_application_view",
     "career_profile_view",
     "event_view",
     "jd_analysis_view",
@@ -169,6 +171,28 @@ def resume_version_view(item: ResumeVersion) -> ResumeVersionView:
     )
 
 
+def career_application_view(item: CareerApplication) -> CareerApplicationView:
+    return CareerApplicationView(
+        application_id=item.application_id,
+        **_career_meta(item),
+        company=item.company,
+        position=item.position,
+        location=item.location,
+        job_url=item.job_url,
+        stage=item.stage,
+        priority=item.priority,
+        resume_profile_id=item.resume_profile_id,
+        career_profile_id=item.career_profile_id,
+        jd_analysis_id=item.jd_analysis_id,
+        job_fit_report_id=item.job_fit_report_id,
+        resume_version_ids=item.resume_version_ids,
+        summary=item.summary,
+        next_actions=item.next_actions,
+        risks=item.risks,
+        notes=item.notes,
+    )
+
+
 def session_message_view(raw: Mapping[str, object]) -> SessionMessage:
     return SessionMessage(
         role=str(raw.get("role", "")),
@@ -213,7 +237,7 @@ def _dict_value(raw: object) -> dict[str, Any]:
 
 
 def _career_meta(
-    item: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion,
+    item: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication,
 ) -> dict[str, Any]:
     return {
         "status": item.status.value,

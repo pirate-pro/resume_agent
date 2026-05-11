@@ -11,6 +11,7 @@ from app.api.deps import get_career_product_store, get_session_artifact_service
 from app.career.store import CareerProductStore
 from app.main import app
 from scripts.seed_career_frontend_demo import (
+    CAREER_APPLICATION_ID,
     DEFAULT_SESSION_ID,
     DIAGNOSIS_ARTIFACT_ID,
     FIT_REPORT_ARTIFACT_ID,
@@ -40,6 +41,7 @@ def test_seed_career_frontend_demo_data_is_idempotent_and_api_readable(tmp_path:
     assert [item.jd_analysis_id for item in store.list_jd_analyses()] == [JD_ANALYSIS_ID]
     assert [item.job_fit_report_id for item in store.list_job_fit_reports()] == [JOB_FIT_REPORT_ID]
     assert [item.resume_version_id for item in store.list_resume_versions()] == [RESUME_VERSION_ID]
+    assert [item.application_id for item in store.list_career_applications()] == [CAREER_APPLICATION_ID]
 
     bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="demo-ok"))
     artifacts = bundle.chat_service._session_repository.list_session_artifacts(DEFAULT_SESSION_ID)  # noqa: SLF001
@@ -52,6 +54,7 @@ def test_seed_career_frontend_demo_data_is_idempotent_and_api_readable(tmp_path:
         with TestClient(app) as client:
             resumes_resp = client.get("/api/career/resumes")
             versions_resp = client.get("/api/career/resume-versions")
+            applications_resp = client.get("/api/career/applications")
             diagnosis_resp = client.get(
                 f"/api/sessions/{DEFAULT_SESSION_ID}/artifacts/{DIAGNOSIS_ARTIFACT_ID}/content"
             )
@@ -64,6 +67,7 @@ def test_seed_career_frontend_demo_data_is_idempotent_and_api_readable(tmp_path:
 
         assert _data(resumes_resp)[0]["resume_profile_id"] == RESUME_PROFILE_ID
         assert _data(versions_resp)[0]["resume_version_id"] == RESUME_VERSION_ID
+        assert _data(applications_resp)[0]["application_id"] == CAREER_APPLICATION_ID
         assert _data(diagnosis_resp)["content"].startswith("# 简历诊断")
         assert _data(fit_report_resp)["content"].startswith("# 岗位匹配报告")
         assert _data(resume_version_resp)["content"].startswith("# 林一凡")

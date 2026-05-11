@@ -14,6 +14,7 @@ final careerAssetsProvider =
 
 enum CareerAssetsTab {
   all,
+  applications,
   resumes,
   profiles,
   jobs,
@@ -75,6 +76,14 @@ class CareerAssetSelection {
         record: record,
       );
     }
+    if (record is CareerApplicationView) {
+      return CareerAssetSelection(
+        recordType: "application",
+        recordId: record.applicationId,
+        sourceSessionId: record.meta.sourceSessionId,
+        record: record,
+      );
+    }
     throw ArgumentError("Unsupported career asset record type.");
   }
 }
@@ -100,6 +109,7 @@ class CareerAssetsProvider extends ChangeNotifier {
   List<JDAnalysisView> _jdAnalyses = [];
   List<JobFitReportView> _jobFitReports = [];
   List<ResumeVersionView> _resumeVersions = [];
+  List<CareerApplicationView> _careerApplications = [];
 
   CareerAssetsProvider(this._api);
 
@@ -124,13 +134,16 @@ class CareerAssetsProvider extends ChangeNotifier {
   List<JobFitReportView> get jobFitReports => List.unmodifiable(_jobFitReports);
   List<ResumeVersionView> get resumeVersions =>
       List.unmodifiable(_resumeVersions);
+  List<CareerApplicationView> get careerApplications =>
+      List.unmodifiable(_careerApplications);
 
   int get totalCount =>
       _resumeProfiles.length +
       _careerProfiles.length +
       _jdAnalyses.length +
       _jobFitReports.length +
-      _resumeVersions.length;
+      _resumeVersions.length +
+      _careerApplications.length;
 
   @override
   void dispose() {
@@ -162,12 +175,14 @@ class CareerAssetsProvider extends ChangeNotifier {
         _api.listCareerJobs(),
         _api.listCareerJobFitReports(),
         _api.listCareerResumeVersions(),
+        _api.listCareerApplications(),
       ]);
       _resumeProfiles = results[0] as List<ResumeProfileView>;
       _careerProfiles = results[1] as List<CareerProfileView>;
       _jdAnalyses = results[2] as List<JDAnalysisView>;
       _jobFitReports = results[3] as List<JobFitReportView>;
       _resumeVersions = results[4] as List<ResumeVersionView>;
+      _careerApplications = results[5] as List<CareerApplicationView>;
       _hasLoaded = true;
       _selection = _selectionStillExists() ? _selection : null;
       if (!firstLoad) {
@@ -319,6 +334,7 @@ class CareerAssetsProvider extends ChangeNotifier {
       ..._jdAnalyses.map((item) => item.jdAnalysisId),
       ..._jobFitReports.map((item) => item.jobFitReportId),
       ..._resumeVersions.map((item) => item.resumeVersionId),
+      ..._careerApplications.map((item) => item.applicationId),
     ].contains(current.recordId);
   }
 
@@ -329,6 +345,7 @@ class CareerAssetsProvider extends ChangeNotifier {
       ..._jdAnalyses.map((item) => item.jdAnalysisId),
       ..._jobFitReports.map((item) => item.jobFitReportId),
       ..._resumeVersions.map((item) => item.resumeVersionId),
+      ..._careerApplications.map((item) => item.applicationId),
     };
   }
 
@@ -380,6 +397,7 @@ class CareerAssetsProvider extends ChangeNotifier {
   ) {
     if (selection == null || tab == CareerAssetsTab.all) return true;
     return switch (tab) {
+      CareerAssetsTab.applications => selection.recordType == "application",
       CareerAssetsTab.resumes => selection.recordType == "resume",
       CareerAssetsTab.profiles => selection.recordType == "profile",
       CareerAssetsTab.jobs => selection.recordType == "job",

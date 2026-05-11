@@ -4304,6 +4304,7 @@ String _artifactRenderHint(String mediaType) {
 
 enum _CareerAssetKind {
   artifact,
+  application,
   resumeProfile,
   careerProfile,
   jdAnalysis,
@@ -4322,6 +4323,7 @@ class _DetectedCareerAsset {
 
   String get label => switch (kind) {
         _CareerAssetKind.artifact => "文件",
+        _CareerAssetKind.application => "求职项目",
         _CareerAssetKind.resumeProfile => "简历画像",
         _CareerAssetKind.careerProfile => "职业画像",
         _CareerAssetKind.jdAnalysis => "JD 分析",
@@ -4336,6 +4338,7 @@ class _DetectedCareerAsset {
 
   IconData get icon => switch (kind) {
         _CareerAssetKind.artifact => Icons.description_outlined,
+        _CareerAssetKind.application => Icons.work_history_outlined,
         _CareerAssetKind.resumeProfile => Icons.badge_outlined,
         _CareerAssetKind.careerProfile => Icons.track_changes_rounded,
         _CareerAssetKind.jdAnalysis => Icons.article_outlined,
@@ -4345,6 +4348,7 @@ class _DetectedCareerAsset {
 
   Color get color => switch (kind) {
         _CareerAssetKind.artifact => AppTheme.accent,
+        _CareerAssetKind.application => const Color(0xFF0F9B78),
         _CareerAssetKind.resumeProfile => const Color(0xFF0F9B78),
         _CareerAssetKind.careerProfile => const Color(0xFF2563EB),
         _CareerAssetKind.jdAnalysis => const Color(0xFF7C3AED),
@@ -4492,6 +4496,8 @@ List<_DetectedCareerAsset> _extractCareerAssets(String content) {
 
   collect(RegExp(r'\bartifact_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
       _CareerAssetKind.artifact);
+  collect(RegExp(r'\bapplication_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
+      _CareerAssetKind.application);
   collect(RegExp(r'\bresume_profile_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
       _CareerAssetKind.resumeProfile);
   collect(RegExp(r'\bcareer_profile_[A-Za-z0-9][A-Za-z0-9_-]*\b'),
@@ -4508,6 +4514,7 @@ List<_DetectedCareerAsset> _extractCareerAssets(String content) {
 bool _isCareerAssetFieldName(String id) {
   return {
     "artifact_id",
+    "application_id",
     "resume_profile_id",
     "career_profile_id",
     "jd_analysis",
@@ -4572,7 +4579,7 @@ bool _isStandaloneAssetLine(
   if (RegExp(r'^[-*•]\s*').hasMatch(line)) {
     return true;
   }
-  return RegExp(r'^(简历画像|诊断报告|职业档案|职业画像|JD 分析|匹配报告|简历版本|来源文件)[:：]')
+  return RegExp(r'^(求职项目|简历画像|诊断报告|职业档案|职业画像|JD 分析|匹配报告|简历版本|来源文件)[:：]')
       .hasMatch(line);
 }
 
@@ -4610,11 +4617,18 @@ Object? _findCareerRecord(
     }
     return null;
   }
+  if (asset.kind == _CareerAssetKind.application) {
+    for (final record in provider.careerApplications) {
+      if (record.applicationId == asset.id) return record;
+    }
+    return null;
+  }
   return null;
 }
 
 CareerAssetsTab _careerAssetsTabForKind(_CareerAssetKind kind) {
   return switch (kind) {
+    _CareerAssetKind.application => CareerAssetsTab.applications,
     _CareerAssetKind.resumeProfile => CareerAssetsTab.resumes,
     _CareerAssetKind.careerProfile => CareerAssetsTab.profiles,
     _CareerAssetKind.jdAnalysis => CareerAssetsTab.jobs,

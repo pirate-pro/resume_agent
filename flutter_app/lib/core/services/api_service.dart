@@ -306,6 +306,17 @@ class ApiService {
         .toList();
   }
 
+  Future<List<CareerApplicationView>> listCareerApplications({
+    bool includeArchived = false,
+  }) async {
+    final resp = await http.get(_careerUri("/applications", includeArchived));
+    final list = _decodeResponseData(resp) as List;
+    return list
+        .map(
+            (e) => CareerApplicationView.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
   Uri _careerUri(String path, bool includeArchived) {
     return _uri("/api/career$path").replace(
       queryParameters: {"include_archived": includeArchived.toString()},

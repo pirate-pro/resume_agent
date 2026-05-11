@@ -7,7 +7,15 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from app.career.models import CareerProfile, CareerRecordStatus, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import (
+    CareerApplication,
+    CareerProfile,
+    CareerRecordStatus,
+    JDAnalysis,
+    JobFitReport,
+    ResumeProfile,
+    ResumeVersion,
+)
 from app.career.store import CareerProductStore
 from app.core.time import app_now
 from app.domain.models import SessionArtifact
@@ -26,6 +34,7 @@ CAREER_PROFILE_ID = "career_profile_m4_demo"
 JD_ANALYSIS_ID = "jd_m4_demo"
 JOB_FIT_REPORT_ID = "fit_m4_demo"
 RESUME_VERSION_ID = "resume_version_m4_demo"
+CAREER_APPLICATION_ID = "application_m4_demo"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +47,7 @@ class DemoSeedSummary:
     jd_analysis_id: str
     job_fit_report_id: str
     resume_version_id: str
+    career_application_id: str
 
 
 def seed_demo_data(data_dir: Path, *, session_id: str = DEFAULT_SESSION_ID) -> DemoSeedSummary:
@@ -63,6 +73,7 @@ def seed_demo_data(data_dir: Path, *, session_id: str = DEFAULT_SESSION_ID) -> D
         jd_analysis_id=JD_ANALYSIS_ID,
         job_fit_report_id=JOB_FIT_REPORT_ID,
         resume_version_id=RESUME_VERSION_ID,
+        career_application_id=CAREER_APPLICATION_ID,
     )
 
 
@@ -298,6 +309,38 @@ def _seed_career_records(store: CareerProductStore, session_id: str) -> None:
             change_summary=["突出 RAG 和 Agent 项目", "把量化结果前置", "弱化无关经历"],
             keyword_strategy=["FastAPI", "RAG", "Agent 工具调用", "向量检索", "可观测性"],
             risk_notes=["高并发经验需在面试中补充", "不要夸大模型评测经验"],
+        )
+    )
+    store.save_career_application(
+        CareerApplication(
+            application_id=CAREER_APPLICATION_ID,
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=JD_ARTIFACT_ID,
+            evidence_refs=[
+                RESUME_PROFILE_ID,
+                CAREER_PROFILE_ID,
+                JD_ANALYSIS_ID,
+                JOB_FIT_REPORT_ID,
+                RESUME_VERSION_ID,
+                JD_ARTIFACT_ID,
+            ],
+            created_at=now,
+            updated_at=now,
+            company="星河智能",
+            position="AI 应用后端工程师",
+            location="上海",
+            stage="ready_to_apply",
+            priority="high",
+            resume_profile_id=RESUME_PROFILE_ID,
+            career_profile_id=CAREER_PROFILE_ID,
+            jd_analysis_id=JD_ANALYSIS_ID,
+            job_fit_report_id=JOB_FIT_REPORT_ID,
+            resume_version_ids=[RESUME_VERSION_ID],
+            summary="匹配度较高，已生成诊断、JD 分析、匹配报告和定制简历，可进入投递准备。",
+            next_actions=["复核定制简历事实准确性", "准备 RAG 检索评估和工具失败恢复面试题"],
+            risks=["高并发生产案例需要补充口径", "RAG 指标需要用项目事实支撑"],
+            notes="M4 前端演示求职项目。",
         )
     )
 

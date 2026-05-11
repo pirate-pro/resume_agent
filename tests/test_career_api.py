@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_career_product_store
 from app.career.models import (
+    CareerApplication,
     CareerProfile,
     CareerRecordStatus,
     JDAnalysis,
@@ -86,6 +87,18 @@ def test_career_api_lists_and_reads_active_records(tmp_path: Path) -> None:
             assert version_resp.status_code == 200
             assert _data(version_resp)["artifact_id"] == "artifact_resume_version"
 
+            applications_resp = client.get("/api/career/applications")
+            assert applications_resp.status_code == 200
+            assert [item["application_id"] for item in _data(applications_resp)] == ["application_alpha"]
+
+            application_resp = client.get("/api/career/applications/application_alpha")
+            assert application_resp.status_code == 200
+            application = _data(application_resp)
+            assert application["company"] == "Example Co"
+            assert application["position"] == "AI 应用开发工程师"
+            assert application["job_fit_report_id"] == "fit_alpha"
+            assert application["resume_version_ids"] == ["resume_version_alpha"]
+
             for response in (
                 resumes_resp,
                 resume_resp,
@@ -97,6 +110,8 @@ def test_career_api_lists_and_reads_active_records(tmp_path: Path) -> None:
                 fit_report_resp,
                 versions_resp,
                 version_resp,
+                applications_resp,
+                application_resp,
             ):
                 _assert_no_internal_path_leak(response.json(), tmp_path)
     finally:
@@ -116,6 +131,7 @@ def test_career_api_returns_404_for_missing_records(tmp_path: Path) -> None:
                 "/api/career/jobs/jd_missing",
                 "/api/career/job-fit-reports/fit_missing",
                 "/api/career/resume-versions/resume_version_missing",
+                "/api/career/applications/application_missing",
             ):
                 response = client.get(path)
                 assert response.status_code == 404
@@ -165,6 +181,7 @@ def _seed_active_records(store: CareerProductStore) -> None:
     store.save_jd_analysis(_jd_analysis())
     store.save_job_fit_report(_job_fit_report())
     store.save_resume_version(_resume_version())
+    store.save_career_application(_career_application())
 
 
 def _seed_resume_profile(store: CareerProductStore, record_id: str) -> None:
@@ -253,6 +270,31 @@ def _resume_version() -> ResumeVersion:
         format="markdown",
         artifact_id="artifact_resume_version",
         change_summary=["强化 RAG 项目"],
+    )
+
+
+def _career_application() -> CareerApplication:
+    return CareerApplication(
+        application_id="application_alpha",
+        status=CareerRecordStatus.ACTIVE,
+        source_session_id="sess_alpha",
+        source_artifact_id="artifact_jd",
+        evidence_refs=["resume_profile_alpha", "career_profile_default", "jd_alpha", "fit_alpha"],
+        created_at=_seed_time(),
+        updated_at=_seed_time(),
+        company="Example Co",
+        position="AI 应用开发工程师",
+        location="上海",
+        stage="ready_to_apply",
+        priority="high",
+        resume_profile_id="resume_profile_alpha",
+        career_profile_id="career_profile_default",
+        jd_analysis_id="jd_alpha",
+        job_fit_report_id="fit_alpha",
+        resume_version_ids=["resume_version_alpha"],
+        summary="匹配度较高，适合优先投递。",
+        next_actions=["完善 RAG 面试题"],
+        risks=["RAG 经验表达需要补证据"],
     )
 
 

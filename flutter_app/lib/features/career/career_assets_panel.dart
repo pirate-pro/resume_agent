@@ -241,6 +241,53 @@ class CareerAssetList extends StatelessWidget {
   Widget build(BuildContext context) {
     final entries = <_CareerAssetCardEntry>[];
     final tab = provider.activeTab;
+    if (tab == CareerAssetsTab.all || tab == CareerAssetsTab.applications) {
+      entries.addAll(
+        _groupCareerApplications(provider.careerApplications).map(
+          (group) {
+            final item = group.current as CareerApplicationView;
+            final fitReport = _findJobFitReport(
+              provider.jobFitReports,
+              item.jobFitReportId,
+            );
+            final latestVersion = _latestResumeVersionForApplication(
+              provider.resumeVersions,
+              item,
+            );
+            final previewSourceSessionId = fitReport?.meta.sourceSessionId ??
+                latestVersion?.meta.sourceSessionId ??
+                item.meta.sourceSessionId;
+            final previewArtifactId = fitReport?.reportArtifactId ??
+                latestVersion?.artifactId ??
+                item.meta.sourceArtifactId;
+            return _CareerAssetCardEntry(
+              record: item,
+              card: CareerApplicationCard(
+                record: item,
+                fitReport: fitReport,
+                latestResumeVersion: latestVersion,
+                selected: _isSelected(provider.selection, item.applicationId),
+                highlighted: _groupHighlighted(provider, group),
+                onDetails: () => _showDetails(context, provider, item),
+                onPreviewArtifact:
+                    _preview(context, provider, previewSourceSessionId),
+                previewError:
+                    previewArtifactId == null || previewArtifactId.isEmpty
+                        ? null
+                        : provider.artifactPreviewError(
+                            sourceSessionId: previewSourceSessionId,
+                            artifactId: previewArtifactId,
+                          ),
+                historyCount: group.records.length,
+                onHistory: group.records.length > 1
+                    ? () => _showHistory(context, provider, group)
+                    : null,
+              ),
+            );
+          },
+        ),
+      );
+    }
     if (tab == CareerAssetsTab.all || tab == CareerAssetsTab.resumes) {
       entries.addAll(
         _groupResumeProfiles(provider.resumeProfiles).map(
@@ -430,6 +477,192 @@ class _CareerAssetCardEntry {
 }
 
 typedef ArtifactPreviewCallback = Future<void> Function(String artifactId);
+
+class CareerApplicationCard extends StatelessWidget {
+  final CareerApplicationView record;
+  final JobFitReportView? fitReport;
+  final ResumeVersionView? latestResumeVersion;
+  final bool selected;
+  final bool highlighted;
+  final VoidCallback onDetails;
+  final ArtifactPreviewCallback onPreviewArtifact;
+  final String? previewError;
+  final int historyCount;
+  final VoidCallback? onHistory;
+
+  const CareerApplicationCard({
+    super.key,
+    required this.record,
+    required this.fitReport,
+    required this.latestResumeVersion,
+    required this.selected,
+    required this.highlighted,
+    required this.onDetails,
+    required this.onPreviewArtifact,
+    this.previewError,
+    this.historyCount = 1,
+    this.onHistory,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final previewArtifactId = fitReport?.reportArtifactId ??
+        latestResumeVersion?.artifactId ??
+        record.meta.sourceArtifactId;
+    final previewLabel = fitReport?.reportArtifactId != null
+        ? "预览报告"
+        : latestResumeVersion?.artifactId != null
+            ? "预览简历"
+            : "预览 JD";
+    final linkedCount = [
+      record.resumeProfileId,
+      record.careerProfileId,
+      record.jdAnalysisId,
+      record.jobFitReportId,
+      ...record.resumeVersionIds,
+    ].whereType<String>().where((item) => item.trim().isNotEmpty).length;
+    return _CareerAssetCardShell(
+      icon: Icons.work_history_outlined,
+      label: "求职项目",
+      title: record.displayTitle,
+      id: record.applicationId,
+      meta: record.meta,
+      selected: selected,
+      highlighted: highlighted,
+      onDetails: onDetails,
+      previewExpected: true,
+      previewLabel: previewLabel,
+      previewArtifactId: previewArtifactId,
+      onPreviewArtifact: onPreviewArtifact,
+      previewError: previewError,
+      historyCount: historyCount,
+      onHistory: onHistory,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _AssetMetaPill(
+                icon: Icons.flag_outlined,
+                label: _applicationStageLabel(record.stage),
+                color: AppTheme.accent,
+                strong: true,
+              ),
+              _AssetMetaPill(
+                icon: Icons.priority_high_rounded,
+                label: _applicationPriorityLabel(record.priority),
+                color: _applicationPriorityColor(record.priority),
+              ),
+              _AssetMetaPill(
+                icon: Icons.link_rounded,
+                label: "$linkedCount 项资料",
+                color: AppTheme.textTertiary,
+              ),
+            ],
+          ),
+          if (record.summary.trim().isNotEmpty) ...[
+            const SizedBox(height: 9),
+            Text(
+              record.summary.trim(),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: AppTheme.ts(
+                fontSize: 11.4,
+                height: 1.45,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ],
+          const SizedBox(height: 9),
+          _ApplicationMiniList(
+            title: "下一步",
+            values: record.nextActions,
+            emptyText: "等待生成下一步行动",
+            icon: Icons.arrow_forward_rounded,
+          ),
+          if (record.risks.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            _ApplicationMiniList(
+              title: "风险",
+              values: record.risks,
+              emptyText: "",
+              icon: Icons.warning_amber_rounded,
+              color: const Color(0xFFB45309),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationMiniList extends StatelessWidget {
+  final String title;
+  final List<String> values;
+  final String emptyText;
+  final IconData icon;
+  final Color? color;
+
+  const _ApplicationMiniList({
+    required this.title,
+    required this.values,
+    required this.emptyText,
+    required this.icon,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = values
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .take(2)
+        .toList();
+    if (normalized.isEmpty) {
+      return Text(
+        emptyText,
+        style: AppTheme.ts(fontSize: 11, color: AppTheme.textTertiary),
+      );
+    }
+    final itemColor = color ?? AppTheme.accent;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 13, color: itemColor),
+            const SizedBox(width: 5),
+            Text(
+              title,
+              style: AppTheme.ts(
+                fontSize: 10.8,
+                fontWeight: FontWeight.w800,
+                color: itemColor,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        for (final item in normalized)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Text(
+              "· $item",
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppTheme.ts(
+                fontSize: 11.2,
+                height: 1.35,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
 
 class _CareerAssetsOverview extends StatelessWidget {
   final CareerAssetsProvider provider;
@@ -649,6 +882,9 @@ List<_CareerAssetGroup> _groupsForTab(
   CareerAssetsTab tab,
 ) {
   final groups = <_CareerAssetGroup>[];
+  if (tab == CareerAssetsTab.all || tab == CareerAssetsTab.applications) {
+    groups.addAll(_groupCareerApplications(provider.careerApplications));
+  }
   if (tab == CareerAssetsTab.all || tab == CareerAssetsTab.resumes) {
     groups.addAll(_groupResumeProfiles(provider.resumeProfiles));
   }
@@ -668,6 +904,18 @@ List<_CareerAssetGroup> _groupsForTab(
         _recordUpdatedAt(a.current),
       ));
   return groups;
+}
+
+List<_CareerAssetGroup> _groupCareerApplications(
+  List<CareerApplicationView> records,
+) {
+  return _groupRecords<CareerApplicationView>(
+    records,
+    keyOf: (record) => record.applicationId,
+    titleOf: (record) => record.displayTitle,
+    idOf: (record) => record.applicationId,
+    updatedAtOf: (record) => record.meta.updatedAt,
+  );
 }
 
 List<_CareerAssetGroup> _groupResumeProfiles(List<ResumeProfileView> records) {
@@ -2315,6 +2563,7 @@ class CareerAssetDetailPane extends StatelessWidget {
     if (record is JDAnalysisView) return record.meta;
     if (record is JobFitReportView) return record.meta;
     if (record is ResumeVersionView) return record.meta;
+    if (record is CareerApplicationView) return record.meta;
     throw ArgumentError("Unsupported career asset record type.");
   }
 
@@ -2356,6 +2605,16 @@ class CareerAssetDetailPane extends StatelessWidget {
         ("格式", record.format),
       ];
     }
+    if (record is CareerApplicationView) {
+      return [
+        ("目标", record.displayTitle),
+        ("阶段", _applicationStageLabel(record.stage)),
+        ("优先级", _applicationPriorityLabel(record.priority)),
+        ("摘要", record.summary),
+        ("下一步", record.nextActions.join("、")),
+        ("风险", record.risks.join("、")),
+      ];
+    }
     return const [];
   }
 
@@ -2385,6 +2644,13 @@ class CareerAssetDetailPane extends StatelessWidget {
       lines.add(("基础简历", record.baseResumeProfileId));
       lines.add(("目标 JD", record.targetJdAnalysisId ?? "-"));
       lines.add(("正文 artifact", record.artifactId));
+    }
+    if (record is CareerApplicationView) {
+      lines.add(("简历画像", record.resumeProfileId ?? "-"));
+      lines.add(("职业画像", record.careerProfileId ?? "-"));
+      lines.add(("JD 分析", record.jdAnalysisId ?? "-"));
+      lines.add(("匹配报告", record.jobFitReportId ?? "-"));
+      lines.add(("简历版本", record.resumeVersionIds.join("、")));
     }
     return lines;
   }
@@ -3557,6 +3823,7 @@ int _groupedAssetCount(CareerAssetsProvider provider) {
 
 DateTime? _latestUpdatedAt(CareerAssetsProvider provider) {
   final times = <DateTime>[
+    ...provider.careerApplications.map((item) => item.meta.updatedAt),
     ...provider.resumeProfiles.map((item) => item.meta.updatedAt),
     ...provider.careerProfiles.map((item) => item.meta.updatedAt),
     ...provider.jdAnalyses.map((item) => item.meta.updatedAt),
@@ -3603,7 +3870,8 @@ bool _previewExpectedForRecord(Object record) {
   return record is ResumeProfileView ||
       record is JDAnalysisView ||
       record is JobFitReportView ||
-      record is ResumeVersionView;
+      record is ResumeVersionView ||
+      record is CareerApplicationView;
 }
 
 _PreviewStatus _previewAvailability({
@@ -3649,6 +3917,7 @@ CareerRecordMetaView _recordMeta(Object record) {
   if (record is JDAnalysisView) return record.meta;
   if (record is JobFitReportView) return record.meta;
   if (record is ResumeVersionView) return record.meta;
+  if (record is CareerApplicationView) return record.meta;
   throw ArgumentError("Unsupported career asset record type.");
 }
 
@@ -3658,6 +3927,7 @@ String _recordId(Object record) {
   if (record is JDAnalysisView) return record.jdAnalysisId;
   if (record is JobFitReportView) return record.jobFitReportId;
   if (record is ResumeVersionView) return record.resumeVersionId;
+  if (record is CareerApplicationView) return record.applicationId;
   return "";
 }
 
@@ -3679,10 +3949,12 @@ String _recordTitle(Object record) {
   if (record is ResumeVersionView) {
     return record.title.isEmpty ? record.resumeVersionId : record.title;
   }
+  if (record is CareerApplicationView) return record.displayTitle;
   return "";
 }
 
 String _recordTypeLabel(Object record) {
+  if (record is CareerApplicationView) return "求职项目";
   if (record is ResumeProfileView) return "简历画像";
   if (record is CareerProfileView) return "职业画像";
   if (record is JDAnalysisView) return "JD 分析";
@@ -3692,6 +3964,7 @@ String _recordTypeLabel(Object record) {
 }
 
 IconData _recordTypeIcon(Object record) {
+  if (record is CareerApplicationView) return Icons.work_history_outlined;
   if (record is ResumeProfileView) return Icons.badge_outlined;
   if (record is CareerProfileView) return Icons.track_changes_rounded;
   if (record is JDAnalysisView) return Icons.article_outlined;
@@ -3741,6 +4014,15 @@ _PreviewSpec? _previewSpecForRecord(Object record) {
       artifactId: artifactId,
     );
   }
+  if (record is CareerApplicationView) {
+    final artifactId = record.meta.sourceArtifactId?.trim() ?? "";
+    if (artifactId.isEmpty) return null;
+    return _PreviewSpec(
+      label: "预览 JD",
+      sourceSessionId: sourceSessionId,
+      artifactId: artifactId,
+    );
+  }
   return null;
 }
 
@@ -3767,6 +4049,7 @@ void _openDownload(BuildContext context, String url) {
 String _tabLabel(CareerAssetsTab tab) {
   return switch (tab) {
     CareerAssetsTab.all => "全部",
+    CareerAssetsTab.applications => "项目",
     CareerAssetsTab.resumes => "简历",
     CareerAssetsTab.profiles => "画像",
     CareerAssetsTab.jobs => "JD",
@@ -3778,6 +4061,7 @@ String _tabLabel(CareerAssetsTab tab) {
 IconData _tabIcon(CareerAssetsTab tab) {
   return switch (tab) {
     CareerAssetsTab.all => Icons.dashboard_customize_outlined,
+    CareerAssetsTab.applications => Icons.work_history_outlined,
     CareerAssetsTab.resumes => Icons.badge_outlined,
     CareerAssetsTab.profiles => Icons.track_changes_rounded,
     CareerAssetsTab.jobs => Icons.article_outlined,
@@ -3788,6 +4072,7 @@ IconData _tabIcon(CareerAssetsTab tab) {
 
 IconData _assetTypeIcon(String label) {
   return switch (label) {
+    "求职项目" => Icons.work_history_outlined,
     "简历画像" => Icons.badge_outlined,
     "职业画像" => Icons.track_changes_rounded,
     "JD 分析" => Icons.article_outlined,
@@ -3800,11 +4085,14 @@ IconData _assetTypeIcon(String label) {
 int _tabCount(CareerAssetsProvider provider, CareerAssetsTab tab) {
   return switch (tab) {
     CareerAssetsTab.all =>
-      _groupResumeProfiles(provider.resumeProfiles).length +
+      _groupCareerApplications(provider.careerApplications).length +
+          _groupResumeProfiles(provider.resumeProfiles).length +
           _groupCareerProfiles(provider.careerProfiles).length +
           _groupJdAnalyses(provider.jdAnalyses).length +
           _groupJobFitReports(provider.jobFitReports).length +
           _groupResumeVersions(provider.resumeVersions).length,
+    CareerAssetsTab.applications =>
+      _groupCareerApplications(provider.careerApplications).length,
     CareerAssetsTab.resumes =>
       _groupResumeProfiles(provider.resumeProfiles).length,
     CareerAssetsTab.profiles =>
@@ -3827,6 +4115,68 @@ String _statusLabel(String status) {
     "archived" => "已归档",
     _ => status,
   };
+}
+
+String _applicationStageLabel(String stage) {
+  return switch (stage) {
+    "draft" => "准备中",
+    "analyzing" => "分析中",
+    "ready_to_apply" => "可投递",
+    "applied" => "已投递",
+    "interviewing" => "面试中",
+    "offer" => "已拿 Offer",
+    "rejected" => "未通过",
+    "paused" => "已暂停",
+    _ => stage.isEmpty ? "准备中" : stage,
+  };
+}
+
+String _applicationPriorityLabel(String priority) {
+  return switch (priority) {
+    "high" => "高优先级",
+    "medium" => "中优先级",
+    "low" => "低优先级",
+    _ => priority.isEmpty ? "中优先级" : priority,
+  };
+}
+
+Color _applicationPriorityColor(String priority) {
+  return switch (priority) {
+    "high" => AppTheme.danger,
+    "medium" => const Color(0xFFB45309),
+    "low" => AppTheme.textTertiary,
+    _ => AppTheme.textTertiary,
+  };
+}
+
+JobFitReportView? _findJobFitReport(
+  List<JobFitReportView> records,
+  String? jobFitReportId,
+) {
+  final id = jobFitReportId?.trim() ?? "";
+  if (id.isEmpty) return null;
+  for (final record in records) {
+    if (record.jobFitReportId == id) {
+      return record;
+    }
+  }
+  return null;
+}
+
+ResumeVersionView? _latestResumeVersionForApplication(
+  List<ResumeVersionView> records,
+  CareerApplicationView application,
+) {
+  final ids = application.resumeVersionIds
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toSet();
+  if (ids.isEmpty) return null;
+  final matches = records
+      .where((record) => ids.contains(record.resumeVersionId))
+      .toList()
+    ..sort((a, b) => b.meta.updatedAt.compareTo(a.meta.updatedAt));
+  return matches.isEmpty ? null : matches.first;
 }
 
 List<String> _dynamicItems(List<dynamic> values) {

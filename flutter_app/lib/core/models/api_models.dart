@@ -736,6 +736,74 @@ class ResumeVersionView {
   }
 }
 
+class CareerApplicationView {
+  final CareerRecordMetaView meta;
+  final String applicationId;
+  final String company;
+  final String position;
+  final String location;
+  final String jobUrl;
+  final String stage;
+  final String priority;
+  final String? resumeProfileId;
+  final String? careerProfileId;
+  final String? jdAnalysisId;
+  final String? jobFitReportId;
+  final List<String> resumeVersionIds;
+  final String summary;
+  final List<String> nextActions;
+  final List<String> risks;
+  final String notes;
+
+  CareerApplicationView({
+    required this.meta,
+    required this.applicationId,
+    required this.company,
+    required this.position,
+    required this.location,
+    required this.jobUrl,
+    required this.stage,
+    required this.priority,
+    required this.resumeProfileId,
+    required this.careerProfileId,
+    required this.jdAnalysisId,
+    required this.jobFitReportId,
+    required this.resumeVersionIds,
+    required this.summary,
+    required this.nextActions,
+    required this.risks,
+    required this.notes,
+  });
+
+  factory CareerApplicationView.fromJson(Map<String, dynamic> json) {
+    return CareerApplicationView(
+      meta: CareerRecordMetaView.fromJson(json),
+      applicationId: (json["application_id"] ?? "").toString(),
+      company: (json["company"] ?? "").toString(),
+      position: (json["position"] ?? "").toString(),
+      location: (json["location"] ?? "").toString(),
+      jobUrl: (json["job_url"] ?? "").toString(),
+      stage: (json["stage"] ?? "draft").toString(),
+      priority: (json["priority"] ?? "medium").toString(),
+      resumeProfileId: _readOptionalString(json["resume_profile_id"]),
+      careerProfileId: _readOptionalString(json["career_profile_id"]),
+      jdAnalysisId: _readOptionalString(json["jd_analysis_id"]),
+      jobFitReportId: _readOptionalString(json["job_fit_report_id"]),
+      resumeVersionIds: _readStringList(json["resume_version_ids"]),
+      summary: (json["summary"] ?? "").toString(),
+      nextActions: _readStringList(json["next_actions"]),
+      risks: _readStringList(json["risks"]),
+      notes: (json["notes"] ?? "").toString(),
+    );
+  }
+
+  String get displayTitle {
+    final parts = [company, position].where((item) => item.trim().isNotEmpty);
+    final title = parts.join(" · ");
+    return title.isEmpty ? applicationId : title;
+  }
+}
+
 class SessionArtifactContentView {
   final String sessionId;
   final String artifactId;

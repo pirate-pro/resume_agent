@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_career_product_store
 from app.api.presenters import (
+    career_application_view,
     career_profile_view,
     jd_analysis_view,
     job_fit_report_view,
@@ -16,6 +17,7 @@ from app.api.presenters import (
 )
 from app.api.responses import ok
 from app.career.models import (
+    CareerApplication,
     CareerProfile,
     CareerRecordStatus,
     JDAnalysis,
@@ -25,6 +27,7 @@ from app.career.models import (
 )
 from app.career.store import CareerProductStore
 from app.schemas.career import (
+    CareerApplicationView,
     CareerProfileView,
     JDAnalysisView,
     JobFitReportView,
@@ -43,6 +46,7 @@ _RecordT = TypeVar(
     JDAnalysis,
     JobFitReport,
     ResumeVersion,
+    CareerApplication,
 )
 
 
@@ -188,6 +192,32 @@ def get_resume_version(
         record_id=resume_version_id,
     )
     return ok(resume_version_view(record))
+
+
+@router.get("/applications", response_model=StandardResponse[list[CareerApplicationView]])
+def list_career_applications(
+    include_archived: bool = Query(default=False),
+    store: CareerProductStore = Depends(get_career_product_store),
+) -> StandardResponse[list[CareerApplicationView]]:
+    return ok([
+        career_application_view(item)
+        for item in store.list_career_applications(include_archived=include_archived)
+    ])
+
+
+@router.get("/applications/{application_id}", response_model=StandardResponse[CareerApplicationView])
+def get_career_application(
+    application_id: str,
+    include_archived: bool = Query(default=False),
+    store: CareerProductStore = Depends(get_career_product_store),
+) -> StandardResponse[CareerApplicationView]:
+    record = _require_visible(
+        store.get_career_application(application_id),
+        include_archived=include_archived,
+        record_type="CareerApplication",
+        record_id=application_id,
+    )
+    return ok(career_application_view(record))
 
 
 def _require_visible(
