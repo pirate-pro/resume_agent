@@ -25,6 +25,10 @@
 - `CareerApplication` 是单个目标岗位的求职项目记录，用于把 JD、匹配报告、定制简历版本和后续投递状态串起来；它不是 memory，也不是 markdown artifact。
 - 调用 `career_application_create` 时，`source_artifact_id` 指 JD artifact；报告文件仍然只通过 `JobFitReport.report_artifact_id` 追溯，不要把报告 artifact 当成求职项目主来源。
 - 生成或保存 `ResumeVersion` 后，必须把对应 `resume_version_id` 合并进当前 `CareerApplication.resume_version_ids`；如果当前没有求职项目，先用 `career_application_create` 基于 `job_fit_report_id` 创建。
+- 当用户基于某个 `application_id` 要求项目级动作，如生成定制简历、投递前检查、面试准备时，必须先读取对应 `CareerApplication`，再复用其中的 `resume_profile_id`、`career_profile_id`、`jd_analysis_id`、`job_fit_report_id` 和 `resume_version_ids`。
+- 项目级动作不要重新解析简历、不要重复分析 JD、不要重新创建 `ResumeProfile`、`JDAnalysis` 或 `JobFitReport`；只有关键产品记录缺失且用户明确要求重建时，才补齐缺失环节。
+- 投递前检查和面试准备可以用 `session_create_text_artifact` 生成用户可复用的 Markdown 报告，但必须通过 `career_application_merge` 更新当前求职项目的 `summary`、`next_actions`、`risks` 或 `notes`。
+- 项目级动作的 `evidence_refs` 至少包含当前 `application_id` 和本次实际读取或生成的产品记录 id / artifact id；不要把项目动作结果写入 memory，也不要写入 workspace path。
 - 委派 `job_agent` 时，instruction 里必须使用真实工具名 `career_jd_analysis_save` 和 `career_job_fit_report_save`；不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`。
 - 创建最终 markdown 简历版本时，优先一次调用 `career_resume_version_create` 并传入 `content`，由工具原子创建 `generated_file` artifact 和 `ResumeVersion`；只有已经有可复用 `artifact_id` 时才分两步创建。
 - 用户要求“保存为可复用简历版本”时，`career_resume_version_create` 是必做动作；不能只创建 markdown artifact 后询问用户是否继续保存。

@@ -1072,6 +1072,12 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "`career_resume_version_create` 是必做动作" in main_doc
     assert "拿到 `job_fit_report_id` 后，必须创建或复用一个 `CareerApplication`" in main_doc
     assert "生成或保存 `ResumeVersion` 后，必须把对应 `resume_version_id` 合并进当前 `CareerApplication.resume_version_ids`" in main_doc
+    assert "当用户基于某个 `application_id` 要求项目级动作" in main_doc
+    assert "必须先读取对应 `CareerApplication`" in main_doc
+    assert "项目级动作不要重新解析简历、不要重复分析 JD" in main_doc
+    assert "投递前检查和面试准备可以用 `session_create_text_artifact` 生成用户可复用的 Markdown 报告" in main_doc
+    assert "必须通过 `career_application_merge` 更新当前求职项目" in main_doc
+    assert "项目级动作的 `evidence_refs` 至少包含当前 `application_id`" in main_doc
     assert "`career_application_merge.updates` 只使用这些字段" in main_doc
     assert "不要先写入或读取 workspace 文件" in main_doc
     assert "不要向 `delegate_agents` 传 `depends_on`" in main_doc
