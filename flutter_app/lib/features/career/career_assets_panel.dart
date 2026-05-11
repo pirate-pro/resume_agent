@@ -443,10 +443,7 @@ class CareerAssetList extends StatelessWidget {
     Object record,
   ) {
     provider.selectRecord(record);
-    _showCareerAssetDetailSheet(
-      context,
-      CareerAssetSelection.fromRecord(record),
-    );
+    _showCareerRecordDetail(context, provider, record);
   }
 
   void _showHistory(
@@ -469,6 +466,21 @@ class CareerAssetList extends StatelessWidget {
           artifactId: artifactId,
         );
   }
+}
+
+void _showCareerRecordDetail(
+  BuildContext context,
+  CareerAssetsProvider provider,
+  Object record,
+) {
+  if (record is CareerApplicationView) {
+    _showCareerApplicationWorkspaceSheet(context, provider, record);
+    return;
+  }
+  _showCareerAssetDetailSheet(
+    context,
+    CareerAssetSelection.fromRecord(record),
+  );
 }
 
 class _CareerAssetCardEntry {
@@ -1081,6 +1093,28 @@ void _showCareerAssetHistorySheet(
   );
 }
 
+void _showCareerApplicationWorkspaceSheet(
+  BuildContext context,
+  CareerAssetsProvider provider,
+  CareerApplicationView record,
+) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) {
+      return _SheetFrame(
+        maxWidth: 860,
+        heightFactor: 0.88,
+        child: _CareerApplicationWorkspaceSheet(
+          provider: provider,
+          initialRecord: record,
+        ),
+      );
+    },
+  );
+}
+
 void _showCareerApplicationUpdateSheet(
   BuildContext context,
   CareerAssetsProvider provider,
@@ -1195,6 +1229,685 @@ class _CareerAssetDetailSheet extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _CareerApplicationWorkspaceSheet extends StatelessWidget {
+  final CareerAssetsProvider provider;
+  final CareerApplicationView initialRecord;
+
+  const _CareerApplicationWorkspaceSheet({
+    required this.provider,
+    required this.initialRecord,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: provider,
+      builder: (context, _) {
+        final record = _findCareerApplication(
+              provider.careerApplications,
+              initialRecord.applicationId,
+            ) ??
+            initialRecord;
+        final linked = _ApplicationLinkedRecords.from(provider, record);
+        return Column(
+          children: [
+            _SheetHeader(
+              icon: Icons.work_history_outlined,
+              title: record.displayTitle,
+              subtitle:
+                  "求职项目工作台 · ${_applicationStageLabel(record.stage)} · ${_applicationPriorityLabel(record.priority)}",
+              onClose: () => Navigator.of(context).pop(),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ApplicationWorkspaceHero(record: record),
+                    const SizedBox(height: 10),
+                    _ApplicationWorkspaceActions(
+                      provider: provider,
+                      record: record,
+                      linked: linked,
+                    ),
+                    const SizedBox(height: 10),
+                    _ApplicationLinkedAssetsSection(
+                      provider: provider,
+                      record: record,
+                      linked: linked,
+                    ),
+                    const SizedBox(height: 10),
+                    _ApplicationWorkItemsSection(record: record),
+                    const SizedBox(height: 10),
+                    _ApplicationNotesSection(record: record),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ApplicationLinkedRecords {
+  final ResumeProfileView? resumeProfile;
+  final CareerProfileView? careerProfile;
+  final JDAnalysisView? jdAnalysis;
+  final JobFitReportView? fitReport;
+  final ResumeVersionView? latestResumeVersion;
+
+  const _ApplicationLinkedRecords({
+    required this.resumeProfile,
+    required this.careerProfile,
+    required this.jdAnalysis,
+    required this.fitReport,
+    required this.latestResumeVersion,
+  });
+
+  factory _ApplicationLinkedRecords.from(
+    CareerAssetsProvider provider,
+    CareerApplicationView record,
+  ) {
+    return _ApplicationLinkedRecords(
+      resumeProfile: _findResumeProfile(
+        provider.resumeProfiles,
+        record.resumeProfileId,
+      ),
+      careerProfile: _findCareerProfile(
+        provider.careerProfiles,
+        record.careerProfileId,
+      ),
+      jdAnalysis: _findJdAnalysis(provider.jdAnalyses, record.jdAnalysisId),
+      fitReport:
+          _findJobFitReport(provider.jobFitReports, record.jobFitReportId),
+      latestResumeVersion: _latestResumeVersionForApplication(
+        provider.resumeVersions,
+        record,
+      ),
+    );
+  }
+}
+
+class _ApplicationWorkspaceHero extends StatelessWidget {
+  final CareerApplicationView record;
+
+  const _ApplicationWorkspaceHero({required this.record});
+
+  @override
+  Widget build(BuildContext context) {
+    final company = record.company.trim().isEmpty ? "-" : record.company.trim();
+    final position =
+        record.position.trim().isEmpty ? "-" : record.position.trim();
+    final location =
+        record.location.trim().isEmpty ? "地点未记录" : record.location.trim();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 13),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppTheme.accent.withValues(alpha: AppTheme.isDark ? 0.14 : 0.1),
+            AppTheme.surfaceHover
+                .withValues(alpha: AppTheme.isDark ? 0.18 : 0.48),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _AssetMetaPill(
+                icon: Icons.flag_outlined,
+                label: _applicationStageLabel(record.stage),
+                color: AppTheme.accent,
+                strong: true,
+              ),
+              _AssetMetaPill(
+                icon: Icons.priority_high_rounded,
+                label: _applicationPriorityLabel(record.priority),
+                color: _applicationPriorityColor(record.priority),
+                strong: true,
+              ),
+              _AssetMetaPill(
+                icon: Icons.schedule_rounded,
+                label: "更新 ${_formatTime(record.meta.updatedAt)}",
+                color: AppTheme.textTertiary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 13),
+          Row(
+            children: [
+              Expanded(
+                child: _ApplicationHeroMetric(
+                  label: "公司",
+                  value: company,
+                  icon: Icons.apartment_rounded,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ApplicationHeroMetric(
+                  label: "岗位",
+                  value: position,
+                  icon: Icons.work_outline_rounded,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _ApplicationHeroMetric(
+            label: "地点",
+            value: location,
+            icon: Icons.location_on_outlined,
+          ),
+          if (record.summary.trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              record.summary.trim(),
+              style: AppTheme.ts(
+                fontSize: 12.4,
+                height: 1.5,
+                fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationHeroMetric extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _ApplicationHeroMetric({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+      decoration: BoxDecoration(
+        color:
+            AppTheme.surface.withValues(alpha: AppTheme.isDark ? 0.52 : 0.78),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: AppTheme.accent),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: AppTheme.ts(
+                    fontSize: 10.4,
+                    color: AppTheme.textTertiary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 12,
+                    height: 1.25,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationWorkspaceActions extends StatelessWidget {
+  final CareerAssetsProvider provider;
+  final CareerApplicationView record;
+  final _ApplicationLinkedRecords linked;
+
+  const _ApplicationWorkspaceActions({
+    required this.provider,
+    required this.record,
+    required this.linked,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final reportArtifactId = linked.fitReport?.reportArtifactId;
+    final resumeArtifactId = linked.latestResumeVersion?.artifactId;
+    final jdArtifactId = linked.jdAnalysis?.meta.sourceArtifactId ??
+        record.meta.sourceArtifactId;
+    return _PanelSection(
+      title: "项目操作",
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _AssetActionButton(
+            label: "更新进展",
+            icon: Icons.edit_note_rounded,
+            primary: true,
+            onTap: () => _showCareerApplicationUpdateSheet(
+              context,
+              provider,
+              record,
+            ),
+          ),
+          if (reportArtifactId != null && reportArtifactId.trim().isNotEmpty)
+            _AssetActionButton(
+              label: "预览匹配报告",
+              icon: Icons.fact_check_outlined,
+              primary: true,
+              onTap: () => _showArtifactPreviewSheet(
+                context,
+                provider,
+                sourceSessionId: linked.fitReport!.meta.sourceSessionId,
+                artifactId: reportArtifactId,
+              ),
+            ),
+          if (resumeArtifactId != null && resumeArtifactId.trim().isNotEmpty)
+            _AssetActionButton(
+              label: "预览定制简历",
+              icon: Icons.description_outlined,
+              onTap: () => _showArtifactPreviewSheet(
+                context,
+                provider,
+                sourceSessionId:
+                    linked.latestResumeVersion!.meta.sourceSessionId,
+                artifactId: resumeArtifactId,
+              ),
+            ),
+          if (jdArtifactId != null && jdArtifactId.trim().isNotEmpty)
+            _AssetActionButton(
+              label: "预览 JD",
+              icon: Icons.article_outlined,
+              onTap: () => _showArtifactPreviewSheet(
+                context,
+                provider,
+                sourceSessionId: linked.jdAnalysis?.meta.sourceSessionId ??
+                    record.meta.sourceSessionId,
+                artifactId: jdArtifactId,
+              ),
+            ),
+          _AssetActionButton(
+            label: "复制项目 ID",
+            icon: Icons.copy_rounded,
+            onTap: () => _copyText(context, record.applicationId, "项目 ID 已复制"),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationLinkedAssetsSection extends StatelessWidget {
+  final CareerAssetsProvider provider;
+  final CareerApplicationView record;
+  final _ApplicationLinkedRecords linked;
+
+  const _ApplicationLinkedAssetsSection({
+    required this.provider,
+    required this.record,
+    required this.linked,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = [
+      _ApplicationLinkedAsset(
+        label: "简历画像",
+        id: record.resumeProfileId,
+        record: linked.resumeProfile,
+        icon: Icons.badge_outlined,
+        preview: _previewSpecForOptionalRecord(linked.resumeProfile),
+      ),
+      _ApplicationLinkedAsset(
+        label: "职业画像",
+        id: record.careerProfileId,
+        record: linked.careerProfile,
+        icon: Icons.track_changes_rounded,
+        preview: null,
+      ),
+      _ApplicationLinkedAsset(
+        label: "JD 分析",
+        id: record.jdAnalysisId,
+        record: linked.jdAnalysis,
+        icon: Icons.article_outlined,
+        preview: _previewSpecForOptionalRecord(linked.jdAnalysis),
+      ),
+      _ApplicationLinkedAsset(
+        label: "匹配报告",
+        id: record.jobFitReportId,
+        record: linked.fitReport,
+        icon: Icons.fact_check_outlined,
+        preview: _previewSpecForOptionalRecord(linked.fitReport),
+      ),
+      _ApplicationLinkedAsset(
+        label: "定制简历",
+        id: linked.latestResumeVersion?.resumeVersionId ??
+            (record.resumeVersionIds.isEmpty
+                ? null
+                : record.resumeVersionIds.last),
+        record: linked.latestResumeVersion,
+        icon: Icons.description_outlined,
+        preview: _previewSpecForOptionalRecord(linked.latestResumeVersion),
+      ),
+    ];
+    return _PanelSection(
+      title: "关联资料",
+      child: Column(
+        children: [
+          for (final tile in tiles) ...[
+            _ApplicationLinkedAssetTile(
+              provider: provider,
+              asset: tile,
+            ),
+            if (tile != tiles.last) const SizedBox(height: 8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationLinkedAsset {
+  final String label;
+  final String? id;
+  final Object? record;
+  final IconData icon;
+  final _PreviewSpec? preview;
+
+  const _ApplicationLinkedAsset({
+    required this.label,
+    required this.id,
+    required this.record,
+    required this.icon,
+    required this.preview,
+  });
+}
+
+class _ApplicationLinkedAssetTile extends StatelessWidget {
+  final CareerAssetsProvider provider;
+  final _ApplicationLinkedAsset asset;
+
+  const _ApplicationLinkedAssetTile({
+    required this.provider,
+    required this.asset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final exists = asset.record != null;
+    final displayTitle = exists ? _recordTitle(asset.record!) : "-";
+    final displayId = _firstNonEmpty([asset.id]);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: exists
+            ? AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.2 : 0.34)
+            : AppTheme.textTertiary.withValues(alpha: 0.045),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: exists
+              ? AppTheme.border.withValues(alpha: 0.72)
+              : AppTheme.textTertiary.withValues(alpha: 0.1),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _AssetIconBadge(icon: asset.icon, highlighted: false),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        asset.label,
+                        style: AppTheme.ts(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    _PreviewStatusPill(
+                      state: exists
+                          ? _previewAvailabilityForOptionalRecord(
+                              provider,
+                              asset.record!,
+                            )
+                          : const _PreviewStatus(
+                              label: "未关联",
+                              icon: Icons.link_off_rounded,
+                              color: Color(0xFF94A3B8),
+                            ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  exists ? displayTitle : "暂无${asset.label}记录",
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 11.5,
+                    height: 1.35,
+                    color:
+                        exists ? AppTheme.textSecondary : AppTheme.textTertiary,
+                  ),
+                ),
+                if (displayId.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    _shortArtifactId(displayId),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.ts(
+                      fontSize: 10.5,
+                      color: AppTheme.textTertiary,
+                    ),
+                  ),
+                ],
+                if (exists) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _AssetActionButton(
+                        label: "详情",
+                        icon: Icons.tune_rounded,
+                        onTap: () => _showCareerRecordDetail(
+                          context,
+                          provider,
+                          asset.record!,
+                        ),
+                      ),
+                      if (asset.preview != null)
+                        _AssetActionButton(
+                          label: asset.preview!.label,
+                          icon: Icons.visibility_outlined,
+                          primary: true,
+                          onTap: () => _showArtifactPreviewSheet(
+                            context,
+                            provider,
+                            sourceSessionId: asset.preview!.sourceSessionId,
+                            artifactId: asset.preview!.artifactId,
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationWorkItemsSection extends StatelessWidget {
+  final CareerApplicationView record;
+
+  const _ApplicationWorkItemsSection({required this.record});
+
+  @override
+  Widget build(BuildContext context) {
+    final actions = _ApplicationWorkList(
+      title: "下一步行动",
+      values: record.nextActions,
+      emptyText: "暂无下一步行动",
+      icon: Icons.arrow_forward_rounded,
+      color: AppTheme.accent,
+    );
+    final risks = _ApplicationWorkList(
+      title: "风险点",
+      values: record.risks,
+      emptyText: "暂无风险记录",
+      icon: Icons.warning_amber_rounded,
+      color: const Color(0xFFB45309),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 560) {
+          return Column(
+            children: [
+              actions,
+              const SizedBox(height: 10),
+              risks,
+            ],
+          );
+        }
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: actions),
+            const SizedBox(width: 10),
+            Expanded(child: risks),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ApplicationWorkList extends StatelessWidget {
+  final String title;
+  final List<String> values;
+  final String emptyText;
+  final IconData icon;
+  final Color color;
+
+  const _ApplicationWorkList({
+    required this.title,
+    required this.values,
+    required this.emptyText,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = values
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    return _PanelSection(
+      title: title,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (items.isEmpty)
+            Text(
+              emptyText,
+              style: AppTheme.ts(
+                fontSize: 11.5,
+                color: AppTheme.textTertiary,
+              ),
+            )
+          else
+            for (final item in items.take(6))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 7),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(icon, size: 14, color: color),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        item,
+                        style: AppTheme.ts(
+                          fontSize: 11.5,
+                          height: 1.4,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationNotesSection extends StatelessWidget {
+  final CareerApplicationView record;
+
+  const _ApplicationNotesSection({required this.record});
+
+  @override
+  Widget build(BuildContext context) {
+    final notes = record.notes.trim();
+    return _PanelSection(
+      title: "备注",
+      child: Text(
+        notes.isEmpty ? "暂无备注" : notes,
+        style: AppTheme.ts(
+          fontSize: 11.8,
+          height: 1.5,
+          color: notes.isEmpty ? AppTheme.textTertiary : AppTheme.textSecondary,
+        ),
+      ),
     );
   }
 }
@@ -4544,6 +5257,18 @@ _PreviewSpec? _previewSpecForRecord(Object record) {
   return null;
 }
 
+_PreviewSpec? _previewSpecForOptionalRecord(Object? record) {
+  if (record == null) return null;
+  return _previewSpecForRecord(record);
+}
+
+_PreviewStatus _previewAvailabilityForOptionalRecord(
+  CareerAssetsProvider provider,
+  Object record,
+) {
+  return _previewAvailabilityForRecord(provider, record);
+}
+
 void _copyText(BuildContext context, String value, String message) {
   Clipboard.setData(ClipboardData(text: value));
   ScaffoldMessenger.of(context).showSnackBar(
@@ -4688,6 +5413,62 @@ List<String> _lineItems(String value) {
       .map((item) => item.trim())
       .where((item) => item.isNotEmpty)
       .toList();
+}
+
+CareerApplicationView? _findCareerApplication(
+  List<CareerApplicationView> records,
+  String? applicationId,
+) {
+  final id = applicationId?.trim() ?? "";
+  if (id.isEmpty) return null;
+  for (final record in records) {
+    if (record.applicationId == id) {
+      return record;
+    }
+  }
+  return null;
+}
+
+ResumeProfileView? _findResumeProfile(
+  List<ResumeProfileView> records,
+  String? resumeProfileId,
+) {
+  final id = resumeProfileId?.trim() ?? "";
+  if (id.isEmpty) return null;
+  for (final record in records) {
+    if (record.resumeProfileId == id) {
+      return record;
+    }
+  }
+  return null;
+}
+
+CareerProfileView? _findCareerProfile(
+  List<CareerProfileView> records,
+  String? careerProfileId,
+) {
+  final id = careerProfileId?.trim() ?? "";
+  if (id.isEmpty) return null;
+  for (final record in records) {
+    if (record.careerProfileId == id) {
+      return record;
+    }
+  }
+  return null;
+}
+
+JDAnalysisView? _findJdAnalysis(
+  List<JDAnalysisView> records,
+  String? jdAnalysisId,
+) {
+  final id = jdAnalysisId?.trim() ?? "";
+  if (id.isEmpty) return null;
+  for (final record in records) {
+    if (record.jdAnalysisId == id) {
+      return record;
+    }
+  }
+  return null;
 }
 
 JobFitReportView? _findJobFitReport(
