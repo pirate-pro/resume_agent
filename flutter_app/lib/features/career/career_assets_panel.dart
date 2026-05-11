@@ -271,6 +271,11 @@ class CareerAssetList extends StatelessWidget {
                 onDetails: () => _showDetails(context, provider, item),
                 onPreviewArtifact:
                     _preview(context, provider, previewSourceSessionId),
+                onUpdate: () => _showCareerApplicationUpdateSheet(
+                  context,
+                  provider,
+                  item,
+                ),
                 previewError:
                     previewArtifactId == null || previewArtifactId.isEmpty
                         ? null
@@ -486,6 +491,7 @@ class CareerApplicationCard extends StatelessWidget {
   final bool highlighted;
   final VoidCallback onDetails;
   final ArtifactPreviewCallback onPreviewArtifact;
+  final VoidCallback? onUpdate;
   final String? previewError;
   final int historyCount;
   final VoidCallback? onHistory;
@@ -499,6 +505,7 @@ class CareerApplicationCard extends StatelessWidget {
     required this.highlighted,
     required this.onDetails,
     required this.onPreviewArtifact,
+    this.onUpdate,
     this.previewError,
     this.historyCount = 1,
     this.onHistory,
@@ -534,6 +541,7 @@ class CareerApplicationCard extends StatelessWidget {
       previewLabel: previewLabel,
       previewArtifactId: previewArtifactId,
       onPreviewArtifact: onPreviewArtifact,
+      onUpdate: onUpdate,
       previewError: previewError,
       historyCount: historyCount,
       onHistory: onHistory,
@@ -1073,6 +1081,28 @@ void _showCareerAssetHistorySheet(
   );
 }
 
+void _showCareerApplicationUpdateSheet(
+  BuildContext context,
+  CareerAssetsProvider provider,
+  CareerApplicationView record,
+) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (sheetContext) {
+      return _SheetFrame(
+        maxWidth: 660,
+        heightFactor: 0.82,
+        child: _CareerApplicationUpdateSheet(
+          provider: provider,
+          record: record,
+        ),
+      );
+    },
+  );
+}
+
 Future<void> _showArtifactPreviewSheet(
   BuildContext context,
   CareerAssetsProvider provider, {
@@ -1165,6 +1195,482 @@ class _CareerAssetDetailSheet extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _CareerApplicationUpdateSheet extends StatefulWidget {
+  final CareerAssetsProvider provider;
+  final CareerApplicationView record;
+
+  const _CareerApplicationUpdateSheet({
+    required this.provider,
+    required this.record,
+  });
+
+  @override
+  State<_CareerApplicationUpdateSheet> createState() =>
+      _CareerApplicationUpdateSheetState();
+}
+
+class _CareerApplicationUpdateSheetState
+    extends State<_CareerApplicationUpdateSheet> {
+  late String _stage;
+  late String _priority;
+  late final TextEditingController _summaryController;
+  late final TextEditingController _nextActionController;
+  late final TextEditingController _riskController;
+  late final TextEditingController _notesController;
+  var _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _stage = widget.record.stage;
+    _priority = widget.record.priority;
+    _summaryController = TextEditingController(text: widget.record.summary);
+    _nextActionController = TextEditingController();
+    _riskController = TextEditingController();
+    _notesController = TextEditingController(text: widget.record.notes);
+  }
+
+  @override
+  void dispose() {
+    _summaryController.dispose();
+    _nextActionController.dispose();
+    _riskController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _SheetHeader(
+          icon: Icons.edit_note_rounded,
+          title: widget.record.displayTitle,
+          subtitle: "更新求职项目阶段、优先级和下一步行动",
+          onClose: () => Navigator.of(context).pop(),
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _PanelSection(
+                  title: "项目阶段",
+                  child: _ApplicationOptionGrid(
+                    values: _applicationStageValues,
+                    selected: _stage,
+                    labelOf: _applicationStageLabel,
+                    colorOf: (_) => AppTheme.accent,
+                    onSelected: (value) => setState(() => _stage = value),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _PanelSection(
+                  title: "优先级",
+                  child: _ApplicationOptionGrid(
+                    values: _applicationPriorityValues,
+                    selected: _priority,
+                    labelOf: _applicationPriorityLabel,
+                    colorOf: _applicationPriorityColor,
+                    onSelected: (value) => setState(() => _priority = value),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _ApplicationEditorField(
+                  label: "项目摘要",
+                  hintText: "例如：已完成匹配报告和定制简历，准备投递。",
+                  controller: _summaryController,
+                  minLines: 2,
+                  maxLines: 4,
+                ),
+                const SizedBox(height: 10),
+                if (widget.record.nextActions.isNotEmpty)
+                  _ExistingApplicationItems(
+                    title: "已有下一步",
+                    values: widget.record.nextActions,
+                    icon: Icons.arrow_forward_rounded,
+                    color: AppTheme.accent,
+                  ),
+                _ApplicationEditorField(
+                  label: "新增下一步",
+                  hintText: "每行一条，例如：准备一面自我介绍",
+                  controller: _nextActionController,
+                  minLines: 2,
+                  maxLines: 5,
+                ),
+                const SizedBox(height: 10),
+                if (widget.record.risks.isNotEmpty)
+                  _ExistingApplicationItems(
+                    title: "已有风险",
+                    values: widget.record.risks,
+                    icon: Icons.warning_amber_rounded,
+                    color: const Color(0xFFB45309),
+                  ),
+                _ApplicationEditorField(
+                  label: "新增风险",
+                  hintText: "每行一条，例如：RAG 指标需要准备项目证据",
+                  controller: _riskController,
+                  minLines: 2,
+                  maxLines: 5,
+                ),
+                const SizedBox(height: 10),
+                _ApplicationEditorField(
+                  label: "备注",
+                  hintText: "记录投递渠道、沟通情况或其他提醒",
+                  controller: _notesController,
+                  minLines: 2,
+                  maxLines: 5,
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  _ApplicationErrorBanner(message: _error!),
+                ],
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _AssetActionButton(
+                        label: "取消",
+                        icon: Icons.close_rounded,
+                        onTap: _saving ? () {} : () => Navigator.pop(context),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _ApplicationSubmitButton(
+                        saving: _saving,
+                        onTap: _saving ? null : _submit,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.provider.updateCareerApplication(
+        applicationId: widget.record.applicationId,
+        stage: _stage,
+        priority: _priority,
+        summary: _summaryController.text.trim(),
+        nextActions: _lineItems(_nextActionController.text),
+        risks: _lineItems(_riskController.text),
+        notes: _notesController.text.trim(),
+        evidenceRefs: [widget.record.applicationId],
+        sourceArtifactId: widget.record.meta.sourceArtifactId,
+      );
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      Navigator.of(context).pop();
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text("求职项目已更新"),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString();
+      });
+    }
+  }
+}
+
+class _ApplicationOptionGrid extends StatelessWidget {
+  final List<String> values;
+  final String selected;
+  final String Function(String value) labelOf;
+  final Color Function(String value) colorOf;
+  final ValueChanged<String> onSelected;
+
+  const _ApplicationOptionGrid({
+    required this.values,
+    required this.selected,
+    required this.labelOf,
+    required this.colorOf,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final value in values)
+          _ApplicationOptionButton(
+            label: labelOf(value),
+            selected: value == selected,
+            color: colorOf(value),
+            onTap: () => onSelected(value),
+          ),
+      ],
+    );
+  }
+}
+
+class _ApplicationOptionButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _ApplicationOptionButton({
+    required this.label,
+    required this.selected,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: selected ? 0.14 : 0.06),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: color.withValues(alpha: selected ? 0.32 : 0.13),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (selected) ...[
+                Icon(Icons.check_rounded, size: 13, color: color),
+                const SizedBox(width: 4),
+              ],
+              Text(
+                label,
+                style: AppTheme.ts(
+                  fontSize: 11.5,
+                  height: 1.1,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+                  color: selected ? color : AppTheme.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ApplicationEditorField extends StatelessWidget {
+  final String label;
+  final String hintText;
+  final TextEditingController controller;
+  final int minLines;
+  final int maxLines;
+
+  const _ApplicationEditorField({
+    required this.label,
+    required this.hintText,
+    required this.controller,
+    required this.minLines,
+    required this.maxLines,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      minLines: minLines,
+      maxLines: maxLines,
+      style: AppTheme.ts(
+        fontSize: 12,
+        height: 1.45,
+        color: AppTheme.textPrimary,
+      ),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hintText,
+        alignLabelWithHint: true,
+      ),
+    );
+  }
+}
+
+class _ExistingApplicationItems extends StatelessWidget {
+  final String title;
+  final List<String> values;
+  final IconData icon;
+  final Color color;
+
+  const _ExistingApplicationItems({
+    required this.title,
+    required this.values,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = values
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .take(4)
+        .toList();
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 13, color: color),
+              const SizedBox(width: 5),
+              Text(
+                title,
+                style: AppTheme.ts(
+                  fontSize: 10.8,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 3),
+              child: Text(
+                "· $item",
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  height: 1.35,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationErrorBanner extends StatelessWidget {
+  final String message;
+
+  const _ApplicationErrorBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+      decoration: BoxDecoration(
+        color: AppTheme.danger.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.danger.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline_rounded, size: 15, color: AppTheme.danger),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              message,
+              style: AppTheme.ts(
+                fontSize: 11,
+                height: 1.35,
+                color: AppTheme.danger,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ApplicationSubmitButton extends StatelessWidget {
+  final bool saving;
+  final VoidCallback? onTap;
+
+  const _ApplicationSubmitButton({
+    required this.saving,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = AppTheme.accent;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (saving)
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: color,
+                  ),
+                )
+              else
+                Icon(Icons.check_rounded, size: 14, color: color),
+              const SizedBox(width: 6),
+              Text(
+                saving ? "保存中" : "保存更新",
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -2778,6 +3284,7 @@ class _CareerAssetCardShell extends StatelessWidget {
   final String? previewLabel;
   final String? previewArtifactId;
   final ArtifactPreviewCallback? onPreviewArtifact;
+  final VoidCallback? onUpdate;
   final String? previewError;
   final int historyCount;
   final VoidCallback? onHistory;
@@ -2796,6 +3303,7 @@ class _CareerAssetCardShell extends StatelessWidget {
     this.previewLabel,
     this.previewArtifactId,
     this.onPreviewArtifact,
+    this.onUpdate,
     this.previewError,
     this.historyCount = 1,
     this.onHistory,
@@ -2822,6 +3330,27 @@ class _CareerAssetCardShell extends StatelessWidget {
         : highlighted
             ? AppTheme.accent.withValues(alpha: 0.065)
             : AppTheme.surface.withValues(alpha: AppTheme.isDark ? 0.78 : 0.9);
+    final secondaryActions = <Widget>[
+      if (canPreview)
+        _AssetActionButton(
+          label: "详情",
+          icon: Icons.tune_rounded,
+          onTap: onDetails,
+        ),
+      if (onUpdate != null)
+        _AssetActionButton(
+          label: "更新进展",
+          icon: Icons.edit_note_rounded,
+          primary: true,
+          onTap: onUpdate!,
+        ),
+      if (historyCount > 1 && onHistory != null)
+        _AssetActionButton(
+          label: "历史 $historyCount",
+          icon: Icons.history_rounded,
+          onTap: onHistory!,
+        ),
+    ];
     return AnimatedContainer(
       duration: const Duration(milliseconds: 220),
       width: double.infinity,
@@ -2914,28 +3443,17 @@ class _CareerAssetCardShell extends StatelessWidget {
                 ? () => onPreviewArtifact!(previewArtifactId!)
                 : onDetails,
           ),
-          if (canPreview || (historyCount > 1 && onHistory != null)) ...[
+          if (secondaryActions.isNotEmpty) ...[
             const SizedBox(height: 9),
             Row(
               children: [
-                if (canPreview)
-                  Expanded(
-                    child: _AssetActionButton(
-                      label: "详情",
-                      icon: Icons.tune_rounded,
-                      onTap: onDetails,
-                    ),
-                  ),
-                if (canPreview && historyCount > 1 && onHistory != null)
-                  const SizedBox(width: 8),
-                if (historyCount > 1 && onHistory != null)
-                  Expanded(
-                    child: _AssetActionButton(
-                      label: "历史 $historyCount",
-                      icon: Icons.history_rounded,
-                      onTap: onHistory!,
-                    ),
-                  ),
+                for (var index = 0;
+                    index < secondaryActions.length;
+                    index++) ...[
+                  Expanded(child: secondaryActions[index]),
+                  if (index != secondaryActions.length - 1)
+                    const SizedBox(width: 8),
+                ],
               ],
             ),
           ],
@@ -4117,6 +4635,19 @@ String _statusLabel(String status) {
   };
 }
 
+const _applicationStageValues = [
+  "draft",
+  "analyzing",
+  "ready_to_apply",
+  "applied",
+  "interviewing",
+  "offer",
+  "rejected",
+  "paused",
+];
+
+const _applicationPriorityValues = ["high", "medium", "low"];
+
 String _applicationStageLabel(String stage) {
   return switch (stage) {
     "draft" => "准备中",
@@ -4147,6 +4678,16 @@ Color _applicationPriorityColor(String priority) {
     "low" => AppTheme.textTertiary,
     _ => AppTheme.textTertiary,
   };
+}
+
+List<String> _lineItems(String value) {
+  return value
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .split('\n')
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList();
 }
 
 JobFitReportView? _findJobFitReport(

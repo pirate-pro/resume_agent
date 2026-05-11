@@ -83,6 +83,7 @@ void main() {
 
   testWidgets('求职项目卡片展示项目阶段并优先预览匹配报告', (tester) async {
     String? previewedArtifactId;
+    var updateOpened = false;
     final record = CareerApplicationView(
       meta: CareerRecordMetaView(
         status: 'active',
@@ -148,6 +149,7 @@ void main() {
                 onPreviewArtifact: (artifactId) async {
                   previewedArtifactId = artifactId;
                 },
+                onUpdate: () => updateOpened = true,
               ),
             ),
           ),
@@ -161,11 +163,15 @@ void main() {
     expect(find.text('高优先级'), findsOneWidget);
     expect(find.text('5 项资料'), findsOneWidget);
     expect(find.text('预览报告'), findsOneWidget);
+    expect(find.text('更新进展'), findsOneWidget);
     expect(find.textContaining('匹配度较高'), findsOneWidget);
     expect(find.textContaining('复核定制简历'), findsOneWidget);
 
     await tester.tap(find.text('预览报告'));
     await tester.pump();
     expect(previewedArtifactId, 'artifact_fit_report_001');
+
+    await tester.tap(find.text('更新进展'));
+    expect(updateOpened, isTrue);
   });
 }
