@@ -342,7 +342,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void setMaxToolRounds(int value) {
-    final clamped = value.clamp(0, 10);
+    final clamped = value.clamp(0, 20);
     if (_maxToolRounds == clamped) return;
     _maxToolRounds = clamped;
     notifyListeners();
@@ -570,7 +570,7 @@ class ChatProvider extends ChangeNotifier {
             sourceKind: doneResponse?.sourceKind ?? "direct_answer",
             artifacts: doneResponse?.artifacts ?? const [],
             toolCalls: doneResponse?.toolCalls ?? const [],
-            progressEvents: _agentTaskEvents(_streamEvents),
+            progressEvents: _progressTraceEvents(_streamEvents),
           ),
         );
         _resetStreamingBuffer(notify: false);
@@ -768,9 +768,19 @@ class ChatProvider extends ChangeNotifier {
     ].join(":");
   }
 
-  List<EventView> _agentTaskEvents(List<EventView> events) {
+  List<EventView> _progressTraceEvents(List<EventView> events) {
     return events
-        .where((event) => event.type.startsWith("agent_task_"))
+        .where(
+          (event) =>
+              event.type.startsWith("agent_task_") ||
+              {
+                "run_started",
+                "assistant_thinking",
+                "tool_call",
+                "tool_result",
+                "run_finished",
+              }.contains(event.type),
+        )
         .toList();
   }
 

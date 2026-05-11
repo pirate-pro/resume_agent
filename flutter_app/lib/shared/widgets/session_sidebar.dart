@@ -75,6 +75,10 @@ class _ExpandedSidebar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final pinnedSessions =
+        parent.sessions.where((session) => session.isPinned).toList();
+    final recentSessions =
+        parent.sessions.where((session) => !session.isPinned).toList();
     return Column(
       children: [
         Padding(
@@ -104,7 +108,7 @@ class _ExpandedSidebar extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Agent Runtime',
+                      '求职 Agent',
                       style: AppTheme.ts(
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
@@ -113,7 +117,7 @@ class _ExpandedSidebar extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '会话与上下文',
+                      '会话与求职资产',
                       style: AppTheme.ts(
                         fontSize: 11,
                         color: AppTheme.textTertiary,
@@ -178,22 +182,47 @@ class _ExpandedSidebar extends StatelessWidget {
                     ],
                   ),
                 )
-              : ListView.builder(
+              : ListView(
                   padding: const EdgeInsets.fromLTRB(10, 4, 10, 14),
-                  itemCount: parent.sessions.length,
-                  itemBuilder: (_, i) => _SessionTile(
-                    session: parent.sessions[i],
-                    isActive: parent.sessions[i].id == parent.activeSessionId,
-                    onTap: () => parent.onSessionTap(parent.sessions[i].id),
-                    onRename: (title) =>
-                        parent.onSessionRename(parent.sessions[i].id, title),
-                    onPinToggle: (isPinned) => parent.onSessionPinToggle(
-                      parent.sessions[i].id,
-                      isPinned,
-                    ),
-                    onDelete: () =>
-                        parent._confirmDelete(context, parent.sessions[i]),
-                  ),
+                  children: [
+                    if (pinnedSessions.isNotEmpty) ...[
+                      _SessionSectionHeader(
+                        title: '置顶',
+                        count: pinnedSessions.length,
+                      ),
+                      for (final session in pinnedSessions)
+                        _SessionTile(
+                          session: session,
+                          isActive: session.id == parent.activeSessionId,
+                          onTap: () => parent.onSessionTap(session.id),
+                          onRename: (title) =>
+                              parent.onSessionRename(session.id, title),
+                          onPinToggle: (isPinned) =>
+                              parent.onSessionPinToggle(session.id, isPinned),
+                          onDelete: () =>
+                              parent._confirmDelete(context, session),
+                        ),
+                      const SizedBox(height: 8),
+                    ],
+                    if (recentSessions.isNotEmpty) ...[
+                      _SessionSectionHeader(
+                        title: pinnedSessions.isEmpty ? '最近会话' : '最近',
+                        count: recentSessions.length,
+                      ),
+                      for (final session in recentSessions)
+                        _SessionTile(
+                          session: session,
+                          isActive: session.id == parent.activeSessionId,
+                          onTap: () => parent.onSessionTap(session.id),
+                          onRename: (title) =>
+                              parent.onSessionRename(session.id, title),
+                          onPinToggle: (isPinned) =>
+                              parent.onSessionPinToggle(session.id, isPinned),
+                          onDelete: () =>
+                              parent._confirmDelete(context, session),
+                        ),
+                    ],
+                  ],
                 ),
         ),
         Padding(
@@ -210,11 +239,15 @@ class _ExpandedSidebar extends StatelessWidget {
               children: [
                 Icon(Icons.circle, size: 8, color: AppTheme.accent),
                 const SizedBox(width: 8),
-                Text(
-                  '${parent.sessions.length} 个会话',
-                  style: AppTheme.ts(
-                    fontSize: 11,
-                    color: AppTheme.textTertiary,
+                Expanded(
+                  child: Text(
+                    _sidebarFooterText(parent.sessions),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.ts(
+                      fontSize: 11,
+                      color: AppTheme.textTertiary,
+                    ),
                   ),
                 ),
               ],
@@ -222,6 +255,57 @@ class _ExpandedSidebar extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SessionSectionHeader extends StatelessWidget {
+  final String title;
+  final int count;
+
+  const _SessionSectionHeader({
+    required this.title,
+    required this.count,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: AppTheme.ts(
+              fontSize: 11,
+              height: 1.1,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+          const SizedBox(width: 7),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceActive.withValues(alpha: 0.68),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: AppTheme.border.withValues(alpha: 0.7)),
+            ),
+            child: Text(
+              '$count',
+              style: AppTheme.ts(
+                fontSize: 10,
+                height: 1,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.textTertiary,
+              ),
+            ),
+          ),
+          const Expanded(
+            child: Divider(indent: 9, height: 1),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -337,17 +421,38 @@ class _SessionTileState extends State<_SessionTile> {
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
           decoration: BoxDecoration(
+            gradient: active
+                ? LinearGradient(
+                    colors: [
+                      AppTheme.accent.withValues(alpha: 0.12),
+                      AppTheme.surface.withValues(alpha: 0.82),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
             color: active
-                ? AppTheme.accent.withValues(alpha: 0.12)
+                ? null
                 : _hovering
                     ? AppTheme.surfaceHover.withValues(alpha: 0.9)
                     : AppTheme.surface.withValues(alpha: 0.68),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: active
-                  ? AppTheme.accent.withValues(alpha: 0.35)
+                  ? AppTheme.accent.withValues(alpha: 0.34)
                   : AppTheme.border.withValues(alpha: 0.9),
             ),
+            boxShadow: active
+                ? [
+                    BoxShadow(
+                      color: AppTheme.accent.withValues(
+                        alpha: AppTheme.isDark ? 0.16 : 0.08,
+                      ),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             children: [
@@ -359,7 +464,11 @@ class _SessionTileState extends State<_SessionTile> {
                       ? AppTheme.accent.withValues(alpha: 0.16)
                       : AppTheme.surfaceActive,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppTheme.border),
+                  border: Border.all(
+                    color: active
+                        ? AppTheme.accent.withValues(alpha: 0.22)
+                        : AppTheme.border,
+                  ),
                 ),
                 child: Icon(
                   Icons.chat_rounded,
@@ -398,12 +507,21 @@ class _SessionTileState extends State<_SessionTile> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      _formatMeta(widget.session),
-                      style: AppTheme.ts(
-                        fontSize: 11,
-                        color: AppTheme.textTertiary,
-                      ),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 5,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        if (widget.session.messageCount > 0)
+                          _SessionMetaPill(
+                            icon: Icons.forum_outlined,
+                            label: '${widget.session.messageCount} 条',
+                          ),
+                        _SessionMetaPill(
+                          icon: Icons.access_time_rounded,
+                          label: _formatDate(widget.session.updatedAt),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -506,20 +624,42 @@ class _SessionTileState extends State<_SessionTile> {
     }
   }
 
-  String _formatMeta(SessionMeta session) {
-    final time = _formatDate(session.updatedAt);
-    if (session.isPinned) {
-      return '已置顶 · $time';
-    }
-    return time;
-  }
-
   String _formatDate(DateTime dt) {
     final now = DateTime.now();
     if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
       return DateFormat('HH:mm').format(dt);
     }
     return DateFormat('MM/dd HH:mm').format(dt);
+  }
+}
+
+class _SessionMetaPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _SessionMetaPill({
+    required this.icon,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 11, color: AppTheme.textTertiary),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: AppTheme.ts(
+            fontSize: 10.4,
+            height: 1,
+            fontWeight: FontWeight.w600,
+            color: AppTheme.textTertiary,
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -595,4 +735,12 @@ class _IconBtn extends StatelessWidget {
       ),
     );
   }
+}
+
+String _sidebarFooterText(List<SessionMeta> sessions) {
+  final pinnedCount = sessions.where((session) => session.isPinned).length;
+  if (pinnedCount == 0) {
+    return '${sessions.length} 个会话';
+  }
+  return '${sessions.length} 个会话 · $pinnedCount 个置顶';
 }

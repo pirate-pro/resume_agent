@@ -237,7 +237,7 @@ class _ChatHeaderLayer extends ConsumerWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              "Single Agent Runtime",
+                              "求职 Agent 工作台",
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: AppTheme.ts(
@@ -249,7 +249,7 @@ class _ChatHeaderLayer extends ConsumerWidget {
                             if (!compactHeader) ...[
                               const SizedBox(height: 2),
                               Text(
-                                "对话 · 工具 · 记忆",
+                                "简历 · JD · 匹配报告",
                                 style: AppTheme.ts(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w500,
@@ -702,14 +702,14 @@ class _WelcomeScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 24),
-            Text("Agent Runtime",
+            Text("求职 Agent 工作台",
                 style: AppTheme.ts(
                     fontSize: 26,
                     fontWeight: FontWeight.w700,
                     color: AppTheme.textPrimary,
-                    letterSpacing: -0.5)),
+                    letterSpacing: 0)),
             const SizedBox(height: 8),
-            Text("智能对话 · 工具调用 · 记忆系统",
+            Text("上传简历，分析 JD，沉淀可复用求职资产",
                 style:
                     AppTheme.ts(fontSize: 14, color: AppTheme.textSecondary)),
             const SizedBox(height: 18),
@@ -723,13 +723,13 @@ class _WelcomeScreen extends ConsumerWidget {
               child: Column(
                 children: [
                   _WelcomeFeature(
-                    icon: Icons.auto_awesome_rounded,
-                    text: "适合直接问问题、整理方案、生成初稿",
+                    icon: Icons.badge_outlined,
+                    text: "解析简历并生成画像、诊断报告和改进建议",
                   ),
                   const SizedBox(height: 10),
                   _WelcomeFeature(
-                    icon: Icons.build_circle_outlined,
-                    text: "支持工具调用、文件上下文和记忆能力",
+                    icon: Icons.work_outline_rounded,
+                    text: "基于目标 JD 生成岗位分析、匹配报告和定制版本",
                   ),
                 ],
               ),
@@ -741,16 +741,16 @@ class _WelcomeScreen extends ConsumerWidget {
               alignment: WrapAlignment.center,
               children: [
                 _QuickPrompt(
-                    icon: Icons.psychology_rounded,
-                    text: "告诉我你的能力",
+                    icon: Icons.badge_outlined,
+                    text: "诊断已激活简历",
                     onSend: (t) => ref.read(chatProvider).sendMessage(t)),
                 _QuickPrompt(
-                    icon: Icons.code_rounded,
-                    text: "帮我写一个函数",
+                    icon: Icons.article_outlined,
+                    text: "分析目标 JD",
                     onSend: (t) => ref.read(chatProvider).sendMessage(t)),
                 _QuickPrompt(
-                    icon: Icons.lightbulb_rounded,
-                    text: "解释一个概念",
+                    icon: Icons.auto_fix_high_rounded,
+                    text: "生成定制简历",
                     onSend: (t) => ref.read(chatProvider).sendMessage(t)),
               ],
             ),
@@ -979,7 +979,17 @@ class _MessageListState extends State<_MessageList> {
 
   List<EventView> _buildProgressEvents(List<EventView> events) {
     return events
-        .where((event) => event.type.startsWith("agent_task_"))
+        .where(
+          (event) =>
+              event.type.startsWith("agent_task_") ||
+              {
+                "run_started",
+                "assistant_thinking",
+                "tool_call",
+                "tool_result",
+                "run_finished",
+              }.contains(event.type),
+        )
         .toList();
   }
 }

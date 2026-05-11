@@ -109,13 +109,13 @@ class AppTheme {
           fontSize: 28,
           fontWeight: FontWeight.w600,
           color: palette.textPrimary,
-          letterSpacing: -0.5,
+          letterSpacing: 0,
         ),
         headlineMedium: ts(
           fontSize: 22,
           fontWeight: FontWeight.w600,
           color: palette.textPrimary,
-          letterSpacing: -0.3,
+          letterSpacing: 0,
         ),
         titleLarge: ts(
           fontSize: 18,

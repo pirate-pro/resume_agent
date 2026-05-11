@@ -22,6 +22,22 @@ enum _UploadAction { file, image }
 
 enum _PlusPanelMode { closed, menu, config }
 
+class _SlashIntentAction {
+  final String label;
+  final String description;
+  final String prompt;
+  final IconData icon;
+  final List<SessionArtifactView> filesToActivate;
+
+  const _SlashIntentAction({
+    required this.label,
+    required this.description,
+    required this.prompt,
+    required this.icon,
+    this.filesToActivate = const [],
+  });
+}
+
 class _DismissPlusPanelIntent extends Intent {
   const _DismissPlusPanelIntent();
 }
@@ -89,6 +105,7 @@ class _InputBarState extends State<InputBar> {
   Timer? _runtimeStatusTimer;
 
   bool _hasText = false;
+  bool _isSending = false;
   String? _slashQuery;
   String? _roundsError;
   String? _runtimeStatusMessage;
@@ -214,12 +231,109 @@ class _InputBarState extends State<InputBar> {
     return files;
   }
 
+  List<_SlashIntentAction> get _slashIntentActions {
+    final query = (_slashQuery ?? "").trim().toLowerCase();
+    final resumeFiles = widget.sessionArtifacts
+        .where(_looksLikeResumeArtifact)
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final jdFiles = widget.sessionArtifacts.where(_looksLikeJdArtifact).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final primaryResume = resumeFiles.isEmpty ? null : resumeFiles.first;
+    final primaryJd = jdFiles.isEmpty ? null : jdFiles.first;
+    final actions = <_SlashIntentAction>[];
+
+    if (primaryResume != null) {
+      actions.add(
+        _SlashIntentAction(
+          label: "诊断简历",
+          description: "生成简历画像和诊断报告",
+          prompt: "请诊断这份简历，生成简历画像和诊断报告，并把结果沉淀到求职资产。",
+          icon: Icons.fact_check_outlined,
+          filesToActivate: [primaryResume],
+        ),
+      );
+      actions.add(
+        _SlashIntentAction(
+          label: "生成画像",
+          description: "提炼技能、经历、目标岗位",
+          prompt: "请基于这份简历生成可复用的简历画像和职业画像。",
+          icon: Icons.badge_outlined,
+          filesToActivate: [primaryResume],
+        ),
+      );
+    }
+
+    if (primaryJd != null) {
+      actions.add(
+        _SlashIntentAction(
+          label: "分析 JD",
+          description: "提炼岗位要求和风险点",
+          prompt: "请分析这份 JD，提炼岗位职责、核心要求、加分项和风险点。",
+          icon: Icons.article_outlined,
+          filesToActivate: [primaryJd],
+        ),
+      );
+      actions.add(
+        _SlashIntentAction(
+          label: "生成匹配报告",
+          description: "结合简历画像评估岗位匹配",
+          prompt: "请结合当前简历画像或已上传简历，分析这份 JD 并生成岗位匹配报告。",
+          icon: Icons.troubleshoot_rounded,
+          filesToActivate: [
+            if (primaryResume != null) primaryResume,
+            primaryJd,
+          ],
+        ),
+      );
+    }
+
+    if (primaryResume != null && primaryJd != null) {
+      actions.add(
+        _SlashIntentAction(
+          label: "简历 + JD 匹配",
+          description: "启动多 Agent 协作并生成报告",
+          prompt: "请启动多 Agent 协作，基于已上传的简历和 JD 生成 JD 分析、匹配报告，并把结果沉淀到求职资产。",
+          icon: Icons.hub_outlined,
+          filesToActivate: [primaryResume, primaryJd],
+        ),
+      );
+    }
+
+    if (query.isEmpty) return actions;
+    return actions.where((action) {
+      final haystack = [
+        action.label,
+        action.description,
+        action.prompt,
+      ].join(" ").toLowerCase();
+      return haystack.contains(query);
+    }).toList();
+  }
+
+  bool _looksLikeResumeArtifact(SessionArtifactView file) {
+    final lower = file.title.toLowerCase();
+    return lower.contains("简历") ||
+        lower.contains("resume") ||
+        lower.contains("cv");
+  }
+
+  bool _looksLikeJdArtifact(SessionArtifactView file) {
+    final lower = file.title.toLowerCase();
+    return lower.contains("jd") ||
+        lower.contains("岗位") ||
+        lower.contains("职位") ||
+        lower.contains("招聘") ||
+        lower.contains("job") ||
+        lower.contains("position");
+  }
+
   String? _validateRoundsInput(String raw) {
     final trimmed = raw.trim();
-    if (trimmed.isEmpty) return "请输入 0-10 的整数";
+    if (trimmed.isEmpty) return "请输入 0-20 的整数";
     final value = int.tryParse(trimmed);
     if (value == null) return "请输入整数";
-    if (value < 0 || value > 10) return "工具轮数仅支持 0-10";
+    if (value < 0 || value > 20) return "工具轮数仅支持 0-20";
     return null;
   }
 
@@ -256,14 +370,21 @@ class _InputBarState extends State<InputBar> {
 
   Future<void> _send() async {
     final text = _ctrl.text.trim();
-    if (text.isEmpty || !widget.enabled || _inSlashMode) return;
+    if (text.isEmpty || !widget.enabled || _inSlashMode || _isSending) return;
     setState(() {
       _plusPanelMode = _PlusPanelMode.closed;
+      _isSending = true;
     });
     _ctrl.clear();
-    await widget.onSend(text);
-    if (mounted) {
-      _focus.requestFocus();
+    try {
+      await widget.onSend(text);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+        _focus.requestFocus();
+      }
     }
   }
 
@@ -328,6 +449,22 @@ class _InputBarState extends State<InputBar> {
     _focus.requestFocus();
   }
 
+  Future<void> _applySlashIntentAction(_SlashIntentAction action) async {
+    for (final file in action.filesToActivate) {
+      if (!_isArtifactActive(file)) {
+        await widget.onToggleArtifactActive(file, true);
+      }
+    }
+    if (!mounted) return;
+    _ctrl.text = action.prompt;
+    _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+    setState(() {
+      _plusPanelMode = _PlusPanelMode.closed;
+      _slashQuery = null;
+    });
+    _focus.requestFocus();
+  }
+
   void _resetRuntimeOptions() {
     widget.onResetRuntimeOptions();
     _roundsCtrl.text = AppConfig.maxToolRounds.toString();
@@ -346,6 +483,21 @@ class _InputBarState extends State<InputBar> {
       _plusPanelMode = _PlusPanelMode.closed;
       _roundsError = null;
     });
+  }
+
+  String _sendTooltip({
+    required bool canSend,
+    required bool hasText,
+    required bool inSlashMode,
+    required bool enabled,
+    required bool isSending,
+  }) {
+    if (isSending) return "正在发送";
+    if (!enabled) return "正在处理上一条消息";
+    if (inSlashMode) return "请先选择任务或资料";
+    if (!hasText) return "输入内容后发送";
+    if (canSend) return "发送消息";
+    return "暂不可发送";
   }
 
   void _showSnackBar(String message) {
@@ -408,11 +560,15 @@ class _InputBarState extends State<InputBar> {
       return _SlashCommandTray(
         key: ValueKey("slash-${_slashQuery ?? ""}"),
         files: _slashCandidates,
+        actions: _slashIntentActions,
         hasUploadedArtifacts: widget.sessionArtifacts.isNotEmpty,
         isFileActive: _isArtifactActive,
         iconForFile: _artifactIcon,
         onSelect: (file) {
           _activateFromSlash(file);
+        },
+        onActionTap: (action) {
+          unawaited(_applySlashIntentAction(action));
         },
       );
     }
@@ -459,7 +615,7 @@ class _InputBarState extends State<InputBar> {
 
   @override
   Widget build(BuildContext context) {
-    final canSend = _hasText && widget.enabled && !_inSlashMode;
+    final canSend = _hasText && widget.enabled && !_inSlashMode && !_isSending;
     final panelVisible =
         _plusPanelMode != _PlusPanelMode.closed || _inSlashMode;
     final plusPanelVisible = _plusPanelMode != _PlusPanelMode.closed;
@@ -473,6 +629,19 @@ class _InputBarState extends State<InputBar> {
     final borderColor = hasInteractiveFocus ? AppTheme.accent : AppTheme.border;
     final borderWidth = hasInteractiveFocus ? 1.5 : 1.0;
     final activeArtifacts = _activeArtifacts;
+    final composerHint = widget.hintText ??
+        (activeArtifacts.isNotEmpty
+            ? "输入任务，或键入 / 选择推荐任务"
+            : widget.sessionArtifacts.isNotEmpty
+                ? "键入 / 选择资料或推荐任务，或直接输入问题"
+                : "输入消息，或键入 / 激活文件和图片");
+    final sendTooltip = _sendTooltip(
+      canSend: canSend,
+      hasText: _hasText,
+      inSlashMode: _inSlashMode,
+      enabled: widget.enabled,
+      isSending: _isSending,
+    );
 
     return Shortcuts(
       shortcuts: const <ShortcutActivator, Intent>{
@@ -504,17 +673,6 @@ class _InputBarState extends State<InputBar> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (activeArtifacts.isNotEmpty) ...[
-                      _ActiveArtifactsTray(
-                        files: activeArtifacts,
-                        highlightedArtifactId: widget.highlightedArtifactId,
-                        iconForFile: _artifactIcon,
-                        onRemove: (file) {
-                          widget.onToggleArtifactActive(file, false);
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                    ],
                     if (panelVisible)
                       Align(
                         alignment: Alignment.centerLeft,
@@ -575,6 +733,8 @@ class _InputBarState extends State<InputBar> {
                               enabled: widget.enabled && !widget.isUploading,
                               busy: widget.isUploading,
                               highlighted: plusPanelVisible,
+                              tooltip:
+                                  widget.isUploading ? "正在上传" : "上传资料或调整设置",
                               onPressed: _togglePlusPanel,
                             ),
                           ),
@@ -595,8 +755,7 @@ class _InputBarState extends State<InputBar> {
                                   height: 1.5,
                                 ),
                                 decoration: InputDecoration(
-                                  hintText:
-                                      widget.hintText ?? "输入消息，或键入 / 激活文件和图片",
+                                  hintText: composerHint,
                                   hintStyle: AppTheme.ts(
                                     color: AppTheme.textTertiary,
                                     fontSize: 14,
@@ -618,6 +777,8 @@ class _InputBarState extends State<InputBar> {
                               icon: Icons.arrow_upward_rounded,
                               enabled: canSend,
                               accent: true,
+                              busy: _isSending,
+                              tooltip: sendTooltip,
                               onPressed: _send,
                             ),
                           ),
@@ -641,6 +802,7 @@ class _ComposerActionButton extends StatefulWidget {
   final bool accent;
   final bool busy;
   final bool highlighted;
+  final String? tooltip;
   final VoidCallback? onPressed;
 
   const _ComposerActionButton({
@@ -650,6 +812,7 @@ class _ComposerActionButton extends StatefulWidget {
     this.accent = false,
     this.busy = false,
     this.highlighted = false,
+    this.tooltip,
   });
 
   @override
@@ -661,27 +824,28 @@ class _ComposerActionButtonState extends State<_ComposerActionButton> {
 
   @override
   Widget build(BuildContext context) {
+    final enabled = widget.enabled && !widget.busy;
     final backgroundColor = widget.accent
-        ? (widget.enabled
+        ? (enabled
             ? (_hovering ? AppTheme.accentHover : AppTheme.accent)
             : AppTheme.surfaceActive)
         : widget.highlighted
             ? AppTheme.surfaceHover
-            : (_hovering && widget.enabled
+            : (_hovering && enabled
                 ? AppTheme.surfaceHover
-                : (widget.enabled ? AppTheme.surface : AppTheme.surfaceActive));
+                : (enabled ? AppTheme.surface : AppTheme.surfaceActive));
     final borderColor = widget.accent
         ? Colors.transparent
         : widget.highlighted
             ? AppTheme.accent.withValues(alpha: 0.45)
-            : (widget.enabled ? AppTheme.borderLight : AppTheme.border);
+            : (enabled ? AppTheme.borderLight : AppTheme.border);
     final iconColor = widget.accent
-        ? (widget.enabled ? Colors.white : AppTheme.textTertiary)
+        ? (enabled ? Colors.white : AppTheme.textTertiary)
         : widget.highlighted
             ? AppTheme.accent
-            : (widget.enabled ? AppTheme.textSecondary : AppTheme.textTertiary);
+            : (enabled ? AppTheme.textSecondary : AppTheme.textTertiary);
 
-    return MouseRegion(
+    final button = MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
       onExit: (_) => setState(() => _hovering = false),
       child: AnimatedContainer(
@@ -697,7 +861,7 @@ class _ComposerActionButtonState extends State<_ComposerActionButton> {
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(14),
-            onTap: widget.enabled ? widget.onPressed : null,
+            onTap: enabled ? widget.onPressed : null,
             child: Center(
               child: widget.busy
                   ? SizedBox(
@@ -714,6 +878,11 @@ class _ComposerActionButtonState extends State<_ComposerActionButton> {
         ),
       ),
     );
+    final tooltip = widget.tooltip;
+    if (tooltip == null || tooltip.isEmpty) {
+      return button;
+    }
+    return Tooltip(message: tooltip, child: button);
   }
 }
 
@@ -1018,7 +1187,7 @@ class _RuntimeConfigTray extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                "输入 0-10，默认 3。",
+                "输入 0-20，默认 10。",
                 style: AppTheme.ts(
                   fontSize: 11,
                   color: AppTheme.textSecondary,
@@ -1390,168 +1559,30 @@ class _RuntimeStatusBanner extends StatelessWidget {
   }
 }
 
-class _ActiveArtifactsTray extends StatelessWidget {
-  final List<SessionArtifactView> files;
-  final String? highlightedArtifactId;
-  final IconData Function(SessionArtifactView file) iconForFile;
-  final void Function(SessionArtifactView file) onRemove;
-
-  const _ActiveArtifactsTray({
-    required this.files,
-    this.highlightedArtifactId,
-    required this.iconForFile,
-    required this.onRemove,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: AppTheme.surface.withValues(alpha: 0.56),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.border.withValues(alpha: 0.72)),
-      ),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 6,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: AppTheme.accent.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: AppTheme.accent.withValues(alpha: 0.16),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.layers_outlined,
-                  size: 13,
-                  color: AppTheme.accent,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  "已激活上下文",
-                  style: AppTheme.ts(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ...files.map(
-            (file) => _ActiveFileChip(
-              file: file,
-              highlighted: highlightedArtifactId == file.artifactId,
-              icon: iconForFile(file),
-              onRemove: () => onRemove(file),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ActiveFileChip extends StatelessWidget {
-  final SessionArtifactView file;
-  final bool highlighted;
-  final IconData icon;
-  final VoidCallback onRemove;
-
-  const _ActiveFileChip({
-    required this.file,
-    this.highlighted = false,
-    required this.icon,
-    required this.onRemove,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 240),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: highlighted
-            ? AppTheme.accent.withValues(alpha: 0.14)
-            : AppTheme.surface,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: highlighted
-              ? AppTheme.accent.withValues(alpha: 0.42)
-              : AppTheme.border,
-        ),
-        boxShadow: highlighted
-            ? [
-                BoxShadow(
-                  color: AppTheme.accent.withValues(alpha: 0.18),
-                  blurRadius: 14,
-                  offset: const Offset(0, 4),
-                ),
-              ]
-            : null,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: AppTheme.accent),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              file.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: AppTheme.ts(
-                fontSize: 11.5,
-                color: AppTheme.textPrimary,
-              ),
-            ),
-          ),
-          const SizedBox(width: 6),
-          InkWell(
-            borderRadius: BorderRadius.circular(999),
-            onTap: onRemove,
-            child: Padding(
-              padding: EdgeInsets.all(2),
-              child: Icon(
-                Icons.close_rounded,
-                size: 14,
-                color: AppTheme.textSecondary,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _SlashCommandTray extends StatelessWidget {
   final List<SessionArtifactView> files;
+  final List<_SlashIntentAction> actions;
   final bool hasUploadedArtifacts;
   final bool Function(SessionArtifactView file) isFileActive;
   final IconData Function(SessionArtifactView file) iconForFile;
   final void Function(SessionArtifactView file) onSelect;
+  final void Function(_SlashIntentAction action) onActionTap;
 
   const _SlashCommandTray({
     super.key,
     required this.files,
+    required this.actions,
     required this.hasUploadedArtifacts,
     required this.isFileActive,
     required this.iconForFile,
     required this.onSelect,
+    required this.onActionTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final hasActions = actions.isNotEmpty;
+    final hasFiles = files.isNotEmpty;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
@@ -1561,39 +1592,156 @@ class _SlashCommandTray extends StatelessWidget {
         children: [
           const _TrayHeader(
             icon: Icons.keyboard_command_key_rounded,
-            title: "选择要激活的文件或图片",
-            subtitle: "从当前会话里快速选择上下文。",
+            title: "选择资料或任务",
+            subtitle: "激活资料，或填入下一步任务。",
           ),
           const SizedBox(height: 8),
-          if (!hasUploadedArtifacts)
+          if (!hasUploadedArtifacts && !hasActions)
             const _PanelHint(
               icon: Icons.info_outline_rounded,
               message: "暂无可激活内容，先用 + 上传文件或图片。",
             )
-          else if (files.isEmpty)
+          else if (!hasActions && !hasFiles)
             const _PanelHint(
               icon: Icons.search_off_rounded,
-              message: "没有匹配的文件或图片。",
+              message: "没有匹配的任务或文件。",
             )
           else
             ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 168),
+              constraints: const BoxConstraints(maxHeight: 280),
               child: SingleChildScrollView(
                 child: Column(
-                  children: files
-                      .map(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (hasActions) ...[
+                      const _SlashSectionLabel("推荐任务"),
+                      ...actions.map(
+                        (action) => _SlashIntentOption(
+                          action: action,
+                          onTap: () => onActionTap(action),
+                        ),
+                      ),
+                    ],
+                    if (hasFiles) ...[
+                      if (hasActions) const SizedBox(height: 6),
+                      const _SlashSectionLabel("会话资料"),
+                      ...files.map(
                         (file) => _SlashFileOption(
                           file: file,
                           icon: iconForFile(file),
                           active: isFileActive(file),
                           onTap: () => onSelect(file),
                         ),
-                      )
-                      .toList(),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _SlashSectionLabel extends StatelessWidget {
+  final String label;
+
+  const _SlashSectionLabel(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 6, 2, 6),
+      child: Text(
+        label,
+        style: AppTheme.ts(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
+          color: AppTheme.textTertiary,
+        ),
+      ),
+    );
+  }
+}
+
+class _SlashIntentOption extends StatelessWidget {
+  final _SlashIntentAction action;
+  final VoidCallback onTap;
+
+  const _SlashIntentOption({
+    required this.action,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppTheme.accent.withValues(alpha: 0.075),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: AppTheme.accent.withValues(alpha: 0.18),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppTheme.accent.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Icon(action.icon, size: 16, color: AppTheme.accent),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      action.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      action.description,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 10.5,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Icon(
+                Icons.arrow_forward_rounded,
+                size: 15,
+                color: AppTheme.accent,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
