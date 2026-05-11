@@ -317,6 +317,8 @@ def run_live_flow(
                     "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
                     "保存 ResumeVersion 后，请调用 career_application_merge 把 resume_version_id 合并进当前求职项目；"
                     "如果尚未创建 CareerApplication，则先用 career_application_create 基于 job_fit_report_id 创建。"
+                    "career_resume_version_create.keyword_strategy 只写已放进简历或已有证据支撑的关键词，"
+                    "不要把风险项、证据不足、缺失、待补、待完善写进 keyword_strategy。"
                     "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
                     "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
                     "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"

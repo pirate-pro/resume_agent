@@ -39,9 +39,10 @@
 - 已经拿到可用 `jd_analysis_id` 或 `job_fit_report_id` 时，不要重复委派 `job_agent` 做同一份 JD 分析或匹配报告；应读取并复用现有产品记录。
 - 定制简历版本由 main-agent 基于已保存的 `ResumeProfile`、`JDAnalysis` 和 `JobFitReport` 综合生成；不要为了定制简历再次委派任何 child-agent，包括 `resume_agent` 和 `job_agent`，也不要在定制简历阶段创建或覆盖 `ResumeProfile`、`JDAnalysis`、`JobFitReport`。
 - 定制简历正文只能使用 `ResumeProfile`、原始简历 artifact、`JDAnalysis`、`JobFitReport` 中已经明确出现的事实；不得新增未被证实的公司、时间、学历、项目、技术栈、工具、指标或成果。
-- JD 中出现但简历证据不足的技能，只能写成“了解 / 待补强 / 面试前需准备”的风险或建议，不能写进简历正文的“熟练掌握 / 项目使用 / 已落地成果”。
+- JD 中出现但简历证据不足的技能，只能写成“了解 / 证据不足 / 面试前需准备”的风险或建议，不能写进简历正文的“熟练掌握 / 项目使用 / 已落地成果”。
 - 量化指标必须来自原始简历或已保存产品记录中的明确事实；如果没有真实指标，不要编造百分比、时延、QPS、并发数、成功率等数字，也不要写“占位”“替换为真实数据”这类投递版简历不应出现的内容。
 - `career_resume_version_create.content` 必须是可直接投递的版本；不确定的内容放到 `risk_notes` 或最终回复的待补充事项里，不要混入简历正文。
+- `career_resume_version_create.keyword_strategy` 只能包含已写入简历正文或已有证据支撑的关键词；不要把“风险项”“证据不足”“缺失”“待补”“待完善”这类说明写进 `keyword_strategy`，这些内容应放到 `risk_notes` 或 `career_application_merge.updates.risks/next_actions`。
 - `career_profile_merge.updates` 只使用这些字段：`career_goal`、`target_roles`、`preferred_industries`、`preferred_cities`、`strengths`、`weaknesses`、`skills`、`interests`、`education_summary`、`experience_summary`、`resume_issues`、`interview_weaknesses`。不要传 `name`、`target_direction`、`target_position`、`core_skills`、`job_market_fit` 等非模型字段。
 - 调用 `career_resume_version_create` 时，`resume_version_id` 如需手动指定，必须以 `resume_version_` 开头；不确定时省略该字段让工具生成。
 - 调用 `career_application_create` 时，`application_id` 如需手动指定，必须以 `application_` 开头；不确定时省略该字段让工具生成。
