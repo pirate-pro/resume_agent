@@ -30,7 +30,11 @@
         "career_job_fit_report_list",
         "career_resume_version_create",
         "career_resume_version_get",
-        "career_resume_version_list"
+        "career_resume_version_list",
+        "career_application_create",
+        "career_application_get",
+        "career_application_list",
+        "career_application_merge"
       ],
       "allowed_skills": [
         "*"

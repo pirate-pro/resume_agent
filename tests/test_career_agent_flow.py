@@ -36,6 +36,10 @@ from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.tools.builtins import (
     AgentTaskStatusTool,
+    CareerApplicationCreateTool,
+    CareerApplicationGetTool,
+    CareerApplicationListTool,
+    CareerApplicationMergeTool,
     CareerJobFitReportGetTool,
     CareerJobFitReportListTool,
     CareerJobFitReportSaveTool,
@@ -260,7 +264,33 @@ class JobFitFlowModel:
                     )
                 ],
             )
-        return ModelResponse(content="已创建 JD 分析和岗位匹配报告。", tool_calls=[])
+        if not _assistant_called(messages, "career_application_create"):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="career_application_create",
+                        arguments={
+                            "application_id": "application_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                            "jd_analysis_id": "jd_alpha",
+                            "resume_profile_id": "resume_profile_alpha",
+                            "career_profile_id": "career_profile_default",
+                            "stage": "ready_to_apply",
+                            "priority": "high",
+                            "summary": "岗位匹配报告已生成，适合进入投递准备。",
+                            "next_actions": ["完善 RAG 项目证据"],
+                            "evidence_refs": [
+                                "resume_profile_alpha",
+                                "career_profile_default",
+                                "jd_alpha",
+                                "fit_alpha",
+                            ],
+                        },
+                    )
+                ],
+            )
+        return ModelResponse(content="已创建 JD 分析、岗位匹配报告和求职项目。", tool_calls=[])
 
     def _job_agent_response(self, messages: list[dict[str, Any]]) -> ModelResponse:
         jd_artifact_id = _first_artifact_id(messages)
@@ -346,23 +376,7 @@ class ResumeVersionFlowModel:
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
         _ = (system_prompt, tools)
-        if not _assistant_called(messages, "session_create_text_artifact"):
-            return ModelResponse(
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        name="session_create_text_artifact",
-                        arguments={
-                            "title": "AI 应用开发简历版本.md",
-                            "content": "# AI 应用开发简历版本\n\n强化 RAG 项目。",
-                            "kind": "generated_file",
-                            "media_type": "text/markdown",
-                        },
-                    )
-                ],
-            )
         if not _assistant_called(messages, "career_resume_version_create"):
-            artifact_id = _latest_artifact_id(messages)
             return ModelResponse(
                 content="",
                 tool_calls=[
@@ -373,8 +387,8 @@ class ResumeVersionFlowModel:
                             "base_resume_profile_id": "resume_profile_alpha",
                             "target_jd_analysis_id": "jd_alpha",
                             "title": "AI 应用开发简历版本",
-                            "artifact_id": artifact_id,
-                            "evidence_refs": ["resume_profile_alpha", "jd_alpha", "fit_alpha", artifact_id],
+                            "content": "# AI 应用开发简历版本\n\n强化 RAG 项目。",
+                            "evidence_refs": ["resume_profile_alpha", "jd_alpha", "fit_alpha"],
                             "change_summary": ["强化 RAG 项目"],
                             "keyword_strategy": ["补充 Agent 和 RAG 关键词"],
                             "risk_notes": ["不要夸大项目指标"],
@@ -382,7 +396,28 @@ class ResumeVersionFlowModel:
                     )
                 ],
             )
-        return ModelResponse(content="已创建定制简历版本。", tool_calls=[])
+        if not _assistant_called(messages, "career_application_create"):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="career_application_create",
+                        arguments={
+                            "application_id": "application_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                            "jd_analysis_id": "jd_alpha",
+                            "resume_profile_id": "resume_profile_alpha",
+                            "career_profile_id": "career_profile_default",
+                            "resume_version_ids": ["resume_version_alpha"],
+                            "stage": "ready_to_apply",
+                            "summary": "已生成定制简历版本，可以进入投递准备。",
+                            "next_actions": ["检查最终简历后投递"],
+                            "evidence_refs": ["fit_alpha", "resume_version_alpha"],
+                        },
+                    )
+                ],
+            )
+        return ModelResponse(content="已创建定制简历版本并更新求职项目。", tool_calls=[])
 
     async def generate_stream(
         self,
@@ -476,7 +511,29 @@ class FullCareerFlowModel:
                         )
                     ],
                 )
-            return ModelResponse(content=f"{case_id} 已创建定制简历版本。", tool_calls=[])
+            if not state.get("application_version_merged"):
+                state["application_version_merged"] = True
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_merge",
+                            arguments={
+                                "application_id": ids["application_id"],
+                                "updates": {
+                                    "stage": "ready_to_apply",
+                                    "resume_version_ids": [ids["resume_version_id"]],
+                                    "next_actions": ["检查定制简历并准备投递"],
+                                },
+                                "evidence_refs": [
+                                    ids["resume_version_id"],
+                                    state["version_artifact_id"],
+                                ],
+                            },
+                        )
+                    ],
+                )
+            return ModelResponse(content=f"{case_id} 已创建定制简历版本并更新求职项目。", tool_calls=[])
 
         if "JD" in user_content or "匹配" in user_content:
             if not state.get("jd_artifact_requested"):
@@ -531,7 +588,35 @@ class FullCareerFlowModel:
                         )
                     ],
                 )
-            return ModelResponse(content=f"{case_id} 已创建 JD 分析和岗位匹配报告。", tool_calls=[])
+            if not state.get("application_created"):
+                state["application_created"] = True
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_create",
+                            arguments={
+                                "application_id": ids["application_id"],
+                                "job_fit_report_id": ids["job_fit_report_id"],
+                                "jd_analysis_id": ids["jd_analysis_id"],
+                                "resume_profile_id": ids["resume_profile_id"],
+                                "career_profile_id": "career_profile_default",
+                                "stage": "ready_to_apply",
+                                "priority": "high",
+                                "summary": f"{case_id} 岗位匹配报告已生成，进入投递准备。",
+                                "next_actions": ["补充 RAG 项目指标"],
+                                "evidence_refs": [
+                                    ids["resume_profile_id"],
+                                    "career_profile_default",
+                                    ids["jd_analysis_id"],
+                                    ids["job_fit_report_id"],
+                                    state["jd_artifact_id"],
+                                ],
+                            },
+                        )
+                    ],
+                )
+            return ModelResponse(content=f"{case_id} 已创建 JD 分析、岗位匹配报告和求职项目。", tool_calls=[])
 
         if not state.get("resume_delegated"):
             state["resume_delegated"] = True
@@ -803,6 +888,10 @@ def _register_flow_tools(
     tool_registry.register(CareerResumeVersionCreateTool(career_store=career_store, session_repository=session_repository))
     tool_registry.register(CareerResumeVersionGetTool(career_store=career_store))
     tool_registry.register(CareerResumeVersionListTool(career_store=career_store))
+    tool_registry.register(CareerApplicationCreateTool(career_store=career_store, session_repository=session_repository))
+    tool_registry.register(CareerApplicationGetTool(career_store=career_store))
+    tool_registry.register(CareerApplicationListTool(career_store=career_store))
+    tool_registry.register(CareerApplicationMergeTool(career_store=career_store, session_repository=session_repository))
 
 
 def test_resume_agent_flow_creates_resume_profile_and_main_merges_career_profile(tmp_path: Path) -> None:
@@ -868,8 +957,9 @@ def test_jd_fit_flow_creates_pasted_jd_artifact_analysis_and_fit_report(tmp_path
 
     jd_analysis = bundle.career_store.get_jd_analysis("jd_alpha")
     fit_report = bundle.career_store.get_job_fit_report("fit_alpha")
+    application = bundle.career_store.get_career_application("application_alpha")
 
-    assert output.answer == "已创建 JD 分析和岗位匹配报告。"
+    assert output.answer == "已创建 JD 分析、岗位匹配报告和求职项目。"
     assert jd_analysis is not None
     assert jd_analysis.source_artifact_id is not None
     jd_artifact = bundle.session_repository.get_session_artifact("sess_job_flow", jd_analysis.source_artifact_id)
@@ -882,6 +972,13 @@ def test_jd_fit_flow_creates_pasted_jd_artifact_analysis_and_fit_report(tmp_path
     assert report_artifact is not None
     assert report_artifact.kind == "generated_file"
     assert report_artifact.media_type == "text/markdown"
+    assert application is not None
+    assert application.job_fit_report_id == "fit_alpha"
+    assert application.jd_analysis_id == "jd_alpha"
+    assert application.resume_profile_id == "resume_profile_alpha"
+    assert application.career_profile_id == "career_profile_default"
+    assert application.stage == "ready_to_apply"
+    assert "fit_alpha" in application.evidence_refs
     assert "career_jd_analysis_save" in _tool_call_names(
         bundle.session_repository.list_agent_events("sess_job_flow", "job_agent")
     )
@@ -908,8 +1005,9 @@ def test_main_agent_flow_creates_markdown_resume_version(tmp_path: Path) -> None
     )
 
     version = bundle.career_store.get_resume_version("resume_version_alpha")
+    application = bundle.career_store.get_career_application("application_alpha")
 
-    assert output.answer == "已创建定制简历版本。"
+    assert output.answer == "已创建定制简历版本并更新求职项目。"
     assert version is not None
     assert version.format == "markdown"
     assert version.source_artifact_id == version.artifact_id
@@ -918,6 +1016,10 @@ def test_main_agent_flow_creates_markdown_resume_version(tmp_path: Path) -> None
     assert artifact is not None
     assert artifact.kind == "generated_file"
     assert artifact.media_type == "text/markdown"
+    assert application is not None
+    assert application.job_fit_report_id == "fit_alpha"
+    assert application.resume_version_ids == ["resume_version_alpha"]
+    assert "resume_version_alpha" in application.evidence_refs
 
 
 def test_career_agent_flow_permissions_prevent_role_bypass(tmp_path: Path) -> None:
@@ -940,6 +1042,14 @@ def test_career_agent_flow_permissions_prevent_role_bypass(tmp_path: Path) -> No
             ),
             _agent_context("sess_permissions", "job_agent"),
         )
+    with pytest.raises(ToolExecutionError, match="not allowed"):
+        bundle.tool_registry.execute(
+            ToolCall(
+                name="career_application_create",
+                arguments={"job_fit_report_id": "fit_alpha", "evidence_refs": ["fit_alpha"]},
+            ),
+            _agent_context("sess_permissions", "job_agent"),
+        )
 
 
 def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
@@ -959,11 +1069,16 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`" in main_doc
     assert "优先一次调用 `career_resume_version_create` 并传入 `content`" in main_doc
     assert "`career_resume_version_create` 是必做动作" in main_doc
+    assert "拿到 `job_fit_report_id` 后，必须创建或复用一个 `CareerApplication`" in main_doc
+    assert "生成或保存 `ResumeVersion` 后，必须把对应 `resume_version_id` 合并进当前 `CareerApplication.resume_version_ids`" in main_doc
+    assert "`career_application_merge.updates` 只使用这些字段" in main_doc
     assert "不要先写入或读取 workspace 文件" in main_doc
     assert "不要向 `delegate_agents` 传 `depends_on`" in main_doc
     assert "child-agent id 不是工具名" in main_doc
     assert "`career_profile_merge.updates` 只使用这些字段" in main_doc
     assert main_capability.allows_tool("career_resume_version_create")
+    assert main_capability.allows_tool("career_application_create")
+    assert main_capability.allows_tool("career_application_merge")
     assert not main_capability.allows_tool("workspace_write_file")
     assert not main_capability.allows_tool("workspace_read_file")
     assert not main_capability.allows_tool("publish_artifact")
@@ -1011,10 +1126,11 @@ def test_full_career_runtime_chain_single_session(tmp_path: Path) -> None:
     jd_analysis = bundle.career_store.get_jd_analysis(ids["jd_analysis_id"])
     fit_report = bundle.career_store.get_job_fit_report(ids["job_fit_report_id"])
     version = bundle.career_store.get_resume_version(ids["resume_version_id"])
+    application = bundle.career_store.get_career_application(ids["application_id"])
 
     assert resume_output.answer == f"{case_id} 已创建简历画像并更新职业画像。"
-    assert jd_output.answer == f"{case_id} 已创建 JD 分析和岗位匹配报告。"
-    assert version_output.answer == f"{case_id} 已创建定制简历版本。"
+    assert jd_output.answer == f"{case_id} 已创建 JD 分析、岗位匹配报告和求职项目。"
+    assert version_output.answer == f"{case_id} 已创建定制简历版本并更新求职项目。"
     assert resume_profile is not None
     assert resume_profile.source_artifact_id == ids["resume_artifact_id"]
     assert resume_profile.diagnosis_artifact_id is not None
@@ -1034,8 +1150,17 @@ def test_full_career_runtime_chain_single_session(tmp_path: Path) -> None:
     assert {ids["resume_profile_id"], ids["jd_analysis_id"], ids["job_fit_report_id"], version.artifact_id}.issubset(
         set(version.evidence_refs)
     )
+    assert application is not None
+    assert application.job_fit_report_id == ids["job_fit_report_id"]
+    assert application.resume_version_ids == [ids["resume_version_id"]]
+    assert application.stage == "ready_to_apply"
+    assert {ids["jd_analysis_id"], ids["job_fit_report_id"], ids["resume_version_id"]}.issubset(
+        set(application.evidence_refs)
+    )
     assert "career_resume_profile_save" in _tool_call_names(bundle.session_repository.list_agent_events(session_id, "resume_agent"))
     assert "career_job_fit_report_save" in _tool_call_names(bundle.session_repository.list_agent_events(session_id, "job_agent"))
+    assert "career_application_create" in _tool_call_names(bundle.session_repository.list_events(session_id))
+    assert "career_application_merge" in _tool_call_names(bundle.session_repository.list_events(session_id))
     assert not _has_path_argument(bundle.session_repository.list_events(session_id))
 
 
@@ -1080,16 +1205,19 @@ def test_full_career_runtime_chain_pressure_quality_and_isolation(tmp_path: Path
     jd_analyses = bundle.career_store.list_jd_analyses()
     fit_reports = bundle.career_store.list_job_fit_reports()
     versions = bundle.career_store.list_resume_versions()
+    applications = bundle.career_store.list_career_applications()
 
     assert elapsed_seconds < 20
     assert len(resume_profiles) == case_count
     assert len(jd_analyses) == case_count
     assert len(fit_reports) == case_count
     assert len(versions) == case_count
+    assert len(applications) == case_count
     assert len({record.resume_profile_id for record in resume_profiles}) == case_count
     assert len({record.jd_analysis_id for record in jd_analyses}) == case_count
     assert len({record.job_fit_report_id for record in fit_reports}) == case_count
     assert len({record.resume_version_id for record in versions}) == case_count
+    assert len({record.application_id for record in applications}) == case_count
 
     for index in range(case_count):
         case_id = f"case_{index:03d}"
@@ -1097,6 +1225,7 @@ def test_full_career_runtime_chain_pressure_quality_and_isolation(tmp_path: Path
         session_id = f"sess_pressure_{case_id}"
         fit_report = bundle.career_store.get_job_fit_report(ids["job_fit_report_id"])
         version = bundle.career_store.get_resume_version(ids["resume_version_id"])
+        application = bundle.career_store.get_career_application(ids["application_id"])
         assert fit_report is not None
         assert fit_report.source_session_id == session_id
         assert fit_report.report_artifact_id is not None
@@ -1105,6 +1234,10 @@ def test_full_career_runtime_chain_pressure_quality_and_isolation(tmp_path: Path
         assert version is not None
         assert version.source_session_id == session_id
         assert bundle.session_repository.get_session_artifact(session_id, version.artifact_id) is not None
+        assert application is not None
+        assert application.source_session_id == session_id
+        assert application.job_fit_report_id == ids["job_fit_report_id"]
+        assert application.resume_version_ids == [ids["resume_version_id"]]
         all_events = (
             bundle.session_repository.list_events(session_id)
             + bundle.session_repository.list_agent_events(session_id, "resume_agent")
@@ -1328,6 +1461,7 @@ def _flow_ids(case_id: str) -> dict[str, str]:
         "jd_analysis_id": f"jd_{case_id}",
         "job_fit_report_id": f"fit_{case_id}",
         "resume_version_id": f"resume_version_{case_id}",
+        "application_id": f"application_{case_id}",
     }
 
 

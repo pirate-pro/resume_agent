@@ -4,7 +4,15 @@ from typing import cast
 
 import pytest
 
-from app.career.models import CareerProfile, CareerRecordStatus, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import (
+    CareerApplication,
+    CareerProfile,
+    CareerRecordStatus,
+    JDAnalysis,
+    JobFitReport,
+    ResumeProfile,
+    ResumeVersion,
+)
 from app.career.store import CareerProductStore
 from app.domain.models import SessionArtifact
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
@@ -44,6 +52,7 @@ def test_live_smoke_report_prints_concise_failure_summary(
             "jd_analyses": ["jd_test"],
             "job_fit_reports": [],
             "resume_versions": [],
+            "career_applications": [],
         },
         artifact_ids=[f"artifact_{index:03d}" for index in range(12)],
         tool_call_counts={"career_jd_analysis_save": 1, "career_job_fit_report_save": 1},
@@ -233,5 +242,25 @@ def _save_product_records(store: CareerProductStore, *, session_id: str) -> None
             format="markdown",
             artifact_id="artifact_resume_version",
             change_summary=["补充量化指标占位"],
+        )
+    )
+    store.save_career_application(
+        CareerApplication(
+            application_id="application_quality",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id="artifact_jd",
+            evidence_refs=["resume_profile_quality", "career_profile_quality", "jd_quality", "fit_quality"],
+            created_at=app_now(),
+            updated_at=app_now(),
+            company="质量门禁公司",
+            position="AI 应用开发工程师",
+            stage="ready_to_apply",
+            priority="medium",
+            resume_profile_id="resume_profile_quality",
+            career_profile_id="career_profile_quality",
+            jd_analysis_id="jd_quality",
+            job_fit_report_id="fit_quality",
+            resume_version_ids=["resume_version_quality"],
         )
     )

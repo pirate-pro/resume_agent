@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.career.models import CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
 from app.career.store import CareerProductStore
 from app.core.time import app_now, to_app_iso
 from app.core.settings import Settings
@@ -47,6 +47,10 @@ from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.tools.builtins import (
     AgentTaskStatusTool,
+    CareerApplicationCreateTool,
+    CareerApplicationGetTool,
+    CareerApplicationListTool,
+    CareerApplicationMergeTool,
     CareerJobFitReportGetTool,
     CareerJobFitReportListTool,
     CareerJobFitReportSaveTool,
@@ -236,6 +240,10 @@ def register_live_tools(
     registry.register(CareerResumeVersionCreateTool(career_store=career_store, session_repository=session_repository))
     registry.register(CareerResumeVersionGetTool(career_store=career_store))
     registry.register(CareerResumeVersionListTool(career_store=career_store))
+    registry.register(CareerApplicationCreateTool(career_store=career_store, session_repository=session_repository))
+    registry.register(CareerApplicationGetTool(career_store=career_store))
+    registry.register(CareerApplicationListTool(career_store=career_store))
+    registry.register(CareerApplicationMergeTool(career_store=career_store, session_repository=session_repository))
 
 
 def run_live_flow(
@@ -291,6 +299,7 @@ def run_live_flow(
                     "这是目标 JD：公司招聘 AI 应用开发工程师，要求 Python、FastAPI、RAG、Agent "
                     "工程经验，熟悉向量检索和后端服务落地。请先把这段 JD 沉淀为 artifact，"
                     "再分析我和这个岗位的匹配度，并保存岗位分析和匹配报告。"
+                    "拿到匹配报告后，请创建或复用 CareerApplication 求职项目。"
                 ),
                 max_tool_rounds=max_tool_rounds,
                 run_index=run_index,
@@ -306,6 +315,8 @@ def run_live_flow(
                 message=(
                     "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport，生成一版 markdown "
                     "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
+                    "保存 ResumeVersion 后，请调用 career_application_merge 把 resume_version_id 合并进当前求职项目；"
+                    "如果尚未创建 CareerApplication，则先用 career_application_create 基于 job_fit_report_id 创建。"
                     "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
                     "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
                     "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"
@@ -381,12 +392,16 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     resume_versions = [
         item for item in stack.career_store.list_resume_versions() if item.source_session_id == report.session_id
     ]
+    career_applications = [
+        item for item in stack.career_store.list_career_applications() if item.source_session_id == report.session_id
+    ]
     record_ids = {
         "resume_profiles": [item.resume_profile_id for item in resume_profiles],
         "career_profiles": [item.career_profile_id for item in career_profiles],
         "jd_analyses": [item.jd_analysis_id for item in jd_analyses],
         "job_fit_reports": [item.job_fit_report_id for item in job_fit_reports],
         "resume_versions": [item.resume_version_id for item in resume_versions],
+        "career_applications": [item.application_id for item in career_applications],
     }
     report.record_ids = record_ids
     report.artifact_ids = [item.artifact_id for item in artifacts]
@@ -398,6 +413,7 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
         "jd_analyses": JDAnalysis,
         "job_fit_reports": JobFitReport,
         "resume_versions": ResumeVersion,
+        "career_applications": CareerApplication,
     }
     for key in required:
         if not record_ids[key]:
@@ -439,7 +455,7 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
 
 
 def _record_touches_session(
-    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion,
+    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication,
     session_id: str,
     artifact_ids: set[str],
     *,
@@ -460,6 +476,8 @@ def infer_failure_stage(report: FlowReport) -> str:
         return "JD 匹配分析"
     if "resume_versions" in missing:
         return "定制简历版本"
+    if "career_applications" in missing:
+        return "求职项目闭环"
     if report.failed_tools:
         return infer_stage_from_tool(report.failed_tools[0])
     if report.consistency_errors:
@@ -478,6 +496,8 @@ def infer_stage_from_tool(tool_name: str) -> str:
         return "JD 匹配分析"
     if tool_name == "career_resume_version_create":
         return "定制简历版本"
+    if tool_name.startswith("career_application_"):
+        return "求职项目闭环"
     if tool_name == "delegate_agents":
         return "multi-agent 委派"
     return "工具执行"

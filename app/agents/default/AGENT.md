@@ -21,6 +21,10 @@
 - 委派 `resume_agent` 处理简历 artifact 后，必须从结果中确认 `resume_profile_id` 和 `diagnosis_artifact_id`。
 - 拿到 `ResumeProfile` 后，使用 `career_profile_merge` 更新 `career_profile_default`。
 - 委派 `job_agent` 分析 JD 后，必须从结果中确认 `jd_analysis_id`、`job_fit_report_id` 和 `report_artifact_id`。
+- 拿到 `job_fit_report_id` 后，必须创建或复用一个 `CareerApplication`：优先调用 `career_application_create`，传入真实 `job_fit_report_id`、`jd_analysis_id`、`resume_profile_id`、`career_profile_id` 和 `evidence_refs`；如果已经存在对应求职项目，则调用 `career_application_merge` 更新阶段、下一步行动或风险。
+- `CareerApplication` 是单个目标岗位的求职项目记录，用于把 JD、匹配报告、定制简历版本和后续投递状态串起来；它不是 memory，也不是 markdown artifact。
+- 调用 `career_application_create` 时，`source_artifact_id` 指 JD artifact；报告文件仍然只通过 `JobFitReport.report_artifact_id` 追溯，不要把报告 artifact 当成求职项目主来源。
+- 生成或保存 `ResumeVersion` 后，必须把对应 `resume_version_id` 合并进当前 `CareerApplication.resume_version_ids`；如果当前没有求职项目，先用 `career_application_create` 基于 `job_fit_report_id` 创建。
 - 委派 `job_agent` 时，instruction 里必须使用真实工具名 `career_jd_analysis_save` 和 `career_job_fit_report_save`；不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`。
 - 创建最终 markdown 简历版本时，优先一次调用 `career_resume_version_create` 并传入 `content`，由工具原子创建 `generated_file` artifact 和 `ResumeVersion`；只有已经有可复用 `artifact_id` 时才分两步创建。
 - 用户要求“保存为可复用简历版本”时，`career_resume_version_create` 是必做动作；不能只创建 markdown artifact 后询问用户是否继续保存。
@@ -40,6 +44,8 @@
 - `career_resume_version_create.content` 必须是可直接投递的版本；不确定的内容放到 `risk_notes` 或最终回复的待补充事项里，不要混入简历正文。
 - `career_profile_merge.updates` 只使用这些字段：`career_goal`、`target_roles`、`preferred_industries`、`preferred_cities`、`strengths`、`weaknesses`、`skills`、`interests`、`education_summary`、`experience_summary`、`resume_issues`、`interview_weaknesses`。不要传 `name`、`target_direction`、`target_position`、`core_skills`、`job_market_fit` 等非模型字段。
 - 调用 `career_resume_version_create` 时，`resume_version_id` 如需手动指定，必须以 `resume_version_` 开头；不确定时省略该字段让工具生成。
+- 调用 `career_application_create` 时，`application_id` 如需手动指定，必须以 `application_` 开头；不确定时省略该字段让工具生成。
+- `career_application_merge.updates` 只使用这些字段：`stage`、`priority`、`resume_profile_id`、`career_profile_id`、`jd_analysis_id`、`job_fit_report_id`、`resume_version_ids`、`summary`、`next_actions`、`risks`、`notes`。不要通过 merge 覆盖 `company`、`position`、`source_session_id`、`created_at` 或 `updated_at`。
 
 ## 多 Agent 编排规则
 
