@@ -536,14 +536,37 @@ M8 完成后，用户应该能完成这条路径：
 - M9 再做资料与题库。
 - M11 再做 RAG / MCP。
 
-## 15. 建议下一步
+## 15. 当前实现状态
 
-先审核本方案，重点看：
+截至 2026-05-12，M8 后端主闭环已完成：
 
-1. Note 正文是否应该由 NoteService 作为事实源。
-2. M8 是否只做 Markdown 字符串，不做富文本。
-3. Note 是否默认不写 memory。
-4. `NoteSourceRef` 是否需要第一版就结构化。
-5. 第一批是否只开发 `app/notes/models.py`、`app/notes/store.py`、`tests/test_note_store.py`。
+- 已完成 `app/notes/models.py`、`app/notes/store.py` 和 `tests/test_note_store.py`。
+- 已完成 `app/schemas/notes.py`、`app/api/notes.py` 和 `tests/test_note_api.py`。
+- 已完成 `app/tools/builtin_tools/notes.py`、工具注册、capability 配置和 `tests/test_note_tools.py`。
+- 已更新 `app/agents/default/AGENT.md`，明确 NoteService 与 memory / artifact / CareerApplication 的边界。
+- 已补 `tests/test_note_agent_flow.py`，验证明确“保存为笔记”会创建 Note，长期偏好仍写 memory，普通求职回答不会自动创建 Note。
 
-审核通过后，再开始第一批代码开发。
+已验证命令：
+
+```text
+uv run pytest tests/test_note_store.py tests/test_note_api.py tests/test_note_tools.py tests/test_note_agent_flow.py tests/test_career_tools.py tests/test_tool_registry.py tests/test_multi_agent_contracts.py
+uv run mypy app tests
+```
+
+仍然不做：
+
+- RAG / MCP。
+- memory 自动写入。
+- 外部资料库。
+- 学习计划。
+- 前端笔记面板。
+- 富文本编辑器。
+
+## 16. 建议下一步
+
+M8 后端底座已经可用。下一步有两个方向：
+
+1. 如果继续完善 M8，就做前端入口：报告预览里的“保存为笔记”、关联笔记列表、笔记详情编辑。
+2. 如果继续主线能力，就进入 M9：外部面经、面试题、资料链接和公司岗位资料的产品资产层。
+
+建议优先进入 M9 方案设计，因为笔记前端可以在 M9/M10 的资料和学习计划入口一起统一设计，避免先做一个孤立笔记面板。

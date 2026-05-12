@@ -183,6 +183,21 @@ NoteDigest
 - 笔记可读、可编辑、可归档。
 - 不自动写入 memory。
 
+已完成：
+
+- Note / NoteCollection / NoteSourceRef 模型和 JSON store。
+- Note API、presenter、依赖注入和主应用路由。
+- Note 工具、capability 配置和 main-agent 契约。
+- 确定性 runtime 闭环测试：保存为笔记写 Note，长期偏好写 memory，普通求职回答不自动写 Note。
+
+暂不做：
+
+- RAG / MCP。
+- memory 自动写入。
+- 外部资料库。
+- 学习计划。
+- 前端笔记面板。
+
 ### M9：资料与题库层
 
 目标：把外部面经、面试题、资料链接沉淀为可复用知识资产。
@@ -242,14 +257,14 @@ ReviewSchedule
 
 ## 当前优先级
 
-M7 主线闭环已经完成低批次验证。下一步进入 M8，但仍然不提前接 memory 和 RAG。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。下一步仍然不提前接 memory 自动写入和 RAG。
 
-M8 最小下一步：
+推荐下一步：
 
 ```text
-1. 先落 NoteService 领域方案，明确 note 不是 memory。
-2. 只做 note 产品记录模型、store 和 API 草案，不接 RAG。
-3. 再评估 note 与求职项目、artifact、面试复盘的关联方式。
+1. 进入 M9 资料与题库层方案设计。
+2. 明确 ExternalResource / InterviewQuestion / ExperiencePost / CompanyProfile / SkillRequirement 的边界。
+3. 再统一考虑 Note 前端入口、资料入口和后续 LearningService 的衔接。
 ```
 
-这样可以先把“目标岗位项目”跑成主线，再自然引出笔记、资料和学习计划。
+这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。
