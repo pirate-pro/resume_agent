@@ -1736,9 +1736,10 @@ ${_applicationPromptContext(record)}
 1. 先读取 CareerApplication，并复用其中的 ResumeProfile、CareerProfile、JDAnalysis 和 JobFitReport。
 2. 不要重新解析简历，不要重复分析 JD，不要重新创建 ResumeProfile、JDAnalysis 或 JobFitReport。
 3. 基于已有事实生成一版可直接投递的 Markdown 简历，不能编造公司、时间、学历、项目、技术栈或量化指标。
-4. 必须调用 career_resume_version_create 保存 ResumeVersion；content 传最终简历正文。
-5. 保存成功后，必须调用 career_application_merge，把新的 resume_version_id 合并到当前求职项目的 resume_version_ids，并更新 summary、next_actions、risks。
-6. 最终回复请说明 resume_version_id、artifact_id、主要改动和仍需用户补充的风险项。
+4. 简历正文和 ResumeVersion 元数据都不能出现“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”等占位或需替换表达；缺失事实只能写入项目风险和下一步行动。
+5. 必须调用 career_resume_version_create 保存 ResumeVersion；content 传最终简历正文。
+6. 保存成功后，必须调用 career_application_merge，把新的 resume_version_id 合并到当前求职项目的 resume_version_ids，并更新 summary、next_actions、risks。
+7. 最终回复请说明 resume_version_id、artifact_id、主要改动和仍需用户提供的风险项。
 ''';
 }
 

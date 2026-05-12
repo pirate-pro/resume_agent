@@ -89,3 +89,44 @@ artifact 数量：5
 补充验证：python -m py_compile tools/smoke_career_live_flow.py tests/test_career_live_smoke_report.py
 下一步：暂不扩大 smoke 批次；下一次 L1 只跑 runs=1 concurrency=1 max_tool_rounds=8，验证模型在新契约下是否能产出可信 ResumeVersion。
 ```
+
+## M7 项目动作链路验证
+
+```text
+时间：2026-05-12 08:46:18 +08:00
+命令：uv run python tools/smoke_career_live_flow.py --runs 1 --concurrency 1 --max-tool-rounds 8 --project-action checklist --data-dir data/live_career_smoke_m7_project_action
+runs / concurrency / max_tool_rounds：1 / 1 / 8
+project_action：checklist
+data_dir：data/live_career_smoke_m7_project_action/run_001
+session_id：sess_live_career_001_03a5e9a8
+总耗时：142.03s
+结果：失败
+产品记录数量：ResumeProfile 1，CareerProfile 1，JDAnalysis 1，JobFitReport 1，ResumeVersion 1，CareerApplication 1
+artifact 数量：7
+项目动作观察：通过。投递前检查阶段调用了 career_application_get、session_create_text_artifact、career_application_merge，并回写当前求职项目。
+质量门禁：失败
+失败阶段：产品数据一致性检查
+失败工具：无
+关键错误：ResumeVersion artifact 和 risk_notes 中出现“待补”占位表达。
+修复动作：统一 main-agent 契约、前端快捷动作 prompt 和 smoke prompt，要求 ResumeVersion 的 content、change_summary、keyword_strategy、risk_notes 都不能包含“占位 / 待填 / 待补 / 待完善 / TODO / TBD”等需替换表达；缺失事实写为“未提供 / 缺少 / 需用户提供”，并进入 CareerApplication 的 risks / next_actions。
+```
+
+```text
+时间：2026-05-12 08:52:44 +08:00
+命令：uv run python tools/smoke_career_live_flow.py --runs 1 --concurrency 1 --max-tool-rounds 8 --project-action checklist --data-dir data/live_career_smoke_m7_project_action_retry
+runs / concurrency / max_tool_rounds：1 / 1 / 8
+project_action：checklist
+data_dir：data/live_career_smoke_m7_project_action_retry/run_001
+session_id：sess_live_career_001_ad6891c3
+总耗时：158.87s
+结果：通过
+产品记录数量：ResumeProfile 1，CareerProfile 1，JDAnalysis 1，JobFitReport 1，ResumeVersion 1，CareerApplication 1
+artifact 数量：6
+项目动作观察：通过。投递前检查阶段调用 career_application_get、career_application_merge、session_create_text_artifact，并创建检查报告 artifact。
+一致性检查：通过，无 error finding
+质量门禁：通过
+失败阶段：无
+失败工具：无
+关键错误：无
+下一步：M7 主线闭环可以进入收尾；后续不扩大 live smoke 批次，转入 M8 NoteService 设计前先做一次代码提交和工作区清理。
+```

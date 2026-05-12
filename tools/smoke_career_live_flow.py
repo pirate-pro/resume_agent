@@ -252,6 +252,7 @@ def run_live_flow(
     root_data_dir: Path,
     settings: Settings,
     max_tool_rounds: int,
+    project_action: str = "none",
     progress: Callable[[str], None] | None = None,
 ) -> FlowReport:
     run_data_dir = root_data_dir / f"run_{run_index:03d}"
@@ -318,7 +319,11 @@ def run_live_flow(
                     "保存 ResumeVersion 后，请调用 career_application_merge 把 resume_version_id 合并进当前求职项目；"
                     "如果尚未创建 CareerApplication，则先用 career_application_create 基于 job_fit_report_id 创建。"
                     "career_resume_version_create.keyword_strategy 只写已放进简历或已有证据支撑的关键词，"
-                    "不要把风险项、证据不足、缺失、待补、待完善写进 keyword_strategy。"
+                    "不要把风险项、证据不足、缺失、需补充、需用户提供写进 keyword_strategy。"
+                    "career_resume_version_create 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
+                    "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
+                    "如果公司、学校、时间、联系方式等事实缺失，不要在简历正文里写“待补充”，"
+                    "应省略对应字段或使用更保守的已知事实，并把缺失项写入 CareerApplication 的 risks/next_actions。"
                     "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
                     "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
                     "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"
@@ -329,6 +334,22 @@ def run_live_flow(
                 progress=progress,
             )
         )
+        if project_action != "none":
+            application = _latest_career_application_for_session(stack, session_id)
+            if application is None:
+                raise RuntimeError("项目动作前未找到 CareerApplication，无法验证 application_id 链路。")
+            current_stage = _project_action_stage(project_action)
+            report.turns.append(
+                run_turn(
+                    stack=stack,
+                    session_id=session_id,
+                    name=current_stage,
+                    message=_project_action_message(project_action, application.application_id),
+                    max_tool_rounds=max_tool_rounds,
+                    run_index=run_index,
+                    progress=progress,
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         report.failed_stage = current_stage
         report.errors.append(str(exc) or exc.__class__.__name__)
@@ -438,6 +459,13 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     if path_argument_leaked(stack.session_repository, report.session_id):
         report.errors.append("检测到工具调用参数中出现 path/file_path/workspace_path。")
 
+    for turn in report.turns:
+        if turn.name.startswith("项目动作"):
+            if "career_application_get" not in turn.tool_calls:
+                report.errors.append("项目动作未读取 CareerApplication。")
+            if "career_application_merge" not in turn.tool_calls:
+                report.errors.append("项目动作未回写 CareerApplication。")
+
     quality_report = check_career_product_store(stack.data_dir, session_id=report.session_id)
     report.quality_gate_passed = quality_report.success
     report.quality_findings = [item.format() for item in quality_report.findings]
@@ -468,6 +496,55 @@ def _record_touches_session(
     if session_started_at is None or record.updated_at < session_started_at:
         return False
     return bool(set(record.evidence_refs).intersection(artifact_ids))
+
+
+def _latest_career_application_for_session(stack: LiveStack, session_id: str) -> CareerApplication | None:
+    records = [
+        item for item in stack.career_store.list_career_applications() if item.source_session_id == session_id
+    ]
+    if not records:
+        return None
+    return max(records, key=lambda item: item.updated_at)
+
+
+def _project_action_stage(project_action: str) -> str:
+    return {
+        "checklist": "项目动作：投递前检查",
+        "interview": "项目动作：面试准备",
+        "custom_resume": "项目动作：生成定制简历",
+    }[project_action]
+
+
+def _project_action_message(project_action: str, application_id: str) -> str:
+    context = (
+        f"当前求职项目 application_id 是 {application_id}。"
+        "请先调用 career_application_get 读取项目，再复用其中已有的 resume_profile_id、career_profile_id、"
+        "jd_analysis_id、job_fit_report_id 和 resume_version_ids。不要重新解析简历，不要重新分析 JD，"
+        "不要重新创建 ResumeProfile、JDAnalysis 或 JobFitReport。"
+    )
+    if project_action == "checklist":
+        return (
+            f"{context}"
+            "请执行投递前检查，判断是否可以投递，检查硬性要求、关键词覆盖、简历事实风险、"
+            "JD 高风险点和定制简历状态。请调用 career_application_merge 更新 summary、next_actions 和 risks；"
+            "如果生成用户可复用检查报告，可以调用 session_create_text_artifact 创建 Markdown artifact。"
+        )
+    if project_action == "interview":
+        return (
+            f"{context}"
+            "请生成面试准备方案，覆盖高优先级准备项、技术追问方向、项目表达话术、风险短板补齐和练习题。"
+            "请调用 career_application_merge 更新 next_actions、risks 或 notes；如需要复用方案，可以创建 Markdown artifact。"
+        )
+    if project_action == "custom_resume":
+        return (
+            f"{context}"
+            "请生成或更新一版定制简历。必须调用 career_resume_version_create 保存 ResumeVersion，"
+            "再调用 career_application_merge 把新的 resume_version_id 合并进当前求职项目。"
+            "简历正文只能使用已有产品记录和源 artifact 明确出现的事实，不要编造指标或经历。"
+            "ResumeVersion 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
+            "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”。"
+        )
+    raise ValueError(f"Unsupported project action: {project_action}")
 
 
 def infer_failure_stage(report: FlowReport) -> str:
@@ -693,6 +770,7 @@ async def run_all(args: argparse.Namespace) -> list[FlowReport]:
                 root_data_dir=root_data_dir,
                 settings=settings,
                 max_tool_rounds=args.max_tool_rounds,
+                project_action=args.project_action,
                 progress=progress,
             )
 
@@ -764,6 +842,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--concurrency", type=int, default=1, help="并发 run 数；每个 run 使用独立 data 子目录。")
     parser.add_argument("--data-dir", type=Path, default=Path("data/live_career_smoke"), help="输出数据根目录。")
     parser.add_argument("--max-tool-rounds", type=int, default=8, help="每轮对话允许的最大工具轮次。")
+    parser.add_argument(
+        "--project-action",
+        choices=("none", "checklist", "interview", "custom_resume"),
+        default="none",
+        help="是否追加一轮基于 application_id 的项目动作验证；默认不追加以控制 live smoke 成本。",
+    )
     parser.add_argument("--verbose", action="store_true", help="打开应用日志。")
     parser.add_argument("--quiet", action="store_true", help="关闭逐 run / 逐阶段进度输出，只打印最终报告。")
     args = parser.parse_args()

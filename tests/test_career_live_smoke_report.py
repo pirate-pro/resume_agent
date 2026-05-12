@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -25,6 +26,7 @@ from tools.smoke_career_live_flow import (
     infer_failure_stage,
     inspect_flow_outputs,
     print_report,
+    run_all,
 )
 
 
@@ -134,6 +136,75 @@ def test_live_smoke_fails_when_checker_rejects_resume_version(tmp_path: Path) ->
     assert "resume_version_placeholder_text" in report.quality_error_codes
     assert "resume_version_unverified_metric" in report.quality_error_codes
     assert any("产品数据一致性错误" in error for error in report.errors)
+
+
+def test_live_smoke_report_fails_when_project_action_does_not_merge(tmp_path: Path) -> None:
+    session_id = "sess_live_project_action"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="项目动作：投递前检查",
+                answer="已完成检查，但没有回写项目。",
+                elapsed_seconds=1.0,
+                tool_calls=["career_application_get"],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "项目动作未回写 CareerApplication。" in report.errors
+
+
+def test_live_smoke_passes_project_action_argument_to_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run_live_flow(**kwargs: object) -> FlowReport:
+        seen.update(kwargs)
+        return FlowReport(
+            run_index=1,
+            session_id="sess_fake",
+            data_dir=tmp_path / "run_001",
+            success=True,
+            elapsed_seconds=0.0,
+        )
+
+    monkeypatch.setattr("tools.smoke_career_live_flow.Settings.load", lambda: SimpleNamespace())
+    monkeypatch.setattr("tools.smoke_career_live_flow.run_live_flow", fake_run_live_flow)
+    args = SimpleNamespace(
+        data_dir=tmp_path,
+        concurrency=1,
+        runs=1,
+        max_tool_rounds=8,
+        project_action="checklist",
+        quiet=True,
+    )
+
+    reports = asyncio.run(run_all(args))
+
+    assert reports[0].success is True
+    assert seen["project_action"] == "checklist"
 
 
 def _add_artifact(
