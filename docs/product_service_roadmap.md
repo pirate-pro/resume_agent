@@ -407,9 +407,19 @@ tests/test_retrieval_agent_flow.py
 
 已接入只读 `retrieval_search` 和 `retrieval_context_pack` 工具。工具参数只接受 `query / source_types / related_application_id / top_k / max_chars / include_archived`，`session_id` 由 `RunContext` 提供，不接受路径、store-owned 字段或任意内部目录。工具输出保留 typed refs、`match_reason`、分组 `ContextPack` 和 citations，不暴露内部路径。能力配置只给 `agent_main` 开放 retrieval 工具，`resume_agent` 和 `job_agent` 默认不开放全局召回。确定性 runtime 测试已覆盖用户不提供 ID 时由 main-agent 自动召回求职项目、匹配报告、笔记和学习任务，且不写 memory。
 
+M11-3 状态：已完成。
+
+M11-3 已完成：
+
+```text
+tests/test_retrieval_mainline_flow.py
+```
+
+已用低成本确定性 runtime 验证主线链路：用户说“根据我之前星河智能岗位准备二面，不用我提供任何 ID，也先别新建记录”时，main-agent 先用 `retrieval_search` 找到相关 `CareerApplication`，再用 `retrieval_context_pack` 按 `related_application_id` 召回 `CareerApplication`、`JobFitReport`、Note、LearningTask、WeaknessTracker、ExternalResource 和 InterviewQuestion，并给出可追溯的二面准备建议。验证同时确认不创建新的 career/note/knowledge/learning/session artifact 记录，不写 memory。
+
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层和 M11-2 只读工具 / agent 契约已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约和 M11-3 主线链路验证已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
 
 M10 收口已完成：
 
@@ -419,10 +429,10 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 开始 M11-3：主线链路验证。
-2. 用低成本确定性链路验证“根据我之前星河智能岗位准备二面”不用手动提供 ID。
-3. 验证召回覆盖 CareerApplication、JobFitReport、Note、LearningTask 和 Knowledge 资料。
-4. 确认默认不创建新记录、不写 memory、不接 MCP / embedding / 前端。
+1. 开始 M11 收口评估：基于当前规则召回结果判断是否真的需要 M11-4 索引 projection。
+2. 如果规则召回足够，暂缓索引、embedding 和 MCP，回到产品主线体验。
+3. 如果规则召回不足，再设计可重建 `RetrievalIndexRecord`，但仍不把索引当事实源。
+4. 继续不做 memory 自动写入、前端召回面板和聊天历史全局检索。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。

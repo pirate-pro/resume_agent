@@ -684,6 +684,8 @@ tests/test_retrieval_agent_flow.py
 
 ### M11-3：主线链路验证
 
+状态：已完成。
+
 验收：
 
 - 用户说“根据我之前星河智能岗位准备二面”，不用手动提供 ID。
@@ -691,6 +693,15 @@ tests/test_retrieval_agent_flow.py
 - Agent 给出可追溯的准备建议。
 - 不创建新记录，除非用户明确要求保存。
 - 不写 memory。
+
+已完成内容：
+
+- 新增 `tests/test_retrieval_mainline_flow.py`。
+- 验证 main-agent 在用户不提供 ID 时，先用 `retrieval_search` 找到相关 `CareerApplication`，再用 `retrieval_context_pack` 构建上下文包。
+- 验证上下文包覆盖 `CareerApplication`、`JobFitReport`、Note、LearningTask、WeaknessTracker、ExternalResource 和 InterviewQuestion。
+- 验证最终回答基于召回结果给出二面准备建议，并用自然来源描述保持可追溯。
+- 验证默认不创建新的 career、note、knowledge、learning 或 session artifact 记录。
+- 验证不写 memory。
 
 ### M11-4：索引 projection
 
@@ -739,12 +750,12 @@ memory 自动写入
 
 ## 14. 当前建议
 
-M11-1 和 M11-2 已完成。下一步进入 M11-3：
+M11-1、M11-2 和 M11-3 已完成。下一步不建议直接冲 embedding 或 MCP，先做 M11 收口评估：
 
 ```text
-tests/test_retrieval_mainline_flow.py
+1. 用现有规则召回跑更多真实求职问题。
+2. 记录召回失败类型：找不到、排序差、上下文太长、来源不完整、引用不清楚。
+3. 只有规则召回不足且问题稳定复现时，再进入 M11-4 索引 projection。
 ```
 
-只做主线链路验证：用户不提供 ID，main-agent 能召回求职项目、匹配报告、笔记、学习任务和资料题库内容，并给出可追溯建议。
-
-继续不做 MCP、不做 embedding、不做前端、不自动写 memory。
+如果进入 M11-4，仍然只做可重建 projection，不把索引当事实源；继续不做 MCP、不做 embedding、不做前端、不自动写 memory。
