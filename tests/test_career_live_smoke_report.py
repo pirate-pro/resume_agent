@@ -1,4 +1,5 @@
 import asyncio
+from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -192,7 +193,7 @@ def test_live_smoke_passes_project_action_argument_to_run(monkeypatch: pytest.Mo
 
     monkeypatch.setattr("tools.smoke_career_live_flow.Settings.load", lambda: SimpleNamespace())
     monkeypatch.setattr("tools.smoke_career_live_flow.run_live_flow", fake_run_live_flow)
-    args = SimpleNamespace(
+    args = Namespace(
         data_dir=tmp_path,
         concurrency=1,
         runs=1,
