@@ -84,7 +84,7 @@ Product Services
 
 负责外部资料、面经、面试题、课程链接和公司岗位信息。
 
-短期可以从用户粘贴或上传内容开始，后期再接：
+短期先完成结构化存储和 API，不通过聊天 Agent 写入。后期再接：
 
 - 外部链接解析
 - 面经 / 题库结构化
@@ -200,7 +200,7 @@ NoteDigest
 
 ### M9：资料与题库层
 
-目标：把外部面经、面试题、资料链接沉淀为可复用知识资产。
+目标：把外部面经、面试题、资料链接沉淀为可复用知识资产。聊天 Agent 暂不写入 KnowledgeService，用户自己的面试经历和复盘仍进入 NoteService。
 
 方案文档：`求职Agent_M9_资料题库层方案_2026-05-12.md`
 
@@ -214,11 +214,12 @@ CompanyProfile
 SkillRequirement
 ```
 
-验收标准：
+长期验收标准：
 
-- 用户可以保存资料链接或粘贴面经。
+- 外部资料可以通过导入、清洗、后台管理或后续 RAG/MCP 管线进入 KnowledgeService。
 - 系统能提取公司、岗位、能力点、题目和建议准备方向。
 - 资料可以关联到求职项目和学习计划。
+- 用户个人面经、复盘、被问到的问题和回答感受走 NoteService，不混入公共资料库。
 
 第一批开发范围：
 
@@ -237,6 +238,7 @@ tests/test_knowledge_store.py
 - API。
 - 工具。
 - prompt。
+- 聊天 Agent 写入工具。
 - 前端。
 - RAG / MCP。
 - 自动爬虫。
@@ -254,6 +256,18 @@ tests/test_knowledge_api.py
 ```
 
 资料、面经、题目、公司画像和能力要求均已支持 create / get / list / update / archive。API 不暴露内部路径，不做跨 store 强存在性校验。
+
+M9-3 状态：暂停。
+
+暂停聊天 Agent 写入 Knowledge 工具。后续如果需要 Agent 使用资料库，优先做只读检索工具，例如：
+
+```text
+knowledge_search
+knowledge_resource_get
+knowledge_question_get
+knowledge_company_get
+knowledge_skill_requirement_get
+```
 
 ### M10：学习计划与监督
 
@@ -294,15 +308,15 @@ ReviewSchedule
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，下一步仍然不提前接 memory 自动写入、RAG、MCP 和学习计划。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。下一步仍然不提前接 memory 自动写入、RAG、MCP 和学习计划。
 
 推荐下一步：
 
 ```text
-1. 开始 M9-3：app/tools/builtin_tools/knowledge.py。
-2. 更新 capability 配置，只给 main agent 开放知识资产写工具。
-3. 更新 app/agents/default/AGENT.md，明确资料、笔记、求职资产和 memory 边界。
-4. 补 tests/test_knowledge_tools.py 和 tests/test_knowledge_agent_flow.py。
+1. 用户个人面经、面试复盘和回答记录继续走 NoteService。
+2. KnowledgeService 保留为外部资料库、题库、公司画像和能力要求底座。
+3. 不做 Knowledge 写工具。
+4. 下一步进入 M10 LearningService，或先补只读 Knowledge 检索方案。
 ```
 
 这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。
