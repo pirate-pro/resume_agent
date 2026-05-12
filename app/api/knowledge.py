@@ -47,9 +47,10 @@ from app.schemas.knowledge import (
     SkillRequirementView,
 )
 
-__all__ = ["router"]
+__all__ = ["admin_router", "router"]
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
+admin_router = APIRouter(prefix="/api/knowledge-admin", tags=["knowledge-admin"])
 _RecordT = TypeVar(
     "_RecordT",
     ExternalResource,
@@ -75,7 +76,7 @@ def list_external_resources(
     ])
 
 
-@router.post("/resources", response_model=StandardResponse[ExternalResourceView])
+@admin_router.post("/resources", response_model=StandardResponse[ExternalResourceView])
 def create_external_resource(
     request: ExternalResourceCreateRequest,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -120,7 +121,7 @@ def get_external_resource(
     return ok(external_resource_view(record))
 
 
-@router.patch("/resources/{resource_id}", response_model=StandardResponse[ExternalResourceView])
+@admin_router.patch("/resources/{resource_id}", response_model=StandardResponse[ExternalResourceView])
 def update_external_resource(
     resource_id: str,
     request: ExternalResourceUpdateRequest,
@@ -136,7 +137,7 @@ def update_external_resource(
     return ok(external_resource_view(store.update_external_resource(resource_id, updates=updates)))
 
 
-@router.post("/resources/{resource_id}/archive", response_model=StandardResponse[ExternalResourceView])
+@admin_router.post("/resources/{resource_id}/archive", response_model=StandardResponse[ExternalResourceView])
 def archive_external_resource(
     resource_id: str,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -162,7 +163,7 @@ def list_experience_posts(
     ])
 
 
-@router.post("/experiences", response_model=StandardResponse[ExperiencePostView])
+@admin_router.post("/experiences", response_model=StandardResponse[ExperiencePostView])
 def create_experience_post(
     request: ExperiencePostCreateRequest,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -207,7 +208,7 @@ def get_experience_post(
     return ok(experience_post_view(record))
 
 
-@router.patch("/experiences/{experience_id}", response_model=StandardResponse[ExperiencePostView])
+@admin_router.patch("/experiences/{experience_id}", response_model=StandardResponse[ExperiencePostView])
 def update_experience_post(
     experience_id: str,
     request: ExperiencePostUpdateRequest,
@@ -223,7 +224,7 @@ def update_experience_post(
     return ok(experience_post_view(store.update_experience_post(experience_id, updates=updates)))
 
 
-@router.post("/experiences/{experience_id}/archive", response_model=StandardResponse[ExperiencePostView])
+@admin_router.post("/experiences/{experience_id}/archive", response_model=StandardResponse[ExperiencePostView])
 def archive_experience_post(
     experience_id: str,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -249,7 +250,7 @@ def list_interview_questions(
     ])
 
 
-@router.post("/questions", response_model=StandardResponse[InterviewQuestionView])
+@admin_router.post("/questions", response_model=StandardResponse[InterviewQuestionView])
 def create_interview_question(
     request: InterviewQuestionCreateRequest,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -294,7 +295,7 @@ def get_interview_question(
     return ok(interview_question_view(record))
 
 
-@router.patch("/questions/{question_id}", response_model=StandardResponse[InterviewQuestionView])
+@admin_router.patch("/questions/{question_id}", response_model=StandardResponse[InterviewQuestionView])
 def update_interview_question(
     question_id: str,
     request: InterviewQuestionUpdateRequest,
@@ -310,7 +311,7 @@ def update_interview_question(
     return ok(interview_question_view(store.update_interview_question(question_id, updates=updates)))
 
 
-@router.post("/questions/{question_id}/archive", response_model=StandardResponse[InterviewQuestionView])
+@admin_router.post("/questions/{question_id}/archive", response_model=StandardResponse[InterviewQuestionView])
 def archive_interview_question(
     question_id: str,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -335,7 +336,7 @@ def list_company_profiles(
     ])
 
 
-@router.post("/companies", response_model=StandardResponse[CompanyProfileView])
+@admin_router.post("/companies", response_model=StandardResponse[CompanyProfileView])
 def create_company_profile(
     request: CompanyProfileCreateRequest,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -377,7 +378,7 @@ def get_company_profile(
     return ok(company_profile_view(record))
 
 
-@router.patch("/companies/{company_id}", response_model=StandardResponse[CompanyProfileView])
+@admin_router.patch("/companies/{company_id}", response_model=StandardResponse[CompanyProfileView])
 def update_company_profile(
     company_id: str,
     request: CompanyProfileUpdateRequest,
@@ -393,7 +394,7 @@ def update_company_profile(
     return ok(company_profile_view(store.update_company_profile(company_id, updates=updates)))
 
 
-@router.post("/companies/{company_id}/archive", response_model=StandardResponse[CompanyProfileView])
+@admin_router.post("/companies/{company_id}/archive", response_model=StandardResponse[CompanyProfileView])
 def archive_company_profile(
     company_id: str,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -415,7 +416,7 @@ def list_skill_requirements(
     ])
 
 
-@router.post("/skill-requirements", response_model=StandardResponse[SkillRequirementView])
+@admin_router.post("/skill-requirements", response_model=StandardResponse[SkillRequirementView])
 def create_skill_requirement(
     request: SkillRequirementCreateRequest,
     store: KnowledgeStore = Depends(get_knowledge_store),
@@ -456,7 +457,7 @@ def get_skill_requirement(
     return ok(skill_requirement_view(record))
 
 
-@router.patch("/skill-requirements/{skill_requirement_id}", response_model=StandardResponse[SkillRequirementView])
+@admin_router.patch("/skill-requirements/{skill_requirement_id}", response_model=StandardResponse[SkillRequirementView])
 def update_skill_requirement(
     skill_requirement_id: str,
     request: SkillRequirementUpdateRequest,
@@ -472,7 +473,10 @@ def update_skill_requirement(
     return ok(skill_requirement_view(store.update_skill_requirement(skill_requirement_id, updates=updates)))
 
 
-@router.post("/skill-requirements/{skill_requirement_id}/archive", response_model=StandardResponse[SkillRequirementView])
+@admin_router.post(
+    "/skill-requirements/{skill_requirement_id}/archive",
+    response_model=StandardResponse[SkillRequirementView],
+)
 def archive_skill_requirement(
     skill_requirement_id: str,
     store: KnowledgeStore = Depends(get_knowledge_store),

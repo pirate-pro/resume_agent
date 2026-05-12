@@ -255,7 +255,7 @@ app/api/knowledge.py
 tests/test_knowledge_api.py
 ```
 
-资料、面经、题目、公司画像和能力要求均已支持 create / get / list / update / archive。API 不暴露内部路径，不做跨 store 强存在性校验。
+资料、面经、题目、公司画像和能力要求均已接入 API。公共 `/api/knowledge` 只读，后台 `/api/knowledge-admin` 承担导入、更新和归档。API 不暴露内部路径，不做跨 store 强存在性校验。
 
 M9-3 状态：暂停。
 

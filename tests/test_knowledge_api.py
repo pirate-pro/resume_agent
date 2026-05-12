@@ -38,7 +38,7 @@ def test_knowledge_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
     try:
         with TestClient(app) as client:
             resource_resp = client.post(
-                "/api/knowledge/resources",
+                "/api/knowledge-admin/resources",
                 json={
                     "resource_id": "resource_stargazer_interview",
                     "source_session_id": "sess_alpha",
@@ -47,7 +47,7 @@ def test_knowledge_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
                     "title": "星河智能 AI Agent 后端面经",
                     "resource_type": "pasted_text",
                     "url": "https://example.com/interview",
-                    "provider": "用户粘贴",
+                    "provider": "后台导入",
                     "company": "星河智能",
                     "position": "AI Agent 后端工程师",
                     "target_roles": ["AI 应用后端工程师"],
@@ -66,7 +66,7 @@ def test_knowledge_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
             assert resource["created_at"] == "2026-05-12T08:01:00+08:00"
 
             experience_resp = client.post(
-                "/api/knowledge/experiences",
+                "/api/knowledge-admin/experiences",
                 json={
                     "experience_id": "experience_stargazer_rounds",
                     "source_session_id": "sess_alpha",
@@ -91,7 +91,7 @@ def test_knowledge_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
             assert _data(experience_resp)["interview_rounds"][0]["round"] == "一面"
 
             question_resp = client.post(
-                "/api/knowledge/questions",
+                "/api/knowledge-admin/questions",
                 json={
                     "question_id": "question_rag_chunk_strategy",
                     "source_session_id": "sess_alpha",
@@ -116,7 +116,7 @@ def test_knowledge_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
             assert _data(question_resp)["question_type"] == "technical"
 
             company_resp = client.post(
-                "/api/knowledge/companies",
+                "/api/knowledge-admin/companies",
                 json={
                     "company_id": "company_stargazer",
                     "source_session_id": "sess_alpha",
@@ -138,7 +138,7 @@ def test_knowledge_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
             assert _data(company_resp)["company_name"] == "星河智能"
 
             skill_resp = client.post(
-                "/api/knowledge/skill-requirements",
+                "/api/knowledge-admin/skill-requirements",
                 json={
                     "skill_requirement_id": "skill_req_rag_engineering",
                     "source_session_id": "sess_alpha",
@@ -221,7 +221,7 @@ def test_knowledge_api_updates_filters_and_archives_records(tmp_path: Path) -> N
             assert [item["question_id"] for item in _data(filtered_questions)] == ["question_alpha"]
 
             update_resource_resp = client.patch(
-                "/api/knowledge/resources/resource_alpha",
+                "/api/knowledge-admin/resources/resource_alpha",
                 json={"summary": "更新后的资料摘要", "url": None, "resource_type": "article"},
             )
             assert update_resource_resp.status_code == 200
@@ -231,13 +231,13 @@ def test_knowledge_api_updates_filters_and_archives_records(tmp_path: Path) -> N
             assert updated_resource["resource_type"] == "article"
 
             update_company_resp = client.patch(
-                "/api/knowledge/companies/company_stargazer",
+                "/api/knowledge-admin/companies/company_stargazer",
                 json={"interview_style": "系统设计偏多"},
             )
             assert update_company_resp.status_code == 200
             assert _data(update_company_resp)["interview_style"] == "系统设计偏多"
 
-            archive_resp = client.post("/api/knowledge/resources/resource_alpha/archive")
+            archive_resp = client.post("/api/knowledge-admin/resources/resource_alpha/archive")
             assert archive_resp.status_code == 200
             assert _data(archive_resp)["status"] == "archived"
 
@@ -283,12 +283,12 @@ def test_knowledge_api_rejects_empty_and_invalid_updates(tmp_path: Path) -> None
 
     try:
         with TestClient(app) as client:
-            empty_update_resp = client.patch("/api/knowledge/resources/resource_alpha", json={})
+            empty_update_resp = client.patch("/api/knowledge-admin/resources/resource_alpha", json={})
             assert empty_update_resp.status_code == 400
             assert "at least one editable field" in empty_update_resp.json()["msg"]
 
             invalid_update_resp = client.patch(
-                "/api/knowledge/resources/resource_alpha",
+                "/api/knowledge-admin/resources/resource_alpha",
                 json={"resource_type": "crawler_snapshot"},
             )
             assert invalid_update_resp.status_code == 400
@@ -298,6 +298,33 @@ def test_knowledge_api_rejects_empty_and_invalid_updates(tmp_path: Path) -> None
                 params={"related_application_id": "bad"},
             )
             assert invalid_query_resp.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_knowledge_public_api_is_read_only(tmp_path: Path) -> None:
+    store = KnowledgeStore(root_dir=tmp_path / "knowledge")
+    store.save_external_resource(_resource("resource_alpha", related_application_id="application_alpha"))
+    _override_knowledge_store(store)
+
+    try:
+        with TestClient(app) as client:
+            create_resp = client.post(
+                "/api/knowledge/resources",
+                json={
+                    "resource_id": "resource_should_not_create",
+                    "source_session_id": "sess_alpha",
+                    "title": "公共接口不应写入",
+                    "resource_type": "link",
+                },
+            )
+            update_resp = client.patch("/api/knowledge/resources/resource_alpha", json={"summary": "不应更新"})
+            archive_resp = client.post("/api/knowledge/resources/resource_alpha/archive")
+
+            assert create_resp.status_code == 405
+            assert update_resp.status_code == 405
+            assert archive_resp.status_code in {404, 405}
+            assert client.get("/api/knowledge/resources/resource_alpha").status_code == 200
     finally:
         app.dependency_overrides.clear()
 
