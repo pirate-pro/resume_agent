@@ -273,6 +273,8 @@ knowledge_skill_requirement_get
 
 目标：让产品从“一次性求职助手”变成“长期成长助手”。
 
+方案文档：`求职Agent_M10_LearningService学习计划层方案_2026-05-12.md`
+
 建议模型：
 
 ```text
@@ -289,6 +291,29 @@ ReviewSchedule
 - 能跟踪完成情况。
 - 能根据进度和新资料调整计划。
 - 能持续提醒用户下一步该做什么。
+
+第一批开发范围：
+
+```text
+app/learning/models.py
+app/learning/store.py
+tests/test_learning_store.py
+```
+
+第一批只做领域模型、严格校验、JSON store、原子写入、读取、列表、归档、更新和损坏 JSON 稳定失败。
+
+暂不做：
+
+- API。
+- 工具。
+- prompt。
+- 前端。
+- RAG / MCP。
+- memory 自动写入。
+- 日历同步。
+- 通知提醒。
+- 排期算法。
+- 跨 store 强存在性校验。
 
 ### M11：RAG / MCP 化
 
@@ -308,15 +333,15 @@ ReviewSchedule
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。下一步仍然不提前接 memory 自动写入、RAG、MCP 和学习计划。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10 LearningService 方案已经明确，下一步仍然不提前接 memory 自动写入、RAG、MCP、日历同步和提醒系统。
 
 推荐下一步：
 
 ```text
-1. 用户个人面经、面试复盘和回答记录继续走 NoteService。
-2. KnowledgeService 保留为外部资料库、题库、公司画像和能力要求底座。
-3. 不做 Knowledge 写工具。
-4. 下一步进入 M10 LearningService，或先补只读 Knowledge 检索方案。
+1. 开始 M10-1：app/learning/models.py。
+2. 实现 app/learning/store.py。
+3. 补 tests/test_learning_store.py。
+4. M10-1 稳定后，再接 API、工具和 agent 契约。
 ```
 
 这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。
