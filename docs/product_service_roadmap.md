@@ -300,7 +300,9 @@ app/learning/store.py
 tests/test_learning_store.py
 ```
 
-第一批只做领域模型、严格校验、JSON store、原子写入、读取、列表、归档、更新和损坏 JSON 稳定失败。
+状态：已完成。
+
+第一批已完成领域模型、严格校验、JSON store、原子写入、读取、列表、归档、更新、任务状态更新、checkin 追加、Asia/Shanghai 时间戳和损坏 JSON 稳定失败。
 
 暂不做：
 
@@ -333,15 +335,15 @@ tests/test_learning_store.py
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10 LearningService 方案已经明确，下一步仍然不提前接 memory 自动写入、RAG、MCP、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座已经完成，下一步仍然不提前接 memory 自动写入、RAG、MCP、日历同步和提醒系统。
 
 推荐下一步：
 
 ```text
-1. 开始 M10-1：app/learning/models.py。
-2. 实现 app/learning/store.py。
-3. 补 tests/test_learning_store.py。
-4. M10-1 稳定后，再接 API、工具和 agent 契约。
+1. 开始 M10-2：app/schemas/learning.py。
+2. 实现 app/api/learning.py。
+3. 补 tests/test_learning_api.py。
+4. M10-2 稳定后，再接工具和 agent 契约。
 ```
 
 这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。

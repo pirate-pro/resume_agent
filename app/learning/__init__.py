@@ -1,0 +1,2 @@
+"""Learning plan product domain."""
+

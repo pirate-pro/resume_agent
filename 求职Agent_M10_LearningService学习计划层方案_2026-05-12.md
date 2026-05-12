@@ -566,6 +566,8 @@ app/learning/store.py
 tests/test_learning_store.py
 ```
 
+状态：已完成。
+
 验收：
 
 - 五类记录模型。
@@ -583,6 +585,17 @@ tests/test_learning_store.py
 - weakness 更新。
 - 损坏 JSON 稳定失败。
 - 反序列化严格失败，不做宽松类型转换。
+
+已完成内容：
+
+- `LearningPlan / LearningTask / ProgressCheckin / WeaknessTracker / ReviewSchedule` 五类模型。
+- `LearningStore` 文件型 JSON store。
+- store 统一维护 Asia/Shanghai 时间戳，支持可注入 clock。
+- 五类记录的 get / list / update / archive。
+- `LearningTask` 状态更新，完成时由 store 设置 `completed_at`。
+- `ProgressCheckin` 追加入口。
+- 严格反序列化，坏 schema 和损坏 JSON 统一抛 `StorageError`。
+- `tests/test_learning_store.py` 覆盖模型校验、时间戳、归档、过滤、损坏 JSON 和跨 store 不校验存在性。
 
 ### M10-2：API
 
@@ -676,18 +689,17 @@ tests/test_learning_agent_flow.py
 
 ## 13. 当前建议
 
-可以进入 M10-1，但只做：
+M10-1 已完成。下一步可以进入 M10-2，但只做：
 
 ```text
-app/learning/models.py
-app/learning/store.py
-tests/test_learning_store.py
+app/schemas/learning.py
+app/api/learning.py
+tests/test_learning_api.py
 ```
 
 暂时不要碰：
 
 ```text
-API
 工具
 prompt
 前端
