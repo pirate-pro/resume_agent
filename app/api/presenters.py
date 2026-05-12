@@ -8,6 +8,7 @@ from typing import Any, Protocol, cast
 
 from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
 from app.domain.models import EventRecord, MemoryItem, SessionMeta
+from app.notes.models import Note, NoteCollection, NoteSourceRef
 from app.schemas.chat import (
     AnswerArtifactView,
     EventView,
@@ -25,6 +26,7 @@ from app.schemas.career import (
     ResumeProfileView,
     ResumeVersionView,
 )
+from app.schemas.notes import NoteCollectionView, NoteSourceRefPayload, NoteView
 from app.services.answer_normalizer import AnswerFormat, LayoutHint, RenderHint, SourceKind
 
 __all__ = [
@@ -34,6 +36,8 @@ __all__ = [
     "jd_analysis_view",
     "job_fit_report_view",
     "memory_view",
+    "note_collection_view",
+    "note_view",
     "resume_profile_view",
     "resume_version_view",
     "session_item_view",
@@ -190,6 +194,51 @@ def career_application_view(item: CareerApplication) -> CareerApplicationView:
         next_actions=item.next_actions,
         risks=item.risks,
         notes=item.notes,
+    )
+
+
+def note_view(item: Note) -> NoteView:
+    return NoteView(
+        note_id=item.note_id,
+        status=item.status.value,
+        source_session_id=item.source_session_id,
+        source_artifact_id=item.source_artifact_id,
+        evidence_refs=item.evidence_refs,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        title=item.title,
+        body_markdown=item.body_markdown,
+        body_format=item.body_format,
+        collection_id=item.collection_id,
+        tags=item.tags,
+        source_refs=[note_source_ref_view(source_ref) for source_ref in item.source_refs],
+        related_application_id=item.related_application_id,
+        summary=item.summary,
+    )
+
+
+def note_collection_view(item: NoteCollection) -> NoteCollectionView:
+    return NoteCollectionView(
+        collection_id=item.collection_id,
+        status=item.status.value,
+        source_session_id=item.source_session_id,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        name=item.name,
+        description=item.description,
+        kind=item.kind.value,
+        tags=item.tags,
+    )
+
+
+def note_source_ref_view(item: NoteSourceRef) -> NoteSourceRefPayload:
+    source_type = item.source_type.value if not isinstance(item.source_type, str) else item.source_type
+    return NoteSourceRefPayload(
+        source_type=source_type,
+        source_id=item.source_id,
+        source_session_id=item.source_session_id,
+        title=item.title,
+        quote=item.quote,
     )
 
 

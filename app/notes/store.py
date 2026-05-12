@@ -21,6 +21,7 @@ from app.notes.models import (
     validate_collection_id,
     validate_evidence_refs,
     validate_note_id,
+    validate_optional_related_application_id,
     validate_source_refs,
 )
 
@@ -88,12 +89,20 @@ class NoteStore:
         normalized_collection_id = None
         if collection_id is not None:
             normalized_collection_id = validate_collection_id(collection_id)
+        normalized_related_application_id = validate_optional_related_application_id(
+            "related_application_id",
+            related_application_id,
+        )
         records = [_read_record_required(path, _note_from_payload) for path in sorted(self._notes_dir.glob("*.json"))]
         filtered = _filter_and_sort(records, include_archived=include_archived)
         if normalized_collection_id is not None:
             filtered = [record for record in filtered if record.collection_id == normalized_collection_id]
-        if related_application_id is not None:
-            filtered = [record for record in filtered if record.related_application_id == related_application_id]
+        if normalized_related_application_id is not None:
+            filtered = [
+                record
+                for record in filtered
+                if record.related_application_id == normalized_related_application_id
+            ]
         return [record.copy() for record in filtered]
 
     def update_note(self, note_id: str, *, updates: dict[str, Any]) -> Note:
