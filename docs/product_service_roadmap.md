@@ -417,9 +417,19 @@ tests/test_retrieval_mainline_flow.py
 
 已用低成本确定性 runtime 验证主线链路：用户说“根据我之前星河智能岗位准备二面，不用我提供任何 ID，也先别新建记录”时，main-agent 先用 `retrieval_search` 找到相关 `CareerApplication`，再用 `retrieval_context_pack` 按 `related_application_id` 召回 `CareerApplication`、`JobFitReport`、Note、LearningTask、WeaknessTracker、ExternalResource 和 InterviewQuestion，并给出可追溯的二面准备建议。验证同时确认不创建新的 career/note/knowledge/learning/session artifact 记录，不写 memory。
 
+M11 收口评估状态：已完成。
+
+M11 收口评估已完成：
+
+```text
+tests/test_retrieval_quality_eval.py
+```
+
+已用规则召回覆盖 5 类核心用户入口：二面准备、学习安排、复盘短板、简历与岗位匹配、当前会话文件。评估断言召回结果包含预期来源类型、citations 可追溯、`match_reason` 不为空。当前结论是：规则召回已经足够支撑 M11 第一阶段产品链路验证，暂不进入 M11-4 索引 projection，也不提前引入 embedding / MCP。
+
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约和 M11-3 主线链路验证已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证和 M11 收口评估已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
 
 M10 收口已完成：
 
@@ -429,9 +439,9 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 开始 M11 收口评估：基于当前规则召回结果判断是否真的需要 M11-4 索引 projection。
-2. 如果规则召回足够，暂缓索引、embedding 和 MCP，回到产品主线体验。
-3. 如果规则召回不足，再设计可重建 `RetrievalIndexRecord`，但仍不把索引当事实源。
+1. 暂缓 M11-4 索引 projection、embedding 和 MCP。
+2. 回到产品主线体验：把召回能力用于面试准备、学习安排和求职项目推进。
+3. 后续只有在真实问题中稳定出现“找不到、排序差、上下文太长、来源不完整、引用不清楚”时，再重启 M11-4。
 4. 继续不做 memory 自动写入、前端召回面板和聊天历史全局检索。
 ```
 
