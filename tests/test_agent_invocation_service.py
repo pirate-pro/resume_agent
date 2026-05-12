@@ -19,7 +19,11 @@ from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.file_store import FileMemoryStore
 from app.memory.models import MemoryScope
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
-from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT, AGENT_TASK_ASSIGNED_EVENT
+from app.runtime.agent_events import (
+    AGENT_RESULT_SUMMARY_EVENT,
+    AGENT_TASK_ASSIGNED_EVENT,
+    AGENT_TASK_PROGRESS_EVENT,
+)
 from app.runtime.agent_registry import AgentRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
@@ -248,8 +252,20 @@ def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_pa
     assert result.summary == "简历解析完成"
     assert event_types == [
         AGENT_TASK_ASSIGNED_EVENT,
+        AGENT_TASK_PROGRESS_EVENT,
+        AGENT_TASK_PROGRESS_EVENT,
+        AGENT_TASK_PROGRESS_EVENT,
+        AGENT_TASK_PROGRESS_EVENT,
         AGENT_RESULT_SUMMARY_EVENT,
     ]
+    progress_events = [event for event in orchestration_events if event.type == AGENT_TASK_PROGRESS_EVENT]
+    assert [event.payload["source_event_type"] for event in progress_events] == [
+        "run_started",
+        "memory_retrieval",
+        "assistant_message",
+        "run_finished",
+    ]
+    assert progress_events[-1].payload["status"] == "completed"
 
     assignment = orchestration_events[0]
     assert assignment.agent_id == "agent_main"

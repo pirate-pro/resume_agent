@@ -369,14 +369,19 @@ tests/test_learning_career_chain.py
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约和 M10-4 低成本主链路验证已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证和 M10 收口已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
+
+M10 收口已完成：
+
+- 修正 `agent_task_progress` 事件测试预期，明确子 agent 运行进度会投影到 orchestration events。
+- 保留当前前端进度面板依赖的 progress 事件，不回退运行逻辑。
 
 推荐下一步：
 
 ```text
-1. 先做 M10 收口：确认是否修复既有 agent_task_progress 事件测试预期。
-2. 整理 M10 边界：Learning 不写 memory，不复制 Note / Knowledge 正文。
-3. 进入 M11 前明确 RAG / MCP 的召回边界和数据来源。
+1. 进入 M11 前先写 RAG / MCP 召回边界文档。
+2. 明确召回来源：Career、Note、Knowledge、Learning、SessionArtifact。
+3. 明确不做项：不把 RAG 当事实源，不自动写 memory，不复制资料正文。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。

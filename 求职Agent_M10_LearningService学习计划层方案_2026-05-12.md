@@ -725,14 +725,23 @@ tests/test_learning_agent_flow.py
 
 ## 13. 当前建议
 
-M10-1、M10-2、M10-3 和 M10-4 已完成。LearningService 已具备后端事实源、API、main-agent 受控工具和低成本主链路验证。
+M10-1、M10-2、M10-3、M10-4 和 M10 收口已完成。LearningService 已具备后端事实源、API、main-agent 受控工具、低成本主链路验证和基础测试收口。
 
-下一步建议先做 M10 收口，再进入 M11：
+M10 收口已完成：
 
 ```text
-确认是否修复既有 agent_task_progress 事件测试预期
-整理 M10 已知边界和不做项
-进入 M11 前先定 RAG / MCP 召回边界
+修正 agent_task_progress 事件测试预期
+确认子 agent 运行进度会投影到 orchestration events
+保留前端进度面板依赖的 progress 事件
+不回退运行逻辑
+```
+
+下一步建议进入 M11 前先落 RAG / MCP 召回边界文档：
+
+```text
+明确召回来源：Career、Note、Knowledge、Learning、SessionArtifact
+明确 RAG 是召回能力，不是产品资产事实源
+明确不自动写 memory，不复制资料正文
 ```
 
 暂时不要碰：
