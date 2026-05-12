@@ -316,10 +316,22 @@ tests/test_learning_api.py
 
 学习计划、学习任务、进度打卡、短板跟踪和复习安排均已接入 API。公共 `/api/learning` 只读，后台 `/api/learning-admin` 承担创建、更新、归档和任务状态流转。API 不暴露内部路径，不做跨 store 强存在性校验。
 
+M10-3 状态：已完成。
+
+M10-3 已完成：
+
+```text
+app/tools/builtin_tools/learning.py
+app/config/agent_capabilities.json
+app/agents/default/AGENT.md
+tests/test_learning_tools.py
+tests/test_learning_agent_flow.py
+```
+
+main-agent 可以创建学习计划、学习任务、进度打卡和短板跟踪，并能更新任务状态和短板状态。`resume_agent` 和 `job_agent` 默认没有 Learning 写权限。Learning 工具不写 memory，不替代 NoteService，也不复制 KnowledgeService 的资料正文。
+
 暂不做：
 
-- API。
-- 工具。
 - prompt。
 - 前端。
 - RAG / MCP。
@@ -347,15 +359,16 @@ tests/test_learning_api.py
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座和 M10-2 API 已经完成，下一步仍然不提前接 memory 自动写入、RAG、MCP、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API 和 M10-3 工具 / agent 契约已经完成，下一步仍然不提前接 memory 自动写入、RAG、MCP、日历同步和提醒系统。
 
 推荐下一步：
 
 ```text
-1. 开始 M10-3：app/tools/builtin_tools/learning.py。
-2. 配置 main agent 的 Learning 写工具能力。
-3. 调整 AGENT.md，明确学习计划、打卡和任务状态的写入边界。
-4. 补 learning 工具测试和低成本 agent flow 测试。
+1. 开始 M10-4：低成本真实链路验证。
+2. 基于一个 CareerApplication + JobFitReport 创建 LearningPlan。
+3. 创建 3 到 5 个 LearningTask。
+4. 模拟一次用户打卡，创建 ProgressCheckin 并更新 LearningTask.state。
+5. 把一个 WeaknessTracker 从 open 更新到 improving。
 ```
 
 这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。

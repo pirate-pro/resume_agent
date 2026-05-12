@@ -5,7 +5,12 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.domain.agent_task_protocols import AgentTaskStore
-from app.api.dependencies.infrastructure import get_career_product_store, get_note_store, get_session_repository
+from app.api.dependencies.infrastructure import (
+    get_career_product_store,
+    get_learning_store,
+    get_note_store,
+    get_session_repository,
+)
 from app.api.dependencies.managers import get_agent_capability_registry, get_memory_manager, get_state_manager
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.tools.builtins import (
@@ -29,6 +34,16 @@ from app.tools.builtins import (
     CareerResumeVersionGetTool,
     CareerResumeVersionListTool,
     DelegateAgentsTool,
+    LearningCheckinCreateTool,
+    LearningPlanCreateTool,
+    LearningPlanGetTool,
+    LearningPlanListTool,
+    LearningTaskCreateTool,
+    LearningTaskGetTool,
+    LearningTaskListTool,
+    LearningTaskUpdateStateTool,
+    LearningWeaknessCreateTool,
+    LearningWeaknessUpdateTool,
     MemoryExplainTool,
     MemoryForgetTool,
     MemoryInspectTool,
@@ -159,6 +174,41 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(NoteCollectionListTool(note_store=get_note_store()))
     registry.register(NoteCollectionUpdateTool(note_store=get_note_store()))
     registry.register(NoteCollectionArchiveTool(note_store=get_note_store()))
+    registry.register(
+        LearningPlanCreateTool(
+            learning_store=get_learning_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(LearningPlanGetTool(learning_store=get_learning_store()))
+    registry.register(LearningPlanListTool(learning_store=get_learning_store()))
+    registry.register(
+        LearningTaskCreateTool(
+            learning_store=get_learning_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(LearningTaskGetTool(learning_store=get_learning_store()))
+    registry.register(LearningTaskListTool(learning_store=get_learning_store()))
+    registry.register(LearningTaskUpdateStateTool(learning_store=get_learning_store()))
+    registry.register(
+        LearningCheckinCreateTool(
+            learning_store=get_learning_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(
+        LearningWeaknessCreateTool(
+            learning_store=get_learning_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(
+        LearningWeaknessUpdateTool(
+            learning_store=get_learning_store(),
+            session_repository=get_session_repository(),
+        )
+    )
     return registry
 
 

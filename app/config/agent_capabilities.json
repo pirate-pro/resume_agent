@@ -45,7 +45,17 @@
         "note_collection_get",
         "note_collection_list",
         "note_collection_update",
-        "note_collection_archive"
+        "note_collection_archive",
+        "learning_plan_create",
+        "learning_plan_get",
+        "learning_plan_list",
+        "learning_task_create",
+        "learning_task_get",
+        "learning_task_list",
+        "learning_task_update_state",
+        "learning_checkin_create",
+        "learning_weakness_create",
+        "learning_weakness_update"
       ],
       "allowed_skills": [
         "*"

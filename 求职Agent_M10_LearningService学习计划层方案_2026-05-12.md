@@ -631,11 +631,13 @@ tests/test_learning_api.py
 
 ```text
 app/tools/builtin_tools/learning.py
-app/config/agent_capabilities.yaml
+app/config/agent_capabilities.json
 app/agents/default/AGENT.md
 tests/test_learning_tools.py
 tests/test_learning_agent_flow.py
 ```
+
+状态：已完成。
 
 验收：
 
@@ -644,6 +646,18 @@ tests/test_learning_agent_flow.py
 - child-agent 默认无 Learning 写权限。
 - 个人学习笔记仍走 NoteService。
 - 创建 Learning 不写 memory。
+
+已完成内容：
+
+- `learning_plan_create / learning_plan_get / learning_plan_list`。
+- `learning_task_create / learning_task_get / learning_task_list / learning_task_update_state`。
+- `learning_checkin_create`。
+- `learning_weakness_create / learning_weakness_update`。
+- 只给 `agent_main` 开放 Learning 写工具；`resume_agent` 和 `job_agent` 默认无 Learning 写权限。
+- AGENT 契约明确 Learning、Note、Knowledge、Memory 的边界。
+- 工具层拒绝路径、workspace path、`source_session_id`、`created_at`、`updated_at`、`status`。
+- `source_artifact_id` 只能引用当前会话 artifact。
+- 确定性 runtime 测试覆盖显式学习计划请求写 Learning、不写 memory。
 
 ### M10-4：低成本真实链路验证
 
@@ -700,20 +714,21 @@ tests/test_learning_agent_flow.py
 
 ## 13. 当前建议
 
-M10-1 和 M10-2 已完成。下一步可以进入 M10-3，但只做：
+M10-1、M10-2 和 M10-3 已完成。下一步可以进入 M10-4，但只做低成本真实链路验证：
 
 ```text
-app/tools/builtin_tools/learning.py
-app/config/agent_capabilities.yaml
-app/agents/default/AGENT.md
-tests/test_learning_tools.py
-tests/test_learning_agent_flow.py
+基于一个 CareerApplication + JobFitReport 创建学习计划
+创建 3 到 5 个 LearningTask
+用户完成一个任务后创建 ProgressCheckin
+一个 WeaknessTracker 从 open 更新到 improving
+smoke 批次保持低
 ```
 
 暂时不要碰：
 
 ```text
 前端
+复习调度
 RAG
 MCP
 memory 自动写入
