@@ -16,6 +16,7 @@ from app.knowledge.models import (
     InterviewQuestion,
     SkillRequirement,
 )
+from app.learning.models import LearningPlan, LearningTask, ProgressCheckin, ReviewSchedule, WeaknessTracker
 from app.notes.models import Note, NoteCollection, NoteSourceRef
 from app.schemas.chat import (
     AnswerArtifactView,
@@ -41,6 +42,13 @@ from app.schemas.knowledge import (
     InterviewQuestionView,
     SkillRequirementView,
 )
+from app.schemas.learning import (
+    LearningPlanView,
+    LearningTaskView,
+    ProgressCheckinView,
+    ReviewScheduleView,
+    WeaknessTrackerView,
+)
 from app.schemas.notes import NoteCollectionView, NoteSourceRefPayload, NoteView
 from app.services.answer_normalizer import AnswerFormat, LayoutHint, RenderHint, SourceKind
 
@@ -54,15 +62,20 @@ __all__ = [
     "interview_question_view",
     "jd_analysis_view",
     "job_fit_report_view",
+    "learning_plan_view",
+    "learning_task_view",
     "memory_view",
     "note_collection_view",
     "note_view",
+    "progress_checkin_view",
+    "review_schedule_view",
     "resume_profile_view",
     "resume_version_view",
     "session_item_view",
     "session_message_view",
     "skill_summary_view",
     "skill_requirement_view",
+    "weakness_tracker_view",
 ]
 
 _ANSWER_FORMATS = {"plain_text", "markdown", "code", "markdown_source"}
@@ -355,6 +368,110 @@ def skill_requirement_view(item: SkillRequirement) -> SkillRequirementView:
     )
 
 
+def learning_plan_view(item: LearningPlan) -> LearningPlanView:
+    return LearningPlanView(
+        learning_plan_id=item.learning_plan_id,
+        **_learning_meta(item),
+        title=item.title,
+        description=item.description,
+        plan_type=_enum_value(item.plan_type),
+        target_application_id=item.target_application_id,
+        target_role=item.target_role,
+        target_company=item.target_company,
+        start_date=item.start_date,
+        end_date=item.end_date,
+        priority=_enum_value(item.priority),
+        goals=item.goals,
+        focus_skill_tags=item.focus_skill_tags,
+        task_ids=item.task_ids,
+        weakness_ids=item.weakness_ids,
+        review_schedule_ids=item.review_schedule_ids,
+        progress_summary=item.progress_summary,
+    )
+
+
+def learning_task_view(item: LearningTask) -> LearningTaskView:
+    return LearningTaskView(
+        learning_task_id=item.learning_task_id,
+        **_learning_meta(item),
+        title=item.title,
+        learning_plan_id=item.learning_plan_id,
+        description=item.description,
+        task_type=_enum_value(item.task_type),
+        priority=_enum_value(item.priority),
+        state=_enum_value(item.state),
+        skill_tags=item.skill_tags,
+        estimated_minutes=item.estimated_minutes,
+        planned_start_date=item.planned_start_date,
+        due_date=item.due_date,
+        completed_at=item.completed_at,
+        resource_refs=item.resource_refs,
+        question_refs=item.question_refs,
+        note_refs=item.note_refs,
+        output_artifact_id=item.output_artifact_id,
+        success_criteria=item.success_criteria,
+        progress_notes=item.progress_notes,
+    )
+
+
+def progress_checkin_view(item: ProgressCheckin) -> ProgressCheckinView:
+    return ProgressCheckinView(
+        checkin_id=item.checkin_id,
+        **_learning_meta(item),
+        learning_plan_id=item.learning_plan_id,
+        learning_task_id=item.learning_task_id,
+        checkin_date=item.checkin_date,
+        minutes_spent=item.minutes_spent,
+        progress_state=_enum_value(item.progress_state),
+        summary=item.summary,
+        blockers=item.blockers,
+        confidence=_enum_value(item.confidence),
+        next_action=item.next_action,
+        note_refs=item.note_refs,
+    )
+
+
+def weakness_tracker_view(item: WeaknessTracker) -> WeaknessTrackerView:
+    return WeaknessTrackerView(
+        weakness_id=item.weakness_id,
+        **_learning_meta(item),
+        title=item.title,
+        description=item.description,
+        weakness_type=_enum_value(item.weakness_type),
+        severity=_enum_value(item.severity),
+        state=_enum_value(item.state),
+        skill_tags=item.skill_tags,
+        target_application_ids=item.target_application_ids,
+        source_report_ids=item.source_report_ids,
+        related_task_ids=item.related_task_ids,
+        related_note_ids=item.related_note_ids,
+        last_observed_at=item.last_observed_at,
+        resolved_at=item.resolved_at,
+        resolution_summary=item.resolution_summary,
+    )
+
+
+def review_schedule_view(item: ReviewSchedule) -> ReviewScheduleView:
+    return ReviewScheduleView(
+        review_schedule_id=item.review_schedule_id,
+        **_learning_meta(item),
+        title=item.title,
+        learning_plan_id=item.learning_plan_id,
+        learning_task_id=item.learning_task_id,
+        weakness_id=item.weakness_id,
+        review_type=_enum_value(item.review_type),
+        review_at=item.review_at,
+        interval_days=item.interval_days,
+        state=_enum_value(item.state),
+        resource_refs=item.resource_refs,
+        question_refs=item.question_refs,
+        note_refs=item.note_refs,
+        last_reviewed_at=item.last_reviewed_at,
+        next_review_at=item.next_review_at,
+        summary=item.summary,
+    )
+
+
 def session_message_view(raw: Mapping[str, object]) -> SessionMessage:
     return SessionMessage(
         role=str(raw.get("role", "")),
@@ -416,6 +533,19 @@ def _knowledge_meta(
 ) -> dict[str, Any]:
     return {
         "status": item.status.value,
+        "source_session_id": item.source_session_id,
+        "source_artifact_id": item.source_artifact_id,
+        "evidence_refs": item.evidence_refs,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
+def _learning_meta(
+    item: LearningPlan | LearningTask | ProgressCheckin | WeaknessTracker | ReviewSchedule,
+) -> dict[str, Any]:
+    return {
+        "status": _enum_value(item.status),
         "source_session_id": item.source_session_id,
         "source_artifact_id": item.source_artifact_id,
         "evidence_refs": item.evidence_refs,

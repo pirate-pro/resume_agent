@@ -607,12 +607,23 @@ app/api/learning.py
 tests/test_learning_api.py
 ```
 
+状态：已完成。
+
 验收：
 
 - 公共 `/api/learning` 只读。
 - 后台 `/api/learning-admin` 承担创建、更新、归档和状态流转。
 - API 不暴露路径。
 - API 不做跨 store 强存在性校验。
+
+已完成内容：
+
+- `LearningPlan / LearningTask / ProgressCheckin / WeaknessTracker / ReviewSchedule` 五类记录的 HTTP view、create request 和 update request。
+- 公共 `/api/learning` 只读列表和详情接口。
+- 后台 `/api/learning-admin` 创建、更新、归档接口。
+- `LearningTask` 状态更新接口和完成接口。
+- app 主路由和依赖注入接入 `LearningStore`。
+- `tests/test_learning_api.py` 覆盖创建、读取、过滤、归档、状态流转、公共接口只读和路径不泄漏。
 
 ### M10-3：工具和 agent 契约
 
@@ -689,19 +700,19 @@ tests/test_learning_agent_flow.py
 
 ## 13. 当前建议
 
-M10-1 已完成。下一步可以进入 M10-2，但只做：
+M10-1 和 M10-2 已完成。下一步可以进入 M10-3，但只做：
 
 ```text
-app/schemas/learning.py
-app/api/learning.py
-tests/test_learning_api.py
+app/tools/builtin_tools/learning.py
+app/config/agent_capabilities.yaml
+app/agents/default/AGENT.md
+tests/test_learning_tools.py
+tests/test_learning_agent_flow.py
 ```
 
 暂时不要碰：
 
 ```text
-工具
-prompt
 前端
 RAG
 MCP
