@@ -202,6 +202,8 @@ NoteDigest
 
 目标：把外部面经、面试题、资料链接沉淀为可复用知识资产。
 
+方案文档：`求职Agent_M9_资料题库层方案_2026-05-12.md`
+
 建议模型：
 
 ```text
@@ -217,6 +219,27 @@ SkillRequirement
 - 用户可以保存资料链接或粘贴面经。
 - 系统能提取公司、岗位、能力点、题目和建议准备方向。
 - 资料可以关联到求职项目和学习计划。
+
+第一批开发范围：
+
+```text
+app/knowledge/models.py
+app/knowledge/store.py
+tests/test_knowledge_store.py
+```
+
+第一批只做领域模型、严格校验、JSON store、原子写入、读取、列表、归档和损坏 JSON 稳定失败。
+
+暂不做：
+
+- API。
+- 工具。
+- prompt。
+- 前端。
+- RAG / MCP。
+- 自动爬虫。
+- 学习计划。
+- 跨 store 强存在性校验。
 
 ### M10：学习计划与监督
 
@@ -257,14 +280,15 @@ ReviewSchedule
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。下一步仍然不提前接 memory 自动写入和 RAG。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9 资料与题库层方案已经明确，下一步仍然不提前接 memory 自动写入、RAG、MCP 和学习计划。
 
 推荐下一步：
 
 ```text
-1. 进入 M9 资料与题库层方案设计。
-2. 明确 ExternalResource / InterviewQuestion / ExperiencePost / CompanyProfile / SkillRequirement 的边界。
-3. 再统一考虑 Note 前端入口、资料入口和后续 LearningService 的衔接。
+1. 开始 M9-1：app/knowledge/models.py。
+2. 实现 app/knowledge/store.py。
+3. 补 tests/test_knowledge_store.py。
+4. M9-1 稳定后，再接 API、工具和 agent 契约。
 ```
 
 这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。
