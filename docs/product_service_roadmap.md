@@ -355,17 +355,30 @@ tests/test_learning_career_chain.py
 
 目标：让 note、资料、面经、学习记录和求职项目被自动召回。
 
+方案文档：`求职Agent_M11_RAG_MCP召回边界方案_2026-05-12.md`
+
 原则：
 
 - 先有稳定领域模型，再做 RAG。
 - RAG 是召回能力，不是产品资产事实源。
 - MCP 可以作为后期 KnowledgeService / RAGService 的对外接口。
+- 第一阶段先做 `RetrievalService`，不直接上向量库和 MCP server。
 
 验收标准：
 
 - 用户不需要手动引用笔记或资料 ID。
 - 系统能根据当前问题自动召回相关笔记、资料、项目和计划。
 - 召回结果可追溯到产品记录或 artifact。
+
+M11-0 状态：已完成。
+
+M11-0 已完成：
+
+```text
+求职Agent_M11_RAG_MCP召回边界方案_2026-05-12.md
+```
+
+已明确 `RetrievalService`、RAG、MCP、Memory 和各产品事实源的边界。M11 第一阶段只做规则召回、上下文包和可追溯引用，不做 embedding、向量库、MCP server、自动爬虫、前端召回面板和 memory 自动写入。
 
 ## 当前优先级
 
@@ -379,9 +392,10 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 进入 M11 前先写 RAG / MCP 召回边界文档。
-2. 明确召回来源：Career、Note、Knowledge、Learning、SessionArtifact。
-3. 明确不做项：不把 RAG 当事实源，不自动写 memory，不复制资料正文。
+1. 开始 M11-1：RetrievalService 领域层。
+2. 建立 `RetrievalHit`、`RetrievalSourceRef`、`ContextPack`。
+3. 接入 Career、Note、Knowledge、Learning 和当前 SessionArtifact 的规则召回 adapter。
+4. 先不做工具、prompt、MCP、embedding 和前端。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。
