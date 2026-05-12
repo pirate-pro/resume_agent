@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.domain.agent_task_protocols import AgentTaskStore
-from app.api.dependencies.infrastructure import get_career_product_store, get_session_repository
+from app.api.dependencies.infrastructure import get_career_product_store, get_note_store, get_session_repository
 from app.api.dependencies.managers import get_agent_capability_registry, get_memory_manager, get_state_manager
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.tools.builtins import (
@@ -35,6 +35,17 @@ from app.tools.builtins import (
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
+    NoteAppendTool,
+    NoteArchiveTool,
+    NoteCollectionArchiveTool,
+    NoteCollectionCreateTool,
+    NoteCollectionGetTool,
+    NoteCollectionListTool,
+    NoteCollectionUpdateTool,
+    NoteCreateTool,
+    NoteGetTool,
+    NoteListTool,
+    NoteUpdateTool,
     SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
     SessionPlanArtifactAccessTool,
@@ -127,6 +138,27 @@ def get_tool_registry() -> ToolRegistry:
             session_repository=get_session_repository(),
         )
     )
+    registry.register(
+        NoteCreateTool(
+            note_store=get_note_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(NoteGetTool(note_store=get_note_store()))
+    registry.register(NoteListTool(note_store=get_note_store()))
+    registry.register(
+        NoteUpdateTool(
+            note_store=get_note_store(),
+            session_repository=get_session_repository(),
+        )
+    )
+    registry.register(NoteAppendTool(note_store=get_note_store()))
+    registry.register(NoteArchiveTool(note_store=get_note_store()))
+    registry.register(NoteCollectionCreateTool(note_store=get_note_store()))
+    registry.register(NoteCollectionGetTool(note_store=get_note_store()))
+    registry.register(NoteCollectionListTool(note_store=get_note_store()))
+    registry.register(NoteCollectionUpdateTool(note_store=get_note_store()))
+    registry.register(NoteCollectionArchiveTool(note_store=get_note_store()))
     return registry
 
 

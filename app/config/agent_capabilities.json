@@ -34,7 +34,18 @@
         "career_application_create",
         "career_application_get",
         "career_application_list",
-        "career_application_merge"
+        "career_application_merge",
+        "note_create",
+        "note_get",
+        "note_list",
+        "note_update",
+        "note_append",
+        "note_archive",
+        "note_collection_create",
+        "note_collection_get",
+        "note_collection_list",
+        "note_collection_update",
+        "note_collection_archive"
       ],
       "allowed_skills": [
         "*"
