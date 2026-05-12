@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from enum import Enum
 from typing import Any, Protocol, cast
 
 from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
 from app.domain.models import EventRecord, MemoryItem, SessionMeta
+from app.knowledge.models import (
+    CompanyProfile,
+    ExperiencePost,
+    ExternalResource,
+    InterviewQuestion,
+    SkillRequirement,
+)
 from app.notes.models import Note, NoteCollection, NoteSourceRef
 from app.schemas.chat import (
     AnswerArtifactView,
@@ -26,13 +34,24 @@ from app.schemas.career import (
     ResumeProfileView,
     ResumeVersionView,
 )
+from app.schemas.knowledge import (
+    CompanyProfileView,
+    ExperiencePostView,
+    ExternalResourceView,
+    InterviewQuestionView,
+    SkillRequirementView,
+)
 from app.schemas.notes import NoteCollectionView, NoteSourceRefPayload, NoteView
 from app.services.answer_normalizer import AnswerFormat, LayoutHint, RenderHint, SourceKind
 
 __all__ = [
     "career_application_view",
     "career_profile_view",
+    "company_profile_view",
     "event_view",
+    "experience_post_view",
+    "external_resource_view",
+    "interview_question_view",
     "jd_analysis_view",
     "job_fit_report_view",
     "memory_view",
@@ -43,6 +62,7 @@ __all__ = [
     "session_item_view",
     "session_message_view",
     "skill_summary_view",
+    "skill_requirement_view",
 ]
 
 _ANSWER_FORMATS = {"plain_text", "markdown", "code", "markdown_source"}
@@ -242,6 +262,99 @@ def note_source_ref_view(item: NoteSourceRef) -> NoteSourceRefPayload:
     )
 
 
+def external_resource_view(item: ExternalResource) -> ExternalResourceView:
+    return ExternalResourceView(
+        resource_id=item.resource_id,
+        **_knowledge_meta(item),
+        title=item.title,
+        resource_type=_enum_value(item.resource_type),
+        url=item.url,
+        provider=item.provider,
+        company=item.company,
+        position=item.position,
+        target_roles=item.target_roles,
+        skill_tags=item.skill_tags,
+        summary=item.summary,
+        key_points=item.key_points,
+        raw_artifact_id=item.raw_artifact_id,
+        related_application_ids=item.related_application_ids,
+        related_note_ids=item.related_note_ids,
+    )
+
+
+def experience_post_view(item: ExperiencePost) -> ExperiencePostView:
+    return ExperiencePostView(
+        experience_id=item.experience_id,
+        **_knowledge_meta(item),
+        source_resource_id=item.source_resource_id,
+        company=item.company,
+        position=item.position,
+        seniority=item.seniority,
+        interview_rounds=item.interview_rounds,
+        interview_process=item.interview_process,
+        questions=item.questions,
+        outcome=item.outcome,
+        difficulty=_enum_value(item.difficulty),
+        summary=item.summary,
+        tags=item.tags,
+        related_application_ids=item.related_application_ids,
+        related_note_ids=item.related_note_ids,
+    )
+
+
+def interview_question_view(item: InterviewQuestion) -> InterviewQuestionView:
+    return InterviewQuestionView(
+        question_id=item.question_id,
+        **_knowledge_meta(item),
+        question_text=item.question_text,
+        question_type=_enum_value(item.question_type),
+        difficulty=_enum_value(item.difficulty),
+        skill_tags=item.skill_tags,
+        company=item.company,
+        position=item.position,
+        source_resource_id=item.source_resource_id,
+        source_experience_id=item.source_experience_id,
+        answer_outline=item.answer_outline,
+        evaluation_points=item.evaluation_points,
+        common_pitfalls=item.common_pitfalls,
+        related_application_ids=item.related_application_ids,
+        related_note_ids=item.related_note_ids,
+    )
+
+
+def company_profile_view(item: CompanyProfile) -> CompanyProfileView:
+    return CompanyProfileView(
+        company_id=item.company_id,
+        **_knowledge_meta(item),
+        company_name=item.company_name,
+        aliases=item.aliases,
+        industries=item.industries,
+        target_roles=item.target_roles,
+        hiring_signals=item.hiring_signals,
+        interview_style=item.interview_style,
+        common_questions=item.common_questions,
+        resource_ids=item.resource_ids,
+        question_ids=item.question_ids,
+        summary=item.summary,
+    )
+
+
+def skill_requirement_view(item: SkillRequirement) -> SkillRequirementView:
+    return SkillRequirementView(
+        skill_requirement_id=item.skill_requirement_id,
+        **_knowledge_meta(item),
+        skill_name=item.skill_name,
+        category=_enum_value(item.category),
+        level=_enum_value(item.level),
+        description=item.description,
+        assessment_points=item.assessment_points,
+        role_tags=item.role_tags,
+        company_ids=item.company_ids,
+        resource_ids=item.resource_ids,
+        question_ids=item.question_ids,
+    )
+
+
 def session_message_view(raw: Mapping[str, object]) -> SessionMessage:
     return SessionMessage(
         role=str(raw.get("role", "")),
@@ -298,6 +411,19 @@ def _career_meta(
     }
 
 
+def _knowledge_meta(
+    item: ExternalResource | ExperiencePost | InterviewQuestion | CompanyProfile | SkillRequirement,
+) -> dict[str, Any]:
+    return {
+        "status": item.status.value,
+        "source_session_id": item.source_session_id,
+        "source_artifact_id": item.source_artifact_id,
+        "evidence_refs": item.evidence_refs,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
 def _enum_text(raw: object, allowed: set[str], default: str) -> str:
     text = str(raw or "").strip()
     return text if text in allowed else default
@@ -305,3 +431,9 @@ def _enum_text(raw: object, allowed: set[str], default: str) -> str:
 
 def _optional_datetime(raw: object) -> datetime | None:
     return raw if isinstance(raw, datetime) else None
+
+
+def _enum_value(raw: Enum | str) -> str:
+    if isinstance(raw, str):
+        return raw
+    return str(raw.value)

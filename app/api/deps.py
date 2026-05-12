@@ -6,6 +6,7 @@ from app.api.dependencies.config import get_settings
 from app.api.dependencies.infrastructure import (
     get_agent_document_repository,
     get_career_product_store,
+    get_knowledge_store,
     get_lock_manager,
     get_memory_store,
     get_note_store,
@@ -56,6 +57,7 @@ __all__ = [
     "get_context_assembler",
     "get_context_compactor",
     "get_event_recorder",
+    "get_knowledge_store",
     "get_lock_manager",
     "get_memory_manager",
     "get_memory_query_service",

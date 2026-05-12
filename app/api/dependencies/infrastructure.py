@@ -11,6 +11,7 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.knowledge.store import KnowledgeStore
 from app.memory.file_store import FileMemoryStore
 from app.notes.store import NoteStore
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
@@ -18,6 +19,7 @@ from app.state.stores.jsonl_file_store import JsonlFileStateStore
 __all__ = [
     "get_agent_document_repository",
     "get_career_product_store",
+    "get_knowledge_store",
     "get_lock_manager",
     "get_memory_store",
     "get_note_store",
@@ -43,6 +45,12 @@ def get_career_product_store() -> CareerProductStore:
 def get_note_store() -> NoteStore:
     settings = get_settings()
     return NoteStore(root_dir=settings.data_dir / "notes")
+
+
+@lru_cache(maxsize=1)
+def get_knowledge_store() -> KnowledgeStore:
+    settings = get_settings()
+    return KnowledgeStore(root_dir=settings.data_dir / "knowledge")
 
 
 @lru_cache(maxsize=1)

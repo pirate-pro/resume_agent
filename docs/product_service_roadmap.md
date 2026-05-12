@@ -243,6 +243,18 @@ tests/test_knowledge_store.py
 - 学习计划。
 - 跨 store 强存在性校验。
 
+第二批状态：已完成。
+
+第二批已完成：
+
+```text
+app/schemas/knowledge.py
+app/api/knowledge.py
+tests/test_knowledge_api.py
+```
+
+资料、面经、题目、公司画像和能力要求均已支持 create / get / list / update / archive。API 不暴露内部路径，不做跨 store 强存在性校验。
+
 ### M10：学习计划与监督
 
 目标：让产品从“一次性求职助手”变成“长期成长助手”。
@@ -282,15 +294,15 @@ ReviewSchedule
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座已经完成，下一步仍然不提前接 memory 自动写入、RAG、MCP 和学习计划。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，下一步仍然不提前接 memory 自动写入、RAG、MCP 和学习计划。
 
 推荐下一步：
 
 ```text
-1. 开始 M9-2：app/schemas/knowledge.py。
-2. 实现 app/api/knowledge.py。
-3. 补 tests/test_knowledge_api.py。
-4. API 稳定后，再接工具和 agent 契约。
+1. 开始 M9-3：app/tools/builtin_tools/knowledge.py。
+2. 更新 capability 配置，只给 main agent 开放知识资产写工具。
+3. 更新 app/agents/default/AGENT.md，明确资料、笔记、求职资产和 memory 边界。
+4. 补 tests/test_knowledge_tools.py 和 tests/test_knowledge_agent_flow.py。
 ```
 
 这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。
