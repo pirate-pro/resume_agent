@@ -164,6 +164,8 @@ AgentTask = 委派执行事实源
 
 目标：建立 NoteService，但暂不接 memory。
 
+方案文档：`求职Agent_M8_NoteService笔记资产层方案_2026-05-12.md`
+
 建议模型：
 
 ```text
