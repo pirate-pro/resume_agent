@@ -621,6 +621,8 @@ Retrieval 只读。
 
 ### M11-1：RetrievalService 领域层
 
+状态：已完成。
+
 文件建议：
 
 ```text
@@ -639,6 +641,14 @@ tests/test_retrieval_service.py
 - 不读 workspace。
 - 不读取未引用的跨会话 artifact。
 - 不写 memory。
+
+已完成内容：
+
+- 新增 `app/retrieval/models.py`，定义 `RetrievalSourceRef`、`RetrievalHit`、`RetrievalQuery` 和 `ContextPack`。
+- 新增 `app/retrieval/adapters.py`，从 Career、Note、Knowledge、Learning 和当前 SessionArtifact 只读构建召回候选。
+- 新增 `app/retrieval/service.py`，负责排序、预算裁剪、按来源分组和 citation 生成。
+- 新增 `tests/test_retrieval_service.py`，覆盖跨产品召回、source type 过滤、求职项目过滤、归档记录控制、上下文预算和跨会话 artifact 隔离。
+- 未接工具、prompt、MCP、embedding、前端和 memory 写入。
 
 ### M11-2：只读工具和 agent 契约
 
@@ -717,15 +727,16 @@ memory 自动写入
 
 ## 14. 当前建议
 
-下一步先做 M11-1：
+M11-1 已完成。下一步进入 M11-2：
 
 ```text
-app/retrieval/models.py
-app/retrieval/adapters.py
-app/retrieval/service.py
-tests/test_retrieval_service.py
+app/tools/builtin_tools/retrieval.py
+app/config/agent_capabilities.json
+app/agents/default/AGENT.md
+tests/test_retrieval_tools.py
+tests/test_retrieval_agent_flow.py
 ```
 
-只做规则召回和上下文包，不接工具、不改 prompt、不做 MCP、不做 embedding。
+只做只读工具和 main-agent 契约，不做 MCP、不做 embedding、不做前端、不自动写 memory。
 
-这一步做好后，再接 M11-2 只读工具和 agent 契约。
+这一步做好后，再进入 M11-3 主线链路验证。
