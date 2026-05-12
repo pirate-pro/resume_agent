@@ -6,7 +6,7 @@
 
 建立 `LearningService`，把求职项目、匹配报告、个人笔记和外部知识库中的能力差距转成可追踪、可调整、可复盘的学习计划。
 
-M10 不做 RAG，不做 MCP，不做前端提醒系统，不接日历，不自动写 memory，不做聊天 Agent 写工具。先把学习计划和进度的事实源做稳。
+M10 不做 RAG，不做 MCP，不做前端提醒系统，不接日历，不自动写 memory，不做开放式聊天写入。只给 `agent_main` 开放受控 Learning 工具，先把学习计划和进度的事实源做稳。
 
 ```text
 CareerApplication / JobFitReport / Note / Knowledge
@@ -661,6 +661,8 @@ tests/test_learning_agent_flow.py
 
 ### M10-4：低成本真实链路验证
 
+状态：已完成。
+
 验收：
 
 - 基于一个 CareerApplication + JobFitReport 创建学习计划。
@@ -668,6 +670,15 @@ tests/test_learning_agent_flow.py
 - 用户完成一个任务后创建 ProgressCheckin。
 - 一个 WeaknessTracker 能从 open 更新到 improving。
 - smoke 批次保持低，避免 token 消耗失控。
+
+已完成内容：
+
+- 新增 `tests/test_learning_career_chain.py`。
+- 使用确定性 runtime 串起 `CareerApplication`、`JobFitReport`、`LearningPlan`、`LearningTask`、`ProgressCheckin` 和 `WeaknessTracker`。
+- 从一个求职项目和匹配报告创建 1 个学习计划、4 个学习任务。
+- 模拟用户完成一个 RAG 任务后写入进度打卡，并把任务状态更新为 `done`。
+- 将 `WeaknessTracker` 从 `open` 更新为 `improving`。
+- 验证 Learning 链路不写 memory，不生成 Markdown 快照，不依赖真实模型 smoke。
 
 ## 12. 风险与控制
 
@@ -714,14 +725,14 @@ tests/test_learning_agent_flow.py
 
 ## 13. 当前建议
 
-M10-1、M10-2 和 M10-3 已完成。下一步可以进入 M10-4，但只做低成本真实链路验证：
+M10-1、M10-2、M10-3 和 M10-4 已完成。LearningService 已具备后端事实源、API、main-agent 受控工具和低成本主链路验证。
+
+下一步建议先做 M10 收口，再进入 M11：
 
 ```text
-基于一个 CareerApplication + JobFitReport 创建学习计划
-创建 3 到 5 个 LearningTask
-用户完成一个任务后创建 ProgressCheckin
-一个 WeaknessTracker 从 open 更新到 improving
-smoke 批次保持低
+确认是否修复既有 agent_task_progress 事件测试预期
+整理 M10 已知边界和不做项
+进入 M11 前先定 RAG / MCP 召回边界
 ```
 
 暂时不要碰：

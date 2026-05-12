@@ -330,6 +330,16 @@ tests/test_learning_agent_flow.py
 
 main-agent 可以创建学习计划、学习任务、进度打卡和短板跟踪，并能更新任务状态和短板状态。`resume_agent` 和 `job_agent` 默认没有 Learning 写权限。Learning 工具不写 memory，不替代 NoteService，也不复制 KnowledgeService 的资料正文。
 
+M10-4 状态：已完成。
+
+M10-4 已完成：
+
+```text
+tests/test_learning_career_chain.py
+```
+
+已用确定性 runtime 验证从 `CareerApplication + JobFitReport` 到 `LearningPlan + LearningTask + ProgressCheckin + WeaknessTracker` 的低成本真实链路。该验证创建 1 个学习计划、4 个学习任务，模拟完成 1 个 RAG 任务后的打卡和任务状态更新，并把对应短板从 `open` 更新为 `improving`。验证过程不跑真实模型 smoke，不写 memory，不生成 Markdown 快照。
+
 暂不做：
 
 - prompt。
@@ -359,16 +369,14 @@ main-agent 可以创建学习计划、学习任务、进度打卡和短板跟踪
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API 和 M10-3 工具 / agent 契约已经完成，下一步仍然不提前接 memory 自动写入、RAG、MCP、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约和 M10-4 低成本主链路验证已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
 
 推荐下一步：
 
 ```text
-1. 开始 M10-4：低成本真实链路验证。
-2. 基于一个 CareerApplication + JobFitReport 创建 LearningPlan。
-3. 创建 3 到 5 个 LearningTask。
-4. 模拟一次用户打卡，创建 ProgressCheckin 并更新 LearningTask.state。
-5. 把一个 WeaknessTracker 从 open 更新到 improving。
+1. 先做 M10 收口：确认是否修复既有 agent_task_progress 事件测试预期。
+2. 整理 M10 边界：Learning 不写 memory，不复制 Note / Knowledge 正文。
+3. 进入 M11 前明确 RAG / MCP 的召回边界和数据来源。
 ```
 
-这样可以先把“目标岗位项目”和“用户笔记资产”作为稳定事实源，再自然引出资料库、学习计划和后续 RAG。
+这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。
