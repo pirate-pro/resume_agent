@@ -31,6 +31,7 @@ from app.api.dependencies.runtime import (
     get_mid_term_flusher,
     get_mid_term_flush_worker,
 )
+from app.api.dependencies.retrieval import get_retrieval_service
 from app.api.dependencies.services import (
     get_agent_invocation_service,
     get_agent_task_runtime,
@@ -67,6 +68,7 @@ __all__ = [
     "get_mid_term_flusher",
     "get_mid_term_flush_worker",
     "get_note_store",
+    "get_retrieval_service",
     "get_maintenance_model_client",
     "get_model_client",
     "get_session_manager",

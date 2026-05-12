@@ -12,6 +12,7 @@ from app.api.dependencies.infrastructure import (
     get_session_repository,
 )
 from app.api.dependencies.managers import get_agent_capability_registry, get_memory_manager, get_state_manager
+from app.api.dependencies.retrieval import get_retrieval_service
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.tools.builtins import (
     AgentTaskStatusTool,
@@ -61,6 +62,8 @@ from app.tools.builtins import (
     NoteGetTool,
     NoteListTool,
     NoteUpdateTool,
+    RetrievalContextPackTool,
+    RetrievalSearchTool,
     SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
     SessionPlanArtifactAccessTool,
@@ -174,6 +177,8 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(NoteCollectionListTool(note_store=get_note_store()))
     registry.register(NoteCollectionUpdateTool(note_store=get_note_store()))
     registry.register(NoteCollectionArchiveTool(note_store=get_note_store()))
+    registry.register(RetrievalSearchTool(retrieval_service=get_retrieval_service()))
+    registry.register(RetrievalContextPackTool(retrieval_service=get_retrieval_service()))
     registry.register(
         LearningPlanCreateTool(
             learning_store=get_learning_store(),

@@ -56,6 +56,7 @@ from app.tools.builtin_tools.notes import (
     NoteListTool,
     NoteUpdateTool,
 )
+from app.tools.builtin_tools.retrieval import RetrievalContextPackTool, RetrievalSearchTool
 from app.tools.builtin_tools.session_artifacts import (
     SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
@@ -114,6 +115,8 @@ __all__ = [
     "NoteGetTool",
     "NoteListTool",
     "NoteUpdateTool",
+    "RetrievalContextPackTool",
+    "RetrievalSearchTool",
     "SessionCreateTextArtifactTool",
     "SessionListArtifactsTool",
     "SessionPlanArtifactAccessTool",

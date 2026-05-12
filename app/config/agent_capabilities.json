@@ -46,6 +46,8 @@
         "note_collection_list",
         "note_collection_update",
         "note_collection_archive",
+        "retrieval_search",
+        "retrieval_context_pack",
         "learning_plan_create",
         "learning_plan_get",
         "learning_plan_list",

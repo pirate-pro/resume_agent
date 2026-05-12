@@ -652,6 +652,8 @@ tests/test_retrieval_service.py
 
 ### M11-2：只读工具和 agent 契约
 
+状态：已完成。
+
 文件建议：
 
 ```text
@@ -669,6 +671,16 @@ tests/test_retrieval_agent_flow.py
 - 工具参数不接受路径。
 - 工具输出包含 typed refs 和 match_reason。
 - 确定性 runtime 测试覆盖“用户不提供 ID，Agent 自动召回相关求职项目和笔记”。
+
+已完成内容：
+
+- 新增 `app/tools/builtin_tools/retrieval.py`，提供只读 `retrieval_search` 和 `retrieval_context_pack`。
+- 工具参数只接受 `query / source_types / related_application_id / top_k / max_chars / include_archived`，`session_id` 固定来自 `RunContext`。
+- 工具拒绝路径参数、store-owned 字段、非法 source type 和任意未声明字段。
+- 工具输出包含 typed refs、`match_reason`、citations、分组 `ContextPack`，不暴露内部路径。
+- `agent_capabilities.json` 只给 `agent_main` 开放 retrieval 工具，`resume_agent` 和 `job_agent` 不开放全局 retrieval。
+- `app/agents/default/AGENT.md` 已补充 RetrievalService 使用边界：只读召回、不写 memory、不替代产品服务、当前上传文件优先走 artifact。
+- 新增 `tests/test_retrieval_tools.py` 和 `tests/test_retrieval_agent_flow.py`，覆盖工具输出、入参约束、权限边界和无 ID 自动召回。
 
 ### M11-3：主线链路验证
 
@@ -727,16 +739,12 @@ memory 自动写入
 
 ## 14. 当前建议
 
-M11-1 已完成。下一步进入 M11-2：
+M11-1 和 M11-2 已完成。下一步进入 M11-3：
 
 ```text
-app/tools/builtin_tools/retrieval.py
-app/config/agent_capabilities.json
-app/agents/default/AGENT.md
-tests/test_retrieval_tools.py
-tests/test_retrieval_agent_flow.py
+tests/test_retrieval_mainline_flow.py
 ```
 
-只做只读工具和 main-agent 契约，不做 MCP、不做 embedding、不做前端、不自动写 memory。
+只做主线链路验证：用户不提供 ID，main-agent 能召回求职项目、匹配报告、笔记、学习任务和资料题库内容，并给出可追溯建议。
 
-这一步做好后，再进入 M11-3 主线链路验证。
+继续不做 MCP、不做 embedding、不做前端、不自动写 memory。
