@@ -1648,6 +1648,7 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
   late final TextEditingController _tagsController;
   late final TextEditingController _bodyController;
   late String _noteType;
+  late bool _previewMode;
   bool _saving = false;
   String? _error;
 
@@ -1659,6 +1660,7 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
     _tagsController = TextEditingController(text: widget.note.tags.join("，"));
     _bodyController = TextEditingController(text: widget.note.bodyMarkdown);
     _noteType = _normalizeNoteType(widget.note.noteType);
+    _previewMode = widget.note.noteId != "note_draft";
   }
 
   @override
@@ -1775,21 +1777,31 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
             ),
           ),
           const SizedBox(height: 12),
+          _NoteBodyHeader(
+            previewMode: _previewMode,
+            onChanged: (value) => setState(() => _previewMode = value),
+          ),
+          const SizedBox(height: 8),
           Expanded(
-            child: TextField(
-              key: const Key("career_note_body_field"),
-              controller: _bodyController,
-              expands: true,
-              maxLines: null,
-              minLines: null,
-              textAlignVertical: TextAlignVertical.top,
-              decoration: _noteInputDecoration("正文（Markdown）"),
-              style: AppTheme.ts(
-                fontSize: 13.2,
-                height: 1.58,
-                color: AppTheme.textPrimary,
-              ),
-            ),
+            child: _previewMode
+                ? _NoteMarkdownPreview(
+                    content: _bodyController.text,
+                    onEdit: () => setState(() => _previewMode = false),
+                  )
+                : TextField(
+                    key: const Key("career_note_body_field"),
+                    controller: _bodyController,
+                    expands: true,
+                    maxLines: null,
+                    minLines: null,
+                    textAlignVertical: TextAlignVertical.top,
+                    decoration: _noteInputDecoration("正文（Markdown）"),
+                    style: AppTheme.ts(
+                      fontSize: 13.2,
+                      height: 1.58,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
           ),
           if (_error != null) ...[
             const SizedBox(height: 10),
@@ -1967,6 +1979,200 @@ class _NoteTypePill extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _NoteBodyHeader extends StatelessWidget {
+  final bool previewMode;
+  final ValueChanged<bool> onChanged;
+
+  const _NoteBodyHeader({
+    required this.previewMode,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "正文",
+                style: AppTheme.ts(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                previewMode ? "已按 Markdown 渲染" : "支持 Markdown，保存后仍可预览",
+                style: AppTheme.ts(
+                  fontSize: 10.6,
+                  color: AppTheme.textTertiary,
+                ),
+              ),
+            ],
+          ),
+        ),
+        _NoteBodyModeSwitch(
+          previewMode: previewMode,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+}
+
+class _NoteBodyModeSwitch extends StatelessWidget {
+  final bool previewMode;
+  final ValueChanged<bool> onChanged;
+
+  const _NoteBodyModeSwitch({
+    required this.previewMode,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceHover.withValues(alpha: 0.52),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.76)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _NoteBodyModePill(
+            label: "编辑",
+            icon: Icons.edit_outlined,
+            selected: !previewMode,
+            onTap: () => onChanged(false),
+          ),
+          _NoteBodyModePill(
+            label: "预览",
+            icon: Icons.visibility_outlined,
+            selected: previewMode,
+            onTap: () => onChanged(true),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteBodyModePill extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _NoteBodyModePill({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: Key("career_note_body_mode_$label"),
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected
+                ? Colors.white.withValues(alpha: 0.86)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(999),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: AppTheme.textPrimary.withValues(alpha: 0.06),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 13,
+                color: selected ? AppTheme.accent : AppTheme.textTertiary,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: selected ? AppTheme.accent : AppTheme.textTertiary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NoteMarkdownPreview extends StatelessWidget {
+  final String content;
+  final VoidCallback onEdit;
+
+  const _NoteMarkdownPreview({
+    required this.content,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = content.trim();
+    return Container(
+      key: const Key("career_note_markdown_preview"),
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.78)),
+      ),
+      child: normalized.isEmpty
+          ? Center(
+              child: _SmallTextButton(
+                label: "开始编辑",
+                icon: Icons.edit_outlined,
+                onTap: onEdit,
+              ),
+            )
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                child: AppMarkdownBody(
+                  content: normalized,
+                  style: AppTheme.ts(
+                    fontSize: 13.2,
+                    height: 1.62,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+            ),
     );
   }
 }

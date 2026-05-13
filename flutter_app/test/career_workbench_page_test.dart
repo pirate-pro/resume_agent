@@ -84,6 +84,11 @@ void main() {
     await tester.tap(find.text('投递准备记录').first);
     await tester.pumpAndSettle();
     expect(api.openedNoteIds, contains('note_staragent_001'));
+    expect(
+        find.byKey(const Key('career_note_markdown_preview')), findsOneWidget);
+    expect(find.textContaining('面试关注点'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('career_note_body_mode_编辑')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('career_note_body_field')), findsOneWidget);
 
     await tester.enterText(
