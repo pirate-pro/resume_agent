@@ -87,6 +87,17 @@ void main() {
     expect(
         find.byKey(const Key('career_note_markdown_preview')), findsOneWidget);
     expect(find.textContaining('面试关注点'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('career_note_body_mode_实时')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('career_note_body_field')), findsOneWidget);
+    expect(
+        find.byKey(const Key('career_note_markdown_preview')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('career_note_body_field')),
+      '# 实时预览标题\n\n- 实时渲染条目',
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('实时渲染条目'), findsWidgets);
     await tester.tap(find.byKey(const Key('career_note_body_mode_编辑')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('career_note_body_field')), findsOneWidget);
