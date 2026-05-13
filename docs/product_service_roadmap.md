@@ -493,7 +493,7 @@ M12 低批次真实 smoke 验收：
 
 方案文档：`求职Agent_M13_求职工作台主流程固化方案_2026-05-13.md`
 
-第一批建议范围：
+第一批已完成：
 
 ```text
 app/career/workbench.py
@@ -503,11 +503,17 @@ tests/test_career_workbench_service.py
 tests/test_career_workbench_api.py
 ```
 
-第一批只做只读聚合层，不写 store、不调用模型、不改 memory。目标是让前端可以通过一个工作台详情接口拿到 `CareerApplication` 关联的简历画像、职业画像、JD 分析、匹配报告、简历版本、笔记、学习任务、准备度、时间线和建议动作。
+第一批已经实现只读聚合层，不写 store、不调用模型、不改 memory。前端现在可以通过工作台接口拿到 `CareerApplication` 关联的简历画像、职业画像、JD 分析、匹配报告、简历版本、笔记、学习计划、学习任务、短板、复盘安排、准备度、时间线和建议动作。
+
+已验证：
+
+- `uv run pytest tests/test_career_workbench_service.py tests/test_career_workbench_api.py`
+- `uv run pytest tests/test_career_api.py tests/test_note_api.py tests/test_learning_api.py tests/test_career_workbench_service.py tests/test_career_workbench_api.py`
+- `uv run mypy`
 
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估和 M12 召回驱动动作闭环真实 smoke 已经完成。下一步进入 M13 求职工作台主流程固化，仍然不提前接 memory 自动写入、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估、M12 召回驱动动作闭环真实 smoke 和 M13 第一批只读工作台聚合层已经完成。下一步进入 M13 第二批前端工作台设计评审与实现，仍然不提前接 memory 自动写入、日历同步和提醒系统。
 
 M10 收口已完成：
 
@@ -517,10 +523,10 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 进入 M13 第一批：实现只读 CareerWorkbench 聚合层。
-2. 先做后端 service / schema / API / tests，不改 prompt，不改前端。
-3. 让前端可以通过单项目工作台接口拿到聚合后的求职项目详情。
-4. 后端聚合层稳定后，再进入 M13 第二批前端工作台。
+1. 先输出 M13 第二批前端 UI 设计稿和组件结构，审核通过后再改 Flutter。
+2. 前端接入 `GET /api/career/workbench` 和 `GET /api/career/workbench/applications/{application_id}`。
+3. 改造求职项目卡片点击行为，进入单项目工作台详情。
+4. 增加准备度、资产、笔记、学习任务、时间线和建议动作的统一展示。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。

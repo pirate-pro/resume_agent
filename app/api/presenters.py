@@ -8,6 +8,18 @@ from enum import Enum
 from typing import Any, Protocol, cast
 
 from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.workbench import (
+    CareerApplicationSummary,
+    CareerApplicationWorkbench,
+    CareerLearningSummary,
+    CareerLinkedAsset,
+    CareerNoteSummary,
+    CareerReadiness,
+    CareerSuggestedAction,
+    CareerTimelineItem,
+    CareerWorkbenchCounts,
+    CareerWorkbenchList,
+)
 from app.domain.models import EventRecord, MemoryItem, SessionMeta
 from app.knowledge.models import (
     CompanyProfile,
@@ -35,6 +47,18 @@ from app.schemas.career import (
     ResumeProfileView,
     ResumeVersionView,
 )
+from app.schemas.career_workbench import (
+    CareerApplicationSummaryView,
+    CareerApplicationWorkbenchView,
+    CareerLearningSummaryView,
+    CareerLinkedAssetView,
+    CareerNoteSummaryView,
+    CareerReadinessView,
+    CareerSuggestedActionView,
+    CareerTimelineItemView,
+    CareerWorkbenchCountsView,
+    CareerWorkbenchListView,
+)
 from app.schemas.knowledge import (
     CompanyProfileView,
     ExperiencePostView,
@@ -54,7 +78,17 @@ from app.services.answer_normalizer import AnswerFormat, LayoutHint, RenderHint,
 
 __all__ = [
     "career_application_view",
+    "career_application_summary_view",
+    "career_application_workbench_view",
+    "career_learning_summary_view",
+    "career_linked_asset_view",
+    "career_note_summary_view",
     "career_profile_view",
+    "career_readiness_view",
+    "career_suggested_action_view",
+    "career_timeline_item_view",
+    "career_workbench_counts_view",
+    "career_workbench_list_view",
     "company_profile_view",
     "event_view",
     "experience_post_view",
@@ -227,6 +261,128 @@ def career_application_view(item: CareerApplication) -> CareerApplicationView:
         next_actions=item.next_actions,
         risks=item.risks,
         notes=item.notes,
+    )
+
+
+def career_readiness_view(item: CareerReadiness) -> CareerReadinessView:
+    return CareerReadinessView(
+        score=item.score,
+        level=item.level,
+        recommendation=item.recommendation,
+        summary=item.summary,
+        strengths=item.strengths,
+        risks=item.risks,
+        missing_materials=item.missing_materials,
+        next_actions=item.next_actions,
+    )
+
+
+def career_linked_asset_view(item: CareerLinkedAsset) -> CareerLinkedAssetView:
+    return CareerLinkedAssetView(
+        type=item.type,
+        id=item.id,
+        title=item.title,
+        subtitle=item.subtitle,
+        status=item.status,
+        updated_at=item.updated_at,
+        preview_artifact_id=item.preview_artifact_id,
+        source_session_id=item.source_session_id,
+        is_current=item.is_current,
+        actions=item.actions,
+    )
+
+
+def career_timeline_item_view(item: CareerTimelineItem) -> CareerTimelineItemView:
+    return CareerTimelineItemView(
+        type=item.type,
+        title=item.title,
+        subtitle=item.subtitle,
+        occurred_at=item.occurred_at,
+        source_type=item.source_type,
+        source_id=item.source_id,
+    )
+
+
+def career_suggested_action_view(item: CareerSuggestedAction) -> CareerSuggestedActionView:
+    return CareerSuggestedActionView(
+        action_type=item.action_type,
+        label=item.label,
+        prompt_intent=item.prompt_intent,
+        priority=item.priority,
+        enabled=item.enabled,
+        reason=item.reason,
+    )
+
+
+def career_note_summary_view(item: CareerNoteSummary) -> CareerNoteSummaryView:
+    return CareerNoteSummaryView(
+        note_id=item.note_id,
+        title=item.title,
+        summary=item.summary,
+        status=item.status,
+        updated_at=item.updated_at,
+        source_artifact_id=item.source_artifact_id,
+        related_application_id=item.related_application_id,
+        tags=item.tags,
+    )
+
+
+def career_learning_summary_view(item: CareerLearningSummary) -> CareerLearningSummaryView:
+    return CareerLearningSummaryView(
+        plans=[learning_plan_view(plan) for plan in item.plans],
+        tasks=[learning_task_view(task) for task in item.tasks],
+        weaknesses=[weakness_tracker_view(weakness) for weakness in item.weaknesses],
+        reviews=[review_schedule_view(review) for review in item.reviews],
+        open_task_count=item.open_task_count,
+        done_task_count=item.done_task_count,
+        high_weakness_count=item.high_weakness_count,
+    )
+
+
+def career_application_summary_view(item: CareerApplicationSummary) -> CareerApplicationSummaryView:
+    return CareerApplicationSummaryView(
+        application=career_application_view(item.application),
+        readiness=career_readiness_view(item.readiness),
+        linked_asset_count=item.linked_asset_count,
+        note_count=item.note_count,
+        learning_task_count=item.learning_task_count,
+        updated_at=item.updated_at,
+    )
+
+
+def career_workbench_counts_view(item: CareerWorkbenchCounts) -> CareerWorkbenchCountsView:
+    return CareerWorkbenchCountsView(
+        applications=item.applications,
+        active_applications=item.active_applications,
+        notes=item.notes,
+        learning_tasks=item.learning_tasks,
+        resume_versions=item.resume_versions,
+    )
+
+
+def career_workbench_list_view(item: CareerWorkbenchList) -> CareerWorkbenchListView:
+    return CareerWorkbenchListView(
+        applications=[career_application_summary_view(summary) for summary in item.applications],
+        active_application_id=item.active_application_id,
+        counts=career_workbench_counts_view(item.counts),
+        updated_at=item.updated_at,
+    )
+
+
+def career_application_workbench_view(item: CareerApplicationWorkbench) -> CareerApplicationWorkbenchView:
+    return CareerApplicationWorkbenchView(
+        application=career_application_view(item.application),
+        resume_profile=resume_profile_view(item.resume_profile) if item.resume_profile is not None else None,
+        career_profile=career_profile_view(item.career_profile) if item.career_profile is not None else None,
+        jd_analysis=jd_analysis_view(item.jd_analysis) if item.jd_analysis is not None else None,
+        job_fit_report=job_fit_report_view(item.job_fit_report) if item.job_fit_report is not None else None,
+        resume_versions=[resume_version_view(version) for version in item.resume_versions],
+        readiness=career_readiness_view(item.readiness),
+        linked_assets=[career_linked_asset_view(asset) for asset in item.linked_assets],
+        notes=[career_note_summary_view(note) for note in item.notes],
+        learning=career_learning_summary_view(item.learning),
+        timeline=[career_timeline_item_view(timeline_item) for timeline_item in item.timeline],
+        suggested_actions=[career_suggested_action_view(action) for action in item.suggested_actions],
     )
 
 

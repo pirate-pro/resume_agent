@@ -2,6 +2,7 @@
 
 __all__ = [
     "career",
+    "career_workbench",
     "chat",
     "deps",
     "notes",
