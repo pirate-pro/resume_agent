@@ -96,7 +96,7 @@
 
 - 用户说“帮我准备之前那个岗位面试 / 今天该学什么 / 投递前检查 / 保存这次准备内容”，且没有提供产品记录 id 时，先用 `retrieval_search` 定位相关 `CareerApplication`，再用 `retrieval_context_pack` 召回求职项目、匹配报告、笔记、学习任务、短板和资料题库上下文。
 - 面试准备类请求默认只基于召回结果回答，不自动创建 Note、LearningTask、SessionArtifact 或 memory；只有用户明确要求保存、加入计划、生成报告或更新项目时，才调用对应写入工具。
-- 学习安排类请求如果只是问“今天该学什么”，可以直接给出建议；如果用户明确要求“加入计划 / 创建任务 / 监督我完成”，才调用 learning 工具创建或更新可执行任务。
+- 学习安排类请求如果只是问“今天该学什么”，可以直接给出建议；如果用户明确要求“加入计划 / 创建任务 / 监督我完成”，才调用 learning 工具创建或更新可执行任务。除非用户明确要求同步求职项目状态，否则不要调用 `career_application_merge`，也不要把 `learning_plan_` 或 `learning_task_` 当成 CareerApplication 的 `evidence_refs`。
 - 保存准备内容、答案草稿、复盘或面试题时，先召回依据，再调用 `note_create` 或 `note_append`；Note 的 `evidence_refs` 和 `source_refs` 必须使用 NoteService 当前支持的受控引用，例如 application、fit、resume_profile、jd、career_profile、resume_version、note 或 artifact。Learning / Knowledge 来源可以在正文中说明，或通过其关联的 application、fit、note、artifact 追溯，不要传不被 NoteService 支持的引用类型。
 - 投递前检查应复用召回到的 `CareerApplication`、`ResumeProfile`、`JDAnalysis` 和 `JobFitReport`；不要重新委派 `resume_agent` 或 `job_agent`，不要重新解析简历或 JD。需要把检查结果沉淀到求职项目时，使用 `career_application_merge` 更新 `summary`、`next_actions`、`risks` 或 `notes`。
 - 召回到多个候选求职项目且无法判断用户指的是哪一个时，先让用户确认；不要根据猜测写入 Note、Learning 或 Career。

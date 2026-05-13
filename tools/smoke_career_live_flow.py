@@ -599,6 +599,8 @@ def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> 
             report.errors.append(f"M12 面试准备只读动作出现写入工具: {leaked}")
     if turn.name == "M12动作：召回创建学习任务" and "learning_task_create" not in turn.tool_calls:
         report.errors.append("M12 学习安排动作未创建 LearningTask。")
+    if turn.name == "M12动作：召回创建学习任务" and "career_application_merge" in turn.tool_calls:
+        report.errors.append("M12 学习安排动作不应更新 CareerApplication。")
     if turn.name == "M12动作：召回保存笔记" and not {"note_create", "note_append"}.intersection(turn.tool_calls):
         report.errors.append("M12 保存笔记动作未写入 Note。")
     if turn.name == "M12动作：召回投递前检查":
@@ -697,6 +699,8 @@ def _retrieval_action_message(retrieval_action: str) -> str:
             f"{base}"
             "请根据之前的匹配短板，给我创建一个今天要完成的学习任务，并加入学习监督。"
             "任务要有标题、优先级、预计时间、能力标签、完成标准和 evidence_refs。"
+            "这轮只写 LearningPlan 或 LearningTask；不要调用 career_application_merge，"
+            "不要更新求职项目，也不要把 learning_plan 或 learning_task id 写入 CareerApplication evidence_refs。"
         )
     if retrieval_action == "save_note":
         return (

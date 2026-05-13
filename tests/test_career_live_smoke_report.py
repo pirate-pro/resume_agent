@@ -283,6 +283,50 @@ def test_live_smoke_report_fails_when_m12_action_skips_retrieval(tmp_path: Path)
     assert "M12 动作未调用 retrieval_context_pack。" in report.errors
 
 
+def test_live_smoke_report_fails_when_m12_learning_updates_career(tmp_path: Path) -> None:
+    session_id = "sess_live_m12_learning"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="M12动作：召回创建学习任务",
+                answer="已创建学习任务，同时错误更新了求职项目。",
+                elapsed_seconds=1.0,
+                tool_calls=[
+                    "retrieval_search",
+                    "retrieval_context_pack",
+                    "learning_task_create",
+                    "career_application_merge",
+                ],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M12 学习安排动作不应更新 CareerApplication。" in report.errors
+
+
 def _add_artifact(
     repository: JsonlSessionRepository,
     *,

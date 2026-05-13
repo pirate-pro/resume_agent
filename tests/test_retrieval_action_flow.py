@@ -104,6 +104,7 @@ class LearningTaskFromRetrievalModel:
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
         assert "如果用户明确要求“加入计划 / 创建任务 / 监督我完成”，才调用 learning 工具" in system_prompt
+        assert "不要调用 `career_application_merge`" in system_prompt
         assert "learning_task_create" in _tool_names(tools)
 
         if not _assistant_called(messages, "retrieval_search"):
@@ -336,6 +337,7 @@ def test_m12_learning_schedule_retrieves_then_creates_task_without_memory(tmp_pa
     assert task.evidence_refs[:3] == ["application_alpha", "learning_plan_stargazer", "weakness_rag_depth"]
     assert _product_counts(bundle.stores).learning_tasks == before.learning_tasks + 1
     assert "learning_task_create" in _tool_call_names(events)
+    assert "career_application_merge" not in _tool_call_names(events)
     assert "memory_write" not in _tool_call_names(events)
     assert bundle.memory_manager.search(query="RAG 学习任务", limit=5, context=_context("sess_alpha")) == []
 
