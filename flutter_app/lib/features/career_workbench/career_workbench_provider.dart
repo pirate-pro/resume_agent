@@ -37,14 +37,22 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   bool _isLoading = false;
   bool _isRefreshing = false;
   bool _isLoadingNotes = false;
+  bool _hasLoadedAssetLibrary = false;
+  bool _isLoadingAssetLibrary = false;
   String? _error;
   String? _notesError;
+  String? _assetLibraryError;
   CareerWorkbenchTab _activeTab = CareerWorkbenchTab.projects;
   CareerProjectFilter _projectFilter = CareerProjectFilter.all;
   String? _selectedApplicationId;
   String? _selectedNoteId;
   CareerWorkbenchListView? _workbench;
   List<NoteView> _noteList = const [];
+  List<ResumeProfileView> _resumeProfiles = const [];
+  List<CareerProfileView> _careerProfiles = const [];
+  List<JDAnalysisView> _jdAnalyses = const [];
+  List<JobFitReportView> _jobFitReports = const [];
+  List<ResumeVersionView> _resumeVersions = const [];
   final Map<String, CareerApplicationWorkbenchView> _details = {};
   final Map<String, NoteView> _notes = {};
   final Set<String> _loadingApplicationIds = {};
@@ -56,8 +64,11 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isRefreshing => _isRefreshing;
   bool get isLoadingNotes => _isLoadingNotes;
+  bool get hasLoadedAssetLibrary => _hasLoadedAssetLibrary;
+  bool get isLoadingAssetLibrary => _isLoadingAssetLibrary;
   String? get error => _error;
   String? get notesError => _notesError;
+  String? get assetLibraryError => _assetLibraryError;
   CareerWorkbenchTab get activeTab => _activeTab;
   CareerProjectFilter get projectFilter => _projectFilter;
   String? get selectedApplicationId => _selectedApplicationId;
@@ -74,6 +85,41 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return records;
   }
+
+  List<ResumeProfileView> get resumeProfiles {
+    final records = [..._resumeProfiles]
+      ..sort((a, b) => b.meta.updatedAt.compareTo(a.meta.updatedAt));
+    return records;
+  }
+
+  List<CareerProfileView> get careerProfiles {
+    final records = [..._careerProfiles]
+      ..sort((a, b) => b.meta.updatedAt.compareTo(a.meta.updatedAt));
+    return records;
+  }
+
+  List<JDAnalysisView> get jdAnalyses {
+    final records = [..._jdAnalyses]
+      ..sort((a, b) => b.meta.updatedAt.compareTo(a.meta.updatedAt));
+    return records;
+  }
+
+  List<JobFitReportView> get jobFitReports {
+    final records = [..._jobFitReports]
+      ..sort((a, b) => b.meta.updatedAt.compareTo(a.meta.updatedAt));
+    return records;
+  }
+
+  List<ResumeVersionView> get resumeVersions {
+    final records = [..._resumeVersions]
+      ..sort((a, b) => b.meta.updatedAt.compareTo(a.meta.updatedAt));
+    return records;
+  }
+
+  int get resumeLibraryCount =>
+      _resumeProfiles.length + _careerProfiles.length + _resumeVersions.length;
+
+  int get jobMatchLibraryCount => _jdAnalyses.length + _jobFitReports.length;
 
   List<CareerApplicationSummaryView> get filteredApplications {
     final filter = _projectFilter;
@@ -132,6 +178,9 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       if (selectedId != null && selectedId.isNotEmpty) {
         await loadApplicationDetail(selectedId, force: true);
       }
+      if (_hasLoadedAssetLibrary) {
+        await loadAssetLibrary(force: true);
+      }
     } catch (error, stackTrace) {
       FlutterError.reportError(
         FlutterErrorDetails(
@@ -155,7 +204,46 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     if (tab == CareerWorkbenchTab.notes) {
       unawaited(loadNotes());
     }
+    if (tab == CareerWorkbenchTab.resumes || tab == CareerWorkbenchTab.jobs) {
+      unawaited(loadAssetLibrary());
+    }
     notifyListeners();
+  }
+
+  Future<void> loadAssetLibrary({bool force = false}) async {
+    if (_isLoadingAssetLibrary) return;
+    if (_hasLoadedAssetLibrary && !force) return;
+    _isLoadingAssetLibrary = true;
+    _assetLibraryError = null;
+    notifyListeners();
+    try {
+      final results = await Future.wait<dynamic>([
+        _api.listCareerResumeProfiles(),
+        _api.listCareerProfiles(),
+        _api.listCareerJobs(),
+        _api.listCareerJobFitReports(),
+        _api.listCareerResumeVersions(),
+      ]);
+      _resumeProfiles = results[0] as List<ResumeProfileView>;
+      _careerProfiles = results[1] as List<CareerProfileView>;
+      _jdAnalyses = results[2] as List<JDAnalysisView>;
+      _jobFitReports = results[3] as List<JobFitReportView>;
+      _resumeVersions = results[4] as List<ResumeVersionView>;
+      _hasLoadedAssetLibrary = true;
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: "career workbench",
+          context: ErrorDescription("load career asset library"),
+        ),
+      );
+      _assetLibraryError = error.toString();
+    } finally {
+      _isLoadingAssetLibrary = false;
+      notifyListeners();
+    }
   }
 
   void setProjectFilter(CareerProjectFilter filter) {

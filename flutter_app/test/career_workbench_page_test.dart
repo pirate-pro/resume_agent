@@ -127,6 +127,31 @@ void main() {
     expect(api.updatedNoteBodies.last, contains('更新后的投递准备'));
     expect(find.text('笔记已保存'), findsOneWidget);
 
+    await tester.tap(find.text('简历资料').first);
+    await tester.pumpAndSettle();
+    expect(find.text('简历画像'), findsWidgets);
+    expect(find.text('职业画像'), findsWidgets);
+    expect(find.text('简历版本'), findsWidgets);
+    expect(find.text('张明'), findsWidgets);
+    await tester.tap(find.text('诊断').first);
+    await tester.pumpAndSettle();
+    expect(api.previewedArtifactIds, contains('artifact_resume_diagnosis_001'));
+    await tester.tap(find.byIcon(Icons.close_rounded).last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('JD 与匹配').first);
+    await tester.pumpAndSettle();
+    expect(find.text('JD 分析'), findsWidgets);
+    expect(find.text('匹配报告'), findsWidgets);
+    expect(find.text('82/100'), findsWidgets);
+    await tester.tap(find.text('JD 原文').first);
+    await tester.pumpAndSettle();
+    expect(api.previewedArtifactIds, contains('artifact_jd_001'));
+    await tester.tap(find.byIcon(Icons.close_rounded).last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('笔记').first);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('新建笔记'));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -321,6 +346,117 @@ class _FakeCareerWorkbenchApi extends ApiService {
         ),
       ],
     );
+  }
+
+  @override
+  Future<List<ResumeProfileView>> listCareerResumeProfiles({
+    bool includeArchived = false,
+  }) async {
+    return [
+      ResumeProfileView(
+        meta: _meta,
+        resumeProfileId: 'resume_profile_zhangming_003',
+        basicInfo: const {'name': '张明'},
+        education: const ['上海理工大学 · 软件工程本科'],
+        workExperience: const ['4 年后端研发经验'],
+        projectExperience: const ['Agent Runtime 平台'],
+        skills: const ['Python', 'FastAPI', 'PostgreSQL'],
+        certificates: const [],
+        awards: const [],
+        selfEvaluation: '具备 Agent Runtime 与后端工程经验。',
+        rawTextArtifactId: 'artifact_resume_raw_001',
+        diagnosisArtifactId: 'artifact_resume_diagnosis_001',
+        diagnosis: const {},
+      ),
+    ];
+  }
+
+  @override
+  Future<List<CareerProfileView>> listCareerProfiles({
+    bool includeArchived = false,
+  }) async {
+    return [
+      CareerProfileView(
+        meta: _meta,
+        careerProfileId: 'career_profile_default',
+        careerGoal: 'AI Agent 后端工程师',
+        targetRoles: const ['后端工程师', 'AI 应用工程师'],
+        preferredIndustries: const ['AI'],
+        preferredCities: const ['上海'],
+        strengths: const ['工程化经验', 'Agent 系统经验'],
+        weaknesses: const ['RAG 证据需补充'],
+        skills: const ['Python', 'FastAPI'],
+        interests: const [],
+        educationSummary: '软件工程本科',
+        experienceSummary: '4 年后端研发经验',
+        resumeIssues: const [],
+        interviewWeaknesses: const [],
+      ),
+    ];
+  }
+
+  @override
+  Future<List<JDAnalysisView>> listCareerJobs({
+    bool includeArchived = false,
+  }) async {
+    return [
+      JDAnalysisView(
+        meta: _meta,
+        jdAnalysisId: 'jd_staragent_001',
+        company: '星河智能',
+        position: 'AI Agent 后端工程师',
+        seniority: '中级',
+        requiredSkills: const ['Python', 'FastAPI'],
+        preferredSkills: const ['RAG', 'Agent Runtime'],
+        responsibilities: const ['建设 Agent 平台后端服务'],
+        keywords: const ['AI Agent', '后端'],
+        riskSignals: const ['RAG 深度要求较高'],
+        interviewFocus: const ['Agent Runtime 架构'],
+      ),
+    ];
+  }
+
+  @override
+  Future<List<JobFitReportView>> listCareerJobFitReports({
+    bool includeArchived = false,
+  }) async {
+    return [
+      JobFitReportView(
+        meta: _meta,
+        jobFitReportId: 'fit_staragent_001',
+        jdAnalysisId: 'jd_staragent_001',
+        resumeProfileId: 'resume_profile_zhangming_003',
+        careerProfileId: 'career_profile_default',
+        overallScore: 82,
+        scoreBreakdown: const {'技术匹配': 85, 'RAG 经验': 65},
+        matchedEvidence: const ['Python 与 FastAPI 项目经验匹配'],
+        gaps: const ['RAG 实战证据需补充'],
+        resumeOptimizationDirection: const ['补充 RAG 链路细节'],
+        interviewPreparationFocus: const ['准备 Agent Runtime 设计说明'],
+        recommendation: 'recommended',
+        reportArtifactId: 'artifact_fit_report_001',
+      ),
+    ];
+  }
+
+  @override
+  Future<List<ResumeVersionView>> listCareerResumeVersions({
+    bool includeArchived = false,
+  }) async {
+    return [
+      ResumeVersionView(
+        meta: _meta,
+        resumeVersionId: 'resume_version_staragent_001',
+        baseResumeProfileId: 'resume_profile_zhangming_003',
+        targetJdAnalysisId: 'jd_staragent_001',
+        title: '张明-星河智能定制简历.md',
+        format: 'markdown',
+        artifactId: 'artifact_resume_version_001',
+        changeSummary: const ['突出 Agent Runtime 项目'],
+        keywordStrategy: const ['Python', 'FastAPI', 'Agent'],
+        riskNotes: const ['补充 RAG 证据'],
+      ),
+    ];
   }
 
   @override

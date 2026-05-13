@@ -616,29 +616,37 @@ flutter_app/lib/features/career_workbench/widgets/project_detail_pane.dart
 
 目标：让用户能独立查看所有 Note。
 
+状态：已完成第一版。
+
 实现：
 
 ```text
-NoteLibraryView
-NoteListItem
-NoteDetailPane
+_NotesOverview
+_NoteSummaryTile
+_NoteEditorForm
+_NoteMarkdownPreview
 ```
 
 功能：
 
 - 列出 `/api/notes`。
-- 按项目关联、标签、更新时间筛选。
-- 查看笔记正文。
-- 从笔记跳转关联求职项目。
+- 按记录 / 学习 / 资料三类筛选。
+- 点击笔记进入编辑，不再额外要求先预览。
+- 支持 Markdown 编辑、预览和实时渲染。
+- 支持用户自由新建笔记。
+- 资产引用可以创建资料类笔记，并保留来源引用。
 
 不做：
 
-- 富文本编辑器。
 - 自动写 memory。
+- 复杂标签体系。
+- RAG 检索。
 
 ### M14-3：学习计划页
 
 目标：让用户能管理长期学习推进。
+
+状态：待完成。目前工作台只在选中项目详情里轻量展示学习任务、短板和复盘信息，还不是独立学习管理视图。
 
 实现：
 
@@ -664,24 +672,33 @@ ReviewScheduleList
 
 目标：让简历、JD、匹配报告和简历版本可查找。
 
+状态：已完成第一版。
+
 实现：
 
 ```text
-ResumeAssetLibraryView
-JobMatchLibraryView
-ArtifactPreviewDrawer
+_ResumeLibraryView
+_JobMatchLibraryView
+_AssetLibraryPanel
+_AssetLibraryCard
+_showLibraryDetailSheet
+_showArtifactPreviewSheet
 ```
 
 功能：
 
-- 按类型浏览资料。
-- 预览和下载 artifact。
-- 查看历史版本。
+- 简历资料页集中展示简历画像、职业画像和简历版本。
+- JD 与匹配页集中展示 JD 分析和匹配报告。
+- 支持按类型筛选。
+- 支持查看结构化详情。
+- 支持从资料卡片预览对应 artifact，例如简历诊断、JD 原文、匹配报告和定制简历版本。
+- 继续复用已有 Career API 和 SessionArtifact 预览能力，不新增事实源。
 
 不做：
 
 - RAG 知识库统一检索。
 - 外部资料库接入。
+- 复杂全文搜索。
 
 ## 验收标准
 
@@ -697,6 +714,17 @@ M14-1 验收：
 - 右侧资产栏仍可正常刷新和预览最近资产。
 - `flutter analyze` 通过。
 - 相关 widget 测试通过。
+
+M14-4 验收：
+
+- 用户能在工作台打开「简历资料」页。
+- 用户能看到简历画像、职业画像和简历版本。
+- 用户能从简历资料页预览简历诊断 artifact。
+- 用户能在工作台打开「JD 与匹配」页。
+- 用户能看到 JD 分析和匹配报告。
+- 用户能从 JD 与匹配页预览 JD 原文或报告 artifact。
+- `flutter analyze` 通过。
+- `flutter test test/career_workbench_page_test.dart` 通过。
 
 ## 风险与取舍
 
