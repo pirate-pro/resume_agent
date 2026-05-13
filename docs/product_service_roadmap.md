@@ -476,6 +476,7 @@ M12 低批次真实 smoke 验收：
 2026-05-13：interview_prep 已通过。
 2026-05-13：learning_task 已通过。
 2026-05-13：save_note 已通过。
+2026-05-13：pre_apply_check 已通过。
 ```
 
 本次真实链路暴露并修复了两个基础兼容问题：
@@ -484,6 +485,7 @@ M12 低批次真实 smoke 验收：
 - Retrieval 工具的 `source_types` 已支持 `career / notes / knowledge / learning / artifacts` 组别别名，避免 Agent 必须硬记每个资料子类型。
 - 学习安排动作已收紧为只写 LearningPlan / LearningTask；除非用户明确要求同步求职项目，否则不调用 `career_application_merge`，也不把 `learning_plan_` 或 `learning_task_` 作为 CareerApplication 的证据。
 - 保存笔记动作已验收为只写 Note；不会写 memory，也不会顺手创建 LearningTask 或更新 CareerApplication。
+- 投递前检查已验收为复用召回上下文后更新 CareerApplication；不会重新委派 child-agent，也不会重新保存 ResumeProfile、JDAnalysis 或 JobFitReport。
 
 ## 当前优先级
 

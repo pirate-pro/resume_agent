@@ -371,6 +371,50 @@ def test_live_smoke_report_fails_when_m12_note_writes_other_products(tmp_path: P
     assert "M12 保存笔记动作出现越界写入工具: ['learning_task_create']" in report.errors
 
 
+def test_live_smoke_report_fails_when_m12_pre_apply_reanalyzes_core_records(tmp_path: Path) -> None:
+    session_id = "sess_live_m12_pre_apply"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="M12动作：召回投递前检查",
+                answer="已完成检查，但错误重写了 JD 分析。",
+                elapsed_seconds=1.0,
+                tool_calls=[
+                    "retrieval_search",
+                    "retrieval_context_pack",
+                    "career_jd_analysis_save",
+                    "career_application_merge",
+                ],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M12 投递前检查不应重新解析或保存核心画像: ['career_jd_analysis_save']" in report.errors
+
+
 def _add_artifact(
     repository: JsonlSessionRepository,
     *,

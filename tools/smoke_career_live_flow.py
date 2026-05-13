@@ -614,6 +614,10 @@ def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> 
             report.errors.append("M12 投递前检查未更新 CareerApplication。")
         if "delegate_agents" in turn.tool_calls:
             report.errors.append("M12 投递前检查不应重新委派 child-agent。")
+        forbidden = {"career_resume_profile_save", "career_jd_analysis_save", "career_job_fit_report_save"}
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M12 投递前检查不应重新解析或保存核心画像: {leaked}")
 
 
 def _record_touches_session(
