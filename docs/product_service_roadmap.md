@@ -511,9 +511,34 @@ tests/test_career_workbench_api.py
 - `uv run pytest tests/test_career_api.py tests/test_note_api.py tests/test_learning_api.py tests/test_career_workbench_service.py tests/test_career_workbench_api.py`
 - `uv run mypy`
 
+### M14：求职工作台一级页面
+
+目标：把右侧「求职资产」栏从完整管理区降级为轻量入口，新增独立的求职工作台一级页面，承载求职项目、笔记、学习任务、简历资料、JD 与匹配报告。
+
+方案文档：`docs/m14_career_workbench_page.md`
+
+M14 的关键判断：
+
+- 聊天界面继续作为任务入口、流式进度和追问入口。
+- 右侧资产栏只保留最近资产、快速预览和打开工作台。
+- 求职工作台负责长期管理、检索、预览和推进。
+- 工作台不创建新的事实源，继续复用 `CareerProductStore`、`NoteStore`、`LearningStore`、`SessionArtifact`。
+- M14 不做 Note 自动进入 memory，不做 RAG / MCP，不做日历提醒。
+
+推荐第一批：
+
+```text
+1. 新增 CareerWorkbenchProvider。
+2. 新增 CareerWorkbenchPage / Shell / Nav / TopBar。
+3. HomeScreen 增加聊天 / 工作台主视图切换。
+4. 抽出 M13 项目详情可复用组件。
+5. 实现求职项目列表和项目详情侧栏。
+6. 右侧资产栏增加“打开工作台”入口。
+```
+
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估、M12 召回驱动动作闭环真实 smoke 和 M13 第一批只读工作台聚合层已经完成。下一步进入 M13 第二批前端工作台设计评审与实现，仍然不提前接 memory 自动写入、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估、M12 召回驱动动作闭环真实 smoke、M13 只读工作台聚合层和 M13 前端项目工作台弹层已经完成。下一步进入 M14 求职工作台一级页面，仍然不提前接 memory 自动写入、日历同步和提醒系统。
 
 M10 收口已完成：
 
@@ -523,10 +548,9 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 先输出 M13 第二批前端 UI 设计稿和组件结构，审核通过后再改 Flutter。
-2. 前端接入 `GET /api/career/workbench` 和 `GET /api/career/workbench/applications/{application_id}`。
-3. 改造求职项目卡片点击行为，进入单项目工作台详情。
-4. 增加准备度、资产、笔记、学习任务、时间线和建议动作的统一展示。
+1. 先审核 `docs/m14_career_workbench_page.md`。
+2. 审核通过后开发 M14-1 工作台壳与求职项目页。
+3. 再进入 M14-2 笔记页和 M14-3 学习计划页。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。
