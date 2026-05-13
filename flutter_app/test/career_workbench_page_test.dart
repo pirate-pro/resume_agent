@@ -78,12 +78,23 @@ void main() {
 
     await tester.tap(find.text('笔记').first);
     await tester.pumpAndSettle();
+    expect(
+        find.byKey(const Key('career_note_filter_resource')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('career_note_filter_resource')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('关于 星河智能'), findsWidgets);
+    expect(find.textContaining('资料引用'), findsWidgets);
+    expect(find.text('投递准备记录'), findsNothing);
+    await tester.tap(find.byKey(const Key('career_note_filter_all')));
+    await tester.pumpAndSettle();
     expect(find.text('投递准备记录'), findsWidgets);
     expect(find.text('新建笔记'), findsOneWidget);
 
     await tester.tap(find.text('投递准备记录').first);
     await tester.pumpAndSettle();
     expect(api.openedNoteIds, contains('note_staragent_001'));
+    expect(find.textContaining('类型 记录'), findsWidgets);
+    expect(find.textContaining('关联项目'), findsWidgets);
     expect(
         find.byKey(const Key('career_note_markdown_preview')), findsOneWidget);
     expect(find.textContaining('面试关注点'), findsOneWidget);

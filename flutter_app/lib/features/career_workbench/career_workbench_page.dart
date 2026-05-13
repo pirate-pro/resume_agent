@@ -581,16 +581,28 @@ class _NotesOverview extends StatefulWidget {
 }
 
 class _NotesOverviewState extends State<_NotesOverview> {
+  String _selectedNoteType = "";
+
   @override
   void initState() {
     super.initState();
     Future.microtask(() => widget.provider.loadNotes());
   }
 
+  List<NoteView> _visibleNotes(List<NoteView> notes) {
+    if (_selectedNoteType.isEmpty) {
+      return notes;
+    }
+    return notes
+        .where((note) => _normalizeNoteType(note.noteType) == _selectedNoteType)
+        .toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = widget.provider;
     final notes = provider.notes;
+    final visibleNotes = _visibleNotes(notes);
     return Container(
       decoration: _workbenchPanelDecoration(),
       child: Column(
@@ -642,6 +654,16 @@ class _NotesOverviewState extends State<_NotesOverview> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            child: _NoteTypeFilterBar(
+              value: _selectedNoteType,
+              notes: notes,
+              onChanged: (value) => setState(() {
+                _selectedNoteType = value;
+              }),
+            ),
+          ),
           Expanded(
             child: provider.isLoadingNotes && notes.isEmpty
                 ? const Center(child: _WorkbenchLoading())
@@ -655,19 +677,27 @@ class _NotesOverviewState extends State<_NotesOverview> {
                             padding: EdgeInsets.all(14),
                             child: _EmptyText("还没有笔记。可以先新建一条自由笔记。"),
                           )
-                        : ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                            itemBuilder: (context, index) {
-                              final note = notes[index];
-                              return _NoteSummaryTile(
-                                provider: provider,
-                                note: _summaryFromNote(note),
-                              );
-                            },
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 9),
-                            itemCount: notes.length,
-                          ),
+                        : visibleNotes.isEmpty
+                            ? const Padding(
+                                padding: EdgeInsets.all(14),
+                                child: _EmptyText("当前筛选下暂无笔记。"),
+                              )
+                            : ListView.separated(
+                                padding:
+                                    const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                                itemBuilder: (context, index) {
+                                  final note = visibleNotes[index];
+                                  return _NoteSummaryTile(
+                                    provider: provider,
+                                    note: _summaryFromNote(note),
+                                    sourceLabels:
+                                        _noteSourceLabelsFromNote(note),
+                                  );
+                                },
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 9),
+                                itemCount: visibleNotes.length,
+                              ),
           ),
         ],
       ),
@@ -1406,19 +1436,148 @@ class _RiskTile extends StatelessWidget {
   }
 }
 
+class _NoteTypeFilterBar extends StatelessWidget {
+  final String value;
+  final List<NoteView> notes;
+  final ValueChanged<String> onChanged;
+
+  const _NoteTypeFilterBar({
+    required this.value,
+    required this.notes,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = <String, int>{
+      "": notes.length,
+      for (final option in _noteTypeOptions) option.value: 0,
+    };
+    for (final note in notes) {
+      final type = _normalizeNoteType(note.noteType);
+      counts[type] = (counts[type] ?? 0) + 1;
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          _NoteTypeFilterChip(
+            key: const Key("career_note_filter_all"),
+            label: "全部",
+            count: counts[""] ?? 0,
+            icon: Icons.all_inbox_outlined,
+            color: AppTheme.accent,
+            selected: value.isEmpty,
+            onTap: () => onChanged(""),
+          ),
+          const SizedBox(width: 7),
+          for (final option in _noteTypeOptions) ...[
+            _NoteTypeFilterChip(
+              key: Key("career_note_filter_${option.value}"),
+              label: option.label,
+              count: counts[option.value] ?? 0,
+              icon: option.icon,
+              color: option.color,
+              selected: value == option.value,
+              onTap: () => onChanged(option.value),
+            ),
+            if (option != _noteTypeOptions.last) const SizedBox(width: 7),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteTypeFilterChip extends StatelessWidget {
+  final String label;
+  final int count;
+  final IconData icon;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _NoteTypeFilterChip({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.icon,
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: selected
+                ? color.withValues(alpha: 0.11)
+                : Colors.white.withValues(alpha: 0.56),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected
+                  ? color.withValues(alpha: 0.28)
+                  : AppTheme.border.withValues(alpha: 0.72),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 13,
+                color: selected ? color : AppTheme.textTertiary,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: selected ? color : AppTheme.textSecondary,
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                "$count",
+                style: AppTheme.ts(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w800,
+                  color: selected ? color : AppTheme.textTertiary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _NoteSummaryTile extends StatelessWidget {
   final CareerWorkbenchProvider provider;
   final CareerNoteSummaryView note;
+  final List<String> sourceLabels;
 
   const _NoteSummaryTile({
     required this.provider,
     required this.note,
+    this.sourceLabels = const [],
   });
 
   @override
   Widget build(BuildContext context) {
     final tags = note.tags.take(3).toList();
     final typeMeta = _noteTypeMeta(note.noteType);
+    final metaItems = _noteSummaryMetaItems(note, sourceLabels);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1505,6 +1664,20 @@ class _NoteSummaryTile extends StatelessWidget {
                         ),
                       ),
                     ],
+                    if (metaItems.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final item in metaItems)
+                            _NoteMetaChip(
+                              icon: item.icon,
+                              label: item.label,
+                            ),
+                        ],
+                      ),
+                    ],
                     if (tags.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       Wrap(
@@ -1550,6 +1723,58 @@ class _NoteSummaryTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _NoteMetaItem {
+  final IconData icon;
+  final String label;
+
+  const _NoteMetaItem({
+    required this.icon,
+    required this.label,
+  });
+}
+
+class _NoteMetaChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _NoteMetaChip({
+    required this.icon,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 260),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceHover.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.72)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: AppTheme.textTertiary),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTheme.ts(
+                fontSize: 10.3,
+                fontWeight: FontWeight.w800,
+                color: AppTheme.textTertiary,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1770,6 +1995,11 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
             },
           ),
           const SizedBox(height: 12),
+          _NoteEditorMetaStrip(
+            note: widget.note,
+            noteType: _noteType,
+          ),
+          const SizedBox(height: 12),
           _NoteTypeSelector(
             value: _noteType,
             onChanged: (value) => setState(() {
@@ -1841,6 +2071,80 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteEditorMetaStrip extends StatelessWidget {
+  final NoteView note;
+  final String noteType;
+
+  const _NoteEditorMetaStrip({
+    required this.note,
+    required this.noteType,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final typeMeta = _noteTypeMeta(noteType);
+    final items = <_NoteMetaItem>[
+      _NoteMetaItem(icon: typeMeta.icon, label: "类型 ${typeMeta.label}"),
+    ];
+    if (note.noteId == "note_draft") {
+      items.add(
+        const _NoteMetaItem(
+          icon: Icons.fiber_new_rounded,
+          label: "新笔记",
+        ),
+      );
+    } else {
+      items.add(
+        _NoteMetaItem(
+          icon: Icons.schedule_rounded,
+          label: "更新 ${_formatTime(note.updatedAt)}",
+        ),
+      );
+    }
+    final relatedApplicationId = note.relatedApplicationId?.trim() ?? "";
+    if (relatedApplicationId.isNotEmpty) {
+      items.add(
+        _NoteMetaItem(
+          icon: Icons.work_outline_rounded,
+          label: "关联项目 ${_compactLabel(relatedApplicationId)}",
+        ),
+      );
+    }
+    final sourceArtifactId = note.sourceArtifactId?.trim() ?? "";
+    if (sourceArtifactId.isNotEmpty) {
+      items.add(
+        _NoteMetaItem(
+          icon: Icons.insert_drive_file_outlined,
+          label: "来源文件 ${_compactLabel(sourceArtifactId)}",
+        ),
+      );
+    }
+    for (final label in _noteSourceLabelsFromNote(note)) {
+      items.add(_NoteMetaItem(icon: Icons.link_rounded, label: label));
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceHover.withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.62)),
+      ),
+      child: Wrap(
+        spacing: 7,
+        runSpacing: 7,
+        children: [
+          for (final item in items)
+            _NoteMetaChip(
+              icon: item.icon,
+              label: item.label,
+            ),
         ],
       ),
     );
@@ -3241,7 +3545,8 @@ Future<void> _showNewNoteEditorSheet(
     noteType: _normalizeNoteType(seedNoteType),
     collectionId: null,
     tags: const [],
-    sourceRefs: const [],
+    sourceRefs:
+        sourceRefs.map((item) => NoteSourceRefView.fromJson(item)).toList(),
     relatedApplicationId: relatedApplicationId,
     summary: seedSummary,
   );
@@ -3823,6 +4128,86 @@ CareerNoteSummaryView _summaryFromNote(NoteView note) {
     relatedApplicationId: note.relatedApplicationId,
     tags: note.tags,
   );
+}
+
+List<_NoteMetaItem> _noteSummaryMetaItems(
+  CareerNoteSummaryView note,
+  List<String> sourceLabels,
+) {
+  final items = <_NoteMetaItem>[];
+  final relatedApplicationId = note.relatedApplicationId?.trim() ?? "";
+  if (relatedApplicationId.isNotEmpty) {
+    items.add(
+      _NoteMetaItem(
+        icon: Icons.work_outline_rounded,
+        label: "关联项目 ${_compactLabel(relatedApplicationId)}",
+      ),
+    );
+  }
+  final sourceArtifactId = note.sourceArtifactId?.trim() ?? "";
+  if (sourceArtifactId.isNotEmpty) {
+    items.add(
+      _NoteMetaItem(
+        icon: Icons.insert_drive_file_outlined,
+        label: "来源文件 ${_compactLabel(sourceArtifactId)}",
+      ),
+    );
+  }
+  for (final label in sourceLabels) {
+    final normalized = label.trim();
+    if (normalized.isEmpty) {
+      continue;
+    }
+    items.add(
+      _NoteMetaItem(
+        icon: Icons.link_rounded,
+        label: normalized,
+      ),
+    );
+    if (items.length >= 3) {
+      break;
+    }
+  }
+  return items;
+}
+
+List<String> _noteSourceLabelsFromNote(NoteView note) {
+  final labels = <String>[];
+  for (final sourceRef in note.sourceRefs) {
+    final label = _sourceRefLabel(sourceRef);
+    if (label.isNotEmpty && !labels.contains(label)) {
+      labels.add(label);
+    }
+    if (labels.length >= 2) {
+      break;
+    }
+  }
+  return labels;
+}
+
+String _sourceRefLabel(NoteSourceRefView sourceRef) {
+  final title = sourceRef.title.trim();
+  if (title.isNotEmpty) {
+    return "资料引用 ${_compactLabel(title)}";
+  }
+  final sourceId = sourceRef.sourceId?.trim() ?? "";
+  if (sourceId.isNotEmpty) {
+    return "${_sourceTypeLabel(sourceRef.sourceType)} ${_compactLabel(sourceId)}";
+  }
+  return "";
+}
+
+String _sourceTypeLabel(String sourceType) {
+  return switch (sourceType.trim()) {
+    "artifact" => "来源文件",
+    "career_application" => "求职项目",
+    "resume_profile" => "简历画像",
+    "career_profile" => "职业画像",
+    "jd_analysis" => "JD 分析",
+    "job_fit_report" => "匹配报告",
+    "resume_version" => "简历版本",
+    _ => "来源",
+  };
 }
 
 String _plainSnippet(String markdown) {
