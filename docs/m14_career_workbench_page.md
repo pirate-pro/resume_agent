@@ -646,27 +646,35 @@ _NoteMarkdownPreview
 
 目标：让用户能管理长期学习推进。
 
-状态：待完成。目前工作台只在选中项目详情里轻量展示学习任务、短板和复盘信息，还不是独立学习管理视图。
+状态：已完成第一版。
 
 实现：
 
 ```text
-LearningPlanBoardView
-LearningTaskList
-WeaknessTrackerList
-ReviewScheduleList
+_LearningPlanView
+_LearningMetricStrip
+_LearningPlanSection
+_LearningTaskBoard
+_LearningWeaknessSection
+_LearningReviewSection
+_showLearningDetailSheet
 ```
 
 功能：
 
-- 展示学习计划、学习任务、短板和复盘安排。
-- 按状态分组。
-- 从短板跳转关联项目或匹配报告。
+- 支持在学习页顶部切换求职项目。
+- 展示计划数、待推进任务、已完成任务和高风险短板。
+- 展示学习路线、学习任务、短板跟踪和复盘安排。
+- 学习任务按待推进 / 进行中 / 已完成分组。
+- 点击计划、任务、短板或复盘可以打开 Markdown 详情弹层。
+- 提供“生成计划”和“同步进展”动作，仍回到聊天执行。
+- 继续复用 M13 工作台聚合中的 learning 数据，不新增事实源。
 
 不做：
 
 - 提醒系统。
 - 日历同步。
+- 前端直接写 LearningStore。
 
 ### M14-4：资料与报告库
 

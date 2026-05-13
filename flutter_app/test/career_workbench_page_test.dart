@@ -127,6 +127,39 @@ void main() {
     expect(api.updatedNoteBodies.last, contains('更新后的投递准备'));
     expect(find.text('笔记已保存'), findsOneWidget);
 
+    await tester.tap(find.text('学习计划').first);
+    await tester.pumpAndSettle();
+    expect(find.text('学习路线'), findsOneWidget);
+    expect(find.text('学习任务'), findsWidgets);
+    expect(find.text('RAG 检索评估'), findsWidgets);
+    expect(find.text('生成计划'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('RAG 检索评估'),
+      220,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('RAG 检索评估').first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('验收标准'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.close_rounded).last);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('短板跟踪'),
+      360,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('短板跟踪'), findsOneWidget);
+    expect(find.text('RAG 深度不足'), findsWidgets);
+    await tester.scrollUntilVisible(
+      find.text('复盘安排'),
+      360,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('复盘安排'), findsOneWidget);
+
     await tester.tap(find.text('简历资料').first);
     await tester.pumpAndSettle();
     expect(find.text('简历画像'), findsWidgets);
@@ -317,13 +350,99 @@ class _FakeCareerWorkbenchApi extends ApiService {
         ),
       ],
       learning: CareerLearningSummaryView(
-        plans: const [],
-        tasks: const [],
-        weaknesses: const [],
-        reviews: const [],
-        openTaskCount: 0,
+        plans: [
+          CareerWorkbenchLearningPlanView(
+            status: 'active',
+            sourceSessionId: 'sess_demo',
+            sourceArtifactId: null,
+            learningPlanId: 'learning_plan_staragent_001',
+            title: '星河智能投递补强计划',
+            description: '围绕 RAG、Agent 架构和工程复盘补齐面试证据。',
+            planType: 'job_gap',
+            targetApplicationId: applicationId,
+            targetRole: 'AI Agent 后端工程师',
+            targetCompany: '星河智能',
+            priority: 'high',
+            goals: const ['补齐 RAG 项目证据', '准备 Agent Runtime 架构说明'],
+            focusSkillTags: const ['RAG', 'Agent Runtime'],
+            progressSummary: '已拆出第一批学习任务。',
+            updatedAt: _now,
+          ),
+        ],
+        tasks: [
+          CareerWorkbenchLearningTaskView(
+            status: 'active',
+            sourceSessionId: 'sess_demo',
+            sourceArtifactId: null,
+            learningTaskId: 'learning_task_rag_eval',
+            title: 'RAG 检索评估',
+            learningPlanId: 'learning_plan_staragent_001',
+            description: '整理 RAG 检索指标、chunk 策略和评估方式。',
+            taskType: 'write_answer',
+            priority: 'high',
+            state: 'doing',
+            skillTags: const ['RAG'],
+            estimatedMinutes: 60,
+            dueDate: _now.add(const Duration(days: 1)),
+            completedAt: null,
+            successCriteria: const ['能讲清召回率和准确率', '能结合项目证据说明'],
+            progressNotes: '已准备指标框架。',
+            updatedAt: _now,
+          ),
+          CareerWorkbenchLearningTaskView(
+            status: 'active',
+            sourceSessionId: 'sess_demo',
+            sourceArtifactId: null,
+            learningTaskId: 'learning_task_agent_arch',
+            title: 'Agent 架构复盘',
+            learningPlanId: 'learning_plan_staragent_001',
+            description: '整理主 Agent 与子 Agent 的协作边界。',
+            taskType: 'review',
+            priority: 'medium',
+            state: 'todo',
+            skillTags: const ['Agent Runtime'],
+            estimatedMinutes: 45,
+            dueDate: null,
+            completedAt: null,
+            successCriteria: const ['能说明任务委派和进度事件'],
+            progressNotes: '',
+            updatedAt: _now,
+          ),
+        ],
+        weaknesses: [
+          CareerWorkbenchWeaknessView(
+            status: 'active',
+            sourceSessionId: 'sess_demo',
+            sourceArtifactId: null,
+            weaknessId: 'weakness_rag_depth',
+            title: 'RAG 深度不足',
+            description: '匹配报告显示 RAG 实战证据需要补充。',
+            weaknessType: 'skill',
+            severity: 'high',
+            state: 'tracking',
+            skillTags: const ['RAG'],
+            relatedTaskIds: const ['learning_task_rag_eval'],
+            updatedAt: _now,
+          ),
+        ],
+        reviews: [
+          CareerWorkbenchReviewView(
+            status: 'active',
+            sourceSessionId: 'sess_demo',
+            sourceArtifactId: null,
+            reviewScheduleId: 'review_rag_eval',
+            title: 'RAG 答案复盘',
+            reviewType: 'task',
+            state: 'scheduled',
+            reviewAt: _now.add(const Duration(days: 2)),
+            nextReviewAt: null,
+            summary: '复盘 RAG 问答是否足够贴近岗位要求。',
+            updatedAt: _now,
+          ),
+        ],
+        openTaskCount: 2,
         doneTaskCount: 0,
-        highWeaknessCount: 0,
+        highWeaknessCount: 1,
       ),
       timeline: [
         CareerTimelineItemView(

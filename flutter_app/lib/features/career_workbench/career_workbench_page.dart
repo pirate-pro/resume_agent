@@ -313,7 +313,11 @@ class _WorkbenchMainPane extends StatelessWidget {
       CareerWorkbenchTab.projects => _ProjectListView(provider: provider),
       CareerWorkbenchTab.resumes => _ResumeLibraryView(provider: provider),
       CareerWorkbenchTab.jobs => _JobMatchLibraryView(provider: provider),
-      CareerWorkbenchTab.learning => _LearningOverview(provider: provider),
+      CareerWorkbenchTab.learning => _LearningPlanView(
+          provider: provider,
+          onBackToChat: onBackToChat,
+          onSendPrompt: onSendPrompt,
+        ),
       CareerWorkbenchTab.notes => _NotesOverview(
           provider: provider,
           currentSessionId: currentSessionId,
@@ -1060,47 +1064,931 @@ class _AssetPreviewAction {
   });
 }
 
-class _LearningOverview extends StatelessWidget {
+class _LearningPlanView extends StatelessWidget {
   final CareerWorkbenchProvider provider;
+  final VoidCallback onBackToChat;
+  final WorkbenchPromptSender? onSendPrompt;
 
-  const _LearningOverview({required this.provider});
+  const _LearningPlanView({
+    required this.provider,
+    required this.onBackToChat,
+    required this.onSendPrompt,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final selected = provider.selectedApplicationSummary;
     final detail = provider.selectedApplicationDetail;
     final learning = detail?.learning;
-    final tasks = learning?.tasks.take(8).toList() ?? const [];
-    final weaknesses = learning?.weaknesses.take(6).toList() ?? const [];
-    return _WorkbenchSection(
-      icon: Icons.school_outlined,
-      title: "学习计划",
-      subtitle: "M14-3 会升级为完整学习任务管理页",
+    final selectedId = selected?.application.applicationId ?? "";
+    final loading =
+        selectedId.isNotEmpty && provider.isApplicationLoading(selectedId);
+    final tasks = [...?learning?.tasks]
+      ..sort((a, b) => _taskSortRank(a).compareTo(_taskSortRank(b)));
+    final plans = [...?learning?.plans]
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    final weaknesses = [...?learning?.weaknesses]
+      ..sort((a, b) => _weaknessSortRank(a).compareTo(_weaknessSortRank(b)));
+    final reviews = [...?learning?.reviews]
+      ..sort((a, b) => _reviewSortTime(a).compareTo(_reviewSortTime(b)));
+    return Container(
+      decoration: _workbenchPanelDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (tasks.isEmpty && weaknesses.isEmpty)
-            const _EmptyText("当前选中项目暂无学习任务或短板记录。"),
-          for (final task in tasks) ...[
-            _CompactRecordTile(
-              icon: Icons.checklist_rounded,
-              color: _priorityColor(task.priority),
-              title: task.title,
-              subtitle: _firstNonEmpty([task.description, task.progressNotes]),
-              meta: _taskStateLabel(task.state),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "学习计划",
+                        style: AppTheme.ts(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        selected == null
+                            ? "选择求职项目后查看学习推进"
+                            : "${selected.application.displayTitle} · 短板、任务和复盘安排",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 11.5,
+                          color: AppTheme.textTertiary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _TinyStatus(label: "${tasks.length} 个任务"),
+              ],
             ),
-            const SizedBox(height: 8),
-          ],
-          for (final weakness in weaknesses)
-            _CompactRecordTile(
-              icon: Icons.report_problem_outlined,
-              color: weakness.severity == "high"
-                  ? AppTheme.danger
-                  : const Color(0xFFB45309),
-              title: weakness.title,
-              subtitle: weakness.description,
-              meta: _weaknessSeverityLabel(weakness.severity),
+          ),
+          if (provider.applications.isNotEmpty)
+            SizedBox(
+              height: 48,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                children: [
+                  for (final app in provider.applications) ...[
+                    _LearningProjectChip(
+                      summary: app,
+                      selected: app.application.applicationId == selectedId,
+                      onTap: () => unawaited(
+                        provider
+                            .selectApplication(app.application.applicationId),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ],
+              ),
             ),
+          Expanded(
+            child: loading && detail == null
+                ? const Center(child: _WorkbenchLoading())
+                : selected == null
+                    ? const Padding(
+                        padding: EdgeInsets.all(14),
+                        child: _EmptyText("暂无求职项目。先在聊天里完成简历和 JD 匹配后，再生成学习计划。"),
+                      )
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                        children: [
+                          _LearningMetricStrip(
+                            plans: plans,
+                            tasks: tasks,
+                            weaknesses: weaknesses,
+                            reviews: reviews,
+                          ),
+                          const SizedBox(height: 12),
+                          _LearningActionStrip(
+                            application: selected.application,
+                            onBackToChat: onBackToChat,
+                            onSendPrompt: onSendPrompt,
+                          ),
+                          const SizedBox(height: 12),
+                          if (plans.isEmpty &&
+                              tasks.isEmpty &&
+                              weaknesses.isEmpty &&
+                              reviews.isEmpty)
+                            const _EmptyText(
+                              "当前项目还没有学习计划。可以从这里回到聊天，让 Agent 基于匹配报告生成学习任务。",
+                            )
+                          else ...[
+                            _LearningPlanSection(plans: plans),
+                            const SizedBox(height: 12),
+                            _LearningTaskBoard(tasks: tasks),
+                            const SizedBox(height: 12),
+                            _LearningWeaknessSection(weaknesses: weaknesses),
+                            const SizedBox(height: 12),
+                            _LearningReviewSection(reviews: reviews),
+                          ],
+                        ],
+                      ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+class _LearningProjectChip extends StatelessWidget {
+  final CareerApplicationSummaryView summary;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _LearningProjectChip({
+    required this.summary,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? AppTheme.accent : AppTheme.textSecondary;
+    final count = summary.learningTaskCount;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          constraints: const BoxConstraints(maxWidth: 260),
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: selected ? 0.12 : 0.05),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: color.withValues(alpha: 0.16)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.work_outline_rounded, size: 13, color: color),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  summary.application.displayTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                    color: color,
+                  ),
+                ),
+              ),
+              if (count > 0) ...[
+                const SizedBox(width: 6),
+                Text(
+                  "$count",
+                  style: AppTheme.ts(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w900,
+                    color: color.withValues(alpha: 0.82),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LearningMetricStrip extends StatelessWidget {
+  final List<CareerWorkbenchLearningPlanView> plans;
+  final List<CareerWorkbenchLearningTaskView> tasks;
+  final List<CareerWorkbenchWeaknessView> weaknesses;
+  final List<CareerWorkbenchReviewView> reviews;
+
+  const _LearningMetricStrip({
+    required this.plans,
+    required this.tasks,
+    required this.weaknesses,
+    required this.reviews,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final openTasks = tasks
+        .where((task) => task.state != "done" && task.state != "cancelled")
+        .length;
+    final doneTasks = tasks.where((task) => task.state == "done").length;
+    final highWeaknesses =
+        weaknesses.where((weakness) => weakness.severity == "high").length;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns =
+            (constraints.maxWidth / 170).floor().clamp(2, 4).toInt();
+        final itemWidth = (constraints.maxWidth - (columns - 1) * 8) / columns;
+        final metrics = [
+          _LearningMetric(
+            label: "计划",
+            value: plans.length.toString(),
+            icon: Icons.route_outlined,
+            color: AppTheme.accent,
+          ),
+          _LearningMetric(
+            label: "待推进",
+            value: openTasks.toString(),
+            icon: Icons.checklist_rounded,
+            color: const Color(0xFF2563EB),
+          ),
+          _LearningMetric(
+            label: "已完成",
+            value: doneTasks.toString(),
+            icon: Icons.check_circle_outline_rounded,
+            color: const Color(0xFF059669),
+          ),
+          _LearningMetric(
+            label: "高风险短板",
+            value: highWeaknesses.toString(),
+            icon: Icons.warning_amber_rounded,
+            color: highWeaknesses > 0 ? AppTheme.danger : AppTheme.textTertiary,
+          ),
+        ];
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final metric in metrics)
+              SizedBox(
+                width: itemWidth,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+                  decoration: BoxDecoration(
+                    color: metric.color.withValues(alpha: 0.055),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: metric.color.withValues(alpha: 0.14),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(metric.icon, size: 17, color: metric.color),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              metric.value,
+                              style: AppTheme.ts(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w900,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
+                            Text(
+                              metric.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTheme.ts(
+                                fontSize: 10.8,
+                                color: AppTheme.textTertiary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _LearningMetric {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  const _LearningMetric({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+}
+
+class _LearningActionStrip extends StatelessWidget {
+  final CareerApplicationView application;
+  final VoidCallback onBackToChat;
+  final WorkbenchPromptSender? onSendPrompt;
+
+  const _LearningActionStrip({
+    required this.application,
+    required this.onBackToChat,
+    required this.onSendPrompt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceHover.withValues(alpha: 0.34),
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.68)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              "基于当前岗位生成或推进学习任务，执行过程仍回到聊天展示。",
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppTheme.ts(
+                fontSize: 11.5,
+                height: 1.45,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          _SmallTextButton(
+            label: "生成计划",
+            icon: Icons.auto_awesome_rounded,
+            onTap: () => _sendLearningPrompt(
+              context,
+              application,
+              intent: "请基于当前求职项目的匹配报告、风险和短板，生成一份可执行学习计划和学习任务。",
+              onBackToChat: onBackToChat,
+              onSendPrompt: onSendPrompt,
+            ),
+          ),
+          const SizedBox(width: 8),
+          _SmallTextButton(
+            label: "同步进展",
+            icon: Icons.update_rounded,
+            onTap: () => _sendLearningPrompt(
+              context,
+              application,
+              intent: "请基于当前学习任务，帮我整理今天应该推进的内容，并在需要时更新学习任务状态或打卡。",
+              onBackToChat: onBackToChat,
+              onSendPrompt: onSendPrompt,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LearningPlanSection extends StatelessWidget {
+  final List<CareerWorkbenchLearningPlanView> plans;
+
+  const _LearningPlanSection({required this.plans});
+
+  @override
+  Widget build(BuildContext context) {
+    return _LearningSection(
+      icon: Icons.route_outlined,
+      title: "学习路线",
+      subtitle: plans.isEmpty ? "暂无计划" : "${plans.length} 个计划",
+      child: plans.isEmpty
+          ? const _EmptyText("当前项目暂无学习计划。")
+          : Column(
+              children: [
+                for (final plan in plans) ...[
+                  _LearningPlanCard(plan: plan),
+                  if (plan != plans.last) const SizedBox(height: 9),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+class _LearningPlanCard extends StatelessWidget {
+  final CareerWorkbenchLearningPlanView plan;
+
+  const _LearningPlanCard({required this.plan});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _priorityColor(plan.priority);
+    return _LearningCard(
+      icon: Icons.route_outlined,
+      color: color,
+      title: plan.title,
+      subtitle: _firstNonEmpty([plan.progressSummary, plan.description]),
+      chips: [
+        _priorityLabel(plan.priority),
+        if (plan.targetRole.trim().isNotEmpty) plan.targetRole.trim(),
+        if (plan.targetCompany.trim().isNotEmpty) plan.targetCompany.trim(),
+      ],
+      tags: plan.focusSkillTags,
+      footer: plan.goals.take(3).toList(),
+      onTap: () => _showLearningDetailSheet(
+        context,
+        icon: Icons.route_outlined,
+        color: color,
+        title: plan.title,
+        subtitle: "学习路线 · 更新 ${_formatTime(plan.updatedAt)}",
+        markdown: _learningPlanMarkdown(plan),
+      ),
+    );
+  }
+}
+
+class _LearningTaskBoard extends StatelessWidget {
+  final List<CareerWorkbenchLearningTaskView> tasks;
+
+  const _LearningTaskBoard({required this.tasks});
+
+  @override
+  Widget build(BuildContext context) {
+    final todo = tasks
+        .where((task) => task.state == "todo" || task.state.trim().isEmpty)
+        .toList();
+    final doing = tasks
+        .where((task) => task.state == "doing" || task.state == "blocked")
+        .toList();
+    final done = tasks.where((task) => task.state == "done").toList();
+    return _LearningSection(
+      icon: Icons.checklist_rounded,
+      title: "学习任务",
+      subtitle: tasks.isEmpty ? "暂无任务" : "${tasks.length} 个任务",
+      child: tasks.isEmpty
+          ? const _EmptyText("当前项目暂无学习任务。")
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                final narrow = constraints.maxWidth < 780;
+                final columns = [
+                  _LearningTaskColumn(title: "待推进", tasks: todo),
+                  _LearningTaskColumn(title: "进行中", tasks: doing),
+                  _LearningTaskColumn(title: "已完成", tasks: done),
+                ];
+                if (narrow) {
+                  return Column(
+                    children: [
+                      for (final column in columns) ...[
+                        column,
+                        if (column != columns.last) const SizedBox(height: 10),
+                      ],
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final column in columns) ...[
+                      Expanded(child: column),
+                      if (column != columns.last) const SizedBox(width: 10),
+                    ],
+                  ],
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _LearningTaskColumn extends StatelessWidget {
+  final String title;
+  final List<CareerWorkbenchLearningTaskView> tasks;
+
+  const _LearningTaskColumn({
+    required this.title,
+    required this.tasks,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.68)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                title,
+                style: AppTheme.ts(
+                  fontSize: 11.8,
+                  fontWeight: FontWeight.w900,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+              const Spacer(),
+              _CountBadge(count: tasks.length, selected: false),
+            ],
+          ),
+          const SizedBox(height: 9),
+          if (tasks.isEmpty)
+            const _EmptyText("暂无")
+          else
+            for (final task in tasks) ...[
+              _LearningTaskCard(task: task),
+              if (task != tasks.last) const SizedBox(height: 8),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LearningTaskCard extends StatelessWidget {
+  final CareerWorkbenchLearningTaskView task;
+
+  const _LearningTaskCard({required this.task});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = task.state == "blocked"
+        ? AppTheme.danger
+        : _priorityColor(task.priority);
+    return _LearningCard(
+      icon: task.state == "done"
+          ? Icons.check_circle_outline_rounded
+          : Icons.checklist_rounded,
+      color: color,
+      title: task.title,
+      subtitle: _firstNonEmpty([task.progressNotes, task.description]),
+      chips: [
+        _taskStateLabel(task.state),
+        _priorityLabel(task.priority),
+        if (task.estimatedMinutes > 0) "${task.estimatedMinutes} 分钟",
+        if (task.dueDate != null) "截止 ${_formatDate(task.dueDate!)}",
+      ],
+      tags: task.skillTags,
+      footer: task.successCriteria.take(2).toList(),
+      onTap: () => _showLearningDetailSheet(
+        context,
+        icon: Icons.checklist_rounded,
+        color: color,
+        title: task.title,
+        subtitle:
+            "${_taskStateLabel(task.state)} · 更新 ${_formatTime(task.updatedAt)}",
+        markdown: _learningTaskMarkdown(task),
+      ),
+    );
+  }
+}
+
+class _LearningWeaknessSection extends StatelessWidget {
+  final List<CareerWorkbenchWeaknessView> weaknesses;
+
+  const _LearningWeaknessSection({required this.weaknesses});
+
+  @override
+  Widget build(BuildContext context) {
+    return _LearningSection(
+      icon: Icons.report_problem_outlined,
+      title: "短板跟踪",
+      subtitle: weaknesses.isEmpty ? "暂无短板" : "${weaknesses.length} 个短板",
+      child: weaknesses.isEmpty
+          ? const _EmptyText("当前项目暂无短板跟踪。")
+          : Column(
+              children: [
+                for (final weakness in weaknesses) ...[
+                  _LearningWeaknessCard(weakness: weakness),
+                  if (weakness != weaknesses.last) const SizedBox(height: 8),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+class _LearningWeaknessCard extends StatelessWidget {
+  final CareerWorkbenchWeaknessView weakness;
+
+  const _LearningWeaknessCard({required this.weakness});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (weakness.severity) {
+      "high" => AppTheme.danger,
+      "low" => const Color(0xFF059669),
+      _ => const Color(0xFFB45309),
+    };
+    return _LearningCard(
+      icon: Icons.report_problem_outlined,
+      color: color,
+      title: weakness.title,
+      subtitle: weakness.description,
+      chips: [
+        _weaknessSeverityLabel(weakness.severity),
+        _weaknessStateLabel(weakness.state),
+        _weaknessTypeLabel(weakness.weaknessType),
+      ],
+      tags: weakness.skillTags,
+      footer: weakness.relatedTaskIds
+          .map((id) => "关联任务 ${_compactLabel(id)}")
+          .toList(),
+      onTap: () => _showLearningDetailSheet(
+        context,
+        icon: Icons.report_problem_outlined,
+        color: color,
+        title: weakness.title,
+        subtitle:
+            "${_weaknessSeverityLabel(weakness.severity)} · 更新 ${_formatTime(weakness.updatedAt)}",
+        markdown: _learningWeaknessMarkdown(weakness),
+      ),
+    );
+  }
+}
+
+class _LearningReviewSection extends StatelessWidget {
+  final List<CareerWorkbenchReviewView> reviews;
+
+  const _LearningReviewSection({required this.reviews});
+
+  @override
+  Widget build(BuildContext context) {
+    return _LearningSection(
+      icon: Icons.event_repeat_outlined,
+      title: "复盘安排",
+      subtitle: reviews.isEmpty ? "暂无复盘" : "${reviews.length} 个安排",
+      child: reviews.isEmpty
+          ? const _EmptyText("当前项目暂无复盘安排。")
+          : Column(
+              children: [
+                for (final review in reviews) ...[
+                  _LearningReviewCard(review: review),
+                  if (review != reviews.last) const SizedBox(height: 8),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+class _LearningReviewCard extends StatelessWidget {
+  final CareerWorkbenchReviewView review;
+
+  const _LearningReviewCard({required this.review});
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        review.state == "done" ? const Color(0xFF059669) : AppTheme.accent;
+    return _LearningCard(
+      icon: Icons.event_repeat_outlined,
+      color: color,
+      title: review.title,
+      subtitle: review.summary,
+      chips: [
+        _reviewStateLabel(review.state),
+        _reviewTypeLabel(review.reviewType),
+        if (review.reviewAt != null) "复盘 ${_formatDate(review.reviewAt!)}",
+        if (review.nextReviewAt != null)
+          "下次 ${_formatDate(review.nextReviewAt!)}",
+      ],
+      tags: const [],
+      footer: const [],
+      onTap: () => _showLearningDetailSheet(
+        context,
+        icon: Icons.event_repeat_outlined,
+        color: color,
+        title: review.title,
+        subtitle:
+            "${_reviewStateLabel(review.state)} · 更新 ${_formatTime(review.updatedAt)}",
+        markdown: _learningReviewMarkdown(review),
+      ),
+    );
+  }
+}
+
+class _LearningSection extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  const _LearningSection({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.76)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(
+                    color: AppTheme.accent.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Icon(icon, size: 15, color: AppTheme.accent),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: AppTheme.ts(
+                        fontSize: 13.2,
+                        fontWeight: FontWeight.w900,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 10.8,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _LearningCard extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final List<String> chips;
+  final List<String> tags;
+  final List<String> footer;
+  final VoidCallback onTap;
+
+  const _LearningCard({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.chips,
+    required this.tags,
+    required this.footer,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(15),
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.045),
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: color.withValues(alpha: 0.13)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: color.withValues(alpha: 0.16)),
+                ),
+                child: Icon(icon, size: 15, color: color),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final chip in chips
+                            .where((item) => item.trim().isNotEmpty)
+                            .take(4))
+                          _TinyTag(label: chip.trim(), color: color),
+                      ],
+                    ),
+                    if (chips.isNotEmpty) const SizedBox(height: 7),
+                    Text(
+                      title.trim().isEmpty ? "未命名学习项" : title.trim(),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 12.6,
+                        height: 1.28,
+                        fontWeight: FontWeight.w900,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    if (subtitle.trim().isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        subtitle.trim(),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 11.3,
+                          height: 1.42,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                    if (tags.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final tag in tags.take(5))
+                            _TinyTag(label: tag, color: color),
+                        ],
+                      ),
+                    ],
+                    if (footer.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      for (final item in footer.take(3))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 3),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.check_rounded,
+                                size: 13,
+                                color: color.withValues(alpha: 0.84),
+                              ),
+                              const SizedBox(width: 5),
+                              Expanded(
+                                child: Text(
+                                  item,
+                                  style: AppTheme.ts(
+                                    fontSize: 10.8,
+                                    height: 1.35,
+                                    color: AppTheme.textTertiary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: AppTheme.textTertiary,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -5022,6 +5910,300 @@ Future<void> _showLibraryDetailSheet(
                         padding: const EdgeInsets.fromLTRB(24, 22, 24, 28),
                         child: AppMarkdownBody(
                           content: item.detailMarkdown.trim(),
+                          style: AppTheme.ts(
+                            fontSize: 13.8,
+                            height: 1.68,
+                            color: AppTheme.textPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+int _taskSortRank(CareerWorkbenchLearningTaskView task) {
+  final stateRank = switch (task.state) {
+    "doing" => 0,
+    "blocked" => 1,
+    "todo" => 2,
+    "done" => 4,
+    _ => 3,
+  };
+  final due = task.dueDate?.millisecondsSinceEpoch ?? 9999999999999;
+  final priority = switch (task.priority) {
+    "high" => 0,
+    "medium" => 1,
+    "low" => 2,
+    _ => 3,
+  };
+  return stateRank * 10000000000000 + due + priority;
+}
+
+int _weaknessSortRank(CareerWorkbenchWeaknessView weakness) {
+  final severity = switch (weakness.severity) {
+    "high" => 0,
+    "medium" => 1,
+    "low" => 2,
+    _ => 3,
+  };
+  final state = weakness.state == "resolved" ? 10 : 0;
+  return state + severity;
+}
+
+int _reviewSortTime(CareerWorkbenchReviewView review) {
+  return (review.reviewAt ?? review.nextReviewAt ?? review.updatedAt)
+      .millisecondsSinceEpoch;
+}
+
+String _formatDate(DateTime time) {
+  return DateFormat("MM-dd").format(time);
+}
+
+String _weaknessStateLabel(String state) {
+  return switch (state) {
+    "open" => "待处理",
+    "tracking" => "跟踪中",
+    "resolved" => "已改善",
+    _ => state.trim().isEmpty ? "待处理" : state,
+  };
+}
+
+String _weaknessTypeLabel(String type) {
+  return switch (type) {
+    "skill" => "技能",
+    "experience" => "经历",
+    "project" => "项目",
+    "interview" => "面试",
+    "resume" => "简历",
+    _ => type.trim().isEmpty ? "短板" : type,
+  };
+}
+
+String _reviewStateLabel(String state) {
+  return switch (state) {
+    "scheduled" => "已安排",
+    "done" => "已复盘",
+    "skipped" => "已跳过",
+    _ => state.trim().isEmpty ? "已安排" : state,
+  };
+}
+
+String _reviewTypeLabel(String type) {
+  return switch (type) {
+    "daily" => "日复盘",
+    "weekly" => "周复盘",
+    "interview" => "面试复盘",
+    "task" => "任务复盘",
+    _ => type.trim().isEmpty ? "复盘" : type,
+  };
+}
+
+Future<void> _sendLearningPrompt(
+  BuildContext context,
+  CareerApplicationView application, {
+  required String intent,
+  required VoidCallback onBackToChat,
+  required WorkbenchPromptSender? onSendPrompt,
+}) async {
+  final sender = onSendPrompt;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  if (sender == null) {
+    messenger?.showSnackBar(
+      const SnackBar(content: Text("当前入口暂不可用")),
+    );
+    return;
+  }
+  onBackToChat();
+  await sender(_learningActionPrompt(application, intent));
+}
+
+String _learningActionPrompt(CareerApplicationView application, String intent) {
+  final lines = <String>[
+    "- application_id: ${application.applicationId}",
+    if (application.company.trim().isNotEmpty)
+      "- company: ${application.company.trim()}",
+    if (application.position.trim().isNotEmpty)
+      "- position: ${application.position.trim()}",
+    if (application.jdAnalysisId?.trim().isNotEmpty == true)
+      "- jd_analysis_id: ${application.jdAnalysisId!.trim()}",
+    if (application.jobFitReportId?.trim().isNotEmpty == true)
+      "- job_fit_report_id: ${application.jobFitReportId!.trim()}",
+    if (application.resumeProfileId?.trim().isNotEmpty == true)
+      "- resume_profile_id: ${application.resumeProfileId!.trim()}",
+    if (application.careerProfileId?.trim().isNotEmpty == true)
+      "- career_profile_id: ${application.careerProfileId!.trim()}",
+  ];
+  return '''
+请执行求职学习推进：
+
+项目信息：
+${lines.join("\n")}
+
+动作意图：
+$intent
+
+执行要求：
+1. 先读取并复用当前求职项目、匹配报告、已有学习计划和学习任务。
+2. 只有确实需要沉淀时，才创建或更新 LearningPlan、LearningTask、WeaknessTracker、ProgressCheckin。
+3. 不要重复创建已有学习计划或任务。
+4. 不要写 memory。
+5. 最终回复请说明本次更新了哪些学习记录，以及下一步建议。
+''';
+}
+
+String _learningPlanMarkdown(CareerWorkbenchLearningPlanView plan) {
+  return """
+# ${plan.title}
+
+- 类型：${plan.planType}
+- 优先级：${_priorityLabel(plan.priority)}
+${plan.targetRole.trim().isEmpty ? "" : "- 目标岗位：${plan.targetRole}\n"}${plan.targetCompany.trim().isEmpty ? "" : "- 目标公司：${plan.targetCompany}\n"}${plan.targetApplicationId == null ? "" : "- 关联项目：${plan.targetApplicationId}\n"}- 更新：${_formatTime(plan.updatedAt)}
+
+${plan.description.trim().isEmpty ? "" : "## 说明\n\n${plan.description.trim()}\n"}
+${plan.progressSummary.trim().isEmpty ? "" : "## 当前进展\n\n${plan.progressSummary.trim()}\n"}
+${_bulletSection("目标", plan.goals)}
+${_bulletSection("重点技能", plan.focusSkillTags)}
+""";
+}
+
+String _learningTaskMarkdown(CareerWorkbenchLearningTaskView task) {
+  return """
+# ${task.title}
+
+- 状态：${_taskStateLabel(task.state)}
+- 优先级：${_priorityLabel(task.priority)}
+- 类型：${task.taskType}
+${task.learningPlanId == null ? "" : "- 所属计划：${task.learningPlanId}\n"}${task.estimatedMinutes <= 0 ? "" : "- 预计耗时：${task.estimatedMinutes} 分钟\n"}${task.dueDate == null ? "" : "- 截止日期：${_formatDate(task.dueDate!)}\n"}${task.completedAt == null ? "" : "- 完成时间：${_formatTime(task.completedAt!)}\n"}- 更新：${_formatTime(task.updatedAt)}
+
+${task.description.trim().isEmpty ? "" : "## 任务说明\n\n${task.description.trim()}\n"}
+${task.progressNotes.trim().isEmpty ? "" : "## 进展记录\n\n${task.progressNotes.trim()}\n"}
+${_bulletSection("验收标准", task.successCriteria)}
+${_bulletSection("技能标签", task.skillTags)}
+""";
+}
+
+String _learningWeaknessMarkdown(CareerWorkbenchWeaknessView weakness) {
+  return """
+# ${weakness.title}
+
+- 严重度：${_weaknessSeverityLabel(weakness.severity)}
+- 状态：${_weaknessStateLabel(weakness.state)}
+- 类型：${_weaknessTypeLabel(weakness.weaknessType)}
+- 更新：${_formatTime(weakness.updatedAt)}
+
+${weakness.description.trim().isEmpty ? "" : "## 问题说明\n\n${weakness.description.trim()}\n"}
+${_bulletSection("技能标签", weakness.skillTags)}
+${_bulletSection("关联任务", weakness.relatedTaskIds)}
+""";
+}
+
+String _learningReviewMarkdown(CareerWorkbenchReviewView review) {
+  return """
+# ${review.title}
+
+- 状态：${_reviewStateLabel(review.state)}
+- 类型：${_reviewTypeLabel(review.reviewType)}
+${review.reviewAt == null ? "" : "- 复盘时间：${_formatTime(review.reviewAt!)}\n"}${review.nextReviewAt == null ? "" : "- 下次复盘：${_formatTime(review.nextReviewAt!)}\n"}- 更新：${_formatTime(review.updatedAt)}
+
+${review.summary.trim().isEmpty ? "" : "## 复盘摘要\n\n${review.summary.trim()}\n"}
+""";
+}
+
+Future<void> _showLearningDetailSheet(
+  BuildContext context, {
+  required IconData icon,
+  required Color color,
+  required String title,
+  required String subtitle,
+  required String markdown,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: double.infinity),
+    builder: (sheetContext) {
+      return SafeArea(
+        top: false,
+        child: FractionallySizedBox(
+          heightFactor: 0.82,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 860),
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                decoration: AppTheme.floatingPanelDecoration(
+                  radius: 24,
+                  alpha: 0.97,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.11),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: color.withValues(alpha: 0.18),
+                              ),
+                            ),
+                            child: Icon(icon, size: 17, color: color),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTheme.ts(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppTheme.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  subtitle,
+                                  style: AppTheme.ts(
+                                    fontSize: 10.8,
+                                    color: AppTheme.textTertiary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          _WorkbenchIconButton(
+                            icon: Icons.close_rounded,
+                            tooltip: "关闭",
+                            onTap: () => Navigator.of(sheetContext).pop(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Divider(height: 1, color: AppTheme.border),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 28),
+                        child: AppMarkdownBody(
+                          content: markdown.trim(),
                           style: AppTheme.ts(
                             fontSize: 13.8,
                             height: 1.68,
