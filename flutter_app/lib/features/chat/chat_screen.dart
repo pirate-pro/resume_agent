@@ -252,7 +252,7 @@ class _ChatHeaderLayer extends ConsumerWidget {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Text(
-                              "求职 Agent 工作台",
+                              "求职 Agent",
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: AppTheme.ts(
@@ -264,7 +264,7 @@ class _ChatHeaderLayer extends ConsumerWidget {
                             if (!compactHeader) ...[
                               const SizedBox(height: 2),
                               Text(
-                                "简历 · JD · 匹配报告",
+                                "对话 · 工具 · 资产",
                                 style: AppTheme.ts(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w500,
@@ -300,6 +300,7 @@ class _ChatHeaderLayer extends ConsumerWidget {
                                 _HeaderButton(
                                   icon: Icons.dashboard_customize_outlined,
                                   active: isWorkbenchOpen,
+                                  label: compactHeader ? null : '工作台',
                                   size: compactHeader ? 34 : 38,
                                   tooltip: '求职工作台',
                                   onTap: onWorkbenchToggle,
@@ -643,6 +644,7 @@ class _HeaderButton extends StatelessWidget {
   final bool active;
   final VoidCallback? onTap;
   final String? tooltip;
+  final String? label;
   final double size;
 
   const _HeaderButton({
@@ -650,19 +652,24 @@ class _HeaderButton extends StatelessWidget {
     required this.onTap,
     this.active = false,
     this.tooltip,
+    this.label,
     this.size = 38,
   });
 
   @override
   Widget build(BuildContext context) {
+    final normalizedLabel = label?.trim() ?? "";
+    final hasLabel = normalizedLabel.isNotEmpty;
     final button = Material(
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
         onTap: onTap,
         child: Container(
-          width: size,
+          width: hasLabel ? null : size,
+          constraints: BoxConstraints(minWidth: size),
           height: size,
+          padding: hasLabel ? const EdgeInsets.symmetric(horizontal: 10) : null,
           decoration: BoxDecoration(
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.16)
@@ -674,10 +681,27 @@ class _HeaderButton extends StatelessWidget {
                   : AppTheme.border.withValues(alpha: 0.9),
             ),
           ),
-          child: Icon(
-            icon,
-            size: 17,
-            color: active ? AppTheme.accent : AppTheme.textSecondary,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 17,
+                color: active ? AppTheme.accent : AppTheme.textSecondary,
+              ),
+              if (hasLabel) ...[
+                const SizedBox(width: 6),
+                Text(
+                  normalizedLabel,
+                  style: AppTheme.ts(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: active ? AppTheme.accent : AppTheme.textSecondary,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),
@@ -727,7 +751,7 @@ class _WelcomeScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 24),
-            Text("求职 Agent 工作台",
+            Text("求职 Agent",
                 style: AppTheme.ts(
                     fontSize: 26,
                     fontWeight: FontWeight.w700,
