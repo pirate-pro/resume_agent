@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/models/api_models.dart';
+import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/utils/download_stub.dart'
     if (dart.library.html) '../../shared/utils/download_web.dart';
@@ -39,6 +40,9 @@ class _CareerWorkbenchPageState extends ConsumerState<CareerWorkbenchPage> {
   @override
   Widget build(BuildContext context) {
     final provider = ref.watch(careerWorkbenchProvider);
+    final currentSessionId = ref.watch(
+      chatProvider.select((provider) => provider.sessionId),
+    );
     return Container(
       decoration: AppTheme.floatingPanelDecoration(radius: 30, alpha: 0.78),
       clipBehavior: Clip.antiAlias,
@@ -52,6 +56,7 @@ class _CareerWorkbenchPageState extends ConsumerState<CareerWorkbenchPage> {
           Expanded(
             child: _WorkbenchShell(
               provider: provider,
+              currentSessionId: currentSessionId,
               onBackToChat: widget.onBackToChat,
               onSendPrompt: widget.onSendPrompt,
             ),
@@ -149,11 +154,13 @@ class _WorkbenchTopBar extends StatelessWidget {
 
 class _WorkbenchShell extends StatelessWidget {
   final CareerWorkbenchProvider provider;
+  final String? currentSessionId;
   final VoidCallback onBackToChat;
   final WorkbenchPromptSender? onSendPrompt;
 
   const _WorkbenchShell({
     required this.provider,
+    required this.currentSessionId,
     required this.onBackToChat,
     required this.onSendPrompt,
   });
@@ -179,6 +186,7 @@ class _WorkbenchShell extends StatelessWidget {
               Expanded(
                 child: _WorkbenchMainPane(
                   provider: provider,
+                  currentSessionId: currentSessionId,
                   compact: true,
                   onBackToChat: onBackToChat,
                   onSendPrompt: onSendPrompt,
@@ -197,6 +205,7 @@ class _WorkbenchShell extends StatelessWidget {
               Expanded(
                 child: _WorkbenchMainPane(
                   provider: provider,
+                  currentSessionId: currentSessionId,
                   compact: false,
                   onBackToChat: onBackToChat,
                   onSendPrompt: onSendPrompt,
@@ -207,6 +216,7 @@ class _WorkbenchShell extends StatelessWidget {
                 width: constraints.maxWidth < 1220 ? 350 : 390,
                 child: _ProjectDetailPane(
                   provider: provider,
+                  currentSessionId: currentSessionId,
                   onBackToChat: onBackToChat,
                   onSendPrompt: onSendPrompt,
                 ),
@@ -283,12 +293,14 @@ class _WorkbenchHorizontalNav extends StatelessWidget {
 
 class _WorkbenchMainPane extends StatelessWidget {
   final CareerWorkbenchProvider provider;
+  final String? currentSessionId;
   final bool compact;
   final VoidCallback onBackToChat;
   final WorkbenchPromptSender? onSendPrompt;
 
   const _WorkbenchMainPane({
     required this.provider,
+    required this.currentSessionId,
     required this.compact,
     required this.onBackToChat,
     required this.onSendPrompt,
@@ -310,7 +322,10 @@ class _WorkbenchMainPane extends StatelessWidget {
           body: "M14-4 会按公司和岗位管理 JD 分析、匹配报告与可预览 artifact。",
         ),
       CareerWorkbenchTab.learning => _LearningOverview(provider: provider),
-      CareerWorkbenchTab.notes => _NotesOverview(provider: provider),
+      CareerWorkbenchTab.notes => _NotesOverview(
+          provider: provider,
+          currentSessionId: currentSessionId,
+        ),
     };
     if (!compact) {
       return child;
@@ -319,6 +334,7 @@ class _WorkbenchMainPane extends StatelessWidget {
       builder: (context, constraints) {
         final detailPane = _ProjectDetailPane(
           provider: provider,
+          currentSessionId: currentSessionId,
           onBackToChat: onBackToChat,
           onSendPrompt: onSendPrompt,
         );
@@ -551,42 +567,123 @@ class _LearningOverview extends StatelessWidget {
   }
 }
 
-class _NotesOverview extends StatelessWidget {
+class _NotesOverview extends StatefulWidget {
   final CareerWorkbenchProvider provider;
+  final String? currentSessionId;
 
-  const _NotesOverview({required this.provider});
+  const _NotesOverview({
+    required this.provider,
+    required this.currentSessionId,
+  });
+
+  @override
+  State<_NotesOverview> createState() => _NotesOverviewState();
+}
+
+class _NotesOverviewState extends State<_NotesOverview> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() => widget.provider.loadNotes());
+  }
 
   @override
   Widget build(BuildContext context) {
-    final notes = provider.selectedApplicationDetail?.notes ?? const [];
-    return _WorkbenchSection(
-      icon: Icons.sticky_note_2_outlined,
-      title: "笔记",
-      subtitle: "当前项目关联笔记，可预览和编辑",
-      child: notes.isEmpty
-          ? const _EmptyText("当前选中项目暂无关联笔记。")
-          : Column(
+    final provider = widget.provider;
+    final notes = provider.notes;
+    return Container(
+      decoration: _workbenchPanelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+            child: Row(
               children: [
-                for (final note in notes) ...[
-                  _NoteSummaryTile(
-                    provider: provider,
-                    note: note,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "笔记库",
+                        style: AppTheme.ts(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        "沉淀求职复盘、面试记录、学习想法和资产引用",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 11.5,
+                          color: AppTheme.textTertiary,
+                        ),
+                      ),
+                    ],
                   ),
-                  if (note != notes.last) const SizedBox(height: 8),
-                ],
+                ),
+                _SmallTextButton(
+                  label: "新建笔记",
+                  icon: Icons.add_rounded,
+                  onTap: () => _showNewNoteEditorSheet(
+                    context,
+                    provider,
+                    sourceSessionId: _noteSourceSessionId(
+                      provider,
+                      widget.currentSessionId,
+                    ),
+                    relatedApplicationId: provider
+                        .selectedApplicationSummary?.application.applicationId,
+                  ),
+                ),
               ],
             ),
+          ),
+          Expanded(
+            child: provider.isLoadingNotes && notes.isEmpty
+                ? const Center(child: _WorkbenchLoading())
+                : provider.notesError != null && notes.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: _EmptyText("笔记读取失败：${provider.notesError}"),
+                      )
+                    : notes.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: _EmptyText("还没有笔记。可以先新建一条自由笔记。"),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                            itemBuilder: (context, index) {
+                              final note = notes[index];
+                              return _NoteSummaryTile(
+                                provider: provider,
+                                note: _summaryFromNote(note),
+                              );
+                            },
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 9),
+                            itemCount: notes.length,
+                          ),
+          ),
+        ],
+      ),
     );
   }
 }
 
 class _ProjectDetailPane extends StatelessWidget {
   final CareerWorkbenchProvider provider;
+  final String? currentSessionId;
   final VoidCallback onBackToChat;
   final WorkbenchPromptSender? onSendPrompt;
 
   const _ProjectDetailPane({
     required this.provider,
+    required this.currentSessionId,
     required this.onBackToChat,
     required this.onSendPrompt,
   });
@@ -632,12 +729,19 @@ class _ProjectDetailPane extends StatelessWidget {
           const SizedBox(height: 12),
           _DetailLinkedAssets(
             provider: provider,
+            application: view.application,
+            currentSessionId: currentSessionId,
             assets: view.linkedAssets,
           ),
           const SizedBox(height: 12),
           _DetailRiskSection(readiness: view.readiness),
           const SizedBox(height: 12),
-          _DetailNotesSection(provider: provider, notes: view.notes),
+          _DetailNotesSection(
+            provider: provider,
+            currentSessionId: currentSessionId,
+            application: view.application,
+            notes: view.notes,
+          ),
         ],
       ),
     );
@@ -827,10 +931,14 @@ class _DetailActionSection extends StatelessWidget {
 
 class _DetailLinkedAssets extends StatelessWidget {
   final CareerWorkbenchProvider provider;
+  final CareerApplicationView application;
+  final String? currentSessionId;
   final List<CareerLinkedAssetView> assets;
 
   const _DetailLinkedAssets({
     required this.provider,
+    required this.application,
+    required this.currentSessionId,
     required this.assets,
   });
 
@@ -848,6 +956,8 @@ class _DetailLinkedAssets extends StatelessWidget {
                 for (final asset in visible) ...[
                   _LinkedAssetTile(
                     provider: provider,
+                    currentSessionId: currentSessionId,
+                    relatedApplicationId: application.applicationId,
                     asset: asset,
                   ),
                   if (asset != visible.last) const SizedBox(height: 8),
@@ -886,10 +996,14 @@ class _DetailRiskSection extends StatelessWidget {
 
 class _DetailNotesSection extends StatelessWidget {
   final CareerWorkbenchProvider provider;
+  final String? currentSessionId;
+  final CareerApplicationView application;
   final List<CareerNoteSummaryView> notes;
 
   const _DetailNotesSection({
     required this.provider,
+    required this.currentSessionId,
+    required this.application,
     required this.notes,
   });
 
@@ -899,20 +1013,41 @@ class _DetailNotesSection extends StatelessWidget {
     return _WorkbenchSection(
       icon: Icons.sticky_note_2_outlined,
       title: "项目笔记",
-      subtitle: "${visible.length} 条上下文",
-      child: visible.isEmpty
-          ? const _EmptyText("暂无关联笔记。")
-          : Column(
-              children: [
-                for (final note in visible) ...[
-                  _NoteSummaryTile(
-                    provider: provider,
-                    note: note,
-                  ),
-                  if (note != visible.last) const SizedBox(height: 8),
-                ],
-              ],
+      subtitle: "${visible.length} 条上下文 · 点击笔记进入编辑",
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _SmallTextButton(
+            label: "新建项目笔记",
+            icon: Icons.add_rounded,
+            onTap: () => _showNewNoteEditorSheet(
+              context,
+              provider,
+              sourceSessionId: _noteSourceSessionId(
+                provider,
+                currentSessionId,
+              ),
+              relatedApplicationId: application.applicationId,
+              seedTitle: "${application.displayTitle} 笔记",
+              seedSummary: application.summary,
+              evidenceRefs: [application.applicationId],
             ),
+          ),
+          if (visible.isEmpty) ...[
+            const SizedBox(height: 8),
+            const _EmptyText("暂无关联笔记。"),
+          ] else ...[
+            const SizedBox(height: 10),
+            for (final note in visible) ...[
+              _NoteSummaryTile(
+                provider: provider,
+                note: note,
+              ),
+              if (note != visible.last) const SizedBox(height: 8),
+            ],
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1057,10 +1192,14 @@ class _ProjectSummaryTile extends StatelessWidget {
 
 class _LinkedAssetTile extends StatelessWidget {
   final CareerWorkbenchProvider provider;
+  final String? currentSessionId;
+  final String? relatedApplicationId;
   final CareerLinkedAssetView asset;
 
   const _LinkedAssetTile({
     required this.provider,
+    required this.currentSessionId,
+    required this.relatedApplicationId,
     required this.asset,
   });
 
@@ -1131,6 +1270,29 @@ class _LinkedAssetTile extends StatelessWidget {
               ),
             ),
           ],
+          const SizedBox(width: 8),
+          _SmallTextButton(
+            label: "引用",
+            icon: Icons.add_link_rounded,
+            onTap: () => _showNewNoteEditorSheet(
+              context,
+              provider,
+              sourceSessionId: _noteSourceSessionId(
+                provider,
+                currentSessionId,
+                fallback: asset.sourceSessionId,
+              ),
+              sourceArtifactId:
+                  asset.type == "artifact" ? asset.id : asset.previewArtifactId,
+              relatedApplicationId: relatedApplicationId,
+              seedTitle:
+                  "关于 ${asset.title.trim().isEmpty ? _assetTypeLabel(asset.type) : asset.title.trim()} 的笔记",
+              seedSummary: "引用 ${_assetTypeLabel(asset.type)} 作为资料来源。",
+              seedBody: _assetNoteSeedBody(asset),
+              evidenceRefs: _assetEvidenceRefs(asset, relatedApplicationId),
+              sourceRefs: [_assetSourceRef(asset)],
+            ),
+          ),
         ],
       ),
     );
@@ -1255,120 +1417,132 @@ class _NoteSummaryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tags = note.tags.take(3).toList();
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFB45309).withValues(alpha: 0.045),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: const Color(0xFFB45309).withValues(alpha: 0.13),
+        onTap: () => _showNoteEditorSheet(
+          context,
+          provider,
+          noteId: note.noteId,
         ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: const Color(0xFFB45309).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: const Color(0xFFB45309).withValues(alpha: 0.16),
-              ),
-            ),
-            child: const Icon(
-              Icons.sticky_note_2_outlined,
-              size: 16,
-              color: Color(0xFFB45309),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFB45309).withValues(alpha: 0.045),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: const Color(0xFFB45309).withValues(alpha: 0.13),
             ),
           ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFB45309).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: const Color(0xFFB45309).withValues(alpha: 0.16),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.sticky_note_2_outlined,
+                  size: 16,
+                  color: Color(0xFFB45309),
+                ),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        note.title.trim().isEmpty ? "未命名笔记" : note.title,
-                        maxLines: 1,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            note.title.trim().isEmpty ? "未命名笔记" : note.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTheme.ts(
+                              fontSize: 12.4,
+                              fontWeight: FontWeight.w900,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _formatTime(note.updatedAt),
+                          style: AppTheme.ts(
+                            fontSize: 10.4,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (note.summary.trim().isNotEmpty) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        note.summary.trim(),
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: AppTheme.ts(
-                          fontSize: 12.4,
-                          fontWeight: FontWeight.w900,
-                          color: AppTheme.textPrimary,
+                          fontSize: 11.2,
+                          height: 1.4,
+                          color: AppTheme.textSecondary,
                         ),
                       ),
-                    ),
-                    Text(
-                      _formatTime(note.updatedAt),
-                      style: AppTheme.ts(
-                        fontSize: 10.4,
-                        fontWeight: FontWeight.w800,
-                        color: AppTheme.textTertiary,
-                      ),
-                    ),
-                  ],
-                ),
-                if (note.summary.trim().isNotEmpty) ...[
-                  const SizedBox(height: 5),
-                  Text(
-                    note.summary.trim(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTheme.ts(
-                      fontSize: 11.2,
-                      height: 1.4,
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-                ],
-                if (tags.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (final tag in tags)
-                        _TinyTag(
-                          label: tag,
-                          color: const Color(0xFFB45309),
-                        ),
                     ],
-                  ),
-                ],
-                const SizedBox(height: 9),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _SmallTextButton(
-                      label: "预览笔记",
-                      icon: Icons.visibility_outlined,
-                      onTap: () => _showNotePreviewSheet(
-                        context,
-                        provider,
-                        noteId: note.noteId,
+                    if (tags.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final tag in tags)
+                            _TinyTag(
+                              label: tag,
+                              color: const Color(0xFFB45309),
+                            ),
+                        ],
                       ),
-                    ),
-                    _SmallTextButton(
-                      label: "编辑",
-                      icon: Icons.edit_note_rounded,
-                      onTap: () => _showNoteEditorSheet(
-                        context,
-                        provider,
-                        noteId: note.noteId,
-                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.edit_note_rounded,
+                          size: 13,
+                          color: AppTheme.textTertiary,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          "点击进入笔记",
+                          style: AppTheme.ts(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.textTertiary,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: AppTheme.textTertiary,
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -2494,13 +2668,36 @@ class _DetailSkeletonFromSummary extends StatelessWidget {
   }
 }
 
-Future<void> _showNotePreviewSheet(
+Future<void> _showNewNoteEditorSheet(
   BuildContext context,
   CareerWorkbenchProvider provider, {
-  required String noteId,
+  required String sourceSessionId,
+  String? sourceArtifactId,
+  String? relatedApplicationId,
+  String seedTitle = "",
+  String seedSummary = "",
+  String seedBody = "",
+  List<String> evidenceRefs = const [],
+  List<Map<String, dynamic>> sourceRefs = const [],
 }) {
-  final rootContext = context;
-  final noteFuture = provider.loadNote(noteId, force: true);
+  final title = seedTitle.trim().isEmpty ? "新建笔记" : seedTitle.trim();
+  final draft = NoteView(
+    noteId: "note_draft",
+    status: "active",
+    sourceSessionId: sourceSessionId,
+    sourceArtifactId: sourceArtifactId,
+    evidenceRefs: evidenceRefs,
+    createdAt: DateTime.now(),
+    updatedAt: DateTime.now(),
+    title: title,
+    bodyMarkdown: seedBody.trim().isEmpty ? "# $title\n\n" : seedBody,
+    bodyFormat: "markdown",
+    collectionId: null,
+    tags: const [],
+    sourceRefs: const [],
+    relatedApplicationId: relatedApplicationId,
+    summary: seedSummary,
+  );
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -2510,7 +2707,7 @@ Future<void> _showNotePreviewSheet(
       return SafeArea(
         top: false,
         child: FractionallySizedBox(
-          heightFactor: 0.9,
+          heightFactor: 0.92,
           child: Align(
             alignment: Alignment.bottomCenter,
             child: ConstrainedBox(
@@ -2519,108 +2716,74 @@ Future<void> _showNotePreviewSheet(
                 margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                 decoration: AppTheme.floatingPanelDecoration(
                   radius: 24,
-                  alpha: 0.96,
+                  alpha: 0.97,
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: FutureBuilder<NoteView>(
-                  future: noteFuture,
-                  builder: (context, snapshot) {
-                    final note = snapshot.data;
-                    return Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.sticky_note_2_outlined,
-                                size: 20,
-                                color: AppTheme.accent,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      note?.title ?? "正在读取笔记",
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: AppTheme.ts(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w900,
-                                        color: AppTheme.textPrimary,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      note == null
-                                          ? noteId
-                                          : "${note.bodyMarkdown.length} 字符 · 更新 ${_formatTime(note.updatedAt)}",
-                                      style: AppTheme.ts(
-                                        fontSize: 10.8,
-                                        color: AppTheme.textTertiary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (note != null) ...[
-                                _WorkbenchTopAction(
-                                  label: "编辑",
-                                  icon: Icons.edit_note_rounded,
-                                  onTap: () {
-                                    Navigator.of(sheetContext).pop();
-                                    _showNoteEditorSheet(
-                                      rootContext,
-                                      provider,
-                                      noteId: noteId,
-                                    );
-                                  },
-                                ),
-                                const SizedBox(width: 8),
-                              ],
-                              _WorkbenchIconButton(
-                                icon: Icons.close_rounded,
-                                tooltip: "关闭",
-                                onTap: () => Navigator.of(sheetContext).pop(),
-                              ),
-                            ],
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.note_add_outlined,
+                            size: 20,
+                            color: AppTheme.accent,
                           ),
-                        ),
-                        Divider(height: 1, color: AppTheme.border),
-                        Expanded(
-                          child: snapshot.connectionState ==
-                                      ConnectionState.waiting &&
-                                  !snapshot.hasData
-                              ? const _WorkbenchLoading()
-                              : snapshot.hasError
-                                  ? Padding(
-                                      padding: const EdgeInsets.all(18),
-                                      child: _EmptyText(
-                                        "笔记读取失败：${snapshot.error}",
-                                      ),
-                                    )
-                                  : SingleChildScrollView(
-                                      padding: const EdgeInsets.fromLTRB(
-                                        24,
-                                        22,
-                                        24,
-                                        28,
-                                      ),
-                                      child: AppMarkdownBody(
-                                        content: note?.bodyMarkdown ?? "",
-                                        style: AppTheme.ts(
-                                          fontSize: 13.8,
-                                          height: 1.68,
-                                          color: AppTheme.textPrimary,
-                                        ),
-                                      ),
-                                    ),
-                        ),
-                      ],
-                    );
-                  },
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              "新建笔记",
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTheme.ts(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w900,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
+                          ),
+                          _WorkbenchIconButton(
+                            icon: Icons.close_rounded,
+                            tooltip: "关闭",
+                            onTap: () => Navigator.of(sheetContext).pop(),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Divider(height: 1, color: AppTheme.border),
+                    Expanded(
+                      child: _NoteEditorForm(
+                        note: draft,
+                        onCancel: () => Navigator.of(sheetContext).pop(),
+                        onSave: (noteDraft) async {
+                          final navigator = Navigator.of(sheetContext);
+                          final messenger =
+                              ScaffoldMessenger.maybeOf(sheetContext);
+                          await provider.createNote(
+                            sourceSessionId: sourceSessionId,
+                            sourceArtifactId: sourceArtifactId,
+                            relatedApplicationId: relatedApplicationId,
+                            evidenceRefs: evidenceRefs,
+                            sourceRefs: sourceRefs,
+                            title: noteDraft.title,
+                            bodyMarkdown: noteDraft.bodyMarkdown,
+                            summary: noteDraft.summary,
+                            tags: noteDraft.tags,
+                          );
+                          if (sheetContext.mounted) {
+                            navigator.pop();
+                            messenger?.showSnackBar(
+                              const SnackBar(
+                                content: Text("笔记已创建"),
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -3095,6 +3258,110 @@ String _firstNonEmpty(List<String?> values) {
     if (normalized.isNotEmpty) return normalized;
   }
   return "";
+}
+
+CareerNoteSummaryView _summaryFromNote(NoteView note) {
+  return CareerNoteSummaryView(
+    noteId: note.noteId,
+    title: note.title,
+    summary: note.summary.isNotEmpty
+        ? note.summary
+        : _plainSnippet(note.bodyMarkdown),
+    status: note.status,
+    updatedAt: note.updatedAt,
+    sourceArtifactId: note.sourceArtifactId,
+    relatedApplicationId: note.relatedApplicationId,
+    tags: note.tags,
+  );
+}
+
+String _plainSnippet(String markdown) {
+  final text = markdown
+      .replaceAll(RegExp(r"^#{1,6}\s*", multiLine: true), "")
+      .replaceAll(RegExp(r"[*_`>#-]"), " ")
+      .replaceAll(RegExp(r"\s+"), " ")
+      .trim();
+  if (text.length <= 80) return text;
+  return "${text.substring(0, 80)}...";
+}
+
+String _noteSourceSessionId(
+  CareerWorkbenchProvider provider,
+  String? currentSessionId, {
+  String? fallback,
+}) {
+  for (final value in [
+    currentSessionId,
+    fallback,
+    provider.selectedApplicationSummary?.application.meta.sourceSessionId,
+    provider.selectedApplicationDetail?.application.meta.sourceSessionId,
+  ]) {
+    final normalized = value?.trim() ?? "";
+    if (normalized.startsWith("sess_")) {
+      return normalized;
+    }
+  }
+  return "sess_workbench";
+}
+
+String _assetNoteSeedBody(CareerLinkedAssetView asset) {
+  final title = asset.title.trim().isEmpty
+      ? _assetTypeLabel(asset.type)
+      : asset.title.trim();
+  return '''
+# 关于 $title 的笔记
+
+> 引用来源：${_assetTypeLabel(asset.type)} `${asset.id}`
+
+## 记录
+
+''';
+}
+
+List<String> _assetEvidenceRefs(
+  CareerLinkedAssetView asset,
+  String? relatedApplicationId,
+) {
+  final refs = <String>[];
+  for (final value in [
+    relatedApplicationId,
+    asset.id,
+    asset.previewArtifactId
+  ]) {
+    final normalized = value?.trim() ?? "";
+    if (_isEvidenceRef(normalized) && !refs.contains(normalized)) {
+      refs.add(normalized);
+    }
+  }
+  return refs;
+}
+
+Map<String, dynamic> _assetSourceRef(CareerLinkedAssetView asset) {
+  return {
+    "source_type": _noteSourceTypeForAsset(asset.type),
+    "source_id": asset.id,
+    "source_session_id": asset.sourceSessionId,
+    "title": asset.title,
+    "quote": "",
+  };
+}
+
+String _noteSourceTypeForAsset(String type) {
+  return switch (type) {
+    "resume_profile" => "resume_profile",
+    "career_profile" => "career_profile",
+    "jd_analysis" => "jd_analysis",
+    "job_fit_report" => "job_fit_report",
+    "resume_version" => "resume_version",
+    "artifact" => "artifact",
+    _ => "manual",
+  };
+}
+
+bool _isEvidenceRef(String value) {
+  return RegExp(
+    r"^(application|artifact|career_profile|collection|fit|jd|jd_analysis|note|resume_profile|resume_version|sess)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+  ).hasMatch(value);
 }
 
 List<String> _parseTags(String raw) {

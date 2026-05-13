@@ -381,6 +381,77 @@ class ApiService {
 
   // ── Notes ─────────────────────────────────────────────────────────────
 
+  Future<List<NoteView>> listNotes({
+    bool includeArchived = false,
+    String? collectionId,
+    String? relatedApplicationId,
+  }) async {
+    final params = <String, String>{
+      "include_archived": includeArchived.toString(),
+    };
+    if (collectionId != null && collectionId.trim().isNotEmpty) {
+      params["collection_id"] = collectionId.trim();
+    }
+    if (relatedApplicationId != null &&
+        relatedApplicationId.trim().isNotEmpty) {
+      params["related_application_id"] = relatedApplicationId.trim();
+    }
+    final resp = await http.get(
+      _uri("/api/notes").replace(queryParameters: params),
+    );
+    final list = _decodeResponseData(resp) as List;
+    return list
+        .map((item) => NoteView.fromJson(Map<String, dynamic>.from(item)))
+        .toList();
+  }
+
+  Future<NoteView> createNote({
+    String? noteId,
+    required String sourceSessionId,
+    String? sourceArtifactId,
+    List<String> evidenceRefs = const [],
+    required String title,
+    required String bodyMarkdown,
+    String bodyFormat = "markdown",
+    String? collectionId,
+    List<String> tags = const [],
+    List<Map<String, dynamic>> sourceRefs = const [],
+    String? relatedApplicationId,
+    String summary = "",
+  }) async {
+    final body = <String, dynamic>{
+      "source_session_id": sourceSessionId,
+      "evidence_refs": evidenceRefs,
+      "title": title,
+      "body_markdown": bodyMarkdown,
+      "body_format": bodyFormat,
+      "tags": tags,
+      "source_refs": sourceRefs,
+      "summary": summary,
+    };
+    if (noteId != null && noteId.trim().isNotEmpty) {
+      body["note_id"] = noteId.trim();
+    }
+    if (sourceArtifactId != null && sourceArtifactId.trim().isNotEmpty) {
+      body["source_artifact_id"] = sourceArtifactId.trim();
+    }
+    if (collectionId != null && collectionId.trim().isNotEmpty) {
+      body["collection_id"] = collectionId.trim();
+    }
+    if (relatedApplicationId != null &&
+        relatedApplicationId.trim().isNotEmpty) {
+      body["related_application_id"] = relatedApplicationId.trim();
+    }
+    final resp = await http.post(
+      _uri("/api/notes"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    return NoteView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
   Future<NoteView> getNote({
     required String noteId,
     bool includeArchived = false,

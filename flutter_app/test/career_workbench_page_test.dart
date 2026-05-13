@@ -60,23 +60,27 @@ void main() {
     await tester.tap(find.byIcon(Icons.close_rounded).last);
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('引用').first);
+    await tester.pumpAndSettle();
+    expect(find.text('新建笔记'), findsOneWidget);
+    expect(find.textContaining('引用来源'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('career_note_body_field')),
+      '# 资产引用笔记\n\n记录匹配报告里的 RAG 风险。',
+    );
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(api.createdNoteTitles.last, contains('星河智能'));
+    expect(api.createdSourceRefs.last.first['source_type'], 'job_fit_report');
+
     await tester.tap(find.text('笔记').first);
     await tester.pumpAndSettle();
     expect(find.text('投递准备记录'), findsWidgets);
-    expect(find.text('预览笔记'), findsWidgets);
-    expect(find.text('编辑'), findsWidgets);
+    expect(find.text('新建笔记'), findsOneWidget);
 
-    await tester.tap(find.text('预览笔记').first);
+    await tester.tap(find.text('投递准备记录').first);
     await tester.pumpAndSettle();
     expect(api.openedNoteIds, contains('note_staragent_001'));
-    expect(find.text('投递准备记录'), findsWidgets);
-    expect(find.textContaining('面试关注点'), findsOneWidget);
-
-    await tester.tap(find.byIcon(Icons.close_rounded).last);
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('编辑').first);
-    await tester.pumpAndSettle();
     expect(find.byKey(const Key('career_note_body_field')), findsOneWidget);
 
     await tester.enterText(
@@ -93,6 +97,20 @@ void main() {
     expect(api.updatedNoteBodies.last, contains('更新后的投递准备'));
     expect(find.text('笔记已保存'), findsOneWidget);
 
+    await tester.tap(find.text('新建笔记'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('career_note_title_field')),
+      '自由复盘笔记',
+    );
+    await tester.enterText(
+      find.byKey(const Key('career_note_body_field')),
+      '# 自由复盘笔记\n\n今天补充一个独立想法。',
+    );
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(api.createdNoteTitles.last, '自由复盘笔记');
+
     await tester.tap(find.text('生成定制简历'));
     await tester.pumpAndSettle();
 
@@ -107,11 +125,14 @@ class _FakeCareerWorkbenchApi extends ApiService {
   final previewedArtifactIds = <String>[];
   final openedNoteIds = <String>[];
   final updatedNoteBodies = <String>[];
+  final createdNoteTitles = <String>[];
+  final createdSourceRefs = <List<Map<String, dynamic>>>[];
   final _now = DateTime(2026, 5, 10, 12, 30);
   String _noteTitle = '投递准备记录';
   String _noteSummary = '记录本轮岗位匹配和投递准备。';
   String _noteBody = '# 投递准备记录\n\n## 面试关注点\n- 复盘 Agent Runtime 项目';
   List<String> _noteTags = const ['投递'];
+  final List<NoteView> _createdNotes = [];
 
   _FakeCareerWorkbenchApi() : super(baseUrl: 'http://localhost');
 
@@ -275,6 +296,54 @@ class _FakeCareerWorkbenchApi extends ApiService {
   }) async {
     openedNoteIds.add(noteId);
     return _noteView();
+  }
+
+  @override
+  Future<List<NoteView>> listNotes({
+    bool includeArchived = false,
+    String? collectionId,
+    String? relatedApplicationId,
+  }) async {
+    return [_noteView(), ..._createdNotes];
+  }
+
+  @override
+  Future<NoteView> createNote({
+    String? noteId,
+    required String sourceSessionId,
+    String? sourceArtifactId,
+    List<String> evidenceRefs = const [],
+    required String title,
+    required String bodyMarkdown,
+    String bodyFormat = 'markdown',
+    String? collectionId,
+    List<String> tags = const [],
+    List<Map<String, dynamic>> sourceRefs = const [],
+    String? relatedApplicationId,
+    String summary = '',
+  }) async {
+    createdNoteTitles.add(title);
+    createdSourceRefs.add(sourceRefs);
+    final note = NoteView(
+      noteId: noteId ?? 'note_created_${createdNoteTitles.length}',
+      status: 'active',
+      sourceSessionId: sourceSessionId,
+      sourceArtifactId: sourceArtifactId,
+      evidenceRefs: evidenceRefs,
+      createdAt: _now,
+      updatedAt: _now,
+      title: title,
+      bodyMarkdown: bodyMarkdown,
+      bodyFormat: bodyFormat,
+      collectionId: collectionId,
+      tags: tags,
+      sourceRefs:
+          sourceRefs.map((item) => NoteSourceRefView.fromJson(item)).toList(),
+      relatedApplicationId: relatedApplicationId,
+      summary: summary,
+    );
+    _createdNotes.insert(0, note);
+    return note;
   }
 
   @override

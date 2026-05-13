@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -34,11 +36,15 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   bool _hasLoaded = false;
   bool _isLoading = false;
   bool _isRefreshing = false;
+  bool _isLoadingNotes = false;
   String? _error;
+  String? _notesError;
   CareerWorkbenchTab _activeTab = CareerWorkbenchTab.projects;
   CareerProjectFilter _projectFilter = CareerProjectFilter.all;
   String? _selectedApplicationId;
+  String? _selectedNoteId;
   CareerWorkbenchListView? _workbench;
+  List<NoteView> _noteList = const [];
   final Map<String, CareerApplicationWorkbenchView> _details = {};
   final Map<String, NoteView> _notes = {};
   final Set<String> _loadingApplicationIds = {};
@@ -49,11 +55,19 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   bool get hasLoaded => _hasLoaded;
   bool get isLoading => _isLoading;
   bool get isRefreshing => _isRefreshing;
+  bool get isLoadingNotes => _isLoadingNotes;
   String? get error => _error;
+  String? get notesError => _notesError;
   CareerWorkbenchTab get activeTab => _activeTab;
   CareerProjectFilter get projectFilter => _projectFilter;
   String? get selectedApplicationId => _selectedApplicationId;
+  String? get selectedNoteId => _selectedNoteId;
   CareerWorkbenchListView? get workbench => _workbench;
+  List<NoteView> get notes {
+    final records = [..._noteList]
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return records;
+  }
 
   List<CareerApplicationSummaryView> get applications {
     final records = [...?_workbench?.applications]
@@ -138,6 +152,9 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   void setTab(CareerWorkbenchTab tab) {
     if (_activeTab == tab) return;
     _activeTab = tab;
+    if (tab == CareerWorkbenchTab.notes) {
+      unawaited(loadNotes());
+    }
     notifyListeners();
   }
 
@@ -232,6 +249,70 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     return note;
   }
 
+  Future<void> loadNotes({bool force = false}) async {
+    if (_isLoadingNotes) return;
+    if (_noteList.isNotEmpty && !force) return;
+    _isLoadingNotes = true;
+    _notesError = null;
+    notifyListeners();
+    try {
+      final records = await _api.listNotes();
+      _noteList = records;
+      for (final note in records) {
+        _notes[note.noteId] = note;
+      }
+      if (_selectedNoteId == null && records.isNotEmpty) {
+        _selectedNoteId = records.first.noteId;
+      }
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: "career workbench",
+          context: ErrorDescription("load notes"),
+        ),
+      );
+      _notesError = error.toString();
+    } finally {
+      _isLoadingNotes = false;
+      notifyListeners();
+    }
+  }
+
+  Future<NoteView> createNote({
+    required String sourceSessionId,
+    required String title,
+    required String bodyMarkdown,
+    required String summary,
+    required List<String> tags,
+    String? sourceArtifactId,
+    List<String> evidenceRefs = const [],
+    List<Map<String, dynamic>> sourceRefs = const [],
+    String? relatedApplicationId,
+  }) async {
+    final note = await _api.createNote(
+      sourceSessionId: sourceSessionId.trim(),
+      sourceArtifactId: sourceArtifactId,
+      evidenceRefs: evidenceRefs,
+      title: title.trim(),
+      bodyMarkdown: bodyMarkdown.trim(),
+      bodyFormat: "markdown",
+      tags: tags,
+      sourceRefs: sourceRefs,
+      relatedApplicationId: relatedApplicationId,
+      summary: summary.trim(),
+    );
+    _notes[note.noteId] = note;
+    _selectedNoteId = note.noteId;
+    await loadNotes(force: true);
+    final selectedId = _selectedApplicationId;
+    if (selectedId != null && selectedId.isNotEmpty) {
+      await loadApplicationDetail(selectedId, force: true);
+    }
+    return note;
+  }
+
   Future<NoteView> updateNote({
     required String noteId,
     required String title,
@@ -249,6 +330,8 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       tags: tags,
     );
     _notes[normalized] = note;
+    _selectedNoteId = normalized;
+    await loadNotes(force: true);
     final selectedId = _selectedApplicationId;
     if (selectedId != null && selectedId.isNotEmpty) {
       await loadApplicationDetail(selectedId, force: true);
