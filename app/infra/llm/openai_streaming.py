@@ -43,7 +43,7 @@ async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamCh
             parsed_payload = parse_stream_payload(payload_text)
             if parsed_payload is None:
                 continue
-            delta, tool_call_entries, _ = parsed_payload
+            delta, reasoning_delta, tool_call_entries, _ = parsed_payload
             if tool_call_entries:
                 saw_tool_call_delta = True
                 _merge_stream_tool_call_entries(tool_calls_accumulator, tool_call_entries)
@@ -51,6 +51,14 @@ async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamCh
                     yield StreamChunk(delta="", tool_calls=None, finished=False, has_tool_call_delta=True)
             if delta:
                 yield StreamChunk(delta=delta, tool_calls=None, finished=False, has_tool_call_delta=bool(tool_call_entries))
+            if reasoning_delta:
+                yield StreamChunk(
+                    delta="",
+                    reasoning_delta=reasoning_delta,
+                    tool_calls=None,
+                    finished=False,
+                    has_tool_call_delta=bool(tool_call_entries),
+                )
             continue
 
         if line.startswith("data:"):
@@ -62,9 +70,10 @@ async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamCh
         if payload_text != "[DONE]":
             parsed_payload = parse_stream_payload(payload_text)
             if parsed_payload is not None:
-                delta, tool_call_entries, _ = parsed_payload
+                delta, reasoning_delta, tool_call_entries, _ = parsed_payload
             else:
                 delta = ""
+                reasoning_delta = ""
                 tool_call_entries = []
             if tool_call_entries:
                 saw_tool_call_delta = True
@@ -73,6 +82,14 @@ async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamCh
                     yield StreamChunk(delta="", tool_calls=None, finished=False, has_tool_call_delta=True)
             if delta:
                 yield StreamChunk(delta=delta, tool_calls=None, finished=False, has_tool_call_delta=bool(tool_call_entries))
+            if reasoning_delta:
+                yield StreamChunk(
+                    delta="",
+                    reasoning_delta=reasoning_delta,
+                    tool_calls=None,
+                    finished=False,
+                    has_tool_call_delta=bool(tool_call_entries),
+                )
 
     parsed_tool_calls = _finalize_stream_tool_calls(tool_calls_accumulator)
     yield StreamChunk(
@@ -98,13 +115,22 @@ async def iter_chunks_from_non_sse_response(response: httpx.Response) -> AsyncIt
         raise ModelClientError(f"Invalid non-SSE stream response structure: {exc}") from exc
 
     content = normalize_content(message.get("content"))
+    reasoning_content = normalize_content(message.get("reasoning_content"))
     tool_calls = parse_tool_calls(message.get("tool_calls"))
     if content:
         yield StreamChunk(delta=content, tool_calls=None, finished=False, has_tool_call_delta=False)
+    if reasoning_content:
+        yield StreamChunk(
+            delta="",
+            reasoning_delta=reasoning_content,
+            tool_calls=None,
+            finished=False,
+            has_tool_call_delta=False,
+        )
     yield StreamChunk(delta="", tool_calls=tool_calls, finished=True, has_tool_call_delta=bool(tool_calls))
 
 
-def parse_stream_payload(payload_text: str) -> tuple[str, list[dict[str, Any]], str | None] | None:
+def parse_stream_payload(payload_text: str) -> tuple[str, str, list[dict[str, Any]], str | None] | None:
     try:
         payload = json.loads(payload_text)
     except json.JSONDecodeError as exc:
@@ -131,11 +157,12 @@ def parse_stream_payload(payload_text: str) -> tuple[str, list[dict[str, Any]], 
         delta_block = {}
 
     content_delta = normalize_stream_content(delta_block.get("content"))
+    reasoning_delta = normalize_stream_content(delta_block.get("reasoning_content"))
     raw_tool_calls = delta_block.get("tool_calls")
     tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
     finish_reason_raw = choice.get("finish_reason")
     finish_reason = finish_reason_raw if isinstance(finish_reason_raw, str) else None
-    return content_delta, tool_calls, finish_reason
+    return content_delta, reasoning_delta, tool_calls, finish_reason
 
 
 async def read_stream_error_detail(response: httpx.Response) -> str:

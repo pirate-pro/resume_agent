@@ -113,9 +113,10 @@ class OpenAICompatibleClient:
             raise ModelClientError(f"Invalid model response structure: {exc}") from exc
 
         content = _normalize_content(message.get("content"))
+        reasoning_content = _normalize_content(message.get("reasoning_content"))
         tool_calls = _parse_tool_calls(message.get("tool_calls"))
         _logger.debug("模型响应解析完成: content_len=%s tool_call_count=%s", len(content), len(tool_calls))
-        return ModelResponse(content=content, tool_calls=tool_calls)
+        return ModelResponse(content=content, tool_calls=tool_calls, reasoning_content=reasoning_content)
 
     async def generate_stream(
         self,

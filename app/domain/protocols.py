@@ -34,11 +34,13 @@ __all__ = [
 class ModelResponse:
     content: str
     tool_calls: list[ToolCall]
+    reasoning_content: str = ""
 
 
 @dataclass(slots=True)
 class StreamChunk:
     delta: str = ""
+    reasoning_delta: str = ""
     tool_calls: list[ToolCall] | None = None
     finished: bool = False
     has_tool_call_delta: bool = False

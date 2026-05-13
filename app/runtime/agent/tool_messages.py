@@ -35,8 +35,12 @@ def ensure_tool_call_ids(tool_calls: list[ToolCall]) -> list[ToolCall]:
     return resolved
 
 
-def build_assistant_tool_call_message(content: str, tool_calls: list[ToolCall]) -> dict[str, Any]:
-    return {
+def build_assistant_tool_call_message(
+    content: str,
+    tool_calls: list[ToolCall],
+    reasoning_content: str = "",
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
         "role": "assistant",
         "content": content or "",
         "tool_calls": [
@@ -51,6 +55,11 @@ def build_assistant_tool_call_message(content: str, tool_calls: list[ToolCall]) 
             for call in tool_calls
         ],
     }
+    if reasoning_content:
+        # Some OpenAI-compatible providers require reasoning_content to be
+        # echoed on the next tool round when they return it in thinking mode.
+        message["reasoning_content"] = reasoning_content
+    return message
 
 
 def build_tool_result_message(*, tool_call_id: str | None, content: str) -> dict[str, str | None]:

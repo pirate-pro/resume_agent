@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import RunContext, ToolDefinition, ToolExecutionResult
-from app.retrieval.models import RetrievalQuery, validate_source_type
+from app.retrieval.models import RetrievalQuery, RetrievalSourceType, validate_source_type
 from app.retrieval.service import RetrievalService
 from app.tools.builtin_tools.common import validate_context
 
@@ -23,6 +23,36 @@ _RETRIEVAL_ARGUMENT_FIELDS = {
     "top_k",
     "max_chars",
     "include_archived",
+}
+_SOURCE_TYPE_GROUP_ALIASES = {
+    "career": (
+        RetrievalSourceType.CAREER_APPLICATION,
+        RetrievalSourceType.RESUME_PROFILE,
+        RetrievalSourceType.CAREER_PROFILE,
+        RetrievalSourceType.JD_ANALYSIS,
+        RetrievalSourceType.JOB_FIT_REPORT,
+        RetrievalSourceType.RESUME_VERSION,
+    ),
+    "notes": (
+        RetrievalSourceType.NOTE,
+        RetrievalSourceType.NOTE_COLLECTION,
+    ),
+    "knowledge": (
+        RetrievalSourceType.EXTERNAL_RESOURCE,
+        RetrievalSourceType.EXPERIENCE_POST,
+        RetrievalSourceType.INTERVIEW_QUESTION,
+        RetrievalSourceType.COMPANY_PROFILE,
+        RetrievalSourceType.SKILL_REQUIREMENT,
+    ),
+    "learning": (
+        RetrievalSourceType.LEARNING_PLAN,
+        RetrievalSourceType.LEARNING_TASK,
+        RetrievalSourceType.PROGRESS_CHECKIN,
+        RetrievalSourceType.WEAKNESS_TRACKER,
+        RetrievalSourceType.REVIEW_SCHEDULE,
+    ),
+    "artifacts": (RetrievalSourceType.SESSION_ARTIFACT,),
+    "artifact": (RetrievalSourceType.SESSION_ARTIFACT,),
 }
 
 
@@ -47,7 +77,10 @@ class RetrievalSearchTool:
                     "source_types": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional source type filters, such as career_application, note, learning_task.",
+                        "description": (
+                            "Optional source type filters. Accepts concrete types such as career_application, "
+                            "note, learning_task, or group aliases: career, notes, knowledge, learning, artifacts."
+                        ),
                     },
                     "related_application_id": {"type": "string"},
                     "top_k": {"type": "integer", "default": 8, "minimum": 1, "maximum": 50},
@@ -97,7 +130,10 @@ class RetrievalContextPackTool:
                     "source_types": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional source type filters, such as career_application, note, learning_task.",
+                        "description": (
+                            "Optional source type filters. Accepts concrete types such as career_application, "
+                            "note, learning_task, or group aliases: career, notes, knowledge, learning, artifacts."
+                        ),
                     },
                     "related_application_id": {"type": "string"},
                     "top_k": {"type": "integer", "default": 8, "minimum": 1, "maximum": 50},
@@ -191,14 +227,18 @@ def _source_types(raw: Any) -> list[str]:
     for item in raw:
         if not isinstance(item, str) or not item.strip():
             raise ToolExecutionError("each 'source_types' item must be a non-empty string.")
-        try:
-            source_type = validate_source_type(item)
-        except ValidationError as exc:
-            raise ToolExecutionError(str(exc)) from exc
-        if source_type.value in seen:
-            continue
-        output.append(source_type.value)
-        seen.add(source_type.value)
+        normalized_item = item.strip().lower()
+        source_types = _SOURCE_TYPE_GROUP_ALIASES.get(normalized_item)
+        if source_types is None:
+            try:
+                source_types = (validate_source_type(item),)
+            except ValidationError as exc:
+                raise ToolExecutionError(str(exc)) from exc
+        for source_type in source_types:
+            if source_type.value in seen:
+                continue
+            output.append(source_type.value)
+            seen.add(source_type.value)
     return output
 
 

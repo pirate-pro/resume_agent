@@ -150,7 +150,13 @@ class AgentRuntime:
 
             # 遇到工具调用时，必须先把 assistant 的 tool_calls 消息回填到上下文，
             # 后续 tool 角色消息才是协议上合法的。
-            messages.append(build_assistant_tool_call_message(model_response.content, resolved_tool_calls))
+            messages.append(
+                build_assistant_tool_call_message(
+                    model_response.content,
+                    resolved_tool_calls,
+                    reasoning_content=model_response.reasoning_content,
+                )
+            )
 
             for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)
@@ -279,6 +285,7 @@ class AgentRuntime:
             _logger.debug("流式模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
             round_content_parts: list[str] = []
             round_content_deltas: list[str] = []
+            round_reasoning_parts: list[str] = []
             resolved_tool_calls: list[ToolCall] = []
 
             async for chunk in self._model_client.generate_stream(
@@ -289,6 +296,8 @@ class AgentRuntime:
                 if chunk.delta:
                     round_content_parts.append(chunk.delta)
                     round_content_deltas.append(chunk.delta)
+                if chunk.reasoning_delta:
+                    round_reasoning_parts.append(chunk.reasoning_delta)
 
                 if chunk.finished:
                     resolved_tool_calls = ensure_tool_call_ids(chunk.tool_calls or [])
@@ -340,7 +349,13 @@ class AgentRuntime:
                     channel=channel,
                 )
 
-            messages.append(build_assistant_tool_call_message(round_content, resolved_tool_calls))
+            messages.append(
+                build_assistant_tool_call_message(
+                    round_content,
+                    resolved_tool_calls,
+                    reasoning_content="".join(round_reasoning_parts).strip(),
+                )
+            )
 
             for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)

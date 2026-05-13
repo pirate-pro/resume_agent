@@ -225,6 +225,7 @@ def test_runtime_builds_valid_tool_message_flow(tmp_path: Path) -> None:
             if len(self.calls) == 1:
                 return ModelResponse(
                     content="",
+                    reasoning_content="provider thinking state",
                     tool_calls=[
                         ToolCall(
                             name="memory_write",
@@ -265,6 +266,7 @@ def test_runtime_builds_valid_tool_message_flow(tmp_path: Path) -> None:
     tool_result_message = next(msg for msg in second_call_messages if msg.get("role") == "tool")
 
     assert output.answer == "done"
+    assert assistant_tool_call_message["reasoning_content"] == "provider thinking state"
     assert assistant_tool_call_message["tool_calls"][0]["id"] == "call_test_1"
     assert tool_result_message["tool_call_id"] == "call_test_1"
 

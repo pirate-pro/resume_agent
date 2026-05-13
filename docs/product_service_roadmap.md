@@ -470,6 +470,17 @@ tests/test_career_live_smoke_report.py
 
 `tools/smoke_career_live_flow.py` 已支持 `--retrieval-action`，可以在原有低批次 live smoke 后追加一轮 M12 召回驱动动作验证。可选动作包括 `interview_prep / learning_task / save_note / pre_apply_check`。报告会检查 M12 动作是否先调用 `retrieval_search` 和 `retrieval_context_pack`，是否误写 memory，以及不同动作是否调用了对应写入工具。
 
+M12 低批次真实 smoke 验收：
+
+```text
+2026-05-13：interview_prep 已通过。
+```
+
+本次真实链路暴露并修复了两个基础兼容问题：
+
+- 当前 Mimo 网关在 thinking 模式下要求工具续轮回传 `reasoning_content`，已在 OpenAI-compatible client 和 runtime 工具消息中保留并回填该字段。
+- Retrieval 工具的 `source_types` 已支持 `career / notes / knowledge / learning / artifacts` 组别别名，避免 Agent 必须硬记每个资料子类型。
+
 ## 当前优先级
 
 M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估和 M12 第一批召回驱动动作闭环已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
