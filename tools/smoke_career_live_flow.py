@@ -2,6 +2,7 @@
 
 Run:
   uv run python tools/smoke_career_live_flow.py --runs 1
+  uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action interview_prep
 
 This script uses the real configured model endpoint. It is intentionally not
 part of pytest because model availability, latency, and tool-call behavior are
@@ -33,7 +34,11 @@ from app.infra.storage.jsonl_agent_task_store import JsonlAgentTaskStore
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.knowledge.store import KnowledgeStore
+from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
+from app.notes.store import NoteStore
+from app.retrieval.service import RetrievalService
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
 from app.runtime.agent_registry import load_agent_registry
 from app.runtime.agent_runtime import AgentRuntime
@@ -66,13 +71,36 @@ from app.tools.builtins import (
     CareerResumeVersionGetTool,
     CareerResumeVersionListTool,
     DelegateAgentsTool,
+    LearningCheckinCreateTool,
+    LearningPlanCreateTool,
+    LearningPlanGetTool,
+    LearningPlanListTool,
+    LearningTaskCreateTool,
+    LearningTaskGetTool,
+    LearningTaskListTool,
+    LearningTaskUpdateStateTool,
+    LearningWeaknessCreateTool,
+    LearningWeaknessUpdateTool,
     MemoryExplainTool,
     MemoryForgetTool,
     MemoryInspectTool,
     MemorySearchTool,
     MemoryUpdateTool,
     MemoryWriteTool,
+    NoteAppendTool,
+    NoteArchiveTool,
+    NoteCollectionArchiveTool,
+    NoteCollectionCreateTool,
+    NoteCollectionGetTool,
+    NoteCollectionListTool,
+    NoteCollectionUpdateTool,
+    NoteCreateTool,
+    NoteGetTool,
+    NoteListTool,
+    NoteUpdateTool,
     PublishArtifactTool,
+    RetrievalContextPackTool,
+    RetrievalSearchTool,
     SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
     SessionPlanArtifactAccessTool,
@@ -93,6 +121,9 @@ class LiveStack:
     runtime: AgentRuntime
     session_repository: JsonlSessionRepository
     career_store: CareerProductStore
+    note_store: NoteStore
+    knowledge_store: KnowledgeStore
+    learning_store: LearningStore
     data_dir: Path
 
 
@@ -129,6 +160,9 @@ class FlowReport:
 def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
     session_repository = JsonlSessionRepository(data_dir=data_dir)
     career_store = CareerProductStore(root_dir=data_dir / "career")
+    note_store = NoteStore(root_dir=data_dir / "notes")
+    knowledge_store = KnowledgeStore(root_dir=data_dir / "knowledge")
+    learning_store = LearningStore(root_dir=data_dir / "learning")
     capability_registry = load_agent_capability_registry(settings.agent_capabilities_path)
     memory_manager = MemoryManager(
         capability_registry=capability_registry,
@@ -182,6 +216,9 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         capability_registry=capability_registry,
         session_repository=session_repository,
         career_store=career_store,
+        note_store=note_store,
+        knowledge_store=knowledge_store,
+        learning_store=learning_store,
         memory_manager=memory_manager,
         state_manager=state_manager,
         task_runtime=task_runtime,
@@ -191,6 +228,9 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         runtime=runtime,
         session_repository=session_repository,
         career_store=career_store,
+        note_store=note_store,
+        knowledge_store=knowledge_store,
+        learning_store=learning_store,
         data_dir=data_dir,
     )
 
@@ -201,6 +241,9 @@ def register_live_tools(
     capability_registry: AgentCapabilityRegistry,
     session_repository: JsonlSessionRepository,
     career_store: CareerProductStore,
+    note_store: NoteStore,
+    knowledge_store: KnowledgeStore,
+    learning_store: LearningStore,
     memory_manager: MemoryManager,
     state_manager: StateManager,
     task_runtime: AgentTaskRuntime,
@@ -244,6 +287,36 @@ def register_live_tools(
     registry.register(CareerApplicationGetTool(career_store=career_store))
     registry.register(CareerApplicationListTool(career_store=career_store))
     registry.register(CareerApplicationMergeTool(career_store=career_store, session_repository=session_repository))
+    retrieval_service = RetrievalService(
+        career_store=career_store,
+        note_store=note_store,
+        knowledge_store=knowledge_store,
+        learning_store=learning_store,
+        session_repository=session_repository,
+    )
+    registry.register(RetrievalSearchTool(retrieval_service=retrieval_service))
+    registry.register(RetrievalContextPackTool(retrieval_service=retrieval_service))
+    registry.register(NoteCreateTool(note_store=note_store, session_repository=session_repository))
+    registry.register(NoteGetTool(note_store=note_store))
+    registry.register(NoteListTool(note_store=note_store))
+    registry.register(NoteUpdateTool(note_store=note_store, session_repository=session_repository))
+    registry.register(NoteAppendTool(note_store=note_store))
+    registry.register(NoteArchiveTool(note_store=note_store))
+    registry.register(NoteCollectionCreateTool(note_store=note_store))
+    registry.register(NoteCollectionGetTool(note_store=note_store))
+    registry.register(NoteCollectionListTool(note_store=note_store))
+    registry.register(NoteCollectionUpdateTool(note_store=note_store))
+    registry.register(NoteCollectionArchiveTool(note_store=note_store))
+    registry.register(LearningPlanCreateTool(learning_store=learning_store, session_repository=session_repository))
+    registry.register(LearningPlanGetTool(learning_store=learning_store))
+    registry.register(LearningPlanListTool(learning_store=learning_store))
+    registry.register(LearningTaskCreateTool(learning_store=learning_store, session_repository=session_repository))
+    registry.register(LearningTaskGetTool(learning_store=learning_store))
+    registry.register(LearningTaskListTool(learning_store=learning_store))
+    registry.register(LearningTaskUpdateStateTool(learning_store=learning_store))
+    registry.register(LearningCheckinCreateTool(learning_store=learning_store, session_repository=session_repository))
+    registry.register(LearningWeaknessCreateTool(learning_store=learning_store, session_repository=session_repository))
+    registry.register(LearningWeaknessUpdateTool(learning_store=learning_store, session_repository=session_repository))
 
 
 def run_live_flow(
@@ -253,6 +326,7 @@ def run_live_flow(
     settings: Settings,
     max_tool_rounds: int,
     project_action: str = "none",
+    retrieval_action: str = "none",
     progress: Callable[[str], None] | None = None,
 ) -> FlowReport:
     run_data_dir = root_data_dir / f"run_{run_index:03d}"
@@ -350,6 +424,19 @@ def run_live_flow(
                     progress=progress,
                 )
             )
+        if retrieval_action != "none":
+            current_stage = _retrieval_action_stage(retrieval_action)
+            report.turns.append(
+                run_turn(
+                    stack=stack,
+                    session_id=session_id,
+                    name=current_stage,
+                    message=_retrieval_action_message(retrieval_action),
+                    max_tool_rounds=max_tool_rounds,
+                    run_index=run_index,
+                    progress=progress,
+                )
+            )
     except Exception as exc:  # noqa: BLE001
         report.failed_stage = current_stage
         report.errors.append(str(exc) or exc.__class__.__name__)
@@ -429,6 +516,18 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     report.record_ids = record_ids
     report.artifact_ids = [item.artifact_id for item in artifacts]
     report.tool_call_counts = tool_call_counts(stack.session_repository, report.session_id)
+    if hasattr(stack, "note_store"):
+        note_ids = [
+            item.note_id for item in stack.note_store.list_notes(include_archived=True) if item.source_session_id == report.session_id
+        ]
+        record_ids["notes"] = note_ids
+    if hasattr(stack, "learning_store"):
+        learning_task_ids = [
+            item.learning_task_id
+            for item in stack.learning_store.list_learning_tasks(include_archived=True)
+            if item.source_session_id == report.session_id
+        ]
+        record_ids["learning_tasks"] = learning_task_ids
 
     required = {
         "resume_profiles": ResumeProfile,
@@ -465,6 +564,8 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
                 report.errors.append("项目动作未读取 CareerApplication。")
             if "career_application_merge" not in turn.tool_calls:
                 report.errors.append("项目动作未回写 CareerApplication。")
+        if turn.name.startswith("M12动作"):
+            _validate_retrieval_action_turn(turn=turn, report=report)
 
     quality_report = check_career_product_store(stack.data_dir, session_id=report.session_id)
     report.quality_gate_passed = quality_report.success
@@ -482,6 +583,29 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
         report.failed_stage = infer_failure_stage(report)
     if report.errors:
         report.last_events = latest_event_summaries(stack.session_repository, report.session_id)
+
+
+def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> None:
+    if "retrieval_search" not in turn.tool_calls:
+        report.errors.append("M12 动作未先调用 retrieval_search。")
+    if "retrieval_context_pack" not in turn.tool_calls:
+        report.errors.append("M12 动作未调用 retrieval_context_pack。")
+    if "memory_write" in turn.tool_calls:
+        report.errors.append("M12 动作不应写 memory。")
+    if turn.name == "M12动作：召回面试准备":
+        forbidden = {"note_create", "note_append", "learning_task_create", "career_application_merge"}
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M12 面试准备只读动作出现写入工具: {leaked}")
+    if turn.name == "M12动作：召回创建学习任务" and "learning_task_create" not in turn.tool_calls:
+        report.errors.append("M12 学习安排动作未创建 LearningTask。")
+    if turn.name == "M12动作：召回保存笔记" and not {"note_create", "note_append"}.intersection(turn.tool_calls):
+        report.errors.append("M12 保存笔记动作未写入 Note。")
+    if turn.name == "M12动作：召回投递前检查":
+        if "career_application_merge" not in turn.tool_calls:
+            report.errors.append("M12 投递前检查未更新 CareerApplication。")
+        if "delegate_agents" in turn.tool_calls:
+            report.errors.append("M12 投递前检查不应重新委派 child-agent。")
 
 
 def _record_touches_session(
@@ -545,6 +669,50 @@ def _project_action_message(project_action: str, application_id: str) -> str:
             "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”。"
         )
     raise ValueError(f"Unsupported project action: {project_action}")
+
+
+def _retrieval_action_stage(retrieval_action: str) -> str:
+    return {
+        "interview_prep": "M12动作：召回面试准备",
+        "learning_task": "M12动作：召回创建学习任务",
+        "save_note": "M12动作：召回保存笔记",
+        "pre_apply_check": "M12动作：召回投递前检查",
+    }[retrieval_action]
+
+
+def _retrieval_action_message(retrieval_action: str) -> str:
+    base = (
+        "请不要让我提供任何产品记录 id。你需要先根据历史求职资产自动召回相关上下文："
+        "先用 retrieval_search 定位相关求职项目，再用 retrieval_context_pack 读取项目、匹配报告、"
+        "简历画像、JD 分析和相关资料。不要使用 workspace path，不要写 memory。"
+    )
+    if retrieval_action == "interview_prep":
+        return (
+            f"{base}"
+            "请帮我准备之前那个 AI 应用开发岗位的面试，重点覆盖 RAG、Agent Runtime、后端工程化。"
+            "这轮只给准备建议，不要保存笔记、不要创建学习任务、不要更新求职项目。"
+        )
+    if retrieval_action == "learning_task":
+        return (
+            f"{base}"
+            "请根据之前的匹配短板，给我创建一个今天要完成的学习任务，并加入学习监督。"
+            "任务要有标题、优先级、预计时间、能力标签、完成标准和 evidence_refs。"
+        )
+    if retrieval_action == "save_note":
+        return (
+            f"{base}"
+            "请把这次面试准备内容保存为一条可编辑笔记。先召回依据，再调用 note_create。"
+            "Note 的 evidence_refs 只能使用 NoteService 支持的受控引用，例如 application、fit、"
+            "resume_profile、jd、career_profile、resume_version、note 或 artifact。"
+        )
+    if retrieval_action == "pre_apply_check":
+        return (
+            f"{base}"
+            "请做投递前检查并更新当前求职项目风险。不要重新委派 resume_agent 或 job_agent，"
+            "不要重新解析简历或 JD；基于召回到的 CareerApplication、ResumeProfile、JDAnalysis "
+            "和 JobFitReport，调用 career_application_merge 更新 summary、next_actions、risks 或 notes。"
+        )
+    raise ValueError(f"Unsupported retrieval action: {retrieval_action}")
 
 
 def infer_failure_stage(report: FlowReport) -> str:
@@ -771,6 +939,7 @@ async def run_all(args: argparse.Namespace) -> list[FlowReport]:
                 settings=settings,
                 max_tool_rounds=args.max_tool_rounds,
                 project_action=args.project_action,
+                retrieval_action=args.retrieval_action,
                 progress=progress,
             )
 
@@ -847,6 +1016,12 @@ def parse_args() -> argparse.Namespace:
         choices=("none", "checklist", "interview", "custom_resume"),
         default="none",
         help="是否追加一轮基于 application_id 的项目动作验证；默认不追加以控制 live smoke 成本。",
+    )
+    parser.add_argument(
+        "--retrieval-action",
+        choices=("none", "interview_prep", "learning_task", "save_note", "pre_apply_check"),
+        default="none",
+        help="是否追加一轮 M12 召回驱动动作验证；默认不追加以控制 live smoke 成本。",
     )
     parser.add_argument("--verbose", action="store_true", help="打开应用日志。")
     parser.add_argument("--quiet", action="store_true", help="关闭逐 run / 逐阶段进度输出，只打印最终报告。")

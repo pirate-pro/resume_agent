@@ -459,6 +459,17 @@ tests/test_retrieval_action_flow.py
 - 前端大改。
 - memory 自动写入。
 
+M12 收口 smoke 支持状态：已完成。
+
+已完成：
+
+```text
+tools/smoke_career_live_flow.py
+tests/test_career_live_smoke_report.py
+```
+
+`tools/smoke_career_live_flow.py` 已支持 `--retrieval-action`，可以在原有低批次 live smoke 后追加一轮 M12 召回驱动动作验证。可选动作包括 `interview_prep / learning_task / save_note / pre_apply_check`。报告会检查 M12 动作是否先调用 `retrieval_search` 和 `retrieval_context_pack`，是否误写 memory，以及不同动作是否调用了对应写入工具。
+
 ## 当前优先级
 
 M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估和 M12 第一批召回驱动动作闭环已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
@@ -471,10 +482,10 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 进入 M12 收口：把召回驱动动作链路接入更完整的 chat smoke 或低批次真实链路。
-2. 验证真实模型是否能稳定遵守“先召回、再行动、按需写入”的契约。
-3. 如果真实模型频繁误写 Note / Learning / Career，再收紧 AGENT.md 或工具描述。
-4. 继续暂缓索引、embedding、MCP、memory 自动写入和前端大改。
+1. 使用 `tools/smoke_career_live_flow.py --retrieval-action ...` 做低批次真实模型验证。
+2. 每次只跑一个 retrieval action，优先 `interview_prep`，再按需跑 `learning_task / save_note / pre_apply_check`。
+3. 验证真实模型是否能稳定遵守“先召回、再行动、按需写入”的契约。
+4. 如果真实模型频繁误写 Note / Learning / Career，再收紧 AGENT.md 或工具描述。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。

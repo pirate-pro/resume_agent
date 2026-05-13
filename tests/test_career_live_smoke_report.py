@@ -199,6 +199,7 @@ def test_live_smoke_passes_project_action_argument_to_run(monkeypatch: pytest.Mo
         runs=1,
         max_tool_rounds=8,
         project_action="checklist",
+        retrieval_action="none",
         quiet=True,
     )
 
@@ -206,6 +207,80 @@ def test_live_smoke_passes_project_action_argument_to_run(monkeypatch: pytest.Mo
 
     assert reports[0].success is True
     assert seen["project_action"] == "checklist"
+
+
+def test_live_smoke_passes_retrieval_action_argument_to_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run_live_flow(**kwargs: object) -> FlowReport:
+        seen.update(kwargs)
+        return FlowReport(
+            run_index=1,
+            session_id="sess_fake",
+            data_dir=tmp_path / "run_001",
+            success=True,
+            elapsed_seconds=0.0,
+        )
+
+    monkeypatch.setattr("tools.smoke_career_live_flow.Settings.load", lambda: SimpleNamespace())
+    monkeypatch.setattr("tools.smoke_career_live_flow.run_live_flow", fake_run_live_flow)
+    args = Namespace(
+        data_dir=tmp_path,
+        concurrency=1,
+        runs=1,
+        max_tool_rounds=8,
+        project_action="none",
+        retrieval_action="learning_task",
+        quiet=True,
+    )
+
+    reports = asyncio.run(run_all(args))
+
+    assert reports[0].success is True
+    assert seen["retrieval_action"] == "learning_task"
+
+
+def test_live_smoke_report_fails_when_m12_action_skips_retrieval(tmp_path: Path) -> None:
+    session_id = "sess_live_m12_action"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="M12动作：召回创建学习任务",
+                answer="已创建学习任务，但没有召回。",
+                elapsed_seconds=1.0,
+                tool_calls=["learning_task_create"],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M12 动作未先调用 retrieval_search。" in report.errors
+    assert "M12 动作未调用 retrieval_context_pack。" in report.errors
 
 
 def _add_artifact(
