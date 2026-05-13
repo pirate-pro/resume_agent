@@ -413,6 +413,7 @@ class ApiService {
     required String title,
     required String bodyMarkdown,
     String bodyFormat = "markdown",
+    String noteType = "note",
     String? collectionId,
     List<String> tags = const [],
     List<Map<String, dynamic>> sourceRefs = const [],
@@ -425,6 +426,7 @@ class ApiService {
       "title": title,
       "body_markdown": bodyMarkdown,
       "body_format": bodyFormat,
+      "note_type": noteType,
       "tags": tags,
       "source_refs": sourceRefs,
       "summary": summary,
@@ -471,6 +473,7 @@ class ApiService {
     String? title,
     String? bodyMarkdown,
     String? bodyFormat,
+    String? noteType,
     String? summary,
     List<String>? tags,
     String? collectionId,
@@ -480,6 +483,7 @@ class ApiService {
     if (title != null) body["title"] = title;
     if (bodyMarkdown != null) body["body_markdown"] = bodyMarkdown;
     if (bodyFormat != null) body["body_format"] = bodyFormat;
+    if (noteType != null) body["note_type"] = noteType;
     if (summary != null) body["summary"] = summary;
     if (tags != null) body["tags"] = tags;
     if (collectionId != null) body["collection_id"] = collectionId;

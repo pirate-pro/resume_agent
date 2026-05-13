@@ -286,6 +286,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     required String bodyMarkdown,
     required String summary,
     required List<String> tags,
+    String noteType = "note",
     String? sourceArtifactId,
     List<String> evidenceRefs = const [],
     List<Map<String, dynamic>> sourceRefs = const [],
@@ -298,6 +299,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       title: title.trim(),
       bodyMarkdown: bodyMarkdown.trim(),
       bodyFormat: "markdown",
+      noteType: _normalizeNoteType(noteType),
       tags: tags,
       sourceRefs: sourceRefs,
       relatedApplicationId: relatedApplicationId,
@@ -319,6 +321,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     required String bodyMarkdown,
     required String summary,
     required List<String> tags,
+    String noteType = "note",
   }) async {
     final normalized = noteId.trim();
     final note = await _api.updateNote(
@@ -326,6 +329,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       title: title.trim(),
       bodyMarkdown: bodyMarkdown.trim(),
       bodyFormat: "markdown",
+      noteType: _normalizeNoteType(noteType),
       summary: summary.trim(),
       tags: tags,
     );
@@ -360,6 +364,14 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     }
     _selectedApplicationId = records.first.application.applicationId;
   }
+}
+
+String _normalizeNoteType(String value) {
+  final normalized = value.trim().toLowerCase();
+  if (normalized == "learning" || normalized == "resource") {
+    return normalized;
+  }
+  return "note";
 }
 
 String _stageForFilter(CareerProjectFilter filter) {

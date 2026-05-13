@@ -387,7 +387,7 @@ class _OverviewView extends StatelessWidget {
               color: const Color(0xFF2563EB),
             ),
             _OverviewMetric(
-              label: "项目笔记",
+              label: "笔记",
               value: counts?.notes ?? 0,
               icon: Icons.sticky_note_2_outlined,
               color: const Color(0xFFB45309),
@@ -1012,13 +1012,13 @@ class _DetailNotesSection extends StatelessWidget {
     final visible = notes.take(4).toList();
     return _WorkbenchSection(
       icon: Icons.sticky_note_2_outlined,
-      title: "项目笔记",
+      title: "关联笔记",
       subtitle: "${visible.length} 条上下文 · 点击笔记进入编辑",
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _SmallTextButton(
-            label: "新建项目笔记",
+            label: "新建笔记",
             icon: Icons.add_rounded,
             onTap: () => _showNewNoteEditorSheet(
               context,
@@ -1289,6 +1289,7 @@ class _LinkedAssetTile extends StatelessWidget {
                   "关于 ${asset.title.trim().isEmpty ? _assetTypeLabel(asset.type) : asset.title.trim()} 的笔记",
               seedSummary: "引用 ${_assetTypeLabel(asset.type)} 作为资料来源。",
               seedBody: _assetNoteSeedBody(asset),
+              seedNoteType: "resource",
               evidenceRefs: _assetEvidenceRefs(asset, relatedApplicationId),
               sourceRefs: [_assetSourceRef(asset)],
             ),
@@ -1417,6 +1418,7 @@ class _NoteSummaryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tags = note.tags.take(3).toList();
+    final typeMeta = _noteTypeMeta(note.noteType);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1430,10 +1432,10 @@ class _NoteSummaryTile extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
           decoration: BoxDecoration(
-            color: const Color(0xFFB45309).withValues(alpha: 0.045),
+            color: typeMeta.color.withValues(alpha: 0.045),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: const Color(0xFFB45309).withValues(alpha: 0.13),
+              color: typeMeta.color.withValues(alpha: 0.13),
             ),
           ),
           child: Row(
@@ -1443,16 +1445,16 @@ class _NoteSummaryTile extends StatelessWidget {
                 width: 30,
                 height: 30,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFB45309).withValues(alpha: 0.1),
+                  color: typeMeta.color.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
-                    color: const Color(0xFFB45309).withValues(alpha: 0.16),
+                    color: typeMeta.color.withValues(alpha: 0.16),
                   ),
                 ),
-                child: const Icon(
-                  Icons.sticky_note_2_outlined,
+                child: Icon(
+                  typeMeta.icon,
                   size: 16,
-                  color: Color(0xFFB45309),
+                  color: typeMeta.color,
                 ),
               ),
               const SizedBox(width: 9),
@@ -1473,6 +1475,11 @@ class _NoteSummaryTile extends StatelessWidget {
                               color: AppTheme.textPrimary,
                             ),
                           ),
+                        ),
+                        const SizedBox(width: 8),
+                        _TinyTag(
+                          label: typeMeta.label,
+                          color: typeMeta.color,
                         ),
                         const SizedBox(width: 8),
                         Text(
@@ -1507,7 +1514,7 @@ class _NoteSummaryTile extends StatelessWidget {
                           for (final tag in tags)
                             _TinyTag(
                               label: tag,
-                              color: const Color(0xFFB45309),
+                              color: typeMeta.color,
                             ),
                         ],
                       ),
@@ -1548,17 +1555,75 @@ class _NoteSummaryTile extends StatelessWidget {
   }
 }
 
+class _NoteTypeMeta {
+  final String value;
+  final String label;
+  final String hint;
+  final IconData icon;
+  final Color color;
+
+  const _NoteTypeMeta({
+    required this.value,
+    required this.label,
+    required this.hint,
+    required this.icon,
+    required this.color,
+  });
+}
+
+const _noteTypeOptions = <_NoteTypeMeta>[
+  _NoteTypeMeta(
+    value: "note",
+    label: "记录",
+    hint: "适合想法、总结、过程记录和杂项内容，后续作为个人上下文参考。",
+    icon: Icons.edit_note_outlined,
+    color: Color(0xFFB45309),
+  ),
+  _NoteTypeMeta(
+    value: "learning",
+    label: "学习",
+    hint: "适合知识点、学习计划和短板复盘，后续学习建议会优先参考。",
+    icon: Icons.school_outlined,
+    color: Color(0xFF2563EB),
+  ),
+  _NoteTypeMeta(
+    value: "resource",
+    label: "资料",
+    hint: "适合面经、文章、链接或资产摘录，后续检索时作为参考材料。",
+    icon: Icons.bookmark_border_rounded,
+    color: Color(0xFF059669),
+  ),
+];
+
+_NoteTypeMeta _noteTypeMeta(String value) {
+  final normalized = _normalizeNoteType(value);
+  for (final option in _noteTypeOptions) {
+    if (option.value == normalized) return option;
+  }
+  return _noteTypeOptions.first;
+}
+
+String _normalizeNoteType(String value) {
+  final normalized = value.trim().toLowerCase();
+  if (normalized == "learning" || normalized == "resource") {
+    return normalized;
+  }
+  return "note";
+}
+
 class _NoteEditDraft {
   final String title;
   final String bodyMarkdown;
   final String summary;
   final List<String> tags;
+  final String noteType;
 
   const _NoteEditDraft({
     required this.title,
     required this.bodyMarkdown,
     required this.summary,
     required this.tags,
+    required this.noteType,
   });
 }
 
@@ -1582,6 +1647,7 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
   late final TextEditingController _summaryController;
   late final TextEditingController _tagsController;
   late final TextEditingController _bodyController;
+  late String _noteType;
   bool _saving = false;
   String? _error;
 
@@ -1592,6 +1658,7 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
     _summaryController = TextEditingController(text: widget.note.summary);
     _tagsController = TextEditingController(text: widget.note.tags.join("，"));
     _bodyController = TextEditingController(text: widget.note.bodyMarkdown);
+    _noteType = _normalizeNoteType(widget.note.noteType);
   }
 
   @override
@@ -1625,6 +1692,7 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
           bodyMarkdown: body,
           summary: _summaryController.text.trim(),
           tags: _parseTags(_tagsController.text),
+          noteType: _noteType,
         ),
       );
     } catch (error) {
@@ -1685,6 +1753,13 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
                 ],
               );
             },
+          ),
+          const SizedBox(height: 12),
+          _NoteTypeSelector(
+            value: _noteType,
+            onChanged: (value) => setState(() {
+              _noteType = _normalizeNoteType(value);
+            }),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -1749,6 +1824,148 @@ class _NoteEditorFormState extends State<_NoteEditorForm> {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _NoteTypeSelector extends StatelessWidget {
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  const _NoteTypeSelector({
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = _noteTypeMeta(value);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.66),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.78)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                "笔记类型",
+                style: AppTheme.ts(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w900,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                "影响后续检索和建议",
+                style: AppTheme.ts(
+                  fontSize: 10.5,
+                  color: AppTheme.textTertiary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 7,
+            runSpacing: 7,
+            children: [
+              for (final option in _noteTypeOptions)
+                _NoteTypePill(
+                  meta: option,
+                  selected: option.value == selected.value,
+                  onTap: () => onChanged(option.value),
+                ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                selected.icon,
+                size: 13,
+                color: selected.color.withValues(alpha: 0.78),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  selected.hint,
+                  style: AppTheme.ts(
+                    fontSize: 10.8,
+                    height: 1.35,
+                    color: AppTheme.textTertiary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteTypePill extends StatelessWidget {
+  final _NoteTypeMeta meta;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _NoteTypePill({
+    required this.meta,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: Key("career_note_type_${meta.value}"),
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected
+                ? meta.color.withValues(alpha: 0.1)
+                : Colors.white.withValues(alpha: 0.68),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected
+                  ? meta.color.withValues(alpha: 0.28)
+                  : AppTheme.border.withValues(alpha: 0.8),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                meta.icon,
+                size: 13,
+                color: selected ? meta.color : AppTheme.textTertiary,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                meta.label,
+                style: AppTheme.ts(
+                  fontSize: 11.2,
+                  fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                  color: selected ? meta.color : AppTheme.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2677,6 +2894,7 @@ Future<void> _showNewNoteEditorSheet(
   String seedTitle = "",
   String seedSummary = "",
   String seedBody = "",
+  String seedNoteType = "note",
   List<String> evidenceRefs = const [],
   List<Map<String, dynamic>> sourceRefs = const [],
 }) {
@@ -2692,6 +2910,7 @@ Future<void> _showNewNoteEditorSheet(
     title: title,
     bodyMarkdown: seedBody.trim().isEmpty ? "# $title\n\n" : seedBody,
     bodyFormat: "markdown",
+    noteType: _normalizeNoteType(seedNoteType),
     collectionId: null,
     tags: const [],
     sourceRefs: const [],
@@ -2770,6 +2989,7 @@ Future<void> _showNewNoteEditorSheet(
                             bodyMarkdown: noteDraft.bodyMarkdown,
                             summary: noteDraft.summary,
                             tags: noteDraft.tags,
+                            noteType: noteDraft.noteType,
                           );
                           if (sheetContext.mounted) {
                             navigator.pop();
@@ -2887,6 +3107,7 @@ Future<void> _showNoteEditorSheet(
                                           bodyMarkdown: draft.bodyMarkdown,
                                           summary: draft.summary,
                                           tags: draft.tags,
+                                          noteType: draft.noteType,
                                         );
                                         if (sheetContext.mounted) {
                                           navigator.pop();
@@ -3269,6 +3490,7 @@ CareerNoteSummaryView _summaryFromNote(NoteView note) {
         : _plainSnippet(note.bodyMarkdown),
     status: note.status,
     updatedAt: note.updatedAt,
+    noteType: note.noteType,
     sourceArtifactId: note.sourceArtifactId,
     relatedApplicationId: note.relatedApplicationId,
     tags: note.tags,

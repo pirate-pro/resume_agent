@@ -63,6 +63,8 @@ void main() {
     await tester.tap(find.text('引用').first);
     await tester.pumpAndSettle();
     expect(find.text('新建笔记'), findsOneWidget);
+    expect(find.text('笔记类型'), findsOneWidget);
+    expect(find.text('资料'), findsWidgets);
     expect(find.textContaining('引用来源'), findsOneWidget);
     await tester.enterText(
       find.byKey(const Key('career_note_body_field')),
@@ -71,6 +73,7 @@ void main() {
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     expect(api.createdNoteTitles.last, contains('星河智能'));
+    expect(api.createdNoteTypes.last, 'resource');
     expect(api.createdSourceRefs.last.first['source_type'], 'job_fit_report');
 
     await tester.tap(find.text('笔记').first);
@@ -110,6 +113,7 @@ void main() {
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     expect(api.createdNoteTitles.last, '自由复盘笔记');
+    expect(api.createdNoteTypes.last, 'note');
 
     await tester.tap(find.text('生成定制简历'));
     await tester.pumpAndSettle();
@@ -126,11 +130,13 @@ class _FakeCareerWorkbenchApi extends ApiService {
   final openedNoteIds = <String>[];
   final updatedNoteBodies = <String>[];
   final createdNoteTitles = <String>[];
+  final createdNoteTypes = <String>[];
   final createdSourceRefs = <List<Map<String, dynamic>>>[];
   final _now = DateTime(2026, 5, 10, 12, 30);
   String _noteTitle = '投递准备记录';
   String _noteSummary = '记录本轮岗位匹配和投递准备。';
   String _noteBody = '# 投递准备记录\n\n## 面试关注点\n- 复盘 Agent Runtime 项目';
+  String _noteType = 'note';
   List<String> _noteTags = const ['投递'];
   final List<NoteView> _createdNotes = [];
 
@@ -250,6 +256,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
           noteId: 'note_staragent_001',
           title: _noteTitle,
           summary: _noteSummary,
+          noteType: _noteType,
           status: 'active',
           updatedAt: _now,
           sourceArtifactId: null,
@@ -316,6 +323,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
     required String title,
     required String bodyMarkdown,
     String bodyFormat = 'markdown',
+    String noteType = 'note',
     String? collectionId,
     List<String> tags = const [],
     List<Map<String, dynamic>> sourceRefs = const [],
@@ -323,6 +331,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
     String summary = '',
   }) async {
     createdNoteTitles.add(title);
+    createdNoteTypes.add(noteType);
     createdSourceRefs.add(sourceRefs);
     final note = NoteView(
       noteId: noteId ?? 'note_created_${createdNoteTitles.length}',
@@ -335,6 +344,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
       title: title,
       bodyMarkdown: bodyMarkdown,
       bodyFormat: bodyFormat,
+      noteType: noteType,
       collectionId: collectionId,
       tags: tags,
       sourceRefs:
@@ -352,6 +362,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
     String? title,
     String? bodyMarkdown,
     String? bodyFormat,
+    String? noteType,
     String? summary,
     List<String>? tags,
     String? collectionId,
@@ -366,6 +377,9 @@ class _FakeCareerWorkbenchApi extends ApiService {
     if (bodyMarkdown != null) {
       _noteBody = bodyMarkdown;
       updatedNoteBodies.add(bodyMarkdown);
+    }
+    if (noteType != null) {
+      _noteType = noteType;
     }
     if (tags != null) {
       _noteTags = tags;
@@ -385,6 +399,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
       title: _noteTitle,
       bodyMarkdown: _noteBody,
       bodyFormat: 'markdown',
+      noteType: _noteType,
       collectionId: null,
       tags: _noteTags,
       sourceRefs: const [],

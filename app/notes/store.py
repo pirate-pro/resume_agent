@@ -6,7 +6,7 @@ import json
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 from uuid import uuid4
 
 from app.core.errors import StorageError, ValidationError
@@ -18,6 +18,7 @@ from app.notes.models import (
     NoteRecordStatus,
     NoteSourceRef,
     NoteSourceType,
+    NoteType,
     validate_collection_id,
     validate_evidence_refs,
     validate_note_id,
@@ -33,6 +34,7 @@ _NOTE_UPDATE_FIELDS = {
     "body_markdown",
     "collection_id",
     "evidence_refs",
+    "note_type",
     "related_application_id",
     "source_artifact_id",
     "source_refs",
@@ -202,6 +204,7 @@ def _note_to_payload(record: Note) -> dict[str, Any]:
         "created_at": _to_iso(record.created_at),
         "evidence_refs": record.evidence_refs,
         "note_id": record.note_id,
+        "note_type": cast(NoteType, record.note_type).value,
         "related_application_id": record.related_application_id,
         "source_artifact_id": record.source_artifact_id,
         "source_refs": [_source_ref_to_payload(source_ref) for source_ref in record.source_refs],
@@ -226,6 +229,7 @@ def _note_from_payload(payload: dict[str, Any]) -> Note:
         title=payload["title"],
         body_markdown=payload["body_markdown"],
         body_format=payload.get("body_format", "markdown"),
+        note_type=payload.get("note_type", "note"),
         collection_id=payload.get("collection_id"),
         tags=payload.get("tags", []),
         source_refs=_source_refs_from_payload(payload.get("source_refs", [])),

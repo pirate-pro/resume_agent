@@ -57,6 +57,7 @@ def test_note_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
                     "evidence_refs": ["application_alpha", "artifact_report", "fit_alpha"],
                     "title": "星河智能投递前检查复盘",
                     "body_markdown": "## 结论\n先补 RAG 项目证据，再投递。",
+                    "note_type": "resource",
                     "collection_id": "collection_interview",
                     "tags": ["投递前检查", "RAG"],
                     "source_refs": [
@@ -75,6 +76,7 @@ def test_note_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
             note = _data(note_resp)
             assert note["note_id"] == "note_alpha"
             assert note["status"] == "active"
+            assert note["note_type"] == "resource"
             assert note["source_refs"][0]["source_id"] == "artifact_report"
             assert note["created_at"] == "2026-05-12T08:02:00+08:00"
 
@@ -133,12 +135,14 @@ def test_note_api_updates_appends_and_archives_note(tmp_path: Path) -> None:
                 json={
                     "title": "更新后的投递复盘",
                     "summary": "需要准备 RAG 深挖问题。",
+                    "note_type": "learning",
                     "tags": ["投递前检查", "面试准备"],
                 },
             )
             assert update_resp.status_code == 200
             updated = _data(update_resp)
             assert updated["title"] == "更新后的投递复盘"
+            assert updated["note_type"] == "learning"
             assert updated["tags"] == ["投递前检查", "面试准备"]
 
             append_resp = client.post(
@@ -246,6 +250,9 @@ def test_note_api_rejects_empty_and_invalid_updates(tmp_path: Path) -> None:
 
             invalid_note_resp = client.patch("/api/notes/note_alpha", json={"related_application_id": "bad"})
             assert invalid_note_resp.status_code == 400
+
+            invalid_type_resp = client.patch("/api/notes/note_alpha", json={"note_type": "project"})
+            assert invalid_type_resp.status_code == 400
 
             empty_collection_resp = client.patch("/api/notes/collections/collection_interview", json={})
             assert empty_collection_resp.status_code == 400

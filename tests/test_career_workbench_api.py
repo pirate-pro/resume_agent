@@ -45,6 +45,7 @@ def test_career_workbench_api_lists_and_reads_workbench(tmp_path: Path) -> None:
             assert detail["job_fit_report"]["job_fit_report_id"] == "fit_alpha"
             assert [item["resume_version_id"] for item in detail["resume_versions"]] == ["resume_version_alpha"]
             assert [item["note_id"] for item in detail["notes"]] == ["note_alpha"]
+            assert [item["note_type"] for item in detail["notes"]] == ["learning"]
             assert [item["learning_plan_id"] for item in detail["learning"]["plans"]] == ["learning_plan_alpha"]
             assert [item["learning_task_id"] for item in detail["learning"]["tasks"]] == ["learning_task_alpha"]
             assert detail["learning"]["open_task_count"] == 1

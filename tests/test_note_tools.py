@@ -160,6 +160,7 @@ def test_main_agent_creates_gets_lists_updates_appends_and_archives_note(tmp_pat
             "evidence_refs": ["application_alpha", "fit_alpha"],
             "title": "星河智能投递前检查复盘",
             "body_markdown": "## 结论\n先补 RAG 项目证据，再投递。",
+            "note_type": "resource",
             "collection_id": collection_payload["record_id"],
             "tags": ["投递前检查", "RAG"],
             "related_application_id": "application_alpha",
@@ -193,6 +194,7 @@ def test_main_agent_creates_gets_lists_updates_appends_and_archives_note(tmp_pat
                 {
                     "title": "更新后的投递复盘",
                     "summary": "准备 RAG 深挖问题。",
+                    "note_type": "learning",
                     "tags": ["投递前检查", "面试准备"],
                 },
                 ensure_ascii=False,
@@ -224,6 +226,7 @@ def test_main_agent_creates_gets_lists_updates_appends_and_archives_note(tmp_pat
     assert note_payload["record_id"] == "note_star_agent_review"
     assert note_payload["source_session_id"] == "sess_notes"
     assert note_payload["record"]["source_artifact_id"] == report_artifact_id
+    assert note_payload["record"]["note_type"] == "resource"
     assert report_artifact_id in note_payload["record"]["evidence_refs"]
     assert note_payload["record"]["source_refs"][0]["source_type"] == "artifact"
     assert duplicate_payload["record_id"] == "note_star_agent_review"
@@ -231,6 +234,7 @@ def test_main_agent_creates_gets_lists_updates_appends_and_archives_note(tmp_pat
     assert loaded_payload["record"]["title"] == "星河智能投递前检查复盘"
     assert [record["note_id"] for record in list_payload["records"]] == ["note_star_agent_review"]
     assert updated_payload["record"]["title"] == "更新后的投递复盘"
+    assert updated_payload["record"]["note_type"] == "learning"
     assert "面试后补充" in appended_payload["record"]["body_markdown"]
     assert appended_payload["record"]["source_refs"][-1]["source_type"] == "manual"
     assert archived_payload["record"]["status"] == "archived"

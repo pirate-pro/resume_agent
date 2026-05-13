@@ -29,7 +29,7 @@ from app.knowledge.models import (
     SkillRequirement,
 )
 from app.learning.models import LearningPlan, LearningTask, ProgressCheckin, ReviewSchedule, WeaknessTracker
-from app.notes.models import Note, NoteCollection, NoteSourceRef
+from app.notes.models import Note, NoteCollection, NoteSourceRef, NoteType
 from app.schemas.chat import (
     AnswerArtifactView,
     EventView,
@@ -321,6 +321,7 @@ def career_note_summary_view(item: CareerNoteSummary) -> CareerNoteSummaryView:
         summary=item.summary,
         status=item.status,
         updated_at=item.updated_at,
+        note_type=item.note_type,
         source_artifact_id=item.source_artifact_id,
         related_application_id=item.related_application_id,
         tags=item.tags,
@@ -398,6 +399,7 @@ def note_view(item: Note) -> NoteView:
         title=item.title,
         body_markdown=item.body_markdown,
         body_format=item.body_format,
+        note_type=cast(NoteType, item.note_type).value,
         collection_id=item.collection_id,
         tags=item.tags,
         source_refs=[note_source_ref_view(source_ref) for source_ref in item.source_refs],

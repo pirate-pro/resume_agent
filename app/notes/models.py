@@ -19,6 +19,7 @@ __all__ = [
     "NoteRecordStatus",
     "NoteSourceRef",
     "NoteSourceType",
+    "NoteType",
     "validate_artifact_id",
     "validate_collection_id",
     "validate_evidence_refs",
@@ -46,6 +47,14 @@ class NoteCollectionKind(str, Enum):
     INTERVIEW = "interview"
     LEARNING = "learning"
     RESUME = "resume"
+    RESOURCE = "resource"
+
+
+class NoteType(str, Enum):
+    """User-facing note intent used for later context selection."""
+
+    NOTE = "note"
+    LEARNING = "learning"
     RESOURCE = "resource"
 
 
@@ -182,6 +191,7 @@ class Note:
     title: str
     body_markdown: str
     body_format: str = "markdown"
+    note_type: NoteType | str = NoteType.NOTE
     collection_id: str | None = None
     tags: list[str] = field(default_factory=list)
     source_refs: list[NoteSourceRef] = field(default_factory=list)
@@ -201,6 +211,7 @@ class Note:
         self.title = _normalize_text("title", self.title, allow_empty=False)
         self.body_markdown = _normalize_text("body_markdown", self.body_markdown, allow_empty=False)
         self.body_format = _normalize_body_format(self.body_format)
+        self.note_type = _normalize_note_type(self.note_type)
         self.collection_id = validate_optional_collection_id("collection_id", self.collection_id)
         self.tags = _normalize_string_list("tags", self.tags)
         self.source_refs = validate_source_refs(self.source_refs)
@@ -222,6 +233,7 @@ class Note:
             title=self.title,
             body_markdown=self.body_markdown,
             body_format=self.body_format,
+            note_type=self.note_type,
             collection_id=self.collection_id,
             tags=list(self.tags),
             source_refs=[source_ref.copy() for source_ref in self.source_refs],
@@ -330,6 +342,17 @@ def _normalize_collection_kind(value: NoteCollectionKind | str) -> NoteCollectio
         except ValueError as exc:
             raise ValidationError(f"kind is invalid: {value}") from exc
     raise ValidationError("kind must be a string.")
+
+
+def _normalize_note_type(value: NoteType | str) -> NoteType:
+    if isinstance(value, NoteType):
+        return value
+    if isinstance(value, str):
+        try:
+            return NoteType(value.strip().lower())
+        except ValueError as exc:
+            raise ValidationError(f"note_type is invalid: {value}") from exc
+    raise ValidationError("note_type must be a string.")
 
 
 def _normalize_source_type(value: NoteSourceType | str) -> NoteSourceType:

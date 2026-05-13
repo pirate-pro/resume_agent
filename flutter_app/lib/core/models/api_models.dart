@@ -975,6 +975,7 @@ class NoteView {
   final String title;
   final String bodyMarkdown;
   final String bodyFormat;
+  final String noteType;
   final String? collectionId;
   final List<String> tags;
   final List<NoteSourceRefView> sourceRefs;
@@ -992,6 +993,7 @@ class NoteView {
     required this.title,
     required this.bodyMarkdown,
     required this.bodyFormat,
+    this.noteType = 'note',
     required this.collectionId,
     required this.tags,
     required this.sourceRefs,
@@ -1011,6 +1013,7 @@ class NoteView {
       title: (json["title"] ?? "").toString(),
       bodyMarkdown: (json["body_markdown"] ?? "").toString(),
       bodyFormat: (json["body_format"] ?? "markdown").toString(),
+      noteType: (json["note_type"] ?? "note").toString(),
       collectionId: _readOptionalString(json["collection_id"]),
       tags: _readStringList(json["tags"]),
       sourceRefs: _readList(json["source_refs"])
@@ -1030,6 +1033,7 @@ class CareerNoteSummaryView {
   final String summary;
   final String status;
   final DateTime updatedAt;
+  final String noteType;
   final String? sourceArtifactId;
   final String? relatedApplicationId;
   final List<String> tags;
@@ -1040,6 +1044,7 @@ class CareerNoteSummaryView {
     required this.summary,
     required this.status,
     required this.updatedAt,
+    this.noteType = 'note',
     required this.sourceArtifactId,
     required this.relatedApplicationId,
     required this.tags,
@@ -1052,6 +1057,7 @@ class CareerNoteSummaryView {
       summary: (json["summary"] ?? "").toString(),
       status: (json["status"] ?? "active").toString(),
       updatedAt: _readDateTime(json["updated_at"]),
+      noteType: (json["note_type"] ?? "note").toString(),
       sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
       relatedApplicationId: _readOptionalString(json["related_application_id"]),
       tags: _readStringList(json["tags"]),

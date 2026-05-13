@@ -66,6 +66,7 @@ def create_note(
         title=request.title,
         body_markdown=request.body_markdown,
         body_format=request.body_format,
+        note_type=request.note_type,
         collection_id=request.collection_id,
         tags=request.tags,
         source_refs=_source_refs(request.source_refs),

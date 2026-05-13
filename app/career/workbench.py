@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from app.career.models import (
     CareerApplication,
@@ -25,7 +25,7 @@ from app.learning.models import (
     WeaknessTracker,
 )
 from app.learning.store import LearningStore
-from app.notes.models import Note, NoteSourceType
+from app.notes.models import Note, NoteSourceType, NoteType
 from app.notes.store import NoteStore
 
 __all__ = [
@@ -108,6 +108,7 @@ class CareerNoteSummary:
     summary: str
     status: str
     updated_at: datetime
+    note_type: str = "note"
     source_artifact_id: str | None = None
     related_application_id: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -749,6 +750,7 @@ def _note_summary(note: Note) -> CareerNoteSummary:
         summary=note.summary,
         status=_enum_value(note.status),
         updated_at=note.updated_at,
+        note_type=cast(NoteType, note.note_type).value,
         source_artifact_id=note.source_artifact_id,
         related_application_id=note.related_application_id,
         tags=note.tags,

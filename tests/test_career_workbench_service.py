@@ -63,6 +63,7 @@ def test_career_workbench_service_aggregates_application_context_without_writes(
     assert detail.job_fit_report is not None
     assert [version.resume_version_id for version in detail.resume_versions] == ["resume_version_alpha"]
     assert [note.note_id for note in detail.notes] == ["note_alpha"]
+    assert [note.note_type for note in detail.notes] == ["learning"]
     assert [plan.learning_plan_id for plan in detail.learning.plans] == ["learning_plan_alpha"]
     assert [task.learning_task_id for task in detail.learning.tasks] == ["learning_task_alpha"]
     assert [weakness.weakness_id for weakness in detail.learning.weaknesses] == ["weakness_alpha"]
@@ -248,6 +249,7 @@ def _note() -> Note:
         updated_at=_seed_time(),
         title="星河智能面试准备笔记",
         body_markdown="# 面试准备\n\n补充 RAG 评估方案。",
+        note_type="learning",
         tags=["RAG"],
         source_refs=[
             NoteSourceRef(

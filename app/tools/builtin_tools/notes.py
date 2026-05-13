@@ -12,7 +12,7 @@ from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.core.time import app_now, to_app_iso
 from app.domain.models import RunContext, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
-from app.notes.models import Note, NoteCollection, NoteCollectionKind, NoteRecordStatus, NoteSourceRef
+from app.notes.models import Note, NoteCollection, NoteCollectionKind, NoteRecordStatus, NoteSourceRef, NoteType
 from app.notes.store import NoteStore
 from app.tools.builtin_tools.common import validate_context
 from app.tools.builtin_tools.session_artifact_helpers import require_session_artifact
@@ -36,6 +36,7 @@ _NOTE_UPDATE_FIELDS = {
     "body_markdown",
     "collection_id",
     "evidence_refs",
+    "note_type",
     "related_application_id",
     "source_artifact_id",
     "source_refs",
@@ -74,6 +75,12 @@ class NoteCreateTool:
                     "title": {"type": "string"},
                     "body_markdown": {"type": "string"},
                     "body_format": {"type": "string", "enum": ["markdown"], "default": "markdown"},
+                    "note_type": {
+                        "type": "string",
+                        "enum": ["note", "learning", "resource"],
+                        "default": "note",
+                        "description": "Use note for general records, learning for study notes, resource for links/interview materials/assets.",
+                    },
                     "collection_id": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "source_refs": {
@@ -133,6 +140,7 @@ class NoteCreateTool:
                 title=_required_string(args.get("title"), field_name="title"),
                 body_markdown=_required_string(args.get("body_markdown"), field_name="body_markdown"),
                 body_format=_optional_string(args.get("body_format")) or "markdown",
+                note_type=_optional_string(args.get("note_type")) or "note",
                 collection_id=_optional_prefixed_id(args.get("collection_id"), "collection"),
                 tags=_optional_string_list(args.get("tags"), field_name="tags"),
                 source_refs=source_refs,
@@ -218,7 +226,8 @@ class NoteUpdateTool:
             name="note_update",
             description=(
                 "Update editable note fields. Allowed fields: title, body_markdown, tags, summary, collection_id, "
-                "source_refs, source_artifact_id, related_application_id, evidence_refs. This tool does not write memory."
+                "note_type, source_refs, source_artifact_id, related_application_id, evidence_refs. "
+                "This tool does not write memory."
             ),
             parameters_schema={
                 "type": "object",
@@ -731,6 +740,7 @@ def _record_to_payload(record: Note | NoteCollection) -> dict[str, Any]:
                 "title": record.title,
                 "body_markdown": record.body_markdown,
                 "body_format": record.body_format,
+                "note_type": cast(NoteType, record.note_type).value,
                 "collection_id": record.collection_id,
                 "tags": record.tags,
                 "source_refs": [_source_ref_to_payload(source_ref) for source_ref in record.source_refs],

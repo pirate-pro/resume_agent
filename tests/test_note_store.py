@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -96,6 +96,7 @@ def test_note_store_persists_notes_and_collections_across_instances(tmp_path: Pa
     assert collection.kind == NoteCollectionKind.INTERVIEW
     assert note is not None
     assert note.title == "星河智能投递前检查复盘"
+    assert note.note_type.value == "note"
     assert note.body_markdown.startswith("## 结论")
     assert note.source_artifact_id == "artifact_report"
     assert note.source_refs[0].source_id == "artifact_report"
@@ -186,6 +187,7 @@ def test_note_update_and_append_validate_allowed_fields(tmp_path: Path) -> None:
             "title": "更新后的投递复盘",
             "body_markdown": "## 新结论\n可以投递，但要准备 RAG 深挖。",
             "tags": ["投递前检查", "面试准备"],
+            "note_type": "learning",
             "summary": "投递前准备 RAG 深挖问题。",
         },
     )
@@ -203,6 +205,7 @@ def test_note_update_and_append_validate_allowed_fields(tmp_path: Path) -> None:
     )
 
     assert updated.title == "更新后的投递复盘"
+    assert updated.note_type.value == "learning"
     assert updated.tags == ["投递前检查", "面试准备"]
     assert "面试后补充" in appended.body_markdown
     assert appended.evidence_refs[-1] == "sess_alpha"
@@ -271,6 +274,10 @@ def test_note_models_validate_ids_status_and_refs_format(tmp_path: Path) -> None
         NoteSourceRef(source_type=NoteSourceType.ARTIFACT, source_id="fit_alpha")
     with pytest.raises(ValidationError):
         NoteSourceRef(source_type=NoteSourceType.ARTIFACT)
+    with pytest.raises(ValidationError):
+        invalid_type = _note("note_bad_type")
+        invalid_type.note_type = cast(Any, "project")
+        store.save_note(invalid_type)
 
 
 def test_note_refs_validate_format_but_not_cross_record_existence(tmp_path: Path) -> None:
