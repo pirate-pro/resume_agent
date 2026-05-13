@@ -47,6 +47,7 @@
 - 量化指标必须来自原始简历或已保存产品记录中的明确事实；如果没有真实指标，不要编造百分比、时延、QPS、并发数、成功率等数字，也不要写“占位”“替换为真实数据”这类投递版简历不应出现的内容。
 - `career_resume_version_create.content` 必须是可直接投递的版本；不确定的内容不要混入简历正文，不要写“学校名称待补充”“公司名称待补充”“TODO”“TBD”等占位表达。
 - `career_resume_version_create` 的 `content`、`change_summary`、`keyword_strategy`、`risk_notes` 都不能包含“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”等占位或需替换表达；缺失事实只能用“未提供 / 缺少 / 需用户提供”这类风险描述，并同步写入 `career_application_merge.updates.risks/next_actions`。
+- 上一条禁用词不能以任何形式出现在 ResumeVersion 正文或元数据里；即使是“避免占位表达”“不写 TODO”这类否定说明也不允许，改写为“省略缺失事实”“仅保留已验证事实”。
 - `career_resume_version_create.keyword_strategy` 只能包含已写入简历正文或已有证据支撑的关键词；不要把“风险项”“证据不足”“缺失”“需补充”“需用户提供”这类说明写进 `keyword_strategy`。
 - `career_profile_merge.updates` 只使用这些字段：`career_goal`、`target_roles`、`preferred_industries`、`preferred_cities`、`strengths`、`weaknesses`、`skills`、`interests`、`education_summary`、`experience_summary`、`resume_issues`、`interview_weaknesses`。不要传 `name`、`target_direction`、`target_position`、`core_skills`、`job_market_fit` 等非模型字段。
 - 调用 `career_resume_version_create` 时，`resume_version_id` 如需手动指定，必须以 `resume_version_` 开头；不确定时省略该字段让工具生成。

@@ -396,6 +396,7 @@ def run_live_flow(
                     "不要把风险项、证据不足、缺失、需补充、需用户提供写进 keyword_strategy。"
                     "career_resume_version_create 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
                     "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
+                    "这些禁用词本身也不能出现在否定说明里，例如不要写“避免占位表达”，改写为“省略缺失事实”。"
                     "如果公司、学校、时间、联系方式等事实缺失，不要在简历正文里写“待补充”，"
                     "应省略对应字段或使用更保守的已知事实，并把缺失项写入 CareerApplication 的 risks/next_actions。"
                     "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
@@ -603,6 +604,11 @@ def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> 
         report.errors.append("M12 学习安排动作不应更新 CareerApplication。")
     if turn.name == "M12动作：召回保存笔记" and not {"note_create", "note_append"}.intersection(turn.tool_calls):
         report.errors.append("M12 保存笔记动作未写入 Note。")
+    if turn.name == "M12动作：召回保存笔记":
+        forbidden = {"learning_task_create", "career_application_merge"}
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M12 保存笔记动作出现越界写入工具: {leaked}")
     if turn.name == "M12动作：召回投递前检查":
         if "career_application_merge" not in turn.tool_calls:
             report.errors.append("M12 投递前检查未更新 CareerApplication。")
@@ -668,7 +674,8 @@ def _project_action_message(project_action: str, application_id: str) -> str:
             "再调用 career_application_merge 把新的 resume_version_id 合并进当前求职项目。"
             "简历正文只能使用已有产品记录和源 artifact 明确出现的事实，不要编造指标或经历。"
             "ResumeVersion 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
-            "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”。"
+            "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
+            "这些禁用词本身也不能出现在否定说明里，例如不要写“避免占位表达”。"
         )
     raise ValueError(f"Unsupported project action: {project_action}")
 

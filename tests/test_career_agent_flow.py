@@ -1067,6 +1067,7 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "不要编造百分比、时延、QPS、并发数、成功率等数字" in main_doc
     assert "`career_resume_version_create.content` 必须是可直接投递的版本" in main_doc
     assert "`career_resume_version_create` 的 `content`、`change_summary`、`keyword_strategy`、`risk_notes` 都不能包含" in main_doc
+    assert "即使是“避免占位表达”“不写 TODO”这类否定说明也不允许" in main_doc
     assert "缺失事实只能用“未提供 / 缺少 / 需用户提供”这类风险描述" in main_doc
     assert "`career_resume_version_create.keyword_strategy` 只能包含已写入简历正文或已有证据支撑的关键词" in main_doc
     assert "不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`" in main_doc
