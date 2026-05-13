@@ -487,9 +487,27 @@ M12 低批次真实 smoke 验收：
 - 保存笔记动作已验收为只写 Note；不会写 memory，也不会顺手创建 LearningTask 或更新 CareerApplication。
 - 投递前检查已验收为复用召回上下文后更新 CareerApplication；不会重新委派 child-agent，也不会重新保存 ResumeProfile、JDAnalysis 或 JobFitReport。
 
+### M13：求职工作台主流程固化
+
+目标：把 M12 已验证通过的 Agent 能力，固化成用户可稳定使用的求职工作台主流程。
+
+方案文档：`求职Agent_M13_求职工作台主流程固化方案_2026-05-13.md`
+
+第一批建议范围：
+
+```text
+app/career/workbench.py
+app/schemas/career_workbench.py
+app/api/career_workbench.py
+tests/test_career_workbench_service.py
+tests/test_career_workbench_api.py
+```
+
+第一批只做只读聚合层，不写 store、不调用模型、不改 memory。目标是让前端可以通过一个工作台详情接口拿到 `CareerApplication` 关联的简历画像、职业画像、JD 分析、匹配报告、简历版本、笔记、学习任务、准备度、时间线和建议动作。
+
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估和 M12 第一批召回驱动动作闭环已经完成，下一步仍然不提前接 memory 自动写入、日历同步和提醒系统。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估和 M12 召回驱动动作闭环真实 smoke 已经完成。下一步进入 M13 求职工作台主流程固化，仍然不提前接 memory 自动写入、日历同步和提醒系统。
 
 M10 收口已完成：
 
@@ -499,10 +517,10 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 使用 `tools/smoke_career_live_flow.py --retrieval-action ...` 做低批次真实模型验证。
-2. 每次只跑一个 retrieval action，优先 `interview_prep`，再按需跑 `learning_task / save_note / pre_apply_check`。
-3. 验证真实模型是否能稳定遵守“先召回、再行动、按需写入”的契约。
-4. 如果真实模型频繁误写 Note / Learning / Career，再收紧 AGENT.md 或工具描述。
+1. 进入 M13 第一批：实现只读 CareerWorkbench 聚合层。
+2. 先做后端 service / schema / API / tests，不改 prompt，不改前端。
+3. 让前端可以通过单项目工作台接口拿到聚合后的求职项目详情。
+4. 后端聚合层稳定后，再进入 M13 第二批前端工作台。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。
