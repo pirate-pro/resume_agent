@@ -1,0 +1,262 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:resume_agent_app/core/models/api_models.dart';
+import 'package:resume_agent_app/core/services/api_service.dart';
+import 'package:resume_agent_app/features/career_workbench/career_workbench_page.dart';
+import 'package:resume_agent_app/features/career_workbench/career_workbench_provider.dart';
+
+void main() {
+  testWidgets('求职工作台展示项目详情、预览资产并发送推荐动作', (tester) async {
+    tester.view.physicalSize = const Size(1360, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = _FakeCareerWorkbenchApi();
+    String? sentPrompt;
+    var backToChatCount = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          careerWorkbenchProvider.overrideWith(
+            (ref) => CareerWorkbenchProvider(api),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 1280,
+              height: 820,
+              child: CareerWorkbenchPage(
+                onBackToChat: () => backToChatCount += 1,
+                onSendPrompt: (prompt) async {
+                  sentPrompt = prompt;
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('求职工作台'), findsWidgets);
+    expect(find.text('求职项目'), findsWidgets);
+    expect(find.text('星河智能 · AI Agent 后端工程师'), findsWidgets);
+    expect(find.text('当前判断'), findsOneWidget);
+    expect(find.text('关联资产'), findsOneWidget);
+    expect(find.text('生成定制简历'), findsOneWidget);
+
+    await tester.tap(find.text('预览').first);
+    await tester.pumpAndSettle();
+
+    expect(api.previewedArtifactIds, contains('artifact_fit_report_001'));
+    expect(find.text('岗位匹配报告.md'), findsOneWidget);
+    expect(find.textContaining('核心匹配点'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.close_rounded).last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('生成定制简历'));
+    await tester.pumpAndSettle();
+
+    expect(backToChatCount, 1);
+    expect(sentPrompt, contains('application_staragent_001'));
+    expect(sentPrompt, contains('生成定制简历'));
+    expect(sentPrompt, contains('不要写 memory'));
+  });
+}
+
+class _FakeCareerWorkbenchApi extends ApiService {
+  final previewedArtifactIds = <String>[];
+  final _now = DateTime(2026, 5, 10, 12, 30);
+
+  _FakeCareerWorkbenchApi() : super(baseUrl: 'http://localhost');
+
+  CareerRecordMetaView get _meta => CareerRecordMetaView(
+        status: 'active',
+        sourceSessionId: 'sess_demo',
+        sourceArtifactId: 'artifact_jd_001',
+        evidenceRefs: const ['artifact_jd_001'],
+        createdAt: _now,
+        updatedAt: _now,
+      );
+
+  CareerApplicationView get _application => CareerApplicationView(
+        meta: _meta,
+        applicationId: 'application_staragent_001',
+        company: '星河智能',
+        position: 'AI Agent 后端工程师',
+        location: '上海',
+        jobUrl: '',
+        stage: 'ready_to_apply',
+        priority: 'high',
+        resumeProfileId: 'resume_profile_zhangming_003',
+        careerProfileId: 'career_profile_default',
+        jdAnalysisId: 'jd_staragent_001',
+        jobFitReportId: 'fit_staragent_001',
+        resumeVersionIds: const ['resume_version_staragent_001'],
+        summary: '匹配度较高，可进入投递准备。',
+        nextActions: const ['生成定制简历'],
+        risks: const ['RAG 证据需要补充'],
+        notes: '',
+      );
+
+  CareerReadinessView get _readiness => CareerReadinessView(
+        score: 82,
+        level: 'ready',
+        recommendation: 'recommended',
+        summary: '候选人与目标岗位匹配度较高，建议进入定制简历阶段。',
+        strengths: const [
+          'Python 与 FastAPI 经验匹配',
+          'Agent Runtime 项目经验可复用',
+        ],
+        risks: const ['RAG 证据需要补充'],
+        missingMaterials: const [],
+        nextActions: const ['生成定制简历'],
+      );
+
+  @override
+  Future<CareerWorkbenchListView> getCareerWorkbench({
+    bool includeArchived = false,
+  }) async {
+    return CareerWorkbenchListView(
+      applications: [
+        CareerApplicationSummaryView(
+          application: _application,
+          readiness: _readiness,
+          linkedAssetCount: 3,
+          noteCount: 1,
+          learningTaskCount: 0,
+          updatedAt: _now,
+        ),
+      ],
+      activeApplicationId: _application.applicationId,
+      counts: CareerWorkbenchCountsView(
+        applications: 1,
+        activeApplications: 1,
+        notes: 1,
+        learningTasks: 0,
+        resumeVersions: 1,
+      ),
+      updatedAt: _now,
+    );
+  }
+
+  @override
+  Future<CareerApplicationWorkbenchView> getCareerApplicationWorkbench({
+    required String applicationId,
+    bool includeArchived = false,
+  }) async {
+    return CareerApplicationWorkbenchView(
+      application: _application,
+      resumeProfile: null,
+      careerProfile: null,
+      jdAnalysis: null,
+      jobFitReport: null,
+      resumeVersions: const [],
+      readiness: _readiness,
+      linkedAssets: [
+        CareerLinkedAssetView(
+          type: 'job_fit_report',
+          id: 'fit_staragent_001',
+          title: '星河智能 · AI Agent 后端工程师',
+          subtitle: '匹配报告',
+          status: 'active',
+          updatedAt: _now,
+          previewArtifactId: 'artifact_fit_report_001',
+          sourceSessionId: 'sess_demo',
+          isCurrent: true,
+          actions: const ['preview'],
+        ),
+        CareerLinkedAssetView(
+          type: 'resume_version',
+          id: 'resume_version_staragent_001',
+          title: '张明-星河智能定制简历.md',
+          subtitle: '简历版本',
+          status: 'active',
+          updatedAt: _now,
+          previewArtifactId: 'artifact_resume_version_001',
+          sourceSessionId: 'sess_demo',
+          isCurrent: true,
+          actions: const ['preview'],
+        ),
+      ],
+      notes: [
+        CareerNoteSummaryView(
+          noteId: 'note_staragent_001',
+          title: '投递准备记录',
+          summary: '记录本轮岗位匹配和投递准备。',
+          status: 'active',
+          updatedAt: _now,
+          sourceArtifactId: null,
+          relatedApplicationId: applicationId,
+          tags: const ['投递'],
+        ),
+      ],
+      learning: CareerLearningSummaryView(
+        plans: const [],
+        tasks: const [],
+        weaknesses: const [],
+        reviews: const [],
+        openTaskCount: 0,
+        doneTaskCount: 0,
+        highWeaknessCount: 0,
+      ),
+      timeline: [
+        CareerTimelineItemView(
+          type: 'job_fit_report',
+          title: '匹配报告更新',
+          subtitle: 'fit_staragent_001',
+          occurredAt: _now,
+          sourceType: 'job_fit_report',
+          sourceId: 'fit_staragent_001',
+        ),
+      ],
+      suggestedActions: [
+        CareerSuggestedActionView(
+          actionType: 'custom_resume',
+          label: '生成定制简历',
+          promptIntent: '基于当前岗位生成定制简历版本',
+          priority: 'high',
+          enabled: true,
+          reason: '已有匹配报告，可以定制简历',
+        ),
+      ],
+    );
+  }
+
+  @override
+  Future<SessionArtifactContentView> readSessionArtifactContent({
+    required String sessionId,
+    required String artifactId,
+    int offset = 0,
+    int maxChars = 12000,
+  }) async {
+    previewedArtifactIds.add(artifactId);
+    const content = '# 岗位匹配报告\n\n## 核心匹配点\n- Python 与 FastAPI 经验匹配';
+    return SessionArtifactContentView(
+      sessionId: sessionId,
+      artifactId: artifactId,
+      title: '岗位匹配报告.md',
+      mediaType: 'text/markdown',
+      status: 'active',
+      totalChars: content.length,
+      offset: 0,
+      returnedChars: content.length,
+      truncated: false,
+      content: content,
+    );
+  }
+
+  @override
+  String sessionArtifactDownloadUrl({
+    required String sessionId,
+    required String artifactId,
+  }) {
+    return 'http://localhost/download/$sessionId/$artifactId';
+  }
+}

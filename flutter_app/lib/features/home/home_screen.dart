@@ -11,9 +11,12 @@ import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/session_sidebar.dart';
 import '../career/career_assets_panel.dart';
+import '../career_workbench/career_workbench_page.dart';
 import '../chat/chat_screen.dart';
 
 enum _RightPanelMode { career, debug }
+
+enum _PrimaryViewMode { chat, careerWorkbench }
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -26,6 +29,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _sidebarCollapsed = false;
   bool _rightPanelOpen = true;
   _RightPanelMode _rightPanelMode = _RightPanelMode.career;
+  _PrimaryViewMode _primaryViewMode = _PrimaryViewMode.chat;
 
   void _openCompactSidebar(BuildContext context, ChatProvider provider) {
     showModalBottomSheet<void>(
@@ -33,8 +37,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) {
-        final height = MediaQuery.of(context).size.height;
+      builder: (sheetContext) {
+        final height = MediaQuery.of(sheetContext).size.height;
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           child: SizedBox(
@@ -68,8 +72,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) {
-        final height = MediaQuery.of(context).size.height;
+      builder: (sheetContext) {
+        final height = MediaQuery.of(sheetContext).size.height;
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           child: SizedBox(
@@ -91,15 +95,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) {
-        final height = MediaQuery.of(context).size.height;
+      builder: (sheetContext) {
+        final height = MediaQuery.of(sheetContext).size.height;
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           child: SizedBox(
             height: math.min(height * 0.82, 720.0),
             child: CareerAssetsPanel(
               compact: true,
-              onClose: () => Navigator.of(context).pop(),
+              onOpenWorkbench: () {
+                Navigator.of(sheetContext).pop();
+                _openCareerWorkbench();
+              },
+              onClose: () => Navigator.of(sheetContext).pop(),
             ),
           ),
         );
@@ -107,8 +115,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  void _openCareerWorkbench() {
+    setState(() {
+      _primaryViewMode = _PrimaryViewMode.careerWorkbench;
+      _rightPanelOpen = false;
+    });
+  }
+
+  void _backToChat() {
+    setState(() {
+      _primaryViewMode = _PrimaryViewMode.chat;
+    });
+  }
+
+  Future<void> _sendWorkbenchPrompt(String prompt) async {
+    setState(() {
+      _primaryViewMode = _PrimaryViewMode.chat;
+    });
+    await ref.read(chatProvider).sendMessage(prompt);
+  }
+
   void _toggleDesktopPanel(_RightPanelMode mode) {
     setState(() {
+      _primaryViewMode = _PrimaryViewMode.chat;
       if (_rightPanelMode == mode) {
         _rightPanelOpen = !_rightPanelOpen;
         return;
@@ -140,7 +169,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       (width * 0.19).clamp(272.0, 308.0).toDouble();
                   final panelWidth =
                       (width * 0.22).clamp(296.0, 336.0).toDouble();
-                  final showDesktopRightPanel = _rightPanelOpen && !isCompact;
+                  final showDesktopRightPanel =
+                      _primaryViewMode == _PrimaryViewMode.chat &&
+                          _rightPanelOpen &&
+                          !isCompact;
                   final showDesktopCareer = showDesktopRightPanel &&
                       _rightPanelMode == _RightPanelMode.career;
                   final showDesktopDebug = showDesktopRightPanel &&
@@ -172,27 +204,42 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           SizedBox(width: gap),
                         ],
                         Expanded(
-                          child: ChatScreen(
-                            showSidebarToggle: useCompactSidebar,
-                            onSidebarToggle: useCompactSidebar
-                                ? () => _openCompactSidebar(context, provider)
-                                : null,
-                            showCareerAssetsToggle: true,
-                            isCareerAssetsPanelOpen: showDesktopCareer,
-                            onCareerAssetsToggle: isCompact
-                                ? () => _openCompactCareerAssetsPanel(context)
-                                : () => _toggleDesktopPanel(
-                                      _RightPanelMode.career,
-                                    ),
-                            showDebugToggle: true,
-                            isDebugPanelOpen: showDesktopDebug,
-                            onDebugToggle: isCompact
-                                ? () =>
-                                    _openCompactDebugPanel(context, provider)
-                                : () => _toggleDesktopPanel(
-                                      _RightPanelMode.debug,
-                                    ),
-                          ),
+                          child: _primaryViewMode ==
+                                  _PrimaryViewMode.careerWorkbench
+                              ? CareerWorkbenchPage(
+                                  onBackToChat: _backToChat,
+                                  onSendPrompt: _sendWorkbenchPrompt,
+                                )
+                              : ChatScreen(
+                                  showSidebarToggle: useCompactSidebar,
+                                  onSidebarToggle: useCompactSidebar
+                                      ? () => _openCompactSidebar(
+                                            context,
+                                            provider,
+                                          )
+                                      : null,
+                                  showWorkbenchToggle: true,
+                                  onWorkbenchToggle: _openCareerWorkbench,
+                                  showCareerAssetsToggle: true,
+                                  isCareerAssetsPanelOpen: showDesktopCareer,
+                                  onCareerAssetsToggle: isCompact
+                                      ? () => _openCompactCareerAssetsPanel(
+                                            context,
+                                          )
+                                      : () => _toggleDesktopPanel(
+                                            _RightPanelMode.career,
+                                          ),
+                                  showDebugToggle: true,
+                                  isDebugPanelOpen: showDesktopDebug,
+                                  onDebugToggle: isCompact
+                                      ? () => _openCompactDebugPanel(
+                                            context,
+                                            provider,
+                                          )
+                                      : () => _toggleDesktopPanel(
+                                            _RightPanelMode.debug,
+                                          ),
+                                ),
                         ),
                         if (showDesktopRightPanel) ...[
                           SizedBox(width: gap),
@@ -200,6 +247,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             width: panelWidth,
                             child: showDesktopCareer
                                 ? CareerAssetsPanel(
+                                    onOpenWorkbench: _openCareerWorkbench,
                                     onClose: () =>
                                         setState(() => _rightPanelOpen = false),
                                   )

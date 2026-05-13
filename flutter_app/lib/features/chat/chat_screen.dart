@@ -20,6 +20,9 @@ const double _jumpToBottomThreshold = 140;
 class ChatScreen extends ConsumerStatefulWidget {
   final bool showSidebarToggle;
   final VoidCallback? onSidebarToggle;
+  final bool showWorkbenchToggle;
+  final bool isWorkbenchOpen;
+  final VoidCallback? onWorkbenchToggle;
   final bool showCareerAssetsToggle;
   final bool isCareerAssetsPanelOpen;
   final VoidCallback? onCareerAssetsToggle;
@@ -31,6 +34,9 @@ class ChatScreen extends ConsumerStatefulWidget {
     super.key,
     this.showSidebarToggle = false,
     this.onSidebarToggle,
+    this.showWorkbenchToggle = false,
+    this.isWorkbenchOpen = false,
+    this.onWorkbenchToggle,
     this.showCareerAssetsToggle = false,
     this.isCareerAssetsPanelOpen = false,
     this.onCareerAssetsToggle,
@@ -126,6 +132,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           child: _ChatHeaderLayer(
             showSidebarToggle: widget.showSidebarToggle,
             onSidebarToggle: widget.onSidebarToggle,
+            showWorkbenchToggle: widget.showWorkbenchToggle,
+            isWorkbenchOpen: widget.isWorkbenchOpen,
+            onWorkbenchToggle: widget.onWorkbenchToggle,
             showCareerAssetsToggle: widget.showCareerAssetsToggle,
             isCareerAssetsPanelOpen: widget.isCareerAssetsPanelOpen,
             onCareerAssetsToggle: widget.onCareerAssetsToggle,
@@ -178,6 +187,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 class _ChatHeaderLayer extends ConsumerWidget {
   final bool showSidebarToggle;
   final VoidCallback? onSidebarToggle;
+  final bool showWorkbenchToggle;
+  final bool isWorkbenchOpen;
+  final VoidCallback? onWorkbenchToggle;
   final bool showCareerAssetsToggle;
   final bool isCareerAssetsPanelOpen;
   final VoidCallback? onCareerAssetsToggle;
@@ -188,6 +200,9 @@ class _ChatHeaderLayer extends ConsumerWidget {
   const _ChatHeaderLayer({
     required this.showSidebarToggle,
     required this.onSidebarToggle,
+    required this.showWorkbenchToggle,
+    required this.isWorkbenchOpen,
+    required this.onWorkbenchToggle,
     required this.showCareerAssetsToggle,
     required this.isCareerAssetsPanelOpen,
     required this.onCareerAssetsToggle,
@@ -280,6 +295,16 @@ class _ChatHeaderLayer extends ConsumerWidget {
                               compactHeader
                                   ? _HealthDot(reachable: reachable)
                                   : _HealthBadge(reachable: reachable),
+                              if (showWorkbenchToggle) ...[
+                                if (!compactHeader) _HeaderDivider(),
+                                _HeaderButton(
+                                  icon: Icons.dashboard_customize_outlined,
+                                  active: isWorkbenchOpen,
+                                  size: compactHeader ? 34 : 38,
+                                  tooltip: '求职工作台',
+                                  onTap: onWorkbenchToggle,
+                                ),
+                              ],
                               if (showCareerAssetsToggle) ...[
                                 if (!compactHeader) _HeaderDivider(),
                                 _HeaderButton(

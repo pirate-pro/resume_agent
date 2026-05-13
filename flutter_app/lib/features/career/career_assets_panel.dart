@@ -16,11 +16,13 @@ import '../../shared/widgets/markdown_body.dart';
 
 class CareerAssetsPanel extends ConsumerStatefulWidget {
   final VoidCallback onClose;
+  final VoidCallback? onOpenWorkbench;
   final bool compact;
 
   const CareerAssetsPanel({
     super.key,
     required this.onClose,
+    this.onOpenWorkbench,
     this.compact = false,
   });
 
@@ -62,6 +64,7 @@ class _CareerAssetsPanelState extends ConsumerState<CareerAssetsPanel> {
             assetCount: _groupedAssetCount(provider),
             recordCount: provider.totalCount,
             latestUpdatedAt: _latestUpdatedAt(provider),
+            onOpenWorkbench: widget.onOpenWorkbench,
             onRefresh: () => unawaited(provider.refresh()),
             onClose: widget.onClose,
           ),
@@ -89,6 +92,7 @@ class CareerAssetsHeader extends StatelessWidget {
   final int assetCount;
   final int recordCount;
   final DateTime? latestUpdatedAt;
+  final VoidCallback? onOpenWorkbench;
   final VoidCallback onRefresh;
   final VoidCallback onClose;
 
@@ -98,6 +102,7 @@ class CareerAssetsHeader extends StatelessWidget {
     required this.assetCount,
     required this.recordCount,
     required this.latestUpdatedAt,
+    this.onOpenWorkbench,
     required this.onRefresh,
     required this.onClose,
   });
@@ -125,37 +130,56 @@ class CareerAssetsHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                "求职资产",
-                style: AppTheme.ts(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.textPrimary,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "求职资产",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                _headerSubtitle,
-                style: AppTheme.ts(
-                  fontSize: 11,
-                  color: AppTheme.textTertiary,
+                const SizedBox(height: 2),
+                Text(
+                  _headerSubtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    color: AppTheme.textTertiary,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const Spacer(),
+          const SizedBox(width: 8),
+          if (onOpenWorkbench != null) ...[
+            _PanelIconButton(
+              icon: Icons.open_in_new_rounded,
+              tooltip: "打开工作台",
+              onTap: onOpenWorkbench!,
+            ),
+            const SizedBox(width: 6),
+          ],
           _PanelIconButton(
             icon: isRefreshing
                 ? Icons.hourglass_top_rounded
                 : Icons.refresh_rounded,
+            tooltip: "刷新",
             onTap: onRefresh,
           ),
           const SizedBox(width: 6),
-          _PanelIconButton(icon: Icons.close_rounded, onTap: onClose),
+          _PanelIconButton(
+            icon: Icons.close_rounded,
+            tooltip: "关闭",
+            onTap: onClose,
+          ),
         ],
       ),
     );
