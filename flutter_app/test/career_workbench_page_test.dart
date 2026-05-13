@@ -60,6 +60,39 @@ void main() {
     await tester.tap(find.byIcon(Icons.close_rounded).last);
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('笔记').first);
+    await tester.pumpAndSettle();
+    expect(find.text('投递准备记录'), findsWidgets);
+    expect(find.text('预览笔记'), findsWidgets);
+    expect(find.text('编辑'), findsWidgets);
+
+    await tester.tap(find.text('预览笔记').first);
+    await tester.pumpAndSettle();
+    expect(api.openedNoteIds, contains('note_staragent_001'));
+    expect(find.text('投递准备记录'), findsWidgets);
+    expect(find.textContaining('面试关注点'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.close_rounded).last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('编辑').first);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('career_note_body_field')), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('career_note_body_field')),
+      '# 更新后的投递准备\n\n## 面试关注点\n- 补充 RAG 项目证据',
+    );
+    await tester.enterText(
+      find.byKey(const Key('career_note_summary_field')),
+      '已补充面试关注点。',
+    );
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    expect(api.updatedNoteBodies.last, contains('更新后的投递准备'));
+    expect(find.text('笔记已保存'), findsOneWidget);
+
     await tester.tap(find.text('生成定制简历'));
     await tester.pumpAndSettle();
 
@@ -72,7 +105,13 @@ void main() {
 
 class _FakeCareerWorkbenchApi extends ApiService {
   final previewedArtifactIds = <String>[];
+  final openedNoteIds = <String>[];
+  final updatedNoteBodies = <String>[];
   final _now = DateTime(2026, 5, 10, 12, 30);
+  String _noteTitle = '投递准备记录';
+  String _noteSummary = '记录本轮岗位匹配和投递准备。';
+  String _noteBody = '# 投递准备记录\n\n## 面试关注点\n- 复盘 Agent Runtime 项目';
+  List<String> _noteTags = const ['投递'];
 
   _FakeCareerWorkbenchApi() : super(baseUrl: 'http://localhost');
 
@@ -188,13 +227,13 @@ class _FakeCareerWorkbenchApi extends ApiService {
       notes: [
         CareerNoteSummaryView(
           noteId: 'note_staragent_001',
-          title: '投递准备记录',
-          summary: '记录本轮岗位匹配和投递准备。',
+          title: _noteTitle,
+          summary: _noteSummary,
           status: 'active',
           updatedAt: _now,
           sourceArtifactId: null,
           relatedApplicationId: applicationId,
-          tags: const ['投递'],
+          tags: _noteTags,
         ),
       ],
       learning: CareerLearningSummaryView(
@@ -226,6 +265,62 @@ class _FakeCareerWorkbenchApi extends ApiService {
           reason: '已有匹配报告，可以定制简历',
         ),
       ],
+    );
+  }
+
+  @override
+  Future<NoteView> getNote({
+    required String noteId,
+    bool includeArchived = false,
+  }) async {
+    openedNoteIds.add(noteId);
+    return _noteView();
+  }
+
+  @override
+  Future<NoteView> updateNote({
+    required String noteId,
+    String? title,
+    String? bodyMarkdown,
+    String? bodyFormat,
+    String? summary,
+    List<String>? tags,
+    String? collectionId,
+    String? relatedApplicationId,
+  }) async {
+    if (title != null) {
+      _noteTitle = title;
+    }
+    if (summary != null) {
+      _noteSummary = summary;
+    }
+    if (bodyMarkdown != null) {
+      _noteBody = bodyMarkdown;
+      updatedNoteBodies.add(bodyMarkdown);
+    }
+    if (tags != null) {
+      _noteTags = tags;
+    }
+    return _noteView();
+  }
+
+  NoteView _noteView() {
+    return NoteView(
+      noteId: 'note_staragent_001',
+      status: 'active',
+      sourceSessionId: 'sess_demo',
+      sourceArtifactId: null,
+      evidenceRefs: const ['application_staragent_001'],
+      createdAt: _now,
+      updatedAt: _now,
+      title: _noteTitle,
+      bodyMarkdown: _noteBody,
+      bodyFormat: 'markdown',
+      collectionId: null,
+      tags: _noteTags,
+      sourceRefs: const [],
+      relatedApplicationId: 'application_staragent_001',
+      summary: _noteSummary,
     );
   }
 

@@ -938,6 +938,92 @@ class CareerSuggestedActionView {
   }
 }
 
+class NoteSourceRefView {
+  final String sourceType;
+  final String? sourceId;
+  final String? sourceSessionId;
+  final String title;
+  final String quote;
+
+  NoteSourceRefView({
+    required this.sourceType,
+    required this.sourceId,
+    required this.sourceSessionId,
+    required this.title,
+    required this.quote,
+  });
+
+  factory NoteSourceRefView.fromJson(Map<String, dynamic> json) {
+    return NoteSourceRefView(
+      sourceType: (json["source_type"] ?? "").toString(),
+      sourceId: _readOptionalString(json["source_id"]),
+      sourceSessionId: _readOptionalString(json["source_session_id"]),
+      title: (json["title"] ?? "").toString(),
+      quote: (json["quote"] ?? "").toString(),
+    );
+  }
+}
+
+class NoteView {
+  final String noteId;
+  final String status;
+  final String sourceSessionId;
+  final String? sourceArtifactId;
+  final List<String> evidenceRefs;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final String title;
+  final String bodyMarkdown;
+  final String bodyFormat;
+  final String? collectionId;
+  final List<String> tags;
+  final List<NoteSourceRefView> sourceRefs;
+  final String? relatedApplicationId;
+  final String summary;
+
+  NoteView({
+    required this.noteId,
+    required this.status,
+    required this.sourceSessionId,
+    required this.sourceArtifactId,
+    required this.evidenceRefs,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.title,
+    required this.bodyMarkdown,
+    required this.bodyFormat,
+    required this.collectionId,
+    required this.tags,
+    required this.sourceRefs,
+    required this.relatedApplicationId,
+    required this.summary,
+  });
+
+  factory NoteView.fromJson(Map<String, dynamic> json) {
+    return NoteView(
+      noteId: (json["note_id"] ?? "").toString(),
+      status: (json["status"] ?? "active").toString(),
+      sourceSessionId: (json["source_session_id"] ?? "").toString(),
+      sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
+      evidenceRefs: _readStringList(json["evidence_refs"]),
+      createdAt: _readDateTime(json["created_at"]),
+      updatedAt: _readDateTime(json["updated_at"]),
+      title: (json["title"] ?? "").toString(),
+      bodyMarkdown: (json["body_markdown"] ?? "").toString(),
+      bodyFormat: (json["body_format"] ?? "markdown").toString(),
+      collectionId: _readOptionalString(json["collection_id"]),
+      tags: _readStringList(json["tags"]),
+      sourceRefs: _readList(json["source_refs"])
+          .map((item) => NoteSourceRefView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      relatedApplicationId: _readOptionalString(json["related_application_id"]),
+      summary: (json["summary"] ?? "").toString(),
+    );
+  }
+}
+
 class CareerNoteSummaryView {
   final String noteId;
   final String title;

@@ -562,18 +562,15 @@ class _NotesOverview extends StatelessWidget {
     return _WorkbenchSection(
       icon: Icons.sticky_note_2_outlined,
       title: "笔记",
-      subtitle: "M14-2 会升级为独立笔记库",
+      subtitle: "当前项目关联笔记，可预览和编辑",
       child: notes.isEmpty
           ? const _EmptyText("当前选中项目暂无关联笔记。")
           : Column(
               children: [
                 for (final note in notes) ...[
-                  _CompactRecordTile(
-                    icon: Icons.notes_rounded,
-                    color: AppTheme.accent,
-                    title: note.title,
-                    subtitle: note.summary,
-                    meta: _formatTime(note.updatedAt),
+                  _NoteSummaryTile(
+                    provider: provider,
+                    note: note,
                   ),
                   if (note != notes.last) const SizedBox(height: 8),
                 ],
@@ -640,7 +637,7 @@ class _ProjectDetailPane extends StatelessWidget {
           const SizedBox(height: 12),
           _DetailRiskSection(readiness: view.readiness),
           const SizedBox(height: 12),
-          _DetailNotesSection(notes: view.notes),
+          _DetailNotesSection(provider: provider, notes: view.notes),
         ],
       ),
     );
@@ -888,9 +885,13 @@ class _DetailRiskSection extends StatelessWidget {
 }
 
 class _DetailNotesSection extends StatelessWidget {
+  final CareerWorkbenchProvider provider;
   final List<CareerNoteSummaryView> notes;
 
-  const _DetailNotesSection({required this.notes});
+  const _DetailNotesSection({
+    required this.provider,
+    required this.notes,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -904,12 +905,9 @@ class _DetailNotesSection extends StatelessWidget {
           : Column(
               children: [
                 for (final note in visible) ...[
-                  _CompactRecordTile(
-                    icon: Icons.notes_rounded,
-                    color: AppTheme.accent,
-                    title: note.title,
-                    subtitle: note.summary,
-                    meta: _formatTime(note.updatedAt),
+                  _NoteSummaryTile(
+                    provider: provider,
+                    note: note,
                   ),
                   if (note != visible.last) const SizedBox(height: 8),
                 ],
@@ -1238,6 +1236,343 @@ class _RiskTile extends StatelessWidget {
                 color: AppTheme.textSecondary,
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteSummaryTile extends StatelessWidget {
+  final CareerWorkbenchProvider provider;
+  final CareerNoteSummaryView note;
+
+  const _NoteSummaryTile({
+    required this.provider,
+    required this.note,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tags = note.tags.take(3).toList();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFB45309).withValues(alpha: 0.045),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: const Color(0xFFB45309).withValues(alpha: 0.13),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: const Color(0xFFB45309).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: const Color(0xFFB45309).withValues(alpha: 0.16),
+              ),
+            ),
+            child: const Icon(
+              Icons.sticky_note_2_outlined,
+              size: 16,
+              color: Color(0xFFB45309),
+            ),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        note.title.trim().isEmpty ? "未命名笔记" : note.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 12.4,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      _formatTime(note.updatedAt),
+                      style: AppTheme.ts(
+                        fontSize: 10.4,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+                if (note.summary.trim().isNotEmpty) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    note.summary.trim(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.ts(
+                      fontSize: 11.2,
+                      height: 1.4,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+                if (tags.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final tag in tags)
+                        _TinyTag(
+                          label: tag,
+                          color: const Color(0xFFB45309),
+                        ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 9),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _SmallTextButton(
+                      label: "预览笔记",
+                      icon: Icons.visibility_outlined,
+                      onTap: () => _showNotePreviewSheet(
+                        context,
+                        provider,
+                        noteId: note.noteId,
+                      ),
+                    ),
+                    _SmallTextButton(
+                      label: "编辑",
+                      icon: Icons.edit_note_rounded,
+                      onTap: () => _showNoteEditorSheet(
+                        context,
+                        provider,
+                        noteId: note.noteId,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoteEditDraft {
+  final String title;
+  final String bodyMarkdown;
+  final String summary;
+  final List<String> tags;
+
+  const _NoteEditDraft({
+    required this.title,
+    required this.bodyMarkdown,
+    required this.summary,
+    required this.tags,
+  });
+}
+
+class _NoteEditorForm extends StatefulWidget {
+  final NoteView note;
+  final VoidCallback onCancel;
+  final Future<void> Function(_NoteEditDraft draft) onSave;
+
+  const _NoteEditorForm({
+    required this.note,
+    required this.onCancel,
+    required this.onSave,
+  });
+
+  @override
+  State<_NoteEditorForm> createState() => _NoteEditorFormState();
+}
+
+class _NoteEditorFormState extends State<_NoteEditorForm> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _summaryController;
+  late final TextEditingController _tagsController;
+  late final TextEditingController _bodyController;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.note.title);
+    _summaryController = TextEditingController(text: widget.note.summary);
+    _tagsController = TextEditingController(text: widget.note.tags.join("，"));
+    _bodyController = TextEditingController(text: widget.note.bodyMarkdown);
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _summaryController.dispose();
+    _tagsController.dispose();
+    _bodyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final title = _titleController.text.trim();
+    final body = _bodyController.text.trim();
+    if (title.isEmpty) {
+      setState(() => _error = "标题不能为空");
+      return;
+    }
+    if (body.isEmpty) {
+      setState(() => _error = "正文不能为空");
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.onSave(
+        _NoteEditDraft(
+          title: title,
+          bodyMarkdown: body,
+          summary: _summaryController.text.trim(),
+          tags: _parseTags(_tagsController.text),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = "保存失败：$error";
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 18,
+        right: 18,
+        top: 16,
+        bottom: 16 + MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: Column(
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final titleField = TextField(
+                key: const Key("career_note_title_field"),
+                controller: _titleController,
+                decoration: _noteInputDecoration("标题"),
+                style: AppTheme.ts(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.textPrimary,
+                ),
+              );
+              final tagsField = TextField(
+                key: const Key("career_note_tags_field"),
+                controller: _tagsController,
+                decoration: _noteInputDecoration("标签，用逗号分隔"),
+                style: AppTheme.ts(
+                  fontSize: 12.2,
+                  color: AppTheme.textPrimary,
+                ),
+              );
+              if (constraints.maxWidth < 560) {
+                return Column(
+                  children: [
+                    titleField,
+                    const SizedBox(height: 10),
+                    tagsField,
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: titleField),
+                  const SizedBox(width: 10),
+                  SizedBox(width: 260, child: tagsField),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key("career_note_summary_field"),
+            controller: _summaryController,
+            minLines: 2,
+            maxLines: 3,
+            decoration: _noteInputDecoration("摘要"),
+            style: AppTheme.ts(
+              fontSize: 12.2,
+              height: 1.45,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: TextField(
+              key: const Key("career_note_body_field"),
+              controller: _bodyController,
+              expands: true,
+              maxLines: null,
+              minLines: null,
+              textAlignVertical: TextAlignVertical.top,
+              decoration: _noteInputDecoration("正文（Markdown）"),
+              style: AppTheme.ts(
+                fontSize: 13.2,
+                height: 1.58,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _error!,
+                style: AppTheme.ts(
+                  fontSize: 11.5,
+                  color: AppTheme.danger,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              _WorkbenchTopAction(
+                label: "取消",
+                icon: Icons.close_rounded,
+                onTap: _saving ? () {} : widget.onCancel,
+              ),
+              const SizedBox(width: 10),
+              _WorkbenchTopAction(
+                label: _saving ? "保存中" : "保存",
+                icon:
+                    _saving ? Icons.hourglass_top_rounded : Icons.check_rounded,
+                onTap: _saving ? () {} : _save,
+              ),
+            ],
           ),
         ],
       ),
@@ -2159,6 +2494,261 @@ class _DetailSkeletonFromSummary extends StatelessWidget {
   }
 }
 
+Future<void> _showNotePreviewSheet(
+  BuildContext context,
+  CareerWorkbenchProvider provider, {
+  required String noteId,
+}) {
+  final rootContext = context;
+  final noteFuture = provider.loadNote(noteId, force: true);
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: double.infinity),
+    builder: (sheetContext) {
+      return SafeArea(
+        top: false,
+        child: FractionallySizedBox(
+          heightFactor: 0.9,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 980),
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                decoration: AppTheme.floatingPanelDecoration(
+                  radius: 24,
+                  alpha: 0.96,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: FutureBuilder<NoteView>(
+                  future: noteFuture,
+                  builder: (context, snapshot) {
+                    final note = snapshot.data;
+                    return Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.sticky_note_2_outlined,
+                                size: 20,
+                                color: AppTheme.accent,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      note?.title ?? "正在读取笔记",
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppTheme.ts(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w900,
+                                        color: AppTheme.textPrimary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      note == null
+                                          ? noteId
+                                          : "${note.bodyMarkdown.length} 字符 · 更新 ${_formatTime(note.updatedAt)}",
+                                      style: AppTheme.ts(
+                                        fontSize: 10.8,
+                                        color: AppTheme.textTertiary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (note != null) ...[
+                                _WorkbenchTopAction(
+                                  label: "编辑",
+                                  icon: Icons.edit_note_rounded,
+                                  onTap: () {
+                                    Navigator.of(sheetContext).pop();
+                                    _showNoteEditorSheet(
+                                      rootContext,
+                                      provider,
+                                      noteId: noteId,
+                                    );
+                                  },
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              _WorkbenchIconButton(
+                                icon: Icons.close_rounded,
+                                tooltip: "关闭",
+                                onTap: () => Navigator.of(sheetContext).pop(),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Divider(height: 1, color: AppTheme.border),
+                        Expanded(
+                          child: snapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  !snapshot.hasData
+                              ? const _WorkbenchLoading()
+                              : snapshot.hasError
+                                  ? Padding(
+                                      padding: const EdgeInsets.all(18),
+                                      child: _EmptyText(
+                                        "笔记读取失败：${snapshot.error}",
+                                      ),
+                                    )
+                                  : SingleChildScrollView(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        24,
+                                        22,
+                                        24,
+                                        28,
+                                      ),
+                                      child: AppMarkdownBody(
+                                        content: note?.bodyMarkdown ?? "",
+                                        style: AppTheme.ts(
+                                          fontSize: 13.8,
+                                          height: 1.68,
+                                          color: AppTheme.textPrimary,
+                                        ),
+                                      ),
+                                    ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+Future<void> _showNoteEditorSheet(
+  BuildContext context,
+  CareerWorkbenchProvider provider, {
+  required String noteId,
+}) {
+  final noteFuture = provider.loadNote(noteId, force: true);
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: double.infinity),
+    builder: (sheetContext) {
+      return SafeArea(
+        top: false,
+        child: FractionallySizedBox(
+          heightFactor: 0.92,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 980),
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                decoration: AppTheme.floatingPanelDecoration(
+                  radius: 24,
+                  alpha: 0.97,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: FutureBuilder<NoteView>(
+                  future: noteFuture,
+                  builder: (context, snapshot) {
+                    final note = snapshot.data;
+                    return Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 16, 12, 12),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.edit_note_rounded,
+                                size: 20,
+                                color: AppTheme.accent,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  note?.title ?? "编辑笔记",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: AppTheme.ts(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppTheme.textPrimary,
+                                  ),
+                                ),
+                              ),
+                              _WorkbenchIconButton(
+                                icon: Icons.close_rounded,
+                                tooltip: "关闭",
+                                onTap: () => Navigator.of(sheetContext).pop(),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Divider(height: 1, color: AppTheme.border),
+                        Expanded(
+                          child: snapshot.connectionState ==
+                                      ConnectionState.waiting &&
+                                  !snapshot.hasData
+                              ? const _WorkbenchLoading()
+                              : snapshot.hasError
+                                  ? Padding(
+                                      padding: const EdgeInsets.all(18),
+                                      child: _EmptyText(
+                                        "笔记读取失败：${snapshot.error}",
+                                      ),
+                                    )
+                                  : _NoteEditorForm(
+                                      note: note!,
+                                      onCancel: () =>
+                                          Navigator.of(sheetContext).pop(),
+                                      onSave: (draft) async {
+                                        final navigator =
+                                            Navigator.of(sheetContext);
+                                        final messenger =
+                                            ScaffoldMessenger.maybeOf(
+                                          sheetContext,
+                                        );
+                                        await provider.updateNote(
+                                          noteId: noteId,
+                                          title: draft.title,
+                                          bodyMarkdown: draft.bodyMarkdown,
+                                          summary: draft.summary,
+                                          tags: draft.tags,
+                                        );
+                                        if (sheetContext.mounted) {
+                                          navigator.pop();
+                                          messenger?.showSnackBar(
+                                            const SnackBar(
+                                                content: Text("笔记已保存"),
+                                                duration: Duration(seconds: 2)),
+                                          );
+                                        }
+                                      },
+                                    ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
 Future<void> _showArtifactPreviewSheet(
   BuildContext context,
   CareerWorkbenchProvider provider, {
@@ -2505,6 +3095,42 @@ String _firstNonEmpty(List<String?> values) {
     if (normalized.isNotEmpty) return normalized;
   }
   return "";
+}
+
+List<String> _parseTags(String raw) {
+  final seen = <String>{};
+  final tags = <String>[];
+  for (final part in raw.split(RegExp(r"[,，\s]+"))) {
+    final normalized = part.trim();
+    if (normalized.isEmpty || seen.contains(normalized)) {
+      continue;
+    }
+    tags.add(normalized);
+    seen.add(normalized);
+  }
+  return tags;
+}
+
+InputDecoration _noteInputDecoration(String label) {
+  return InputDecoration(
+    labelText: label,
+    labelStyle: AppTheme.ts(
+      fontSize: 11.5,
+      color: AppTheme.textTertiary,
+      fontWeight: FontWeight.w700,
+    ),
+    filled: true,
+    fillColor: AppTheme.surfaceHover.withValues(alpha: 0.34),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: AppTheme.border.withValues(alpha: 0.78)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: AppTheme.accent.withValues(alpha: 0.42)),
+    ),
+  );
 }
 
 String _promptForAction(

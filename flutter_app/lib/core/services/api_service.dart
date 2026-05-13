@@ -379,6 +379,52 @@ class ApiService {
     );
   }
 
+  // ── Notes ─────────────────────────────────────────────────────────────
+
+  Future<NoteView> getNote({
+    required String noteId,
+    bool includeArchived = false,
+  }) async {
+    final resp = await http.get(
+      _uri("/api/notes/${Uri.encodeComponent(noteId)}").replace(
+        queryParameters: {"include_archived": includeArchived.toString()},
+      ),
+    );
+    return NoteView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
+  Future<NoteView> updateNote({
+    required String noteId,
+    String? title,
+    String? bodyMarkdown,
+    String? bodyFormat,
+    String? summary,
+    List<String>? tags,
+    String? collectionId,
+    String? relatedApplicationId,
+  }) async {
+    final body = <String, dynamic>{};
+    if (title != null) body["title"] = title;
+    if (bodyMarkdown != null) body["body_markdown"] = bodyMarkdown;
+    if (bodyFormat != null) body["body_format"] = bodyFormat;
+    if (summary != null) body["summary"] = summary;
+    if (tags != null) body["tags"] = tags;
+    if (collectionId != null) body["collection_id"] = collectionId;
+    if (relatedApplicationId != null) {
+      body["related_application_id"] = relatedApplicationId;
+    }
+    final resp = await http.patch(
+      _uri("/api/notes/${Uri.encodeComponent(noteId)}"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    return NoteView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
   Uri _careerUri(String path, bool includeArchived) {
     return _uri("/api/career$path").replace(
       queryParameters: {"include_archived": includeArchived.toString()},

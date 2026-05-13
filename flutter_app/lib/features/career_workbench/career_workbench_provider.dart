@@ -40,6 +40,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   String? _selectedApplicationId;
   CareerWorkbenchListView? _workbench;
   final Map<String, CareerApplicationWorkbenchView> _details = {};
+  final Map<String, NoteView> _notes = {};
   final Set<String> _loadingApplicationIds = {};
   final Map<String, String> _detailErrors = {};
 
@@ -216,6 +217,45 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       sessionId: sourceSessionId.trim(),
       artifactId: artifactId.trim(),
     );
+  }
+
+  Future<NoteView> loadNote(String noteId, {bool force = false}) async {
+    final normalized = noteId.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(noteId, "noteId", "noteId cannot be empty");
+    }
+    if (_notes.containsKey(normalized) && !force) {
+      return _notes[normalized]!;
+    }
+    final note = await _api.getNote(noteId: normalized);
+    _notes[normalized] = note;
+    return note;
+  }
+
+  Future<NoteView> updateNote({
+    required String noteId,
+    required String title,
+    required String bodyMarkdown,
+    required String summary,
+    required List<String> tags,
+  }) async {
+    final normalized = noteId.trim();
+    final note = await _api.updateNote(
+      noteId: normalized,
+      title: title.trim(),
+      bodyMarkdown: bodyMarkdown.trim(),
+      bodyFormat: "markdown",
+      summary: summary.trim(),
+      tags: tags,
+    );
+    _notes[normalized] = note;
+    final selectedId = _selectedApplicationId;
+    if (selectedId != null && selectedId.isNotEmpty) {
+      await loadApplicationDetail(selectedId, force: true);
+    } else {
+      notifyListeners();
+    }
+    return note;
   }
 
   void _syncSelectedApplication() {
