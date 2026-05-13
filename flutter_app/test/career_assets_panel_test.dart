@@ -204,16 +204,20 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('求职项目工作台'), findsOneWidget);
-    expect(find.text('关联资料'), findsOneWidget);
+    expect(find.text('当前判断'), findsOneWidget);
+    expect(find.text('关键匹配点'), findsOneWidget);
+    expect(find.text('主要风险'), findsOneWidget);
+    expect(find.text('关联资产'), findsOneWidget);
+    expect(find.text('学习推进'), findsOneWidget);
+    expect(find.text('推进记录'), findsOneWidget);
     expect(find.text('简历画像'), findsWidgets);
     expect(find.text('职业画像'), findsWidgets);
     expect(find.text('JD 分析'), findsWidgets);
-    expect(find.text('匹配报告'), findsWidgets);
+    expect(find.text('匹配度 82/100'), findsOneWidget);
     expect(find.text('定制简历'), findsWidgets);
-    expect(find.text('下一步行动'), findsOneWidget);
-    expect(find.text('风险点'), findsOneWidget);
 
-    await tester.tap(find.text('预览匹配报告'));
+    await tester.ensureVisible(find.text('预览').at(2));
+    await tester.tap(find.text('预览').at(2));
     await tester.pumpAndSettle();
 
     expect(api.previewedArtifactIds, contains('artifact_fit_report_001'));
@@ -254,6 +258,7 @@ void main() {
     expect(find.text('投递前检查'), findsOneWidget);
     expect(find.text('面试准备'), findsOneWidget);
 
+    await tester.ensureVisible(find.text('生成定制简历'));
     await tester.tap(find.text('生成定制简历'));
     await tester.pumpAndSettle();
 
@@ -421,6 +426,239 @@ class _FakeCareerApiService extends ApiService {
         notes: '本轮由完整求职链路生成。',
       ),
     ];
+  }
+
+  @override
+  Future<CareerWorkbenchListView> getCareerWorkbench({
+    bool includeArchived = false,
+  }) async {
+    final application = (await listCareerApplications()).first;
+    return CareerWorkbenchListView(
+      applications: [
+        CareerApplicationSummaryView(
+          application: application,
+          readiness: CareerReadinessView(
+            score: 82,
+            level: 'ready',
+            recommendation: 'recommended',
+            summary: '匹配度较高，可进入投递准备。',
+            strengths: const ['Python 与 FastAPI 经验匹配'],
+            risks: const ['RAG 证据需要补充'],
+            missingMaterials: const [],
+            nextActions: const ['复核定制简历事实准确性'],
+          ),
+          linkedAssetCount: 5,
+          noteCount: 1,
+          learningTaskCount: 1,
+          updatedAt: _now,
+        ),
+      ],
+      activeApplicationId: application.applicationId,
+      counts: CareerWorkbenchCountsView(
+        applications: 1,
+        activeApplications: 1,
+        notes: 1,
+        learningTasks: 1,
+        resumeVersions: 1,
+      ),
+      updatedAt: _now,
+    );
+  }
+
+  @override
+  Future<CareerApplicationWorkbenchView> getCareerApplicationWorkbench({
+    required String applicationId,
+    bool includeArchived = false,
+  }) async {
+    final application = (await listCareerApplications()).first;
+    final resumeProfile = (await listCareerResumeProfiles()).first;
+    final careerProfile = (await listCareerProfiles()).first;
+    final jdAnalysis = (await listCareerJobs()).first;
+    final fitReport = (await listCareerJobFitReports()).first;
+    final resumeVersion = (await listCareerResumeVersions()).first;
+    return CareerApplicationWorkbenchView(
+      application: application,
+      resumeProfile: resumeProfile,
+      careerProfile: careerProfile,
+      jdAnalysis: jdAnalysis,
+      jobFitReport: fitReport,
+      resumeVersions: [resumeVersion],
+      readiness: CareerReadinessView(
+        score: 82,
+        level: 'ready',
+        recommendation: 'recommended',
+        summary: '匹配度较高，可进入投递准备。',
+        strengths: const [
+          'Python 与 FastAPI 经验匹配',
+          'Agent Runtime 项目经验可复用',
+        ],
+        risks: const ['RAG 证据需要补充'],
+        missingMaterials: const ['补充 RAG 项目证据'],
+        nextActions: const ['复核定制简历事实准确性'],
+      ),
+      linkedAssets: [
+        CareerLinkedAssetView(
+          type: 'resume_profile',
+          id: resumeProfile.resumeProfileId,
+          title: '张明',
+          subtitle: '简历画像',
+          status: 'active',
+          updatedAt: _now,
+          previewArtifactId: resumeProfile.diagnosisArtifactId,
+          sourceSessionId: resumeProfile.meta.sourceSessionId,
+          isCurrent: true,
+          actions: const ['detail', 'preview'],
+        ),
+        CareerLinkedAssetView(
+          type: 'career_profile',
+          id: careerProfile.careerProfileId,
+          title: careerProfile.careerGoal,
+          subtitle: '职业画像',
+          status: 'active',
+          updatedAt: _now,
+          previewArtifactId: null,
+          sourceSessionId: careerProfile.meta.sourceSessionId,
+          isCurrent: true,
+          actions: const ['detail'],
+        ),
+        CareerLinkedAssetView(
+          type: 'jd_analysis',
+          id: jdAnalysis.jdAnalysisId,
+          title: jdAnalysis.displayTitle,
+          subtitle: 'JD 分析',
+          status: 'active',
+          updatedAt: _now,
+          previewArtifactId: jdAnalysis.meta.sourceArtifactId,
+          sourceSessionId: jdAnalysis.meta.sourceSessionId,
+          isCurrent: true,
+          actions: const ['detail', 'preview'],
+        ),
+        CareerLinkedAssetView(
+          type: 'job_fit_report',
+          id: fitReport.jobFitReportId,
+          title: '星河智能 · AI Agent 后端工程师',
+          subtitle: '匹配度 82/100',
+          status: 'active',
+          updatedAt: _now,
+          previewArtifactId: fitReport.reportArtifactId,
+          sourceSessionId: fitReport.meta.sourceSessionId,
+          isCurrent: true,
+          actions: const ['detail', 'preview'],
+        ),
+        CareerLinkedAssetView(
+          type: 'resume_version',
+          id: resumeVersion.resumeVersionId,
+          title: resumeVersion.title,
+          subtitle: '定制简历',
+          status: 'active',
+          updatedAt: _now,
+          previewArtifactId: resumeVersion.artifactId,
+          sourceSessionId: resumeVersion.meta.sourceSessionId,
+          isCurrent: true,
+          actions: const ['preview'],
+        ),
+      ],
+      notes: [
+        CareerNoteSummaryView(
+          noteId: 'note_application_001',
+          title: '投递准备记录',
+          summary: '记录本轮岗位匹配与投递准备。',
+          status: 'active',
+          updatedAt: _now,
+          sourceArtifactId: null,
+          relatedApplicationId: application.applicationId,
+          tags: const ['投递'],
+        ),
+      ],
+      learning: CareerLearningSummaryView(
+        plans: const [],
+        tasks: [
+          CareerWorkbenchLearningTaskView(
+            status: 'active',
+            sourceSessionId: 'sess_demo',
+            sourceArtifactId: null,
+            learningTaskId: 'learning_task_rag_001',
+            title: '补充 RAG 项目证据',
+            learningPlanId: null,
+            description: '整理 RAG 项目中的检索、召回、评估证据。',
+            taskType: 'custom',
+            priority: 'high',
+            state: 'todo',
+            skillTags: const ['RAG'],
+            estimatedMinutes: 60,
+            dueDate: null,
+            completedAt: null,
+            successCriteria: const ['补充一段可写入简历的项目证据'],
+            progressNotes: '',
+            updatedAt: _now,
+          ),
+        ],
+        weaknesses: [
+          CareerWorkbenchWeaknessView(
+            status: 'active',
+            sourceSessionId: 'sess_demo',
+            sourceArtifactId: null,
+            weaknessId: 'weakness_rag_001',
+            title: 'RAG 证据不足',
+            description: '需要补充真实项目证据。',
+            weaknessType: 'skill',
+            severity: 'medium',
+            state: 'open',
+            skillTags: const ['RAG'],
+            relatedTaskIds: const ['learning_task_rag_001'],
+            updatedAt: _now,
+          ),
+        ],
+        reviews: const [],
+        openTaskCount: 1,
+        doneTaskCount: 0,
+        highWeaknessCount: 0,
+      ),
+      timeline: [
+        CareerTimelineItemView(
+          type: 'job_fit_report',
+          title: '匹配报告更新',
+          subtitle: fitReport.jobFitReportId,
+          occurredAt: _now,
+          sourceType: 'job_fit_report',
+          sourceId: fitReport.jobFitReportId,
+        ),
+        CareerTimelineItemView(
+          type: 'resume_profile',
+          title: '简历画像更新',
+          subtitle: resumeProfile.resumeProfileId,
+          occurredAt: _now,
+          sourceType: 'resume_profile',
+          sourceId: resumeProfile.resumeProfileId,
+        ),
+      ],
+      suggestedActions: [
+        CareerSuggestedActionView(
+          actionType: 'custom_resume',
+          label: '生成定制简历',
+          promptIntent: '基于当前岗位生成定制简历版本',
+          priority: 'high',
+          enabled: true,
+          reason: '已有匹配报告，可以定制简历',
+        ),
+        CareerSuggestedActionView(
+          actionType: 'pre_apply_check',
+          label: '投递前检查',
+          promptIntent: '基于当前求职项目做投递前检查',
+          priority: 'high',
+          enabled: true,
+          reason: '复用当前匹配报告和求职项目',
+        ),
+        CareerSuggestedActionView(
+          actionType: 'interview_prep',
+          label: '面试准备',
+          promptIntent: '基于当前岗位和短板生成面试准备建议',
+          priority: 'medium',
+          enabled: true,
+          reason: '复用匹配报告、笔记和学习任务',
+        ),
+      ],
+    );
   }
 
   @override

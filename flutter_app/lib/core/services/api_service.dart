@@ -317,6 +317,36 @@ class ApiService {
         .toList();
   }
 
+  Future<CareerWorkbenchListView> getCareerWorkbench({
+    bool includeArchived = false,
+  }) async {
+    final resp = await http.get(
+      _uri("/api/career/workbench").replace(
+        queryParameters: {"include_archived": includeArchived.toString()},
+      ),
+    );
+    return CareerWorkbenchListView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
+  Future<CareerApplicationWorkbenchView> getCareerApplicationWorkbench({
+    required String applicationId,
+    bool includeArchived = false,
+  }) async {
+    final resp = await http.get(
+      _uri(
+        "/api/career/workbench/applications/"
+        "${Uri.encodeComponent(applicationId)}",
+      ).replace(
+        queryParameters: {"include_archived": includeArchived.toString()},
+      ),
+    );
+    return CareerApplicationWorkbenchView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
   Future<CareerApplicationView> updateCareerApplication({
     required String applicationId,
     String? stage,

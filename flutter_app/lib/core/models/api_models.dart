@@ -804,6 +804,613 @@ class CareerApplicationView {
   }
 }
 
+class CareerReadinessView {
+  final int? score;
+  final String level;
+  final String recommendation;
+  final String summary;
+  final List<String> strengths;
+  final List<String> risks;
+  final List<String> missingMaterials;
+  final List<String> nextActions;
+
+  CareerReadinessView({
+    required this.score,
+    required this.level,
+    required this.recommendation,
+    required this.summary,
+    required this.strengths,
+    required this.risks,
+    required this.missingMaterials,
+    required this.nextActions,
+  });
+
+  factory CareerReadinessView.fromJson(Map<String, dynamic> json) {
+    return CareerReadinessView(
+      score: json["score"] == null ? null : _readInt(json["score"]),
+      level: (json["level"] ?? "unknown").toString(),
+      recommendation: (json["recommendation"] ?? "unknown").toString(),
+      summary: (json["summary"] ?? "").toString(),
+      strengths: _readStringList(json["strengths"]),
+      risks: _readStringList(json["risks"]),
+      missingMaterials: _readStringList(json["missing_materials"]),
+      nextActions: _readStringList(json["next_actions"]),
+    );
+  }
+}
+
+class CareerLinkedAssetView {
+  final String type;
+  final String id;
+  final String title;
+  final String subtitle;
+  final String status;
+  final DateTime? updatedAt;
+  final String? previewArtifactId;
+  final String? sourceSessionId;
+  final bool isCurrent;
+  final List<String> actions;
+
+  CareerLinkedAssetView({
+    required this.type,
+    required this.id,
+    required this.title,
+    required this.subtitle,
+    required this.status,
+    required this.updatedAt,
+    required this.previewArtifactId,
+    required this.sourceSessionId,
+    required this.isCurrent,
+    required this.actions,
+  });
+
+  factory CareerLinkedAssetView.fromJson(Map<String, dynamic> json) {
+    return CareerLinkedAssetView(
+      type: (json["type"] ?? "").toString(),
+      id: (json["id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      subtitle: (json["subtitle"] ?? "").toString(),
+      status: (json["status"] ?? "active").toString(),
+      updatedAt: _readOptionalDateTime(json["updated_at"]),
+      previewArtifactId: _readOptionalString(json["preview_artifact_id"]),
+      sourceSessionId: _readOptionalString(json["source_session_id"]),
+      isCurrent: json["is_current"] == true,
+      actions: _readStringList(json["actions"]),
+    );
+  }
+}
+
+class CareerTimelineItemView {
+  final String type;
+  final String title;
+  final String subtitle;
+  final DateTime occurredAt;
+  final String sourceType;
+  final String sourceId;
+
+  CareerTimelineItemView({
+    required this.type,
+    required this.title,
+    required this.subtitle,
+    required this.occurredAt,
+    required this.sourceType,
+    required this.sourceId,
+  });
+
+  factory CareerTimelineItemView.fromJson(Map<String, dynamic> json) {
+    return CareerTimelineItemView(
+      type: (json["type"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      subtitle: (json["subtitle"] ?? "").toString(),
+      occurredAt: _readDateTime(json["occurred_at"]),
+      sourceType: (json["source_type"] ?? "").toString(),
+      sourceId: (json["source_id"] ?? "").toString(),
+    );
+  }
+}
+
+class CareerSuggestedActionView {
+  final String actionType;
+  final String label;
+  final String promptIntent;
+  final String priority;
+  final bool enabled;
+  final String reason;
+
+  CareerSuggestedActionView({
+    required this.actionType,
+    required this.label,
+    required this.promptIntent,
+    required this.priority,
+    required this.enabled,
+    required this.reason,
+  });
+
+  factory CareerSuggestedActionView.fromJson(Map<String, dynamic> json) {
+    return CareerSuggestedActionView(
+      actionType: (json["action_type"] ?? "").toString(),
+      label: (json["label"] ?? "").toString(),
+      promptIntent: (json["prompt_intent"] ?? "").toString(),
+      priority: (json["priority"] ?? "medium").toString(),
+      enabled: json["enabled"] != false,
+      reason: (json["reason"] ?? "").toString(),
+    );
+  }
+}
+
+class CareerNoteSummaryView {
+  final String noteId;
+  final String title;
+  final String summary;
+  final String status;
+  final DateTime updatedAt;
+  final String? sourceArtifactId;
+  final String? relatedApplicationId;
+  final List<String> tags;
+
+  CareerNoteSummaryView({
+    required this.noteId,
+    required this.title,
+    required this.summary,
+    required this.status,
+    required this.updatedAt,
+    required this.sourceArtifactId,
+    required this.relatedApplicationId,
+    required this.tags,
+  });
+
+  factory CareerNoteSummaryView.fromJson(Map<String, dynamic> json) {
+    return CareerNoteSummaryView(
+      noteId: (json["note_id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      summary: (json["summary"] ?? "").toString(),
+      status: (json["status"] ?? "active").toString(),
+      updatedAt: _readDateTime(json["updated_at"]),
+      sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
+      relatedApplicationId: _readOptionalString(json["related_application_id"]),
+      tags: _readStringList(json["tags"]),
+    );
+  }
+}
+
+class CareerWorkbenchLearningPlanView {
+  final String status;
+  final String sourceSessionId;
+  final String? sourceArtifactId;
+  final String learningPlanId;
+  final String title;
+  final String description;
+  final String planType;
+  final String? targetApplicationId;
+  final String targetRole;
+  final String targetCompany;
+  final String priority;
+  final List<String> goals;
+  final List<String> focusSkillTags;
+  final String progressSummary;
+  final DateTime updatedAt;
+
+  CareerWorkbenchLearningPlanView({
+    required this.status,
+    required this.sourceSessionId,
+    required this.sourceArtifactId,
+    required this.learningPlanId,
+    required this.title,
+    required this.description,
+    required this.planType,
+    required this.targetApplicationId,
+    required this.targetRole,
+    required this.targetCompany,
+    required this.priority,
+    required this.goals,
+    required this.focusSkillTags,
+    required this.progressSummary,
+    required this.updatedAt,
+  });
+
+  factory CareerWorkbenchLearningPlanView.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return CareerWorkbenchLearningPlanView(
+      status: (json["status"] ?? "active").toString(),
+      sourceSessionId: (json["source_session_id"] ?? "").toString(),
+      sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
+      learningPlanId: (json["learning_plan_id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      description: (json["description"] ?? "").toString(),
+      planType: (json["plan_type"] ?? "custom").toString(),
+      targetApplicationId: _readOptionalString(json["target_application_id"]),
+      targetRole: (json["target_role"] ?? "").toString(),
+      targetCompany: (json["target_company"] ?? "").toString(),
+      priority: (json["priority"] ?? "medium").toString(),
+      goals: _readStringList(json["goals"]),
+      focusSkillTags: _readStringList(json["focus_skill_tags"]),
+      progressSummary: (json["progress_summary"] ?? "").toString(),
+      updatedAt: _readDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class CareerWorkbenchLearningTaskView {
+  final String status;
+  final String sourceSessionId;
+  final String? sourceArtifactId;
+  final String learningTaskId;
+  final String title;
+  final String? learningPlanId;
+  final String description;
+  final String taskType;
+  final String priority;
+  final String state;
+  final List<String> skillTags;
+  final int estimatedMinutes;
+  final DateTime? dueDate;
+  final DateTime? completedAt;
+  final List<String> successCriteria;
+  final String progressNotes;
+  final DateTime updatedAt;
+
+  CareerWorkbenchLearningTaskView({
+    required this.status,
+    required this.sourceSessionId,
+    required this.sourceArtifactId,
+    required this.learningTaskId,
+    required this.title,
+    required this.learningPlanId,
+    required this.description,
+    required this.taskType,
+    required this.priority,
+    required this.state,
+    required this.skillTags,
+    required this.estimatedMinutes,
+    required this.dueDate,
+    required this.completedAt,
+    required this.successCriteria,
+    required this.progressNotes,
+    required this.updatedAt,
+  });
+
+  factory CareerWorkbenchLearningTaskView.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return CareerWorkbenchLearningTaskView(
+      status: (json["status"] ?? "active").toString(),
+      sourceSessionId: (json["source_session_id"] ?? "").toString(),
+      sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
+      learningTaskId: (json["learning_task_id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      learningPlanId: _readOptionalString(json["learning_plan_id"]),
+      description: (json["description"] ?? "").toString(),
+      taskType: (json["task_type"] ?? "custom").toString(),
+      priority: (json["priority"] ?? "medium").toString(),
+      state: (json["state"] ?? "todo").toString(),
+      skillTags: _readStringList(json["skill_tags"]),
+      estimatedMinutes: _readInt(json["estimated_minutes"]),
+      dueDate: _readOptionalDateTime(json["due_date"]),
+      completedAt: _readOptionalDateTime(json["completed_at"]),
+      successCriteria: _readStringList(json["success_criteria"]),
+      progressNotes: (json["progress_notes"] ?? "").toString(),
+      updatedAt: _readDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class CareerWorkbenchWeaknessView {
+  final String status;
+  final String sourceSessionId;
+  final String? sourceArtifactId;
+  final String weaknessId;
+  final String title;
+  final String description;
+  final String weaknessType;
+  final String severity;
+  final String state;
+  final List<String> skillTags;
+  final List<String> relatedTaskIds;
+  final DateTime updatedAt;
+
+  CareerWorkbenchWeaknessView({
+    required this.status,
+    required this.sourceSessionId,
+    required this.sourceArtifactId,
+    required this.weaknessId,
+    required this.title,
+    required this.description,
+    required this.weaknessType,
+    required this.severity,
+    required this.state,
+    required this.skillTags,
+    required this.relatedTaskIds,
+    required this.updatedAt,
+  });
+
+  factory CareerWorkbenchWeaknessView.fromJson(Map<String, dynamic> json) {
+    return CareerWorkbenchWeaknessView(
+      status: (json["status"] ?? "active").toString(),
+      sourceSessionId: (json["source_session_id"] ?? "").toString(),
+      sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
+      weaknessId: (json["weakness_id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      description: (json["description"] ?? "").toString(),
+      weaknessType: (json["weakness_type"] ?? "other").toString(),
+      severity: (json["severity"] ?? "medium").toString(),
+      state: (json["state"] ?? "open").toString(),
+      skillTags: _readStringList(json["skill_tags"]),
+      relatedTaskIds: _readStringList(json["related_task_ids"]),
+      updatedAt: _readDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class CareerWorkbenchReviewView {
+  final String status;
+  final String sourceSessionId;
+  final String? sourceArtifactId;
+  final String reviewScheduleId;
+  final String title;
+  final String reviewType;
+  final String state;
+  final DateTime? reviewAt;
+  final DateTime? nextReviewAt;
+  final String summary;
+  final DateTime updatedAt;
+
+  CareerWorkbenchReviewView({
+    required this.status,
+    required this.sourceSessionId,
+    required this.sourceArtifactId,
+    required this.reviewScheduleId,
+    required this.title,
+    required this.reviewType,
+    required this.state,
+    required this.reviewAt,
+    required this.nextReviewAt,
+    required this.summary,
+    required this.updatedAt,
+  });
+
+  factory CareerWorkbenchReviewView.fromJson(Map<String, dynamic> json) {
+    return CareerWorkbenchReviewView(
+      status: (json["status"] ?? "active").toString(),
+      sourceSessionId: (json["source_session_id"] ?? "").toString(),
+      sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
+      reviewScheduleId: (json["review_schedule_id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      reviewType: (json["review_type"] ?? "custom").toString(),
+      state: (json["state"] ?? "scheduled").toString(),
+      reviewAt: _readOptionalDateTime(json["review_at"]),
+      nextReviewAt: _readOptionalDateTime(json["next_review_at"]),
+      summary: (json["summary"] ?? "").toString(),
+      updatedAt: _readDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class CareerLearningSummaryView {
+  final List<CareerWorkbenchLearningPlanView> plans;
+  final List<CareerWorkbenchLearningTaskView> tasks;
+  final List<CareerWorkbenchWeaknessView> weaknesses;
+  final List<CareerWorkbenchReviewView> reviews;
+  final int openTaskCount;
+  final int doneTaskCount;
+  final int highWeaknessCount;
+
+  CareerLearningSummaryView({
+    required this.plans,
+    required this.tasks,
+    required this.weaknesses,
+    required this.reviews,
+    required this.openTaskCount,
+    required this.doneTaskCount,
+    required this.highWeaknessCount,
+  });
+
+  factory CareerLearningSummaryView.fromJson(Map<String, dynamic> json) {
+    return CareerLearningSummaryView(
+      plans: _readList(json["plans"])
+          .map((item) => CareerWorkbenchLearningPlanView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      tasks: _readList(json["tasks"])
+          .map((item) => CareerWorkbenchLearningTaskView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      weaknesses: _readList(json["weaknesses"])
+          .map((item) => CareerWorkbenchWeaknessView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      reviews: _readList(json["reviews"])
+          .map((item) => CareerWorkbenchReviewView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      openTaskCount: _readInt(json["open_task_count"]),
+      doneTaskCount: _readInt(json["done_task_count"]),
+      highWeaknessCount: _readInt(json["high_weakness_count"]),
+    );
+  }
+}
+
+class CareerApplicationSummaryView {
+  final CareerApplicationView application;
+  final CareerReadinessView readiness;
+  final int linkedAssetCount;
+  final int noteCount;
+  final int learningTaskCount;
+  final DateTime updatedAt;
+
+  CareerApplicationSummaryView({
+    required this.application,
+    required this.readiness,
+    required this.linkedAssetCount,
+    required this.noteCount,
+    required this.learningTaskCount,
+    required this.updatedAt,
+  });
+
+  factory CareerApplicationSummaryView.fromJson(Map<String, dynamic> json) {
+    return CareerApplicationSummaryView(
+      application: CareerApplicationView.fromJson(
+        Map<String, dynamic>.from(json["application"] ?? const {}),
+      ),
+      readiness: CareerReadinessView.fromJson(
+        Map<String, dynamic>.from(json["readiness"] ?? const {}),
+      ),
+      linkedAssetCount: _readInt(json["linked_asset_count"]),
+      noteCount: _readInt(json["note_count"]),
+      learningTaskCount: _readInt(json["learning_task_count"]),
+      updatedAt: _readDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class CareerWorkbenchCountsView {
+  final int applications;
+  final int activeApplications;
+  final int notes;
+  final int learningTasks;
+  final int resumeVersions;
+
+  CareerWorkbenchCountsView({
+    required this.applications,
+    required this.activeApplications,
+    required this.notes,
+    required this.learningTasks,
+    required this.resumeVersions,
+  });
+
+  factory CareerWorkbenchCountsView.fromJson(Map<String, dynamic> json) {
+    return CareerWorkbenchCountsView(
+      applications: _readInt(json["applications"]),
+      activeApplications: _readInt(json["active_applications"]),
+      notes: _readInt(json["notes"]),
+      learningTasks: _readInt(json["learning_tasks"]),
+      resumeVersions: _readInt(json["resume_versions"]),
+    );
+  }
+}
+
+class CareerWorkbenchListView {
+  final List<CareerApplicationSummaryView> applications;
+  final String? activeApplicationId;
+  final CareerWorkbenchCountsView counts;
+  final DateTime? updatedAt;
+
+  CareerWorkbenchListView({
+    required this.applications,
+    required this.activeApplicationId,
+    required this.counts,
+    required this.updatedAt,
+  });
+
+  factory CareerWorkbenchListView.fromJson(Map<String, dynamic> json) {
+    return CareerWorkbenchListView(
+      applications: _readList(json["applications"])
+          .map((item) => CareerApplicationSummaryView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      activeApplicationId: _readOptionalString(json["active_application_id"]),
+      counts: CareerWorkbenchCountsView.fromJson(
+        Map<String, dynamic>.from(json["counts"] ?? const {}),
+      ),
+      updatedAt: _readOptionalDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class CareerApplicationWorkbenchView {
+  final CareerApplicationView application;
+  final ResumeProfileView? resumeProfile;
+  final CareerProfileView? careerProfile;
+  final JDAnalysisView? jdAnalysis;
+  final JobFitReportView? jobFitReport;
+  final List<ResumeVersionView> resumeVersions;
+  final CareerReadinessView readiness;
+  final List<CareerLinkedAssetView> linkedAssets;
+  final List<CareerNoteSummaryView> notes;
+  final CareerLearningSummaryView learning;
+  final List<CareerTimelineItemView> timeline;
+  final List<CareerSuggestedActionView> suggestedActions;
+
+  CareerApplicationWorkbenchView({
+    required this.application,
+    required this.resumeProfile,
+    required this.careerProfile,
+    required this.jdAnalysis,
+    required this.jobFitReport,
+    required this.resumeVersions,
+    required this.readiness,
+    required this.linkedAssets,
+    required this.notes,
+    required this.learning,
+    required this.timeline,
+    required this.suggestedActions,
+  });
+
+  factory CareerApplicationWorkbenchView.fromJson(Map<String, dynamic> json) {
+    return CareerApplicationWorkbenchView(
+      application: CareerApplicationView.fromJson(
+        Map<String, dynamic>.from(json["application"] ?? const {}),
+      ),
+      resumeProfile: json["resume_profile"] is Map
+          ? ResumeProfileView.fromJson(
+              Map<String, dynamic>.from(json["resume_profile"]),
+            )
+          : null,
+      careerProfile: json["career_profile"] is Map
+          ? CareerProfileView.fromJson(
+              Map<String, dynamic>.from(json["career_profile"]),
+            )
+          : null,
+      jdAnalysis: json["jd_analysis"] is Map
+          ? JDAnalysisView.fromJson(
+              Map<String, dynamic>.from(json["jd_analysis"]),
+            )
+          : null,
+      jobFitReport: json["job_fit_report"] is Map
+          ? JobFitReportView.fromJson(
+              Map<String, dynamic>.from(json["job_fit_report"]),
+            )
+          : null,
+      resumeVersions: _readList(json["resume_versions"])
+          .map((item) => ResumeVersionView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      readiness: CareerReadinessView.fromJson(
+        Map<String, dynamic>.from(json["readiness"] ?? const {}),
+      ),
+      linkedAssets: _readList(json["linked_assets"])
+          .map((item) => CareerLinkedAssetView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      notes: _readList(json["notes"])
+          .map((item) => CareerNoteSummaryView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      learning: CareerLearningSummaryView.fromJson(
+        Map<String, dynamic>.from(json["learning"] ?? const {}),
+      ),
+      timeline: _readList(json["timeline"])
+          .map((item) => CareerTimelineItemView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+      suggestedActions: _readList(json["suggested_actions"])
+          .map((item) => CareerSuggestedActionView.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(),
+    );
+  }
+}
+
 class SessionArtifactContentView {
   final String sessionId;
   final String artifactId;
@@ -847,6 +1454,12 @@ class SessionArtifactContentView {
 
 DateTime _readDateTime(dynamic raw) {
   return DateTime.tryParse((raw ?? "").toString()) ?? DateTime.now();
+}
+
+DateTime? _readOptionalDateTime(dynamic raw) {
+  final value = raw?.toString().trim() ?? "";
+  if (value.isEmpty) return null;
+  return DateTime.tryParse(value);
 }
 
 String? _readOptionalString(dynamic raw) {

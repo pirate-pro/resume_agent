@@ -101,6 +101,10 @@ class CareerAssetsProvider extends ChangeNotifier {
   String? _previewError;
   SessionArtifactContentView? _preview;
   final Map<String, String> _artifactPreviewErrors = {};
+  CareerWorkbenchListView? _workbenchList;
+  final Map<String, CareerApplicationWorkbenchView> _workbenchDetails = {};
+  final Map<String, String> _workbenchErrors = {};
+  final Set<String> _loadingWorkbenchApplicationIds = {};
   Timer? _recentRecordTimer;
   Set<String> _recentRecordIds = {};
 
@@ -124,6 +128,7 @@ class CareerAssetsProvider extends ChangeNotifier {
   SessionArtifactContentView? get preview => _preview;
   Map<String, String> get artifactPreviewErrors =>
       Map.unmodifiable(_artifactPreviewErrors);
+  CareerWorkbenchListView? get workbenchList => _workbenchList;
   Set<String> get recentRecordIds => Set.unmodifiable(_recentRecordIds);
 
   List<ResumeProfileView> get resumeProfiles =>
@@ -136,6 +141,20 @@ class CareerAssetsProvider extends ChangeNotifier {
       List.unmodifiable(_resumeVersions);
   List<CareerApplicationView> get careerApplications =>
       List.unmodifiable(_careerApplications);
+
+  CareerApplicationWorkbenchView? workbenchForApplication(
+    String applicationId,
+  ) {
+    return _workbenchDetails[applicationId.trim()];
+  }
+
+  bool isWorkbenchLoading(String applicationId) {
+    return _loadingWorkbenchApplicationIds.contains(applicationId.trim());
+  }
+
+  String? workbenchError(String applicationId) {
+    return _workbenchErrors[applicationId.trim()];
+  }
 
   int get totalCount =>
       _resumeProfiles.length +
@@ -183,6 +202,9 @@ class CareerAssetsProvider extends ChangeNotifier {
       _jobFitReports = results[3] as List<JobFitReportView>;
       _resumeVersions = results[4] as List<ResumeVersionView>;
       _careerApplications = results[5] as List<CareerApplicationView>;
+      _workbenchList = null;
+      _workbenchDetails.clear();
+      _workbenchErrors.clear();
       _hasLoaded = true;
       _selection = _selectionStillExists() ? _selection : null;
       if (!firstLoad) {
@@ -221,6 +243,62 @@ class CareerAssetsProvider extends ChangeNotifier {
     _preview = null;
     _previewError = null;
     notifyListeners();
+  }
+
+  Future<CareerWorkbenchListView> loadCareerWorkbench({
+    bool force = false,
+  }) async {
+    if (_workbenchList != null && !force) {
+      return _workbenchList!;
+    }
+    final list = await _api.getCareerWorkbench();
+    _workbenchList = list;
+    for (final summary in list.applications) {
+      _upsertCareerApplication(summary.application);
+    }
+    notifyListeners();
+    return list;
+  }
+
+  Future<CareerApplicationWorkbenchView> loadApplicationWorkbench(
+    String applicationId, {
+    bool force = false,
+  }) async {
+    final normalized = applicationId.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError("缺少求职项目 id");
+    }
+    final cached = _workbenchDetails[normalized];
+    if (cached != null && !force) {
+      return cached;
+    }
+
+    _workbenchErrors.remove(normalized);
+    _loadingWorkbenchApplicationIds.add(normalized);
+    notifyListeners();
+
+    try {
+      final view = await _api.getCareerApplicationWorkbench(
+        applicationId: normalized,
+      );
+      _workbenchDetails[normalized] = view;
+      _syncWorkbenchRecords(view);
+      return view;
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: "career assets",
+          context: ErrorDescription("load career application workbench"),
+        ),
+      );
+      _workbenchErrors[normalized] = error.toString();
+      rethrow;
+    } finally {
+      _loadingWorkbenchApplicationIds.remove(normalized);
+      notifyListeners();
+    }
   }
 
   Future<CareerApplicationView> updateCareerApplication({
@@ -390,6 +468,89 @@ class CareerAssetsProvider extends ChangeNotifier {
       return;
     }
     _careerApplications = [record, ..._careerApplications];
+  }
+
+  void _syncWorkbenchRecords(CareerApplicationWorkbenchView view) {
+    _upsertCareerApplication(view.application);
+    final resumeProfile = view.resumeProfile;
+    if (resumeProfile != null) _upsertResumeProfile(resumeProfile);
+    final careerProfile = view.careerProfile;
+    if (careerProfile != null) _upsertCareerProfile(careerProfile);
+    final jdAnalysis = view.jdAnalysis;
+    if (jdAnalysis != null) _upsertJdAnalysis(jdAnalysis);
+    final fitReport = view.jobFitReport;
+    if (fitReport != null) _upsertJobFitReport(fitReport);
+    for (final version in view.resumeVersions) {
+      _upsertResumeVersion(version);
+    }
+    if (_selection?.recordId == view.application.applicationId) {
+      _selection = CareerAssetSelection.fromRecord(view.application);
+    }
+  }
+
+  void _upsertResumeProfile(ResumeProfileView record) {
+    final index = _resumeProfiles.indexWhere(
+      (item) => item.resumeProfileId == record.resumeProfileId,
+    );
+    if (index >= 0) {
+      final next = [..._resumeProfiles];
+      next[index] = record;
+      _resumeProfiles = next;
+      return;
+    }
+    _resumeProfiles = [record, ..._resumeProfiles];
+  }
+
+  void _upsertCareerProfile(CareerProfileView record) {
+    final index = _careerProfiles.indexWhere(
+      (item) => item.careerProfileId == record.careerProfileId,
+    );
+    if (index >= 0) {
+      final next = [..._careerProfiles];
+      next[index] = record;
+      _careerProfiles = next;
+      return;
+    }
+    _careerProfiles = [record, ..._careerProfiles];
+  }
+
+  void _upsertJdAnalysis(JDAnalysisView record) {
+    final index = _jdAnalyses.indexWhere(
+      (item) => item.jdAnalysisId == record.jdAnalysisId,
+    );
+    if (index >= 0) {
+      final next = [..._jdAnalyses];
+      next[index] = record;
+      _jdAnalyses = next;
+      return;
+    }
+    _jdAnalyses = [record, ..._jdAnalyses];
+  }
+
+  void _upsertJobFitReport(JobFitReportView record) {
+    final index = _jobFitReports.indexWhere(
+      (item) => item.jobFitReportId == record.jobFitReportId,
+    );
+    if (index >= 0) {
+      final next = [..._jobFitReports];
+      next[index] = record;
+      _jobFitReports = next;
+      return;
+    }
+    _jobFitReports = [record, ..._jobFitReports];
+  }
+
+  void _upsertResumeVersion(ResumeVersionView record) {
+    final index = _resumeVersions.indexWhere(
+      (item) => item.resumeVersionId == record.resumeVersionId,
+    );
+    if (index >= 0) {
+      final next = [..._resumeVersions];
+      next[index] = record;
+      _resumeVersions = next;
+      return;
+    }
+    _resumeVersions = [record, ..._resumeVersions];
   }
 
   void _markRecentlyCreatedRecords(Set<String> recordIds) {
