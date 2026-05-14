@@ -577,6 +577,7 @@ class _FakeCareerApiService extends ApiService {
             status: 'active',
             sourceSessionId: 'sess_demo',
             sourceArtifactId: null,
+            evidenceRefs: const ['application_demo_001'],
             learningTaskId: 'learning_task_rag_001',
             title: '补充 RAG 项目证据',
             learningPlanId: null,

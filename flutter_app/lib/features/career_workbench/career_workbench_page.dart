@@ -1286,9 +1286,26 @@ class _LearningPlanView extends StatelessWidget {
             child: loading && detail == null
                 ? const Center(child: _WorkbenchLoading())
                 : selected == null
-                    ? const Padding(
-                        padding: EdgeInsets.all(14),
-                        child: _EmptyText("暂无求职项目。先在聊天里完成简历和 JD 匹配后，再生成学习计划。"),
+                    ? Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _LearningTaskEntryPanel(
+                              application: null,
+                              tasks: const [],
+                              plans: const [],
+                              weaknesses: const [],
+                              reviews: const [],
+                              onBackToChat: onBackToChat,
+                              onSendPrompt: onSendPrompt,
+                            ),
+                            const SizedBox(height: 12),
+                            const _EmptyText(
+                              "暂无求职项目。可以先新建一个全局学习任务，后续再关联到目标岗位。",
+                            ),
+                          ],
+                        ),
                       )
                     : ListView(
                         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
@@ -1300,8 +1317,12 @@ class _LearningPlanView extends StatelessWidget {
                             reviews: reviews,
                           ),
                           const SizedBox(height: 12),
-                          _LearningActionStrip(
+                          _LearningTaskEntryPanel(
                             application: selected.application,
+                            tasks: tasks,
+                            plans: plans,
+                            weaknesses: weaknesses,
+                            reviews: reviews,
                             onBackToChat: onBackToChat,
                             onSendPrompt: onSendPrompt,
                           ),
@@ -1517,69 +1538,897 @@ class _LearningMetric {
   });
 }
 
-class _LearningActionStrip extends StatelessWidget {
-  final CareerApplicationView application;
+class _LearningTaskEntryPanel extends StatelessWidget {
+  final CareerApplicationView? application;
+  final List<CareerWorkbenchLearningTaskView> tasks;
+  final List<CareerWorkbenchLearningPlanView> plans;
+  final List<CareerWorkbenchWeaknessView> weaknesses;
+  final List<CareerWorkbenchReviewView> reviews;
   final VoidCallback onBackToChat;
   final WorkbenchPromptSender? onSendPrompt;
 
-  const _LearningActionStrip({
+  const _LearningTaskEntryPanel({
     required this.application,
+    required this.tasks,
+    required this.plans,
+    required this.weaknesses,
+    required this.reviews,
     required this.onBackToChat,
     required this.onSendPrompt,
   });
 
   @override
   Widget build(BuildContext context) {
+    final openTasks = tasks
+        .where((task) => task.state != "done" && task.state != "archived")
+        .length;
+    final doneTasks = tasks.where((task) => task.state == "done").length;
+    final hasProject = application != null;
+    final subtitle = !hasProject
+        ? "先记录一个全局学习目标，后续可以再关联到求职项目。"
+        : tasks.isEmpty
+            ? "当前项目还没有任务，可以自己添加，也可以让 Agent 基于短板推荐。"
+            : "$openTasks 个待推进 · $doneTasks 个已完成，继续打卡或补充新任务。";
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: BoxDecoration(
-        color: AppTheme.surfaceHover.withValues(alpha: 0.34),
-        borderRadius: BorderRadius.circular(17),
+        color: AppTheme.surfaceHover.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppTheme.border.withValues(alpha: 0.68)),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              "基于当前岗位生成或推进学习任务，执行过程仍回到聊天展示。",
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: AppTheme.ts(
-                fontSize: 11.5,
-                height: 1.45,
-                color: AppTheme.textSecondary,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 680;
+          final headline = Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: AppTheme.accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(
+                    color: AppTheme.accent.withValues(alpha: 0.16),
+                  ),
+                ),
+                child: Icon(
+                  Icons.school_outlined,
+                  size: 16,
+                  color: AppTheme.accent,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "今天要推进什么？",
+                      style: AppTheme.ts(
+                        fontSize: 13.2,
+                        fontWeight: FontWeight.w900,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 11.2,
+                        height: 1.42,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+          final actions = Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: narrow ? WrapAlignment.start : WrapAlignment.end,
+            children: [
+              _LearningTaskActionButton(
+                label: "新建任务",
+                icon: Icons.add_task_rounded,
+                color: AppTheme.accent,
+                onTap: () => _showLearningTaskCreateSheet(
+                  context,
+                  application: application,
+                  onBackToChat: onBackToChat,
+                  onSendPrompt: onSendPrompt,
+                ),
+              ),
+              _LearningTaskActionButton(
+                label: "从项目推荐",
+                icon: Icons.auto_awesome_rounded,
+                color: const Color(0xFF7C3AED),
+                enabled: hasProject,
+                disabledMessage: "暂无求职项目，先新建任务或完成一次岗位匹配",
+                onTap: () => _sendLearningPrompt(
+                  context,
+                  application,
+                  label: "推荐任务",
+                  actionType: "learning_recommend",
+                  intent: _learningRecommendationIntent(
+                    plans: plans.length,
+                    tasks: tasks.length,
+                    weaknesses: weaknesses.length,
+                    reviews: reviews.length,
+                  ),
+                  onBackToChat: onBackToChat,
+                  onSendPrompt: onSendPrompt,
+                ),
+              ),
+              _LearningTaskActionButton(
+                label: "记录进度",
+                icon: Icons.fact_check_outlined,
+                color: const Color(0xFF2563EB),
+                enabled: tasks.isNotEmpty,
+                disabledMessage: "当前还没有学习任务，先新建或生成推荐任务",
+                onTap: () => _showLearningTaskCheckinSheet(
+                  context,
+                  application: application,
+                  tasks: tasks,
+                  onBackToChat: onBackToChat,
+                  onSendPrompt: onSendPrompt,
+                ),
+              ),
+            ],
+          );
+          if (narrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                headline,
+                const SizedBox(height: 12),
+                actions,
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: headline),
+              const SizedBox(width: 14),
+              actions,
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _LearningTaskActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final bool enabled;
+  final String? disabledMessage;
+  final VoidCallback onTap;
+
+  const _LearningTaskActionButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.enabled = true,
+    this.disabledMessage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveColor = enabled ? color : AppTheme.textTertiary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: enabled
+            ? onTap
+            : () {
+                final message = disabledMessage;
+                if (message == null) return;
+                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                  SnackBar(
+                    content: Text(message),
+                    duration: const Duration(seconds: 1),
+                  ),
+                );
+              },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: effectiveColor.withValues(alpha: enabled ? 0.1 : 0.055),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: effectiveColor.withValues(alpha: enabled ? 0.2 : 0.12),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: effectiveColor),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: effectiveColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _showLearningTaskCreateSheet(
+  BuildContext context, {
+  required CareerApplicationView? application,
+  required VoidCallback onBackToChat,
+  required WorkbenchPromptSender? onSendPrompt,
+}) {
+  final titleController = TextEditingController();
+  final descriptionController = TextEditingController();
+  final minutesController = TextEditingController();
+  var priority = "medium";
+  var error = "";
+
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: double.infinity),
+    builder: (sheetContext) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          Future<void> submit() async {
+            final title = titleController.text.trim();
+            if (title.isEmpty) {
+              setSheetState(() => error = "先写一个任务标题");
+              return;
+            }
+            final rawMinutes = minutesController.text.trim();
+            final estimatedMinutes = rawMinutes.isEmpty
+                ? 0
+                : int.tryParse(rawMinutes.replaceAll(RegExp(r"[^0-9]"), ""));
+            Navigator.of(sheetContext).pop();
+            await _sendLearningPrompt(
+              context,
+              application,
+              label: "新建任务",
+              actionType: "learning_task_manual",
+              intent: _manualLearningTaskIntent(
+                title: title,
+                description: descriptionController.text.trim(),
+                priority: priority,
+                estimatedMinutes: estimatedMinutes ?? 0,
+              ),
+              onBackToChat: onBackToChat,
+              onSendPrompt: onSendPrompt,
+            );
+          }
+
+          return SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: 12,
+                right: 12,
+                bottom: 12 + MediaQuery.viewInsetsOf(context).bottom,
+              ),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 720),
+                  child: Container(
+                    decoration: AppTheme.floatingPanelDecoration(
+                      radius: 24,
+                      alpha: 0.98,
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 34,
+                                height: 34,
+                                decoration: BoxDecoration(
+                                  color: AppTheme.accent.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color:
+                                        AppTheme.accent.withValues(alpha: 0.18),
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.add_task_rounded,
+                                  size: 17,
+                                  color: AppTheme.accent,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      "新建学习任务",
+                                      style: AppTheme.ts(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w900,
+                                        color: AppTheme.textPrimary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      application == null
+                                          ? "创建一个全局任务，后续可以再关联到项目。"
+                                          : "任务会优先关联当前求职项目，但仍由 Agent 执行写入。",
+                                      style: AppTheme.ts(
+                                        fontSize: 11,
+                                        color: AppTheme.textTertiary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              _WorkbenchIconButton(
+                                icon: Icons.close_rounded,
+                                tooltip: "关闭",
+                                onTap: () => Navigator.of(sheetContext).pop(),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: titleController,
+                            decoration: _noteInputDecoration("任务标题"),
+                            style: AppTheme.ts(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: descriptionController,
+                            minLines: 3,
+                            maxLines: 5,
+                            decoration: _noteInputDecoration("任务目标或说明（可选）"),
+                            style: AppTheme.ts(
+                              fontSize: 12.5,
+                              height: 1.48,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final prioritySelector = _LearningChoiceGroup(
+                                label: "优先级",
+                                value: priority,
+                                options: const [
+                                  _LearningChoiceOption("high", "优先"),
+                                  _LearningChoiceOption("medium", "常规"),
+                                  _LearningChoiceOption("low", "可稍后"),
+                                ],
+                                onChanged: (value) => setSheetState(() {
+                                  priority = value;
+                                }),
+                              );
+                              final minutesField = TextField(
+                                controller: minutesController,
+                                keyboardType: TextInputType.number,
+                                decoration: _noteInputDecoration("预计分钟数"),
+                                style: AppTheme.ts(
+                                  fontSize: 12.5,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              );
+                              if (constraints.maxWidth < 560) {
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    prioritySelector,
+                                    const SizedBox(height: 10),
+                                    minutesField,
+                                  ],
+                                );
+                              }
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Expanded(child: prioritySelector),
+                                  const SizedBox(width: 10),
+                                  SizedBox(width: 180, child: minutesField),
+                                ],
+                              );
+                            },
+                          ),
+                          if (error.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              error,
+                              style: AppTheme.ts(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.danger,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(sheetContext).pop(),
+                                child: Text(
+                                  "取消",
+                                  style: AppTheme.ts(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              _SmallTextButton(
+                                label: "交给 Agent 创建",
+                                icon: Icons.arrow_forward_rounded,
+                                onTap: () => unawaited(submit()),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 10),
-          _SmallTextButton(
-            label: "生成计划",
-            icon: Icons.auto_awesome_rounded,
-            onTap: () => _sendLearningPrompt(
+          );
+        },
+      );
+    },
+  ).whenComplete(() {
+    titleController.dispose();
+    descriptionController.dispose();
+    minutesController.dispose();
+  });
+}
+
+Future<void> _showLearningTaskCheckinSheet(
+  BuildContext context, {
+  required CareerApplicationView? application,
+  required List<CareerWorkbenchLearningTaskView> tasks,
+  required VoidCallback onBackToChat,
+  required WorkbenchPromptSender? onSendPrompt,
+}) {
+  if (tasks.isEmpty) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text("当前还没有学习任务"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    return Future<void>.value();
+  }
+  final summaryController = TextEditingController();
+  final blockersController = TextEditingController();
+  final nextActionController = TextEditingController();
+  final minutesController = TextEditingController();
+  final orderedTasks = [...tasks]
+    ..sort((a, b) => _taskSortRank(a).compareTo(_taskSortRank(b)));
+  var selectedTaskId = orderedTasks.first.learningTaskId;
+  var nextState = "";
+  var error = "";
+
+  CareerWorkbenchLearningTaskView selectedTask() {
+    return orderedTasks.firstWhere(
+      (task) => task.learningTaskId == selectedTaskId,
+      orElse: () => orderedTasks.first,
+    );
+  }
+
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: double.infinity),
+    builder: (sheetContext) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          Future<void> submit() async {
+            final summary = summaryController.text.trim();
+            final blockers = blockersController.text.trim();
+            final nextAction = nextActionController.text.trim();
+            if (summary.isEmpty && blockers.isEmpty && nextAction.isEmpty) {
+              setSheetState(() => error = "至少写一项进展、卡点或下一步");
+              return;
+            }
+            final rawMinutes = minutesController.text.trim();
+            final minutes = rawMinutes.isEmpty
+                ? 0
+                : int.tryParse(rawMinutes.replaceAll(RegExp(r"[^0-9]"), ""));
+            final task = selectedTask();
+            Navigator.of(sheetContext).pop();
+            await _sendLearningPrompt(
               context,
               application,
-              label: "生成计划",
-              actionType: "learning_plan",
-              intent: "请基于当前求职项目的匹配报告、风险和短板，生成一份可执行学习计划和学习任务。",
+              label: "记录进度",
+              actionType: "learning_checkin",
+              intent: _learningCheckinIntent(
+                task: task,
+                summary: summary,
+                blockers: blockers,
+                nextAction: nextAction,
+                minutes: minutes ?? 0,
+                nextState: nextState,
+              ),
               onBackToChat: onBackToChat,
               onSendPrompt: onSendPrompt,
+            );
+          }
+
+          return SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: 12,
+                right: 12,
+                bottom: 12 + MediaQuery.viewInsetsOf(context).bottom,
+              ),
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 760),
+                  child: Container(
+                    decoration: AppTheme.floatingPanelDecoration(
+                      radius: 24,
+                      alpha: 0.98,
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 34,
+                                height: 34,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2563EB)
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: const Color(0xFF2563EB)
+                                        .withValues(alpha: 0.18),
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.fact_check_outlined,
+                                  size: 17,
+                                  color: Color(0xFF2563EB),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      "记录今日进度",
+                                      style: AppTheme.ts(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w900,
+                                        color: AppTheme.textPrimary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      "只记录你明确提交的进展；状态变化也需要你主动选择。",
+                                      style: AppTheme.ts(
+                                        fontSize: 11,
+                                        color: AppTheme.textTertiary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              _WorkbenchIconButton(
+                                icon: Icons.close_rounded,
+                                tooltip: "关闭",
+                                onTap: () => Navigator.of(sheetContext).pop(),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          DropdownButtonFormField<String>(
+                            initialValue: selectedTaskId,
+                            isExpanded: true,
+                            decoration: _noteInputDecoration("学习任务"),
+                            items: [
+                              for (final task in orderedTasks)
+                                DropdownMenuItem(
+                                  value: task.learningTaskId,
+                                  child: Text(
+                                    task.title.trim().isEmpty
+                                        ? task.learningTaskId
+                                        : task.title.trim(),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                            onChanged: (value) => setSheetState(() {
+                              selectedTaskId = value ?? selectedTaskId;
+                            }),
+                          ),
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: summaryController,
+                            minLines: 2,
+                            maxLines: 4,
+                            decoration: _noteInputDecoration("今天完成了什么"),
+                            style: AppTheme.ts(
+                              fontSize: 12.5,
+                              height: 1.48,
+                              color: AppTheme.textPrimary,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final blockersField = TextField(
+                                controller: blockersController,
+                                minLines: 2,
+                                maxLines: 3,
+                                decoration: _noteInputDecoration("当前卡点（可选）"),
+                                style: AppTheme.ts(
+                                  fontSize: 12.5,
+                                  height: 1.48,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              );
+                              final nextField = TextField(
+                                controller: nextActionController,
+                                minLines: 2,
+                                maxLines: 3,
+                                decoration: _noteInputDecoration("下一步（可选）"),
+                                style: AppTheme.ts(
+                                  fontSize: 12.5,
+                                  height: 1.48,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              );
+                              if (constraints.maxWidth < 620) {
+                                return Column(
+                                  children: [
+                                    blockersField,
+                                    const SizedBox(height: 10),
+                                    nextField,
+                                  ],
+                                );
+                              }
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: blockersField),
+                                  const SizedBox(width: 10),
+                                  Expanded(child: nextField),
+                                ],
+                              );
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              final stateSelector = _LearningChoiceGroup(
+                                label: "状态变化",
+                                value: nextState,
+                                options: const [
+                                  _LearningChoiceOption("", "不变"),
+                                  _LearningChoiceOption("doing", "进行中"),
+                                  _LearningChoiceOption("blocked", "受阻"),
+                                  _LearningChoiceOption("done", "完成"),
+                                ],
+                                onChanged: (value) => setSheetState(() {
+                                  nextState = value;
+                                }),
+                              );
+                              final minutesField = TextField(
+                                controller: minutesController,
+                                keyboardType: TextInputType.number,
+                                decoration: _noteInputDecoration("投入分钟数"),
+                                style: AppTheme.ts(
+                                  fontSize: 12.5,
+                                  color: AppTheme.textPrimary,
+                                ),
+                              );
+                              if (constraints.maxWidth < 560) {
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    stateSelector,
+                                    const SizedBox(height: 10),
+                                    minutesField,
+                                  ],
+                                );
+                              }
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Expanded(child: stateSelector),
+                                  const SizedBox(width: 10),
+                                  SizedBox(width: 180, child: minutesField),
+                                ],
+                              );
+                            },
+                          ),
+                          if (error.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              error,
+                              style: AppTheme.ts(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.danger,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(sheetContext).pop(),
+                                child: Text(
+                                  "取消",
+                                  style: AppTheme.ts(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              _SmallTextButton(
+                                label: "交给 Agent 记录",
+                                icon: Icons.arrow_forward_rounded,
+                                onTap: () => unawaited(submit()),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  ).whenComplete(() {
+    summaryController.dispose();
+    blockersController.dispose();
+    nextActionController.dispose();
+    minutesController.dispose();
+  });
+}
+
+class _LearningChoiceOption {
+  final String value;
+  final String label;
+
+  const _LearningChoiceOption(this.value, this.label);
+}
+
+class _LearningChoiceGroup extends StatelessWidget {
+  final String label;
+  final String value;
+  final List<_LearningChoiceOption> options;
+  final ValueChanged<String> onChanged;
+
+  const _LearningChoiceGroup({
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: AppTheme.ts(
+            fontSize: 10.8,
+            fontWeight: FontWeight.w900,
+            color: AppTheme.textTertiary,
+          ),
+        ),
+        const SizedBox(height: 7),
+        Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          children: [
+            for (final option in options)
+              _LearningChoicePill(
+                label: option.label,
+                selected: option.value == value,
+                onTap: () => onChanged(option.value),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _LearningChoicePill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _LearningChoicePill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppTheme.accent.withValues(alpha: 0.1)
+                : AppTheme.surfaceHover.withValues(alpha: 0.34),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected
+                  ? AppTheme.accent.withValues(alpha: 0.22)
+                  : AppTheme.border.withValues(alpha: 0.72),
             ),
           ),
-          const SizedBox(width: 8),
-          _SmallTextButton(
-            label: "同步进展",
-            icon: Icons.update_rounded,
-            onTap: () => _sendLearningPrompt(
-              context,
-              application,
-              label: "同步进展",
-              actionType: "learning_sync",
-              intent: "请基于当前学习任务，帮我整理今天应该推进的内容，并在需要时更新学习任务状态或打卡。",
-              onBackToChat: onBackToChat,
-              onSendPrompt: onSendPrompt,
+          child: Text(
+            label,
+            style: AppTheme.ts(
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              color: selected ? AppTheme.accent : AppTheme.textSecondary,
             ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1661,7 +2510,7 @@ class _LearningTaskBoard extends StatelessWidget {
       title: "学习任务",
       subtitle: tasks.isEmpty ? "暂无任务" : "${tasks.length} 个任务",
       child: tasks.isEmpty
-          ? const _EmptyText("当前项目暂无学习任务。")
+          ? const _EmptyText("还没有学习任务。可以使用上方入口新建，或基于当前项目生成推荐。")
           : LayoutBuilder(
               builder: (context, constraints) {
                 final narrow = constraints.maxWidth < 780;
@@ -1762,6 +2611,7 @@ class _LearningTaskCard extends StatelessWidget {
       title: task.title,
       subtitle: _firstNonEmpty([task.progressNotes, task.description]),
       chips: [
+        _learningTaskSourceLabel(task),
         _taskStateLabel(task.state),
         _priorityLabel(task.priority),
         if (task.estimatedMinutes > 0) "${task.estimatedMinutes} 分钟",
@@ -6317,7 +7167,7 @@ String _reviewTypeLabel(String type) {
 
 Future<void> _sendLearningPrompt(
   BuildContext context,
-  CareerApplicationView application, {
+  CareerApplicationView? application, {
   required String label,
   required String actionType,
   required String intent,
@@ -6335,31 +7185,41 @@ Future<void> _sendLearningPrompt(
   onBackToChat();
   await sender(
     _learningActionPrompt(application, intent),
-    action: CareerWorkbenchActionRequest(
-      applicationId: application.applicationId,
-      actionType: actionType,
-      label: label,
-      origin: "learning",
-    ),
+    action: application == null
+        ? null
+        : CareerWorkbenchActionRequest(
+            applicationId: application.applicationId,
+            actionType: actionType,
+            label: label,
+            origin: "learning",
+          ),
   );
 }
 
-String _learningActionPrompt(CareerApplicationView application, String intent) {
-  final lines = <String>[
-    "- application_id: ${application.applicationId}",
-    if (application.company.trim().isNotEmpty)
-      "- company: ${application.company.trim()}",
-    if (application.position.trim().isNotEmpty)
-      "- position: ${application.position.trim()}",
-    if (application.jdAnalysisId?.trim().isNotEmpty == true)
-      "- jd_analysis_id: ${application.jdAnalysisId!.trim()}",
-    if (application.jobFitReportId?.trim().isNotEmpty == true)
-      "- job_fit_report_id: ${application.jobFitReportId!.trim()}",
-    if (application.resumeProfileId?.trim().isNotEmpty == true)
-      "- resume_profile_id: ${application.resumeProfileId!.trim()}",
-    if (application.careerProfileId?.trim().isNotEmpty == true)
-      "- career_profile_id: ${application.careerProfileId!.trim()}",
-  ];
+String _learningActionPrompt(
+  CareerApplicationView? application,
+  String intent,
+) {
+  final lines = application == null
+      ? <String>[
+          "- 当前没有绑定求职项目",
+          "- 可以创建用户主动添加的全局 LearningTask",
+        ]
+      : <String>[
+          "- application_id: ${application.applicationId}",
+          if (application.company.trim().isNotEmpty)
+            "- company: ${application.company.trim()}",
+          if (application.position.trim().isNotEmpty)
+            "- position: ${application.position.trim()}",
+          if (application.jdAnalysisId?.trim().isNotEmpty == true)
+            "- jd_analysis_id: ${application.jdAnalysisId!.trim()}",
+          if (application.jobFitReportId?.trim().isNotEmpty == true)
+            "- job_fit_report_id: ${application.jobFitReportId!.trim()}",
+          if (application.resumeProfileId?.trim().isNotEmpty == true)
+            "- resume_profile_id: ${application.resumeProfileId!.trim()}",
+          if (application.careerProfileId?.trim().isNotEmpty == true)
+            "- career_profile_id: ${application.careerProfileId!.trim()}",
+        ];
   return '''
 请执行求职学习推进：
 
@@ -6375,6 +7235,77 @@ $intent
 3. 不要重复创建已有学习计划或任务。
 4. 不要写 memory。
 5. 最终回复请说明本次更新了哪些学习记录，以及下一步建议。
+''';
+}
+
+String _manualLearningTaskIntent({
+  required String title,
+  required String description,
+  required String priority,
+  required int estimatedMinutes,
+}) {
+  return '''
+请创建一个用户主动添加的学习任务。
+
+任务草稿：
+- title: $title
+${description.trim().isEmpty ? "" : "- description: ${description.trim()}\n"}- priority: $priority
+${estimatedMinutes <= 0 ? "" : "- estimated_minutes: $estimatedMinutes\n"}
+执行要求：
+1. 调用 learning_task_create。
+2. progress_notes 写明“来源：用户主动添加”。
+3. 如果当前有求职项目上下文，将 application_id 加入 evidence_refs；如果没有项目，也不要拒绝创建。
+4. 不要自动创建 Note、WeaknessTracker、CareerApplication 更新或 memory。
+''';
+}
+
+String _learningRecommendationIntent({
+  required int plans,
+  required int tasks,
+  required int weaknesses,
+  required int reviews,
+}) {
+  return '''
+请基于当前求职项目生成可加入学习任务的推荐建议。
+
+当前工作台概况：
+- learning_plans: $plans
+- learning_tasks: $tasks
+- weaknesses: $weaknesses
+- reviews: $reviews
+
+执行要求：
+1. 先召回并复用当前求职项目、匹配报告、复盘、短板和已有学习任务。
+2. 推荐 1 到 3 个最值得推进的学习任务，说明来源和优先级。
+3. 如果已有高度相似任务，不要重复创建，直接指出可继续推进的任务。
+4. 本次只做推荐和确认，不要静默批量创建任务；除非用户在本轮明确要求“直接创建”。
+5. 不要写 Note、CareerApplication、WeaknessTracker 或 memory。
+''';
+}
+
+String _learningCheckinIntent({
+  required CareerWorkbenchLearningTaskView task,
+  required String summary,
+  required String blockers,
+  required String nextAction,
+  required int minutes,
+  required String nextState,
+}) {
+  return '''
+请记录学习任务今日进度。
+
+任务信息：
+- learning_task_id: ${task.learningTaskId}
+- title: ${task.title}
+- current_state: ${task.state}
+
+进度内容：
+${summary.trim().isEmpty ? "" : "- summary: ${summary.trim()}\n"}${blockers.trim().isEmpty ? "" : "- blockers: ${blockers.trim()}\n"}${nextAction.trim().isEmpty ? "" : "- next_action: ${nextAction.trim()}\n"}${minutes <= 0 ? "" : "- minutes_spent: $minutes\n"}${nextState.trim().isEmpty ? "- state_change: 不变\n" : "- state_change: $nextState\n"}
+执行要求：
+1. 先读取并定位该 LearningTask。
+2. 调用 learning_checkin_create 记录本次进度。
+3. 只有 state_change 不是“不变”时，才调用 learning_task_update_state。
+4. 不要自动写 Note、CareerApplication、WeaknessTracker 或 memory。
 ''';
 }
 
@@ -6881,6 +7812,21 @@ String _taskStateLabel(String state) {
     "done" => "完成",
     _ => state.trim().isEmpty ? "待办" : state,
   };
+}
+
+String _learningTaskSourceLabel(CareerWorkbenchLearningTaskView task) {
+  final notes = task.progressNotes;
+  if (notes.contains("来源：用户主动添加")) return "用户添加";
+  if (notes.contains("来源：面试复盘建议")) return "复盘建议";
+  if (notes.contains("来源：岗位匹配短板")) return "匹配短板";
+  if (notes.contains("来源：系统推荐")) return "推荐加入";
+  if (task.evidenceRefs.any((ref) => ref.startsWith("fit_"))) {
+    return "匹配短板";
+  }
+  if (task.evidenceRefs.any((ref) => ref.startsWith("note_"))) {
+    return "复盘建议";
+  }
+  return "学习任务";
 }
 
 String _weaknessSeverityLabel(String severity) {

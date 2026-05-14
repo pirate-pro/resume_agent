@@ -138,7 +138,8 @@ void main() {
     expect(find.text('学习路线'), findsOneWidget);
     expect(find.text('学习任务'), findsWidgets);
     expect(find.text('RAG 检索评估'), findsWidgets);
-    expect(find.text('生成计划'), findsOneWidget);
+    expect(find.text('从项目推荐'), findsOneWidget);
+    expect(find.text('新建任务'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('RAG 检索评估'),
       220,
@@ -382,6 +383,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
             status: 'active',
             sourceSessionId: 'sess_demo',
             sourceArtifactId: null,
+            evidenceRefs: const ['fit_demo_001'],
             learningTaskId: 'learning_task_rag_eval',
             title: 'RAG 检索评估',
             learningPlanId: 'learning_plan_staragent_001',
@@ -401,6 +403,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
             status: 'active',
             sourceSessionId: 'sess_demo',
             sourceArtifactId: null,
+            evidenceRefs: const ['application_demo_001'],
             learningTaskId: 'learning_task_agent_arch',
             title: 'Agent 架构复盘',
             learningPlanId: 'learning_plan_staragent_001',

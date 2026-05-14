@@ -1127,6 +1127,7 @@ class CareerWorkbenchLearningTaskView {
   final String status;
   final String sourceSessionId;
   final String? sourceArtifactId;
+  final List<String> evidenceRefs;
   final String learningTaskId;
   final String title;
   final String? learningPlanId;
@@ -1146,6 +1147,7 @@ class CareerWorkbenchLearningTaskView {
     required this.status,
     required this.sourceSessionId,
     required this.sourceArtifactId,
+    required this.evidenceRefs,
     required this.learningTaskId,
     required this.title,
     required this.learningPlanId,
@@ -1169,6 +1171,7 @@ class CareerWorkbenchLearningTaskView {
       status: (json["status"] ?? "active").toString(),
       sourceSessionId: (json["source_session_id"] ?? "").toString(),
       sourceArtifactId: _readOptionalString(json["source_artifact_id"]),
+      evidenceRefs: _readStringList(json["evidence_refs"]),
       learningTaskId: (json["learning_task_id"] ?? "").toString(),
       title: (json["title"] ?? "").toString(),
       learningPlanId: _readOptionalString(json["learning_plan_id"]),
