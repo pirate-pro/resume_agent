@@ -345,6 +345,24 @@ M20 打卡: 创建 1 个 ProgressCheckin，并把对应 LearningTask 标记为 d
 
 本次 smoke 暴露了一个检查规则问题：确认加入学习任务时，真实模型使用 `retrieval_search` 定位上下文并创建了证据完整的 LearningTask，但没有再次调用 `retrieval_context_pack`，旧报告规则因此判失败。已调整为产品意图级检查：确认加入动作重点看是否先定位、是否创建任务、是否保留来源和核心证据，不再把固定工具序列当作唯一成功标准。
 
+2026-05-14 按最新规则复跑通过：
+
+```text
+data_dir: data/live_career_smoke_m20_entries_verify/run_001
+result: 通过
+elapsed: 263.50s
+record_counts: CareerApplication 1, LearningTask 2, ProgressCheckin 1, Note 1
+quality_gate: 通过
+```
+
+结论：
+
+- M20 学习任务入口真实链路已跑通。
+- 只问建议时不创建学习任务。
+- 用户确认加入时创建推荐学习任务，并保留来源和核心证据。
+- 用户主动添加时创建独立学习任务，不强制依赖求职项目。
+- 用户打卡时能定位任务、创建 ProgressCheckin，并按明确状态更新 LearningTask。
+
 ## 后续方向
 
 - 如果来源标签成为高频筛选条件，再为 LearningTask 增加 `origin` 字段。

@@ -727,3 +727,4 @@ M20 的关键判断：
 - 该 smoke 一把覆盖“只问建议不创建 / 确认加入后创建 LearningTask / 用户主动添加任务 / 记录进度并更新任务状态”四类入口。
 - 2026-05-14 已完成一次低批次真实 run，实际落库链路完整：创建 2 个 LearningTask、1 个 ProgressCheckin，且未越界写 Note、CareerApplication、WeaknessTracker 或 memory。
 - 本次 run 暴露了 smoke 规则过度依赖固定 `retrieval_context_pack` 调用的问题；已调整为产品意图级检查，确认加入任务时重点检查召回定位、任务创建、来源标记和 `application_ / note_ / fit_` 核心 evidence refs。
+- 2026-05-14 按最新规则复跑通过：`data/live_career_smoke_m20_entries_verify/run_001`，质量门禁通过，M20 学习任务入口真实链路已收口。
