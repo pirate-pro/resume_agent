@@ -114,7 +114,14 @@ def test_retrieval_tools_accept_common_career_source_aliases(tmp_path: Path) -> 
     result = tool.execute(
         {
             "query": "星河智能 匹配报告",
-            "source_types": ["resume", "career_job_fit_report", "job_fit_reports", "career_jd_analysis", "jd"],
+            "source_types": [
+                "resume",
+                "career_job_fit_report",
+                "job_fit_reports",
+                "career_jd_analysis",
+                "jd",
+                "learning_weakness",
+            ],
             "top_k": 8,
         },
         context=_context("sess_alpha"),
@@ -127,6 +134,7 @@ def test_retrieval_tools_accept_common_career_source_aliases(tmp_path: Path) -> 
     assert result.success is True
     assert "job_fit_report" in source_types
     assert "jd_analysis" in source_types
+    assert "weakness_tracker" in source_types
 
 
 def test_retrieval_tools_reject_path_store_owned_and_invalid_source_type(tmp_path: Path) -> None:

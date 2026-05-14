@@ -623,14 +623,14 @@ M17 低成本真实 smoke 命令：
 uv run python tools/smoke_career_live_flow.py \
   --runs 1 \
   --concurrency 1 \
-  --max-tool-rounds 8 \
+  --max-tool-rounds 10 \
   --retrieval-action review_advice \
   --data-dir data/live_career_smoke_m17_advice
 
 uv run python tools/smoke_career_live_flow.py \
   --runs 1 \
   --concurrency 1 \
-  --max-tool-rounds 8 \
+  --max-tool-rounds 10 \
   --retrieval-action review_to_learning_task \
   --data-dir data/live_career_smoke_m17_task
 ```
@@ -666,6 +666,7 @@ M19 已完成：
 
 - `tools/smoke_career_live_flow.py` 新增 `--retrieval-action review_advice`。
 - `tools/smoke_career_live_flow.py` 新增 `--retrieval-action review_to_learning_task`。
+- 基础求职链路中的 JD 由 smoke 先创建为 `pasted_text` SessionArtifact，再交给 Agent 使用真实 `artifact_id`，避免模型自造 JD artifact id 后再补救。
 - M17 动作前会种入一条复盘 Note，模拟用户已经完成面试复盘，不额外消耗一轮 M16 真实模型调用。
 - smoke 报告会检查复盘建议只读边界和复盘转任务写入边界。
 - 增加确定性报告测试覆盖 M17 越界写入和未创建 LearningTask 场景。

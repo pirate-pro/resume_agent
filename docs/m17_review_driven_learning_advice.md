@@ -142,20 +142,22 @@ review_to_learning_task
 
 为了控制 token 成本，这两个动作不会额外跑一轮 M16 面试复盘。smoke 会在基础求职链路完成后，用 store 直接种入一条复盘 Note，模拟用户之前已经完成复盘的状态，然后再让模型执行 M17 动作。
 
+基础求职链路中的 JD 也按 artifact-first 处理：smoke 会先创建 `pasted_text` JD artifact，再要求 Agent 基于真实 `artifact_id` 委派 `job_agent` 和保存 `JDAnalysis`。这样验证的是产品主链路，而不是让模型在同一轮里先猜 artifact id 再自我修正。
+
 可选命令：
 
 ```bash
 uv run python tools/smoke_career_live_flow.py \
   --runs 1 \
   --concurrency 1 \
-  --max-tool-rounds 8 \
+  --max-tool-rounds 10 \
   --retrieval-action review_advice \
   --data-dir data/live_career_smoke_m17_advice
 
 uv run python tools/smoke_career_live_flow.py \
   --runs 1 \
   --concurrency 1 \
-  --max-tool-rounds 8 \
+  --max-tool-rounds 10 \
   --retrieval-action review_to_learning_task \
   --data-dir data/live_career_smoke_m17_task
 ```

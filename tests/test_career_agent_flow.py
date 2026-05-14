@@ -1071,6 +1071,9 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "缺失事实只能用“未提供 / 缺少 / 需用户提供”这类风险描述" in main_doc
     assert "`career_resume_version_create.keyword_strategy` 只能包含已写入简历正文或已有证据支撑的关键词" in main_doc
     assert "不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`" in main_doc
+    assert "不要把 JD 原文直接委派给 `job_agent` 后让它自己猜来源" in main_doc
+    assert "`artifact_refs` 必须包含真实 JD artifact id" in main_doc
+    assert "不要让 `job_agent` 自造 `artifact_` id" in main_doc
     assert "优先一次调用 `career_resume_version_create` 并传入 `content`" in main_doc
     assert "`career_resume_version_create` 是必做动作" in main_doc
     assert "拿到 `job_fit_report_id` 后，必须创建或复用一个 `CareerApplication`" in main_doc
@@ -1096,6 +1099,8 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "不要因为定制简历、优化简历正文、提取能力标签而覆盖已有 `ResumeProfile`" in resume_doc
     assert "分数必须是 0 到 100 的整数" in job_doc
     assert "将其理解为 `career_jd_analysis_save`" in job_doc
+    assert "保存 `JDAnalysis` 前必须有真实 JD artifact id" in job_doc
+    assert "不要自造 `artifact_jd_text_inline`" in job_doc
 
 
 def test_full_career_runtime_chain_single_session(tmp_path: Path) -> None:

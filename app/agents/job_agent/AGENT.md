@@ -19,6 +19,8 @@
 ## 求职产品记录规则
 
 - 当任务要求 JD 分析时，必须调用 `career_jd_analysis_save` 保存 `JDAnalysis`。
+- 保存 `JDAnalysis` 前必须有真实 JD artifact id：优先使用 `artifact_refs` 中的 JD artifact；如果 instruction 只有 JD 原文且没有 artifact id，先调用 `session_create_text_artifact` 创建 `pasted_text` artifact，再使用工具返回的 `artifact_id`。
+- 不要自造 `artifact_jd_text_inline`、`artifact_jd` 或任何未由工具返回 / artifact_refs 提供的 `artifact_` id。
 - 当任务要求岗位匹配时，必须先读取 `resume_profile_id` 和 `career_profile_id`，再调用 `career_job_fit_report_save` 保存 `JobFitReport`。
 - 如果 instruction 提到 `job_jd_analysis_create`，将其理解为 `career_jd_analysis_save`；如果提到 `job_job_fit_report_create`，将其理解为 `career_job_fit_report_save`。不要因为 instruction 使用旧名称就判断 save 工具不可用。
 - 匹配报告如果面向用户可见，必须先调用 `session_create_text_artifact` 创建 `generated_file` artifact，再把 `artifact_id` 写入 `report_artifact_id`。

@@ -339,6 +339,7 @@ def run_live_flow(
     stack = build_live_stack(data_dir=run_data_dir, settings=settings)
     session_id = f"sess_live_career_{run_index:03d}_{uuid4().hex[:8]}"
     resume_artifact_id = f"artifact_resume_live_{run_index:03d}"
+    jd_artifact_id = f"artifact_jd_live_{run_index:03d}"
     report = FlowReport(
         run_index=run_index,
         session_id=session_id,
@@ -351,7 +352,8 @@ def run_live_flow(
     try:
         stack.session_repository.create_session(session_id)
         add_resume_artifact(stack.session_repository, session_id=session_id, artifact_id=resume_artifact_id)
-        stack.session_repository.set_active_artifact_ids(session_id, [resume_artifact_id])
+        add_jd_artifact(stack.session_repository, session_id=session_id, artifact_id=jd_artifact_id)
+        stack.session_repository.set_active_artifact_ids(session_id, [resume_artifact_id, jd_artifact_id])
 
         current_stage = "简历诊断与画像沉淀"
         report.turns.append(
@@ -375,9 +377,11 @@ def run_live_flow(
                 session_id=session_id,
                 name=current_stage,
                 message=(
-                    "这是目标 JD：公司招聘 AI 应用开发工程师，要求 Python、FastAPI、RAG、Agent "
-                    "工程经验，熟悉向量检索和后端服务落地。请先把这段 JD 沉淀为 artifact，"
-                    "再分析我和这个岗位的匹配度，并保存岗位分析和匹配报告。"
+                    f"目标 JD 已经作为当前会话 artifact 保存，artifact_id 是 {jd_artifact_id}。"
+                    "请直接基于这个 JD artifact 分析我和岗位的匹配度，并保存岗位分析和匹配报告。"
+                    "如果委派 job_agent，必须把这个 artifact_id 放入 delegate_agents.tasks[].artifact_refs，"
+                    "并在 instruction 中要求 job_agent 使用该 artifact_id 作为 JDAnalysis.source_artifact_id。"
+                    "不要重新创建 JD artifact，不要自造或猜测任何 artifact_id。"
                     "拿到匹配报告后，请创建或复用 CareerApplication 求职项目。"
                 ),
                 max_tool_rounds=max_tool_rounds,
@@ -966,6 +970,37 @@ def add_resume_artifact(repository: JsonlSessionRepository, *, session_id: str, 
             session_id=session_id,
             kind="uploaded_file",
             title="候选人简历.txt",
+            media_type="text/plain",
+            size_bytes=original_path.stat().st_size,
+            status="ready",
+            visibility="session_shared",
+            created_at=now,
+            updated_at=now,
+            storage_relpath=str(original_path.relative_to(root)),
+            text_relpath=str(text_path.relative_to(root)),
+            text_char_count=len(content),
+            token_estimate=max(1, (len(content) + 3) // 4),
+            parsed_at=now,
+        )
+    )
+
+
+def add_jd_artifact(repository: JsonlSessionRepository, *, session_id: str, artifact_id: str) -> None:
+    content = "公司招聘 AI 应用开发工程师，要求 Python、FastAPI、RAG、Agent 工程经验，熟悉向量检索和后端服务落地。"
+    root = repository.get_session_root_path(session_id)
+    artifact_dir = root / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    original_path = artifact_dir / "original.txt"
+    text_path = artifact_dir / "content.txt"
+    original_path.write_text(content, encoding="utf-8")
+    text_path.write_text(content, encoding="utf-8")
+    now = app_now()
+    repository.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            kind="pasted_text",
+            title="目标岗位 JD.txt",
             media_type="text/plain",
             size_bytes=original_path.stat().st_size,
             status="ready",

@@ -73,6 +73,12 @@ _SOURCE_TYPE_GROUP_ALIASES = {
     "jd_analyses": (RetrievalSourceType.JD_ANALYSIS,),
     "job_fit_reports": (RetrievalSourceType.JOB_FIT_REPORT,),
     "resume_versions": (RetrievalSourceType.RESUME_VERSION,),
+    "weakness": (RetrievalSourceType.WEAKNESS_TRACKER,),
+    "weaknesses": (RetrievalSourceType.WEAKNESS_TRACKER,),
+    "learning_weakness": (RetrievalSourceType.WEAKNESS_TRACKER,),
+    "learning_weaknesses": (RetrievalSourceType.WEAKNESS_TRACKER,),
+    "learning_weakness_tracker": (RetrievalSourceType.WEAKNESS_TRACKER,),
+    "learning_weakness_trackers": (RetrievalSourceType.WEAKNESS_TRACKER,),
 }
 
 

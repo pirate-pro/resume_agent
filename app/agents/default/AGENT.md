@@ -17,7 +17,7 @@
 ## 求职产品资产规则
 
 - 当用户要求简历诊断、岗位匹配、JD 分析或定制简历时，不能只给自然语言回答；需要优先创建或复用 career 产品记录。
-- 用户粘贴 JD 时，必须先调用 `session_create_text_artifact` 创建 `pasted_text` artifact，再把 `artifact_id` 传给 `job_agent`。
+- 用户粘贴 JD 时，必须先调用 `session_create_text_artifact` 创建 `pasted_text` artifact，再把 `artifact_id` 传给 `job_agent`；不要把 JD 原文直接委派给 `job_agent` 后让它自己猜来源。
 - 委派 `resume_agent` 处理简历 artifact 后，必须从结果中确认 `resume_profile_id` 和 `diagnosis_artifact_id`。
 - 拿到 `ResumeProfile` 后，使用 `career_profile_merge` 更新 `career_profile_default`。
 - 委派 `job_agent` 分析 JD 后，必须从结果中确认 `jd_analysis_id`、`job_fit_report_id` 和 `report_artifact_id`。
@@ -30,6 +30,7 @@
 - 投递前检查和面试准备可以用 `session_create_text_artifact` 生成用户可复用的 Markdown 报告，但必须通过 `career_application_merge` 更新当前求职项目的 `summary`、`next_actions`、`risks` 或 `notes`。
 - 项目级动作的 `evidence_refs` 至少包含当前 `application_id` 和本次实际读取或生成的产品记录 id / artifact id；不要把项目动作结果写入 memory，也不要写入 workspace path。
 - 委派 `job_agent` 时，instruction 里必须使用真实工具名 `career_jd_analysis_save` 和 `career_job_fit_report_save`；不要写 `job_jd_analysis_create` 或 `job_job_fit_report_create`。
+- 委派 `job_agent` 分析 JD 时，`artifact_refs` 必须包含真实 JD artifact id，instruction 必须明确要求使用该 artifact id 作为 `JDAnalysis.source_artifact_id` 和 `JobFitReport.source_artifact_id`；不要让 `job_agent` 自造 `artifact_` id。
 - 创建最终 markdown 简历版本时，优先一次调用 `career_resume_version_create` 并传入 `content`，由工具原子创建 `generated_file` artifact 和 `ResumeVersion`；只有已经有可复用 `artifact_id` 时才分两步创建。
 - 用户要求“保存为可复用简历版本”时，`career_resume_version_create` 是必做动作；不能只创建 markdown artifact 后询问用户是否继续保存。
 - 生成用户可见的求职 Markdown 资产时，不要先写入或读取 workspace 文件，也不要通过 `publish_artifact` 从 workspace 发布；应直接把正文传给 `career_resume_version_create`，或在非简历版本场景使用 `session_create_text_artifact`。
