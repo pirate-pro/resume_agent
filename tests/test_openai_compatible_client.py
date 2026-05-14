@@ -38,10 +38,21 @@ def test_generate_preserves_provider_reasoning_content() -> None:
     assert response.content == ""
     assert response.reasoning_content == "provider thinking state"
     assert response.tool_calls[0].tool_call_id == "call_1"
+    assert response.model == "test-model"
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 11
+    assert response.usage.completion_tokens == 7
+    assert response.usage.total_tokens == 18
 
 
 def _response_payload() -> dict[str, Any]:
     return {
+        "model": "test-model",
+        "usage": {
+            "prompt_tokens": 11,
+            "completion_tokens": 7,
+            "total_tokens": 18,
+        },
         "choices": [
             {
                 "message": {

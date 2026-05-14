@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.errors import ValidationError
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall
-from app.domain.protocols import ChatModelClient, ToolExecutor
+from app.domain.protocols import ChatModelClient, ModelResponse, TokenUsage, ToolExecutor
 from app.prompts.agent_runtime import FINAL_ANSWER_RECOVERY_PROMPT
 from app.runtime.agent import (
     PostRunMaintenanceScheduler,
@@ -19,6 +19,7 @@ from app.runtime.agent import (
     to_model_tool_schema,
 )
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.context_compaction.text_utils import estimate_tokens_from_object
 from app.runtime.context_compactor import ContextCompactor
 from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
@@ -123,11 +124,23 @@ class AgentRuntime:
             )
 
             resolved_tool_calls = ensure_tool_call_ids(model_response.tool_calls)
+            self._record_llm_usage(
+                run_context=run_context,
+                system_prompt=context.system_prompt,
+                messages=messages,
+                tools=tools_payload,
+                model_response=model_response,
+                tool_calls=resolved_tool_calls,
+                mode="sync",
+                phase="tool_loop",
+                round_index=round_index,
+            )
 
             if not resolved_tool_calls:
                 answer = (model_response.content or "").strip()
                 if not answer:
                     answer = self._recover_final_answer(
+                        run_context=run_context,
                         system_prompt=context.system_prompt,
                         messages=messages,
                         original_user_message=run_input.user_message,
@@ -287,6 +300,8 @@ class AgentRuntime:
             round_content_deltas: list[str] = []
             round_reasoning_parts: list[str] = []
             resolved_tool_calls: list[ToolCall] = []
+            round_usage: TokenUsage | None = None
+            round_model: str | None = None
 
             async for chunk in self._model_client.generate_stream(
                 system_prompt=context.system_prompt,
@@ -298,17 +313,37 @@ class AgentRuntime:
                     round_content_deltas.append(chunk.delta)
                 if chunk.reasoning_delta:
                     round_reasoning_parts.append(chunk.reasoning_delta)
+                if chunk.usage is not None:
+                    round_usage = chunk.usage
+                if chunk.model:
+                    round_model = chunk.model
 
                 if chunk.finished:
                     resolved_tool_calls = ensure_tool_call_ids(chunk.tool_calls or [])
 
             round_content = "".join(round_content_parts).strip()
+            round_reasoning = "".join(round_reasoning_parts).strip()
             _logger.debug(
                 "流式模型调用完成: session_id=%s round=%s content_len=%s tool_call_count=%s",
                 session_id,
                 round_index,
                 len(round_content),
                 len(resolved_tool_calls),
+            )
+            await self._record_llm_usage_async(
+                run_context=run_context,
+                system_prompt=context.system_prompt,
+                messages=messages,
+                tools=tools_payload,
+                content=round_content,
+                reasoning_content=round_reasoning,
+                tool_calls=resolved_tool_calls,
+                usage=round_usage,
+                model=round_model,
+                mode="stream",
+                phase="tool_loop",
+                round_index=round_index,
+                channel=channel,
             )
 
             if not resolved_tool_calls:
@@ -327,6 +362,7 @@ class AgentRuntime:
                         await channel.emit("answer_delta", {"delta": delta})
                 if not answer:
                     answer = await self._recover_final_answer_stream(
+                        run_context=run_context,
                         system_prompt=context.system_prompt,
                         messages=messages,
                         original_user_message=run_input.user_message,
@@ -353,7 +389,7 @@ class AgentRuntime:
                 build_assistant_tool_call_message(
                     round_content,
                     resolved_tool_calls,
-                    reasoning_content="".join(round_reasoning_parts).strip(),
+                    reasoning_content=round_reasoning,
                 )
             )
 
@@ -439,6 +475,7 @@ class AgentRuntime:
     def _recover_final_answer(
         self,
         *,
+        run_context: RunContext,
         system_prompt: str,
         messages: list[dict[str, Any]],
         original_user_message: str,
@@ -456,6 +493,17 @@ class AgentRuntime:
             messages=recovery_messages,
             tools=[],
         )
+        self._record_llm_usage(
+            run_context=run_context,
+            system_prompt=system_prompt,
+            messages=recovery_messages,
+            tools=[],
+            model_response=model_response,
+            tool_calls=ensure_tool_call_ids(model_response.tool_calls),
+            mode="sync",
+            phase="final_answer_recovery",
+            round_index=None,
+        )
         if model_response.tool_calls:
             _logger.warning("补答轮仍返回 tool_calls，已忽略: tool_call_count=%s", len(model_response.tool_calls))
         return (model_response.content or "").strip()
@@ -463,6 +511,7 @@ class AgentRuntime:
     async def _recover_final_answer_stream(
         self,
         *,
+        run_context: RunContext,
         system_prompt: str,
         messages: list[dict[str, Any]],
         original_user_message: str,
@@ -478,6 +527,10 @@ class AgentRuntime:
             },
         ]
         parts: list[str] = []
+        reasoning_parts: list[str] = []
+        usage: TokenUsage | None = None
+        model: str | None = None
+        resolved_tool_calls: list[ToolCall] = []
         emitted_answer_meta: tuple[str, str, str, str, str] | None = None
         async for chunk in self._model_client.generate_stream(
             system_prompt=system_prompt,
@@ -493,6 +546,29 @@ class AgentRuntime:
                     previous_meta=emitted_answer_meta,
                 )
                 await channel.emit("answer_delta", {"delta": chunk.delta})
+            if chunk.reasoning_delta:
+                reasoning_parts.append(chunk.reasoning_delta)
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if chunk.model:
+                model = chunk.model
+            if chunk.finished:
+                resolved_tool_calls = ensure_tool_call_ids(chunk.tool_calls or [])
+        await self._record_llm_usage_async(
+            run_context=run_context,
+            system_prompt=system_prompt,
+            messages=recovery_messages,
+            tools=[],
+            content="".join(parts).strip(),
+            reasoning_content="".join(reasoning_parts).strip(),
+            tool_calls=resolved_tool_calls,
+            usage=usage,
+            model=model,
+            mode="stream",
+            phase="final_answer_recovery",
+            round_index=None,
+            channel=channel,
+        )
         return "".join(parts).strip()
 
     async def _emit_stream_answer_meta_if_changed(
@@ -538,9 +614,168 @@ class AgentRuntime:
         )
         return current_meta
 
+    def _record_llm_usage(
+        self,
+        *,
+        run_context: RunContext,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        model_response: ModelResponse,
+        tool_calls: list[ToolCall],
+        mode: str,
+        phase: str,
+        round_index: int | None,
+    ) -> None:
+        payload = _build_llm_usage_payload(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            content=model_response.content,
+            reasoning_content=model_response.reasoning_content,
+            tool_calls=tool_calls,
+            usage=model_response.usage,
+            model=model_response.model or _client_model_name(self._model_client),
+            mode=mode,
+            phase=phase,
+            round_index=round_index,
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="llm_usage",
+            payload=payload,
+        )
+
+    async def _record_llm_usage_async(
+        self,
+        *,
+        run_context: RunContext,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        content: str,
+        reasoning_content: str,
+        tool_calls: list[ToolCall],
+        usage: TokenUsage | None,
+        model: str | None,
+        mode: str,
+        phase: str,
+        round_index: int | None,
+        channel: EventChannel,
+    ) -> None:
+        payload = _build_llm_usage_payload(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            content=content,
+            reasoning_content=reasoning_content,
+            tool_calls=tool_calls,
+            usage=usage,
+            model=model or _client_model_name(self._model_client),
+            mode=mode,
+            phase=phase,
+            round_index=round_index,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="llm_usage",
+            payload=payload,
+            channel=channel,
+        )
+
     def _resolve_run_context(self, session_id: str, run_input: AgentRunInput) -> RunContext:
         if run_input.context is None:
             raise ValidationError("run_input.context is required.")
         if run_input.context.session_id != session_id:
             raise ValidationError("run_input.context.session_id must match resolved session_id.")
         return run_input.context
+
+
+def _build_llm_usage_payload(
+    *,
+    system_prompt: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    content: str,
+    reasoning_content: str,
+    tool_calls: list[ToolCall],
+    usage: TokenUsage | None,
+    model: str | None,
+    mode: str,
+    phase: str,
+    round_index: int | None,
+) -> dict[str, Any]:
+    normalized_usage = usage or _estimate_usage(
+        system_prompt=system_prompt,
+        messages=messages,
+        tools=tools,
+        content=content,
+        reasoning_content=reasoning_content,
+        tool_calls=tool_calls,
+    )
+    payload: dict[str, Any] = {
+        "api": "POST /v1/chat/completions",
+        "operation": "model.generate_stream" if mode == "stream" else "model.generate",
+        "mode": mode,
+        "phase": phase,
+        "round_index": round_index,
+        "model": model or "unknown",
+        "prompt_tokens": normalized_usage.prompt_tokens,
+        "completion_tokens": normalized_usage.completion_tokens,
+        "total_tokens": normalized_usage.total_tokens,
+        "estimated": normalized_usage.estimated,
+        "usage_source": normalized_usage.source,
+        "message_count": len(messages) + 1,
+        "tool_schema_count": len(tools),
+        "returned_tool_call_count": len(tool_calls),
+        "content_chars": len(content or ""),
+        "reasoning_chars": len(reasoning_content or ""),
+    }
+    return payload
+
+
+def _estimate_usage(
+    *,
+    system_prompt: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    content: str,
+    reasoning_content: str,
+    tool_calls: list[ToolCall],
+) -> TokenUsage:
+    prompt_payload: dict[str, Any] = {
+        "messages": [{"role": "system", "content": system_prompt}, *messages],
+    }
+    if tools:
+        prompt_payload["tools"] = tools
+    completion_payload: dict[str, Any] = {
+        "content": content,
+        "reasoning_content": reasoning_content,
+        "tool_calls": [
+            {
+                "id": item.tool_call_id,
+                "name": item.name,
+                "arguments": item.arguments,
+            }
+            for item in tool_calls
+        ],
+    }
+    prompt_tokens = estimate_tokens_from_object(prompt_payload)
+    completion_tokens = estimate_tokens_from_object(completion_payload)
+    return TokenUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        estimated=True,
+        source="estimate",
+    )
+
+
+def _client_model_name(client: ChatModelClient) -> str | None:
+    raw = getattr(client, "model", None)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    raw = getattr(client, "_model", None)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None

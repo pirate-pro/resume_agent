@@ -444,6 +444,10 @@ class EventView {
       case "tool_result":
         final ok = payload["success"] == true ? "成功" : "失败";
         return "工具$ok ${payload["tool_name"] ?? "unknown"}";
+      case "llm_usage":
+        final total = payload["total_tokens"];
+        final source = payload["estimated"] == true ? "估算" : "provider";
+        return "模型 token 消耗 ${total is int ? total : "-"} ($source)";
       case "run_finished":
         return "执行完成";
       default:

@@ -17,6 +17,7 @@ from app.infra.llm.openai_response import (
     is_auto_tool_choice_error as _is_auto_tool_choice_error,
     is_auto_tool_choice_error_detail as _is_auto_tool_choice_error_detail,
     normalize_content as _normalize_content,
+    parse_token_usage as _parse_token_usage,
     parse_tool_calls as _parse_tool_calls,
     validate_non_empty as _validate_non_empty,
 )
@@ -115,8 +116,17 @@ class OpenAICompatibleClient:
         content = _normalize_content(message.get("content"))
         reasoning_content = _normalize_content(message.get("reasoning_content"))
         tool_calls = _parse_tool_calls(message.get("tool_calls"))
+        usage = _parse_token_usage(_extract_usage_payload(body))
+        model = body.get("model")
+        model_name = model.strip() if isinstance(model, str) and model.strip() else self._model
         _logger.debug("模型响应解析完成: content_len=%s tool_call_count=%s", len(content), len(tool_calls))
-        return ModelResponse(content=content, tool_calls=tool_calls, reasoning_content=reasoning_content)
+        return ModelResponse(
+            content=content,
+            tool_calls=tool_calls,
+            reasoning_content=reasoning_content,
+            usage=usage,
+            model=model_name,
+        )
 
     async def generate_stream(
         self,
@@ -177,3 +187,13 @@ class OpenAICompatibleClient:
                     async for chunk in _iter_stream_chunks(response):
                         yield chunk
                     return
+
+
+def _extract_usage_payload(payload: dict[str, Any]) -> Any:
+    direct = payload.get("usage")
+    if direct is not None:
+        return direct
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        return nested.get("usage")
+    return None

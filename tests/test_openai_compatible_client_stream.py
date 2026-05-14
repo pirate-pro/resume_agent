@@ -36,9 +36,11 @@ class _FakeNonSseResponse:
         return self._payload
 
 
-def test_parse_stream_payload_skips_usage_chunk_without_choices() -> None:
+def test_parse_stream_payload_preserves_usage_chunk_without_choices() -> None:
     parsed = _parse_stream_payload('{"id":"x","usage":{"prompt_tokens":10}}')
-    assert parsed is None
+    assert parsed is not None
+    assert parsed.usage is not None
+    assert parsed.usage.prompt_tokens == 10
 
 
 def test_parse_stream_payload_accepts_nested_data_choices() -> None:
@@ -46,11 +48,10 @@ def test_parse_stream_payload_accepts_nested_data_choices() -> None:
         '{"data":{"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}}'
     )
     assert parsed is not None
-    delta, reasoning_delta, tool_calls, finish_reason = parsed
-    assert delta == "你好"
-    assert reasoning_delta == ""
-    assert tool_calls == []
-    assert finish_reason is None
+    assert parsed.delta == "你好"
+    assert parsed.reasoning_delta == ""
+    assert parsed.tool_calls == []
+    assert parsed.finish_reason is None
 
 
 def test_parse_stream_payload_accepts_reasoning_content_delta() -> None:
@@ -58,11 +59,10 @@ def test_parse_stream_payload_accepts_reasoning_content_delta() -> None:
         '{"choices":[{"delta":{"reasoning_content":"thinking"},"finish_reason":null}]}'
     )
     assert parsed is not None
-    delta, reasoning_delta, tool_calls, finish_reason = parsed
-    assert delta == ""
-    assert reasoning_delta == "thinking"
-    assert tool_calls == []
-    assert finish_reason is None
+    assert parsed.delta == ""
+    assert parsed.reasoning_delta == "thinking"
+    assert parsed.tool_calls == []
+    assert parsed.finish_reason is None
 
 
 def test_parse_stream_payload_raises_when_chunk_contains_error() -> None:
@@ -99,6 +99,8 @@ def test_iter_stream_chunks_ignores_non_choice_chunks() -> None:
     assert chunks[1].reasoning_delta == "hidden"
     assert chunks[2].delta == "lo"
     assert chunks[3].finished is True
+    assert chunks[3].usage is not None
+    assert chunks[3].usage.prompt_tokens == 10
 
 
 def test_iter_chunks_from_non_sse_response_preserves_reasoning_content() -> None:

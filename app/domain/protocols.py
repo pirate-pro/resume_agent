@@ -23,6 +23,7 @@ __all__ = [
     "ChatModelClient",
     "ModelResponse",
     "StreamChunk",
+    "TokenUsage",
     "SessionRepository",
     "SkillSummaryRecord",
     "SkillRepository",
@@ -31,10 +32,21 @@ __all__ = [
 
 
 @dataclass(slots=True)
+class TokenUsage:
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated: bool = False
+    source: str = "provider"
+
+
+@dataclass(slots=True)
 class ModelResponse:
     content: str
     tool_calls: list[ToolCall]
     reasoning_content: str = ""
+    usage: TokenUsage | None = None
+    model: str | None = None
 
 
 @dataclass(slots=True)
@@ -44,6 +56,8 @@ class StreamChunk:
     tool_calls: list[ToolCall] | None = None
     finished: bool = False
     has_tool_call_delta: bool = False
+    usage: TokenUsage | None = None
+    model: str | None = None
 
 
 class SessionRepository(Protocol):

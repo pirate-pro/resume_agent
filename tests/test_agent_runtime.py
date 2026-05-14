@@ -112,6 +112,10 @@ def test_runtime_without_tool_calls_finishes(tmp_path: Path) -> None:
     assert output.answer == "hello"
     assert len(output.tool_calls) == 0
     assert any(event.type == "run_finished" for event in events)
+    usage_events = [event for event in events if event.type == "llm_usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].payload["estimated"] is True
+    assert usage_events[0].payload["total_tokens"] > 0
 
 
 

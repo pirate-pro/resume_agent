@@ -28,6 +28,7 @@ _logger = logging.getLogger(__name__)
 
 _DEFAULT_ENTRY_AGENT_ID = "agent_main"
 _ORCHESTRATION_EVENT_TYPES = {
+    "llm_usage",
     "agent_task_assigned",
     "agent_result_summary",
     "agent_task_group_created",

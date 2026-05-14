@@ -5,14 +5,20 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from app.core.errors import ModelClientError
 from app.domain.models import ToolCall
-from app.domain.protocols import StreamChunk
-from app.infra.llm.openai_response import normalize_content, normalize_stream_content, parse_tool_calls
+from app.domain.protocols import StreamChunk, TokenUsage
+from app.infra.llm.openai_response import (
+    normalize_content,
+    normalize_stream_content,
+    parse_token_usage,
+    parse_tool_calls,
+)
 
 __all__ = [
     "iter_chunks_from_non_sse_response",
@@ -24,10 +30,22 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class ParsedStreamPayload:
+    delta: str = ""
+    reasoning_delta: str = ""
+    tool_calls: list[dict[str, Any]] | None = None
+    finish_reason: str | None = None
+    usage: TokenUsage | None = None
+    model: str | None = None
+
+
 async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamChunk]:
     data_lines: list[str] = []
     tool_calls_accumulator: dict[int, dict[str, Any]] = {}
     saw_tool_call_delta = False
+    latest_usage: TokenUsage | None = None
+    latest_model: str | None = None
 
     async for raw_line in response.aiter_lines():
         line = raw_line.strip("\r")
@@ -43,7 +61,13 @@ async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamCh
             parsed_payload = parse_stream_payload(payload_text)
             if parsed_payload is None:
                 continue
-            delta, reasoning_delta, tool_call_entries, _ = parsed_payload
+            if parsed_payload.usage is not None:
+                latest_usage = parsed_payload.usage
+            if parsed_payload.model is not None:
+                latest_model = parsed_payload.model
+            delta = parsed_payload.delta
+            reasoning_delta = parsed_payload.reasoning_delta
+            tool_call_entries = parsed_payload.tool_calls or []
             if tool_call_entries:
                 saw_tool_call_delta = True
                 _merge_stream_tool_call_entries(tool_calls_accumulator, tool_call_entries)
@@ -70,7 +94,13 @@ async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamCh
         if payload_text != "[DONE]":
             parsed_payload = parse_stream_payload(payload_text)
             if parsed_payload is not None:
-                delta, reasoning_delta, tool_call_entries, _ = parsed_payload
+                if parsed_payload.usage is not None:
+                    latest_usage = parsed_payload.usage
+                if parsed_payload.model is not None:
+                    latest_model = parsed_payload.model
+                delta = parsed_payload.delta
+                reasoning_delta = parsed_payload.reasoning_delta
+                tool_call_entries = parsed_payload.tool_calls or []
             else:
                 delta = ""
                 reasoning_delta = ""
@@ -97,6 +127,8 @@ async def iter_stream_chunks(response: httpx.Response) -> AsyncIterator[StreamCh
         tool_calls=parsed_tool_calls,
         finished=True,
         has_tool_call_delta=saw_tool_call_delta,
+        usage=latest_usage,
+        model=latest_model,
     )
 
 
@@ -117,6 +149,8 @@ async def iter_chunks_from_non_sse_response(response: httpx.Response) -> AsyncIt
     content = normalize_content(message.get("content"))
     reasoning_content = normalize_content(message.get("reasoning_content"))
     tool_calls = parse_tool_calls(message.get("tool_calls"))
+    usage = parse_token_usage(_extract_usage_payload(payload))
+    model = _extract_model(payload)
     if content:
         yield StreamChunk(delta=content, tool_calls=None, finished=False, has_tool_call_delta=False)
     if reasoning_content:
@@ -127,10 +161,17 @@ async def iter_chunks_from_non_sse_response(response: httpx.Response) -> AsyncIt
             finished=False,
             has_tool_call_delta=False,
         )
-    yield StreamChunk(delta="", tool_calls=tool_calls, finished=True, has_tool_call_delta=bool(tool_calls))
+    yield StreamChunk(
+        delta="",
+        tool_calls=tool_calls,
+        finished=True,
+        has_tool_call_delta=bool(tool_calls),
+        usage=usage,
+        model=model,
+    )
 
 
-def parse_stream_payload(payload_text: str) -> tuple[str, str, list[dict[str, Any]], str | None] | None:
+def parse_stream_payload(payload_text: str) -> ParsedStreamPayload | None:
     try:
         payload = json.loads(payload_text)
     except json.JSONDecodeError as exc:
@@ -142,12 +183,16 @@ def parse_stream_payload(payload_text: str) -> tuple[str, str, list[dict[str, An
     if provider_error:
         raise ModelClientError(f"Model stream failed: {provider_error}")
 
+    usage = parse_token_usage(_extract_usage_payload(payload))
+    model = _extract_model(payload)
     choices = _extract_stream_chunk_choices(payload)
     if choices is None:
+        if usage is not None or model is not None:
+            return ParsedStreamPayload(usage=usage, model=model)
         _logger.debug("跳过无 choices 的流式片段: keys=%s", list(payload.keys())[:8])
         return None
     if not choices:
-        return None
+        return ParsedStreamPayload(usage=usage, model=model) if usage is not None or model is not None else None
     choice = choices[0]
     if not isinstance(choice, dict):
         raise ModelClientError("Invalid stream payload structure: choice must be object.")
@@ -162,7 +207,14 @@ def parse_stream_payload(payload_text: str) -> tuple[str, str, list[dict[str, An
     tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
     finish_reason_raw = choice.get("finish_reason")
     finish_reason = finish_reason_raw if isinstance(finish_reason_raw, str) else None
-    return content_delta, reasoning_delta, tool_calls, finish_reason
+    return ParsedStreamPayload(
+        delta=content_delta,
+        reasoning_delta=reasoning_delta,
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
+        usage=usage,
+        model=model,
+    )
 
 
 async def read_stream_error_detail(response: httpx.Response) -> str:
@@ -199,6 +251,28 @@ def _extract_stream_chunk_choices(payload: dict[str, Any]) -> list[Any] | None:
         nested_choices = nested.get("choices")
         if isinstance(nested_choices, list):
             return nested_choices
+    return None
+
+
+def _extract_usage_payload(payload: dict[str, Any]) -> Any:
+    direct = payload.get("usage")
+    if direct is not None:
+        return direct
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        return nested.get("usage")
+    return None
+
+
+def _extract_model(payload: dict[str, Any]) -> str | None:
+    direct = payload.get("model")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        nested_model = nested.get("model")
+        if isinstance(nested_model, str) and nested_model.strip():
+            return nested_model.strip()
     return None
 
 

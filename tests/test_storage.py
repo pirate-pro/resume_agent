@@ -102,6 +102,38 @@ def test_session_events_are_physically_split_by_agent_and_orchestration(tmp_path
     ]
 
 
+def test_child_agent_llm_usage_is_session_visible(tmp_path: Path) -> None:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session("sess_usage_events")
+
+    usage_event = EventRecord(
+        event_id="evt_usage_child",
+        session_id="sess_usage_events",
+        type="llm_usage",
+        payload={
+            "api": "POST /v1/chat/completions",
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "estimated": False,
+        },
+        created_at=datetime.now(UTC),
+        agent_id="resume_agent",
+        run_id="run_child",
+        parent_run_id="run_main",
+    )
+
+    repository.append_event("sess_usage_events", usage_event)
+
+    assert [event.event_id for event in repository.list_agent_events("sess_usage_events", "resume_agent")] == [
+        "evt_usage_child"
+    ]
+    assert [event.event_id for event in repository.list_orchestration_events("sess_usage_events")] == [
+        "evt_usage_child"
+    ]
+    assert [event.event_id for event in repository.list_events("sess_usage_events")] == ["evt_usage_child"]
+
+
 
 def test_skill_file_read_standard_layout(tmp_path: Path) -> None:
     skills_dir = tmp_path / "skills"

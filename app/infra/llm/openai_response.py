@@ -9,6 +9,7 @@ import httpx
 
 from app.core.errors import ModelClientError, ValidationError
 from app.domain.models import ToolCall
+from app.domain.protocols import TokenUsage
 
 __all__ = [
     "build_chat_completions_url",
@@ -17,6 +18,7 @@ __all__ = [
     "is_auto_tool_choice_error_detail",
     "normalize_content",
     "normalize_stream_content",
+    "parse_token_usage",
     "parse_tool_calls",
     "validate_non_empty",
 ]
@@ -98,6 +100,29 @@ def parse_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:
     return parsed
 
 
+def parse_token_usage(raw_usage: Any, *, source: str = "provider") -> TokenUsage | None:
+    if raw_usage is None:
+        return None
+    if not isinstance(raw_usage, dict):
+        return None
+
+    prompt_tokens = _read_token_count(raw_usage, "prompt_tokens", "input_tokens")
+    completion_tokens = _read_token_count(raw_usage, "completion_tokens", "output_tokens")
+    total_tokens = _read_token_count(raw_usage, "total_tokens")
+    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+        total_tokens = prompt_tokens + completion_tokens
+    if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+        return None
+
+    return TokenUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        estimated=False,
+        source=source,
+    )
+
+
 def is_auto_tool_choice_error(error: httpx.HTTPStatusError) -> bool:
     response = error.response
     if response.status_code != 400:
@@ -166,3 +191,13 @@ def _extract_provider_error_detail(response: httpx.Response) -> str:
         if isinstance(message, str) and message.strip():
             return message.strip()
     return json.dumps(payload, ensure_ascii=False)[:400]
+
+
+def _read_token_count(payload: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return max(0, value)
+    return None

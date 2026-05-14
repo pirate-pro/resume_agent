@@ -371,6 +371,7 @@ class ChatProvider extends ChangeNotifier {
     } catch (_) {}
 
     await refreshSessionArtifacts();
+    await refreshEvents();
   }
 
   Future<void> deleteSession(String sessionId) async {
@@ -672,8 +673,8 @@ class ChatProvider extends ChangeNotifier {
           _activeRunId = eventRecord.runId;
         }
         _mergeStreamEvents([eventRecord]);
-        if (_streamEvents.length > 200) {
-          _streamEvents = _streamEvents.sublist(_streamEvents.length - 200);
+        if (_streamEvents.length > 500) {
+          _streamEvents = _streamEvents.sublist(_streamEvents.length - 500);
         }
         notifyListeners();
         return null;
@@ -754,7 +755,7 @@ class ChatProvider extends ChangeNotifier {
     final merged = byKey.values.toList()
       ..sort((left, right) => left.createdAt.compareTo(right.createdAt));
     _streamEvents =
-        merged.length > 200 ? merged.sublist(merged.length - 200) : merged;
+        merged.length > 500 ? merged.sublist(merged.length - 500) : merged;
   }
 
   String _eventKey(EventView event) {

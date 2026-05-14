@@ -119,6 +119,8 @@ class SequenceModelClient:
             tool_calls=response.tool_calls,
             finished=True,
             has_tool_call_delta=bool(response.tool_calls),
+            usage=response.usage,
+            model=response.model,
         )
 
 

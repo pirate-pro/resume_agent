@@ -369,6 +369,7 @@ class _DebugPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final tokenUsage = _TokenUsageSnapshot.fromEvents(provider.streamEvents);
     return Container(
       decoration: AppTheme.floatingPanelDecoration(
         radius: compact ? 28 : 30,
@@ -458,6 +459,8 @@ class _DebugPanel extends ConsumerWidget {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
               children: [
+                _TokenUsageSection(snapshot: tokenUsage),
+                const SizedBox(height: 14),
                 _section(
                   '系统状态',
                   _formatSystemHealth(
@@ -592,6 +595,442 @@ class _DebugPanel extends ConsumerWidget {
     buf.writeln('queue.succeeded: ${queue.succeeded}');
     return buf.toString().trim();
   }
+}
+
+class _TokenUsageSection extends StatelessWidget {
+  final _TokenUsageSnapshot snapshot;
+
+  const _TokenUsageSection({required this.snapshot});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasData = snapshot.entries.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppTheme.accent.withValues(alpha: AppTheme.isDark ? 0.16 : 0.10),
+            const Color(0xFF2563EB).withValues(
+              alpha: AppTheme.isDark ? 0.12 : 0.07,
+            ),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color:
+              AppTheme.accent.withValues(alpha: AppTheme.isDark ? 0.32 : 0.24),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: AppTheme.surface.withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Icon(
+                  Icons.data_usage_rounded,
+                  size: 16,
+                  color: AppTheme.accent,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Token 消耗',
+                      style: AppTheme.ts(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      hasData
+                          ? '${snapshot.entries.length} 次模型接口调用'
+                          : '等待下一次模型调用',
+                      style: AppTheme.ts(
+                        fontSize: 10,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _TokenSourceChip(snapshot: snapshot),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _TokenMetric(
+                  label: '累计',
+                  value: _formatTokenCount(snapshot.totalTokens),
+                  strong: true,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _TokenMetric(
+                  label: '输入',
+                  value: _formatTokenCount(snapshot.promptTokens),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _TokenMetric(
+                  label: '输出',
+                  value: _formatTokenCount(snapshot.completionTokens),
+                ),
+              ),
+            ],
+          ),
+          if (hasData) ...[
+            const SizedBox(height: 14),
+            ...snapshot.entries.take(8).map(_TokenUsageRow.new),
+          ] else ...[
+            const SizedBox(height: 12),
+            Text(
+              '运行一次对话后，这里会按时间列出每次模型接口、所属 Agent、输入/输出/总 token。',
+              style: AppTheme.ts(
+                fontSize: 11,
+                color: AppTheme.textSecondary,
+                height: 1.45,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TokenSourceChip extends StatelessWidget {
+  final _TokenUsageSnapshot snapshot;
+
+  const _TokenSourceChip({required this.snapshot});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = snapshot.entries.isEmpty
+        ? '待记录'
+        : snapshot.estimatedCount == 0
+            ? 'provider'
+            : snapshot.providerCount == 0
+                ? 'estimated'
+                : 'mixed';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Text(
+        label,
+        style: AppTheme.ts(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: AppTheme.accent,
+        ),
+      ),
+    );
+  }
+}
+
+class _TokenMetric extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool strong;
+
+  const _TokenMetric({
+    required this.label,
+    required this.value,
+    this.strong = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTheme.ts(
+              fontSize: strong ? 15 : 13,
+              fontWeight: FontWeight.w800,
+              color: strong ? AppTheme.accent : AppTheme.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: AppTheme.ts(fontSize: 10, color: AppTheme.textTertiary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TokenUsageRow extends StatelessWidget {
+  final _TokenUsageEntry entry;
+
+  const _TokenUsageRow(this.entry);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.85)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: entry.estimated
+                  ? const Color(0xFFF59E0B).withValues(alpha: 0.12)
+                  : AppTheme.accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(
+                color: entry.estimated
+                    ? const Color(0xFFF59E0B).withValues(alpha: 0.28)
+                    : AppTheme.accent.withValues(alpha: 0.26),
+              ),
+            ),
+            child: Icon(
+              entry.estimated
+                  ? Icons.functions_rounded
+                  : Icons.check_circle_outline_rounded,
+              size: 15,
+              color:
+                  entry.estimated ? const Color(0xFFD97706) : AppTheme.accent,
+            ),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${entry.agentLabel} · ${entry.phaseLabel}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      _formatTokenCount(entry.totalTokens),
+                      style: AppTheme.ts(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '${entry.timeLabel} · ${entry.apiLabel}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      AppTheme.ts(fontSize: 10, color: AppTheme.textTertiary),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '输入 ${_formatTokenCount(entry.promptTokens)} / 输出 ${_formatTokenCount(entry.completionTokens)}',
+                  style:
+                      AppTheme.ts(fontSize: 10, color: AppTheme.textSecondary),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TokenUsageSnapshot {
+  final List<_TokenUsageEntry> entries;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final int providerCount;
+  final int estimatedCount;
+
+  const _TokenUsageSnapshot({
+    required this.entries,
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+    required this.providerCount,
+    required this.estimatedCount,
+  });
+
+  factory _TokenUsageSnapshot.fromEvents(List<EventView> events) {
+    final entries = events
+        .where((event) => event.type == 'llm_usage')
+        .map(_TokenUsageEntry.fromEvent)
+        .toList()
+      ..sort((left, right) => right.createdAt.compareTo(left.createdAt));
+    var prompt = 0;
+    var completion = 0;
+    var total = 0;
+    var provider = 0;
+    var estimated = 0;
+    for (final entry in entries) {
+      prompt += entry.promptTokens;
+      completion += entry.completionTokens;
+      total += entry.totalTokens;
+      if (entry.estimated) {
+        estimated += 1;
+      } else {
+        provider += 1;
+      }
+    }
+    return _TokenUsageSnapshot(
+      entries: entries,
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: total,
+      providerCount: provider,
+      estimatedCount: estimated,
+    );
+  }
+}
+
+class _TokenUsageEntry {
+  final DateTime createdAt;
+  final String agentId;
+  final String api;
+  final String operation;
+  final String mode;
+  final String phase;
+  final int? roundIndex;
+  final String model;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final bool estimated;
+
+  const _TokenUsageEntry({
+    required this.createdAt,
+    required this.agentId,
+    required this.api,
+    required this.operation,
+    required this.mode,
+    required this.phase,
+    required this.roundIndex,
+    required this.model,
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+    required this.estimated,
+  });
+
+  factory _TokenUsageEntry.fromEvent(EventView event) {
+    final payload = event.payload;
+    final prompt = _readTokenInt(payload['prompt_tokens']);
+    final completion = _readTokenInt(payload['completion_tokens']);
+    final total =
+        _readOptionalTokenInt(payload['total_tokens']) ?? prompt + completion;
+    return _TokenUsageEntry(
+      createdAt: event.createdAt,
+      agentId: event.agentId,
+      api: payload['api']?.toString() ?? 'POST /v1/chat/completions',
+      operation: payload['operation']?.toString() ?? '',
+      mode: payload['mode']?.toString() ?? '',
+      phase: payload['phase']?.toString() ?? '',
+      roundIndex: _readOptionalTokenInt(payload['round_index']),
+      model: payload['model']?.toString() ?? 'unknown',
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: total,
+      estimated: payload['estimated'] == true,
+    );
+  }
+
+  String get timeLabel => DateFormat('HH:mm:ss').format(createdAt);
+
+  String get agentLabel {
+    if (agentId == 'agent_main') return '主控';
+    if (agentId == 'resume_agent') return '简历';
+    if (agentId == 'job_agent') return '岗位';
+    return agentId.isEmpty ? 'agent' : agentId;
+  }
+
+  String get phaseLabel {
+    if (phase == 'tool_loop') {
+      return roundIndex == null ? '工具轮' : '第 $roundIndex 轮';
+    }
+    if (phase == 'final_answer_recovery') return '补答';
+    return phase.isEmpty ? '模型调用' : phase;
+  }
+
+  String get apiLabel {
+    final modeLabel = mode == 'stream' ? '流式' : '同步';
+    final modelLabel = model == 'unknown' ? '' : ' · $model';
+    return '$api · $modeLabel$modelLabel';
+  }
+}
+
+int _readTokenInt(dynamic value) {
+  if (value is int) return value < 0 ? 0 : value;
+  return 0;
+}
+
+int? _readOptionalTokenInt(dynamic value) {
+  if (value is int) return value < 0 ? 0 : value;
+  return null;
+}
+
+String _formatTokenCount(int value) {
+  if (value >= 1000000) {
+    return '${(value / 1000000).toStringAsFixed(1)}M';
+  }
+  if (value >= 1000) {
+    return '${(value / 1000).toStringAsFixed(1)}K';
+  }
+  return value.toString();
 }
 
 class _PanelIconButton extends StatelessWidget {

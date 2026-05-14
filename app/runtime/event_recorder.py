@@ -31,6 +31,7 @@ _logger = logging.getLogger(__name__)
 _ALLOWED_EVENT_TYPES = {
     "run_started",
     "user_message",
+    "llm_usage",
     "tool_call",
     "tool_result",
     "assistant_thinking",

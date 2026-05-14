@@ -100,6 +100,8 @@ def build_semantic_units(events: list[EventRecord]) -> list[PreparedSemanticUnit
         )
 
     for event in events:
+        if event.type == "llm_usage":
+            continue
         if event.type in message_types:
             if event.type == "user_message" and buffered_messages:
                 flush_messages()
