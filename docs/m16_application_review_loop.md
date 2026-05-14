@@ -146,6 +146,33 @@ memory = 运行时上下文材料，不自动写
 - RAG / MCP。
 - memory 自动写入。
 
+## 第二批开发范围
+
+目标：让工作台项目详情能直接看到求职推进和复盘脉络，不需要用户去笔记页里翻找。
+
+实现：
+
+```text
+flutter_app/lib/features/career_workbench/career_workbench_page.dart
+flutter_app/test/career_workbench_page_test.dart
+```
+
+功能：
+
+- 在项目详情中增加「求职进展」区块。
+- 从已有 `CareerApplication`、关联 Note 和工作台 timeline 中生成前端展示项。
+- 优先展示投递状态、面试复盘、复盘安排、学习任务和短板更新。
+- 复盘 Note 仍然只是 Note，不新增面试事实源。
+- 用户仍可点击关联笔记进入编辑。
+
+不做：
+
+- 不新增 `InterviewRecordStore`。
+- 不新增 API。
+- 不改后端模型。
+- 不做自动 memory 写入。
+- 不做复杂时间线编辑。
+
 ## 验收标准
 
 - 用户表达面试复盘并要求记录时，系统先召回项目上下文。
@@ -156,6 +183,8 @@ memory = 运行时上下文材料，不自动写
 - 不创建 LearningTask，除非用户明确要求加入计划。
 - 不写 memory。
 - 定向测试通过。
+- 工作台项目详情能展示求职进展区块。
+- 求职进展区块能显示当前阶段和复盘类 Note。
 
 ## 后续方向
 

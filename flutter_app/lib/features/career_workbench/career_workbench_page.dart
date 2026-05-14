@@ -2312,6 +2312,12 @@ class _ProjectDetailPane extends StatelessWidget {
           const SizedBox(height: 12),
           _DetailJudgmentCard(readiness: view.readiness),
           const SizedBox(height: 12),
+          _DetailProgressTimeline(
+            application: view.application,
+            notes: view.notes,
+            timeline: view.timeline,
+          ),
+          const SizedBox(height: 12),
           _DetailActionSection(
             view: view,
             onBackToChat: onBackToChat,
@@ -2464,6 +2470,149 @@ class _DetailJudgmentCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _DetailProgressTimeline extends StatelessWidget {
+  final CareerApplicationView application;
+  final List<CareerNoteSummaryView> notes;
+  final List<CareerTimelineItemView> timeline;
+
+  const _DetailProgressTimeline({
+    required this.application,
+    required this.notes,
+    required this.timeline,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _applicationProgressItems(application, notes, timeline);
+    return _WorkbenchSection(
+      icon: Icons.timeline_rounded,
+      title: "求职进展",
+      subtitle: items.isEmpty ? "暂无推进记录" : "${items.length} 条关键进展",
+      child: items.isEmpty
+          ? const _EmptyText("暂无投递或面试复盘记录。")
+          : Column(
+              children: [
+                for (var index = 0; index < items.length; index++) ...[
+                  _ProgressTimelineTile(
+                    item: items[index],
+                    isLast: index == items.length - 1,
+                  ),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+class _ProgressTimelineTile extends StatelessWidget {
+  final _ProgressTimelineItem item;
+  final bool isLast;
+
+  const _ProgressTimelineTile({
+    required this.item,
+    required this.isLast,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 30,
+          child: Column(
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: item.color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: item.color.withValues(alpha: 0.18)),
+                ),
+                child: Icon(item.icon, size: 14, color: item.color),
+              ),
+              if (!isLast)
+                Container(
+                  width: 1,
+                  height: 48,
+                  margin: const EdgeInsets.symmetric(vertical: 5),
+                  color: AppTheme.border.withValues(alpha: 0.82),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Container(
+            margin: EdgeInsets.only(bottom: isLast ? 0 : 10),
+            padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+            decoration: BoxDecoration(
+              color: item.color.withValues(alpha: 0.045),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: item.color.withValues(alpha: 0.13)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        item.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 12.1,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _formatTime(item.occurredAt),
+                      style: AppTheme.ts(
+                        fontSize: 10.2,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+                if (item.subtitle.trim().isNotEmpty) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    item.subtitle.trim(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.ts(
+                      fontSize: 11,
+                      height: 1.4,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+                if (item.tags.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final tag in item.tags.take(3))
+                        _TinyTag(label: tag, color: item.color),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -3347,6 +3496,24 @@ class _NoteMetaChip extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ProgressTimelineItem {
+  final String title;
+  final String subtitle;
+  final DateTime occurredAt;
+  final IconData icon;
+  final Color color;
+  final List<String> tags;
+
+  const _ProgressTimelineItem({
+    required this.title,
+    required this.subtitle,
+    required this.occurredAt,
+    required this.icon,
+    required this.color,
+    this.tags = const [],
+  });
 }
 
 class _NoteTypeMeta {
@@ -6541,6 +6708,168 @@ IconData _actionStateIcon(CareerWorkbenchActionState state) {
     CareerWorkbenchActionState.running => Icons.autorenew_rounded,
     CareerWorkbenchActionState.completed => Icons.check_rounded,
     CareerWorkbenchActionState.failed => Icons.error_outline_rounded,
+  };
+}
+
+List<_ProgressTimelineItem> _applicationProgressItems(
+  CareerApplicationView application,
+  List<CareerNoteSummaryView> notes,
+  List<CareerTimelineItemView> timeline,
+) {
+  final items = <_ProgressTimelineItem>[
+    _ProgressTimelineItem(
+      title: _stageProgressTitle(application.stage),
+      subtitle: _firstNonEmpty([
+        application.summary,
+        application.notes,
+        application.displayTitle,
+      ]),
+      occurredAt: application.meta.updatedAt,
+      icon: _stageProgressIcon(application.stage),
+      color: _stageProgressColor(application.stage),
+      tags: [
+        _stageLabel(application.stage),
+        _priorityLabel(application.priority),
+      ],
+    ),
+  ];
+
+  final reviewNotes = notes.where(_isReviewNote).toList()
+    ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  for (final note in reviewNotes.take(4)) {
+    items.add(
+      _ProgressTimelineItem(
+        title: note.title.trim().isEmpty ? "面试复盘" : note.title.trim(),
+        subtitle: _firstNonEmpty([note.summary, note.tags.join(" · ")]),
+        occurredAt: note.updatedAt,
+        icon: Icons.rate_review_outlined,
+        color: _reviewNoteColor(note),
+        tags: note.tags,
+      ),
+    );
+  }
+
+  final eventItems = timeline.where(_isProgressTimelineEvent).toList()
+    ..sort((a, b) => b.occurredAt.compareTo(a.occurredAt));
+  for (final event in eventItems.take(5)) {
+    items.add(
+      _ProgressTimelineItem(
+        title: event.title.trim().isEmpty
+            ? _timelineEventLabel(event.type)
+            : event.title.trim(),
+        subtitle: event.subtitle,
+        occurredAt: event.occurredAt,
+        icon: _timelineEventIcon(event.type),
+        color: _timelineEventColor(event.type),
+      ),
+    );
+  }
+
+  items.sort((a, b) => b.occurredAt.compareTo(a.occurredAt));
+  final unique = <_ProgressTimelineItem>[];
+  final seen = <String>{};
+  for (final item in items) {
+    final key = "${item.title}|${item.occurredAt.toIso8601String()}";
+    if (seen.add(key)) {
+      unique.add(item);
+    }
+  }
+  return unique.take(6).toList(growable: false);
+}
+
+bool _isReviewNote(CareerNoteSummaryView note) {
+  final text = [
+    note.title,
+    note.summary,
+    ...note.tags,
+  ].join(" ").toLowerCase();
+  return text.contains("面试") ||
+      text.contains("复盘") ||
+      text.contains("笔试") ||
+      text.contains("hr") ||
+      text.contains("offer") ||
+      text.contains("挂") ||
+      text.contains("interview") ||
+      text.contains("review");
+}
+
+bool _isProgressTimelineEvent(CareerTimelineItemView item) {
+  return switch (item.type) {
+    "note" || "review" || "learning_task" || "weakness" => true,
+    _ => false,
+  };
+}
+
+String _stageProgressTitle(String stage) {
+  return switch (stage) {
+    "applied" => "已投递",
+    "interviewing" => "进入面试",
+    "offer" => "拿到 Offer",
+    "rejected" => "流程结束",
+    "paused" => "项目暂停",
+    "ready_to_apply" => "准备投递",
+    _ => "项目更新",
+  };
+}
+
+IconData _stageProgressIcon(String stage) {
+  return switch (stage) {
+    "applied" => Icons.send_outlined,
+    "interviewing" => Icons.record_voice_over_outlined,
+    "offer" => Icons.emoji_events_outlined,
+    "rejected" => Icons.block_outlined,
+    "paused" => Icons.pause_circle_outline_rounded,
+    "ready_to_apply" => Icons.task_alt_rounded,
+    _ => Icons.flag_outlined,
+  };
+}
+
+Color _stageProgressColor(String stage) {
+  return switch (stage) {
+    "offer" => AppTheme.accent,
+    "interviewing" => const Color(0xFF7C3AED),
+    "applied" => const Color(0xFF2563EB),
+    "rejected" => AppTheme.danger,
+    "paused" => AppTheme.textTertiary,
+    "ready_to_apply" => const Color(0xFF0EA5E9),
+    _ => AppTheme.accent,
+  };
+}
+
+Color _reviewNoteColor(CareerNoteSummaryView note) {
+  if (note.tags.any((tag) => tag.toLowerCase().contains("面试"))) {
+    return const Color(0xFF7C3AED);
+  }
+  return _noteTypeMeta(note.noteType).color;
+}
+
+String _timelineEventLabel(String type) {
+  return switch (type) {
+    "note" => "笔记更新",
+    "review" => "复盘安排",
+    "learning_task" => "学习任务",
+    "weakness" => "短板更新",
+    _ => _assetTypeLabel(type),
+  };
+}
+
+IconData _timelineEventIcon(String type) {
+  return switch (type) {
+    "note" => Icons.sticky_note_2_outlined,
+    "review" => Icons.event_repeat_outlined,
+    "learning_task" => Icons.school_outlined,
+    "weakness" => Icons.warning_amber_rounded,
+    _ => Icons.timeline_rounded,
+  };
+}
+
+Color _timelineEventColor(String type) {
+  return switch (type) {
+    "note" => const Color(0xFFB45309),
+    "review" => const Color(0xFF7C3AED),
+    "learning_task" => const Color(0xFF2563EB),
+    "weakness" => AppTheme.danger,
+    _ => AppTheme.accent,
   };
 }
 

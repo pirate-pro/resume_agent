@@ -49,9 +49,13 @@ void main() {
     expect(find.text('求职项目'), findsWidgets);
     expect(find.text('星河智能 · AI Agent 后端工程师'), findsWidgets);
     expect(find.text('当前判断'), findsOneWidget);
+    expect(find.text('求职进展'), findsOneWidget);
+    expect(find.text('准备投递'), findsWidgets);
     expect(find.text('关联资产'), findsOneWidget);
     expect(find.text('生成定制简历'), findsOneWidget);
 
+    await tester.ensureVisible(find.text('预览').first);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('预览').first);
     await tester.pumpAndSettle();
 
@@ -64,7 +68,7 @@ void main() {
 
     await tester.tap(find.text('引用').first);
     await tester.pumpAndSettle();
-    expect(find.text('新建笔记'), findsOneWidget);
+    expect(find.text('新建笔记'), findsWidgets);
     expect(find.text('笔记类型'), findsOneWidget);
     expect(find.text('资料'), findsWidgets);
     expect(find.textContaining('引用来源'), findsOneWidget);
@@ -86,11 +90,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('关于 星河智能'), findsWidgets);
     expect(find.textContaining('资料引用'), findsWidgets);
-    expect(find.text('投递准备记录'), findsNothing);
+    expect(find.text('投递准备记录'), findsWidgets);
     await tester.tap(find.byKey(const Key('career_note_filter_all')));
     await tester.pumpAndSettle();
     expect(find.text('投递准备记录'), findsWidgets);
-    expect(find.text('新建笔记'), findsOneWidget);
+    expect(find.text('新建笔记'), findsWidgets);
 
     await tester.tap(find.text('投递准备记录').first);
     await tester.pumpAndSettle();
@@ -187,7 +191,7 @@ void main() {
 
     await tester.tap(find.text('笔记').first);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('新建笔记'));
+    await tester.tap(find.text('新建笔记').last);
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('career_note_title_field')),
