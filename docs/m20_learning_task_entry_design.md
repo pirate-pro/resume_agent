@@ -294,6 +294,15 @@ M20 第一批后端不新增模型字段。
 - 所有写入动作仍只生成聊天意图，由 Agent 调用工具完成。
 - 前端 `LearningTask` 模型补充 `evidence_refs`，用于来源标签推断。
 
+第二批第二阶段已完成：
+
+- Assistant 准备建议、复盘建议、学习计划类回复下方增加“加入学习任务”动作。
+- 点击后先展示确认弹层，不静默创建任务。
+- 确认后把当前 Assistant 建议作为上下文发回聊天，由 Agent 调用学习任务工具。
+- 提示词要求默认只创建最高优先级的一项，最多不超过 3 项。
+- 提示词要求复用已有学习任务，避免重复创建。
+- 提示词要求保留来源语义和 evidence_refs，不写 Note、CareerApplication、WeaknessTracker 或 memory。
+
 ## 后续方向
 
 - 如果来源标签成为高频筛选条件，再为 LearningTask 增加 `origin` 字段。

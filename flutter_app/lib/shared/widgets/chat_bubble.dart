@@ -74,6 +74,8 @@ class _ChatBubbleState extends State<ChatBubble> {
                 asset.kind != _CareerAssetKind.artifact ||
                 !attachedArtifactIds.contains(asset.id))
             .toList();
+    final showLearningAction = !isUser &&
+        _shouldOfferLearningTaskAction(widget.message, visibleContent);
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: MouseRegion(
@@ -155,6 +157,12 @@ class _ChatBubbleState extends State<ChatBubble> {
                       if (widget.message.artifacts.isNotEmpty) ...[
                         const SizedBox(height: 8),
                         _ArtifactList(artifacts: widget.message.artifacts),
+                      ],
+                      if (showLearningAction) ...[
+                        const SizedBox(height: 10),
+                        _LearningTaskSuggestionActionStrip(
+                          suggestionText: visibleContent,
+                        ),
                       ],
                       if (widget.isStreaming) const _Cursor(),
                     ],
@@ -3274,6 +3282,87 @@ class _ArtifactCard extends ConsumerWidget {
   }
 }
 
+class _LearningTaskSuggestionActionStrip extends StatelessWidget {
+  final String suggestionText;
+
+  const _LearningTaskSuggestionActionStrip({required this.suggestionText});
+
+  @override
+  Widget build(BuildContext context) {
+    final sourceLabel = _learningSuggestionSourceLabel(suggestionText);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: AppTheme.isDark ? 0.08 : 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: AppTheme.accent.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+              border:
+                  Border.all(color: AppTheme.accent.withValues(alpha: 0.16)),
+            ),
+            child: Icon(
+              Icons.school_outlined,
+              size: 15,
+              color: AppTheme.accent,
+            ),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "可以加入学习任务",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 11.8,
+                    height: 1.2,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "$sourceLabel · 默认只沉淀最值得推进的一项",
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 10.8,
+                    height: 1.3,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.textTertiary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _ArtifactActionButton(
+            label: "加入学习任务",
+            icon: Icons.add_task_rounded,
+            primary: true,
+            onPressed: () => _openLearningTaskSuggestionConfirm(
+              context,
+              suggestionText,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ArtifactActionButton extends StatelessWidget {
   final String label;
   final IconData icon;
@@ -4375,6 +4464,275 @@ class _CareerAssetRecommendedAction {
     required this.buttonIcon,
     required this.color,
   });
+}
+
+bool _shouldOfferLearningTaskAction(ChatMessage message, String content) {
+  if (message.isUser || content.trim().length < 24) {
+    return false;
+  }
+  final normalized = content.replaceAll(RegExp(r"\s+"), " ");
+  if (normalized.contains("已创建") && normalized.contains("LearningTask")) {
+    return false;
+  }
+  if (normalized.contains("已加入学习任务") || normalized.contains("任务已创建")) {
+    return false;
+  }
+  final learningSignals = [
+    "学习任务",
+    "学习计划",
+    "准备建议",
+    "面试准备",
+    "复盘建议",
+    "记录进度",
+    "今日进度",
+    "学习监督",
+  ];
+  return learningSignals.any(normalized.contains);
+}
+
+Future<void> _openLearningTaskSuggestionConfirm(
+  BuildContext context,
+  String suggestionText,
+) async {
+  ProviderContainer container;
+  try {
+    container = ProviderScope.containerOf(context, listen: false);
+  } catch (_) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text("当前入口暂不可用"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    return;
+  }
+
+  final chat = container.read(chatProvider);
+  if (chat.isStreaming) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text("当前任务正在执行，完成后再加入学习任务"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    return;
+  }
+
+  final preview = _learningSuggestionPreview(suggestionText);
+  final confirmed = await showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    constraints: const BoxConstraints(maxWidth: double.infinity),
+    builder: (sheetContext) {
+      return SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(
+            left: 12,
+            right: 12,
+            bottom: 12 + MediaQuery.viewInsetsOf(sheetContext).bottom,
+          ),
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 680),
+              child: Container(
+                decoration: AppTheme.floatingPanelDecoration(
+                  radius: 22,
+                  alpha: 0.98,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: AppTheme.accent.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: AppTheme.accent.withValues(alpha: 0.18),
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.add_task_rounded,
+                              size: 17,
+                              color: AppTheme.accent,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "加入学习任务",
+                                  style: AppTheme.ts(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppTheme.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  "会交给 Agent 召回上下文并创建任务，不会直接写入。",
+                                  style: AppTheme.ts(
+                                    fontSize: 11,
+                                    color: AppTheme.textTertiary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: "关闭",
+                            onPressed: () =>
+                                Navigator.of(sheetContext).pop(false),
+                            icon: const Icon(Icons.close_rounded, size: 18),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+                        decoration: BoxDecoration(
+                          color: AppTheme.surfaceHover.withValues(alpha: 0.42),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppTheme.border.withValues(alpha: 0.72),
+                          ),
+                        ),
+                        child: Text(
+                          preview,
+                          maxLines: 6,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTheme.ts(
+                            fontSize: 12,
+                            height: 1.5,
+                            color: AppTheme.textSecondary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        "默认只创建最高优先级的一项；如果已有相似任务，Agent 应复用已有任务。",
+                        style: AppTheme.ts(
+                          fontSize: 11,
+                          height: 1.45,
+                          color: AppTheme.textTertiary,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.of(sheetContext).pop(false),
+                            child: Text(
+                              "取消",
+                              style: AppTheme.ts(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.textSecondary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _ArtifactActionButton(
+                            label: "交给 Agent 创建",
+                            icon: Icons.arrow_forward_rounded,
+                            primary: true,
+                            onPressed: () async {
+                              Navigator.of(sheetContext).pop(true);
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  if (confirmed != true) {
+    return;
+  }
+  final prompt = _learningTaskFromSuggestionPrompt(
+    suggestionText: suggestionText,
+    sessionId: chat.sessionId,
+  );
+  await chat.sendMessage(prompt);
+  await container.read(careerAssetsProvider).refresh();
+}
+
+String _learningTaskFromSuggestionPrompt({
+  required String suggestionText,
+  required String? sessionId,
+}) {
+  final sourceLabel = _learningSuggestionSourceLabel(suggestionText);
+  final normalized = _trimLearningSuggestionForPrompt(suggestionText);
+  return '''
+请把下面这条 Assistant 建议加入学习任务。
+
+建议来源：$sourceLabel
+${sessionId == null || sessionId.trim().isEmpty ? "" : "当前 session_id: ${sessionId.trim()}\n"}
+建议内容：
+<<<
+$normalized
+>>>
+
+执行要求：
+1. 先召回并复用当前会话、求职项目、匹配报告、复盘、短板和已有学习任务。
+2. 默认只调用 learning_task_create 创建最高优先级的 1 个 LearningTask；如果建议明确包含多个必须并行推进的主题，最多创建 3 个。
+3. 如果已有高度相似任务，不要重复创建，改为更新或提示继续推进已有任务。
+4. 创建任务时 progress_notes 写明“来源：$sourceLabel”。
+5. evidence_refs 要尽量包含真实来源记录；如果只能定位当前会话，也要保留 session ref。
+6. 不要自动写 Note、CareerApplication、WeaknessTracker 或 memory。
+7. 最终回复请说明创建或复用了哪些学习任务，以及下一步怎么推进。
+''';
+}
+
+String _learningSuggestionSourceLabel(String content) {
+  final normalized = content.replaceAll(RegExp(r"\s+"), " ");
+  if (normalized.contains("复盘")) {
+    return "面试复盘建议";
+  }
+  if (normalized.contains("匹配") ||
+      normalized.contains("短板") ||
+      normalized.contains("风险")) {
+    return "岗位匹配短板";
+  }
+  return "系统推荐";
+}
+
+String _learningSuggestionPreview(String content) {
+  final normalized = content
+      .replaceAll(RegExp(r"```[\s\S]*?```"), "")
+      .replaceAll(RegExp(r"^[#>*\\-\\s]+", multiLine: true), "")
+      .replaceAll(RegExp(r"\s+"), " ")
+      .trim();
+  if (normalized.length <= 360) return normalized;
+  return "${normalized.substring(0, 360)}...";
+}
+
+String _trimLearningSuggestionForPrompt(String content) {
+  final normalized = content.trim();
+  if (normalized.length <= 2400) return normalized;
+  return "${normalized.substring(0, 2400)}\n\n（以上为建议内容节选，原文较长）";
 }
 
 _CareerAssetRecommendedAction? _careerAssetRecommendedAction(

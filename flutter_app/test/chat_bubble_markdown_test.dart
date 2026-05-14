@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resume_agent_app/core/models/api_models.dart';
+import 'package:resume_agent_app/core/providers/chat_provider.dart';
+import 'package:resume_agent_app/core/services/api_service.dart';
 import 'package:resume_agent_app/shared/widgets/career_report.dart';
 import 'package:resume_agent_app/shared/widgets/chat_bubble.dart';
 
@@ -393,4 +395,142 @@ JD 分析 ID：jd_b8e6607b59a6
     expect(find.textContaining('fit_zhangming_staragent_001'), findsNothing);
     expect(find.text('复制'), findsWidgets);
   });
+
+  testWidgets('学习建议消息支持确认加入学习任务', (tester) async {
+    final api = _FakeChatBubbleApiService();
+    final message = ChatMessage(
+      role: 'assistant',
+      content: '''
+## 面试准备建议
+
+1. 优先补齐 RAG 评估方案，整理召回率、准确率和 chunk 策略。
+2. 准备 Agent Runtime 与 LangGraph 的架构取舍说明。
+
+建议把第一项加入学习任务，持续推进。
+''',
+      answerFormat: 'markdown',
+      renderHint: 'markdown',
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [apiServiceProvider.overrideWithValue(api)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: ChatBubble(message: message),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('可以加入学习任务'), findsOneWidget);
+    expect(find.text('加入学习任务'), findsOneWidget);
+
+    await tester.tap(find.text('加入学习任务'));
+    await tester.pumpAndSettle();
+    expect(find.text('交给 Agent 创建'), findsOneWidget);
+
+    await tester.tap(find.text('交给 Agent 创建'));
+    await tester.pumpAndSettle();
+
+    expect(api.sentMessages, hasLength(1));
+    expect(api.sentMessages.single, contains('请把下面这条 Assistant 建议加入学习任务'));
+    expect(api.sentMessages.single, contains('调用'));
+    expect(api.sentMessages.single, contains('learning_task'));
+    expect(api.sentMessages.single, contains('不要自动写 Note'));
+    expect(api.sentMessages.single, contains('不要重复创建'));
+  });
+}
+
+class _FakeChatBubbleApiService extends ApiService {
+  final sentMessages = <String>[];
+
+  _FakeChatBubbleApiService() : super(baseUrl: 'http://localhost');
+
+  @override
+  Future<HealthView?> fetchHealth() async {
+    return HealthView(status: 'ok', midTermFlush: null);
+  }
+
+  @override
+  Future<List<SkillOption>> listSkills() async => const [];
+
+  @override
+  Future<List<SessionMeta>> listSessions() async => const [];
+
+  @override
+  Stream<StreamEvent> chatStream({
+    required String message,
+    String? sessionId,
+    List<String> skillNames = const [],
+    int maxToolRounds = 8,
+    List<String>? activeArtifactIds,
+  }) async* {}
+
+  @override
+  Future<ChatResponse> chat({
+    required String message,
+    String? sessionId,
+    List<String> skillNames = const [],
+    int maxToolRounds = 8,
+    List<String>? activeArtifactIds,
+  }) async {
+    sentMessages.add(message);
+    return ChatResponse(
+      sessionId: sessionId ?? 'sess_chat_bubble',
+      answer: '已加入学习任务。',
+      toolCalls: const [],
+      memoryHits: const [],
+    );
+  }
+
+  @override
+  Future<SessionArtifactsResponse> listSessionArtifacts(
+    String sessionId,
+  ) async {
+    return SessionArtifactsResponse(
+      sessionId: sessionId,
+      activeArtifactIds: const [],
+      artifacts: const [],
+    );
+  }
+
+  @override
+  Future<List<ResumeProfileView>> listCareerResumeProfiles({
+    bool includeArchived = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<CareerProfileView>> listCareerProfiles({
+    bool includeArchived = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<JDAnalysisView>> listCareerJobs({
+    bool includeArchived = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<JobFitReportView>> listCareerJobFitReports({
+    bool includeArchived = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<ResumeVersionView>> listCareerResumeVersions({
+    bool includeArchived = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<CareerApplicationView>> listCareerApplications({
+    bool includeArchived = false,
+  }) async =>
+      const [];
 }
