@@ -162,6 +162,29 @@ uv run python tools/smoke_career_live_flow.py \
   --data-dir data/live_career_smoke_m17_task
 ```
 
+验证结果（2026-05-14）：
+
+```text
+review_advice
+  data_dir: data/live_career_smoke_m17_advice_retry2/run_001
+  result: 通过
+  tools: retrieval_search, retrieval_context_pack
+  quality_gate: 通过
+
+review_to_learning_task
+  data_dir: data/live_career_smoke_m17_task_verify/run_001
+  result: 通过
+  tools: retrieval_search, retrieval_context_pack, learning_task_create
+  record_counts.learning_tasks: 1
+  quality_gate: 通过
+```
+
+结论：
+
+- 只问复盘后的准备建议时，真实模型只召回并回答，没有写 Note、LearningTask、CareerApplication 或 memory。
+- 用户明确要求加入学习任务时，真实模型先召回上下文，再创建 LearningTask，没有顺手更新 CareerApplication、保存新 Note、创建 WeaknessTracker 或写 memory。
+- M17 从确定性测试到低批次真实模型 smoke 已闭环。
+
 ## 验收标准
 
 - 用户只问复盘后的下一步准备时，系统先召回上下文并只回答。
