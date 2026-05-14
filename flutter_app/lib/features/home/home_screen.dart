@@ -7,11 +7,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/models/api_models.dart';
+import '../../core/providers/career_assets_provider.dart';
 import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/session_sidebar.dart';
 import '../career/career_assets_panel.dart';
 import '../career_workbench/career_workbench_page.dart';
+import '../career_workbench/career_workbench_provider.dart';
 import '../chat/chat_screen.dart';
 
 enum _RightPanelMode { career, debug }
@@ -120,6 +122,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _primaryViewMode = _PrimaryViewMode.careerWorkbench;
       _rightPanelOpen = false;
     });
+    unawaited(ref.read(careerWorkbenchProvider).refresh());
   }
 
   void _backToChat() {
@@ -133,6 +136,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _primaryViewMode = _PrimaryViewMode.chat;
     });
     await ref.read(chatProvider).sendMessage(prompt);
+    unawaited(ref.read(careerWorkbenchProvider).refresh());
+    unawaited(ref.read(careerAssetsProvider).refresh());
   }
 
   void _toggleDesktopPanel(_RightPanelMode mode) {

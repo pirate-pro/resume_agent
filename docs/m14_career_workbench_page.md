@@ -544,6 +544,13 @@ GET /api/learning/reviews
 
 第一阶段建议点击动作后切回聊天，让用户能看到执行过程。
 
+M14 收口时明确两条刷新规则：
+
+- 每次打开求职工作台时，触发 `CareerWorkbenchProvider.refresh()`，避免用户回到工作台后看到旧项目状态。
+- 工作台动作回到聊天执行完成后，同时刷新 `CareerWorkbenchProvider` 和 `CareerAssetsProvider`，让新产物能回到工作台和右侧资产栏。
+
+这只是前端状态刷新闭环，不新增事实源，也不让工作台直接写 `CareerProductStore`。
+
 ### 5. 查看笔记
 
 ```text
@@ -733,6 +740,13 @@ M14-4 验收：
 - 用户能从 JD 与匹配页预览 JD 原文或报告 artifact。
 - `flutter analyze` 通过。
 - `flutter test test/career_workbench_page_test.dart` 通过。
+
+M14 收口验收：
+
+- 用户从聊天顶部或右侧资产栏进入工作台时，工作台会刷新聚合数据。
+- 用户在工作台点击推荐动作后，动作仍回到聊天执行。
+- 聊天执行完成后，工作台聚合数据和右侧资产栏数据都会刷新。
+- `flutter test test/home_screen_test.dart` 覆盖工作台动作回聊天后的刷新链路。
 
 ## 风险与取舍
 
