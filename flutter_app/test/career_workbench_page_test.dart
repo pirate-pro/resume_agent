@@ -140,6 +140,63 @@ void main() {
     expect(find.text('RAG 检索评估'), findsWidgets);
     expect(find.text('从项目推荐'), findsOneWidget);
     expect(find.text('新建任务'), findsOneWidget);
+
+    await tester.tap(find.text('从项目推荐'));
+    await tester.pumpAndSettle();
+    expect(backToChatCount, 1);
+    expect(sentPrompt, contains('请基于当前求职项目生成可加入学习任务的推荐建议'));
+    expect(sentPrompt,
+        contains('不要写 Note、CareerApplication、WeaknessTracker 或 memory'));
+    expect(sentAction?.actionType, 'learning_recommend');
+    expect(sentAction?.origin, 'learning');
+
+    await tester.tap(find.text('新建任务'));
+    await tester.pumpAndSettle();
+    expect(find.text('新建学习任务'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('learning_task_title_field')),
+      '补 RAG 评估指标',
+    );
+    await tester.enterText(
+      find.byKey(const Key('learning_task_description_field')),
+      '整理 precision、recall 和 hit rate 的项目化表达。',
+    );
+    await tester.enterText(
+      find.byKey(const Key('learning_task_minutes_field')),
+      '40',
+    );
+    await tester.tap(find.text('交给 Agent 创建'));
+    await tester.pumpAndSettle();
+    expect(backToChatCount, 2);
+    expect(sentPrompt, contains('请创建一个用户主动添加的学习任务'));
+    expect(sentPrompt, contains('title: 补 RAG 评估指标'));
+    expect(sentPrompt, contains('estimated_minutes: 40'));
+    expect(sentPrompt, contains('progress_notes 写明“来源：用户主动添加”'));
+    expect(sentAction?.actionType, 'learning_task_manual');
+
+    await tester.tap(find.text('记录进度'));
+    await tester.pumpAndSettle();
+    expect(find.text('记录今日进度'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('learning_checkin_summary_field')),
+      '今天完成 RAG 指标整理。',
+    );
+    await tester.enterText(
+      find.byKey(const Key('learning_checkin_minutes_field')),
+      '35',
+    );
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('交给 Agent 记录'));
+    await tester.pumpAndSettle();
+    expect(backToChatCount, 3);
+    expect(sentPrompt, contains('learning_task_id: learning_task_rag_eval'));
+    expect(sentPrompt, contains('summary: 今天完成 RAG 指标整理。'));
+    expect(sentPrompt, contains('minutes_spent: 35'));
+    expect(sentPrompt, contains('state_change: done'));
+    expect(sentPrompt, contains('调用 learning_checkin_create'));
+    expect(sentAction?.actionType, 'learning_checkin');
+
     await tester.scrollUntilVisible(
       find.text('RAG 检索评估'),
       220,
@@ -210,7 +267,7 @@ void main() {
     await tester.tap(find.text('生成定制简历'));
     await tester.pumpAndSettle();
 
-    expect(backToChatCount, 1);
+    expect(backToChatCount, 4);
     expect(sentPrompt, contains('application_staragent_001'));
     expect(sentPrompt, contains('生成定制简历'));
     expect(sentPrompt, contains('不要写 memory'));

@@ -1780,6 +1780,7 @@ Future<void> _showLearningTaskCreateSheet(
   final titleController = TextEditingController();
   final descriptionController = TextEditingController();
   final minutesController = TextEditingController();
+  String? pendingIntent;
   var priority = "medium";
   var error = "";
 
@@ -1801,21 +1802,13 @@ Future<void> _showLearningTaskCreateSheet(
             final estimatedMinutes = rawMinutes.isEmpty
                 ? 0
                 : int.tryParse(rawMinutes.replaceAll(RegExp(r"[^0-9]"), ""));
-            Navigator.of(sheetContext).pop();
-            await _sendLearningPrompt(
-              context,
-              application,
-              label: "新建任务",
-              actionType: "learning_task_manual",
-              intent: _manualLearningTaskIntent(
-                title: title,
-                description: descriptionController.text.trim(),
-                priority: priority,
-                estimatedMinutes: estimatedMinutes ?? 0,
-              ),
-              onBackToChat: onBackToChat,
-              onSendPrompt: onSendPrompt,
+            pendingIntent = _manualLearningTaskIntent(
+              title: title,
+              description: descriptionController.text.trim(),
+              priority: priority,
+              estimatedMinutes: estimatedMinutes ?? 0,
             );
+            Navigator.of(sheetContext).pop();
           }
 
           return SafeArea(
@@ -1896,6 +1889,7 @@ Future<void> _showLearningTaskCreateSheet(
                           ),
                           const SizedBox(height: 16),
                           TextField(
+                            key: const Key('learning_task_title_field'),
                             controller: titleController,
                             decoration: _noteInputDecoration("任务标题"),
                             style: AppTheme.ts(
@@ -1906,6 +1900,7 @@ Future<void> _showLearningTaskCreateSheet(
                           ),
                           const SizedBox(height: 10),
                           TextField(
+                            key: const Key('learning_task_description_field'),
                             controller: descriptionController,
                             minLines: 3,
                             maxLines: 5,
@@ -1932,6 +1927,7 @@ Future<void> _showLearningTaskCreateSheet(
                                 }),
                               );
                               final minutesField = TextField(
+                                key: const Key('learning_task_minutes_field'),
                                 controller: minutesController,
                                 keyboardType: TextInputType.number,
                                 decoration: _noteInputDecoration("预计分钟数"),
@@ -2007,9 +2003,24 @@ Future<void> _showLearningTaskCreateSheet(
       );
     },
   ).whenComplete(() {
-    titleController.dispose();
-    descriptionController.dispose();
-    minutesController.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      titleController.dispose();
+      descriptionController.dispose();
+      minutesController.dispose();
+    });
+  }).then((_) async {
+    final intent = pendingIntent;
+    if (intent == null) return;
+    if (!context.mounted) return;
+    await _sendLearningPrompt(
+      context,
+      application,
+      label: "新建任务",
+      actionType: "learning_task_manual",
+      intent: intent,
+      onBackToChat: onBackToChat,
+      onSendPrompt: onSendPrompt,
+    );
   });
 }
 
@@ -2033,6 +2044,7 @@ Future<void> _showLearningTaskCheckinSheet(
   final blockersController = TextEditingController();
   final nextActionController = TextEditingController();
   final minutesController = TextEditingController();
+  String? pendingIntent;
   final orderedTasks = [...tasks]
     ..sort((a, b) => _taskSortRank(a).compareTo(_taskSortRank(b)));
   var selectedTaskId = orderedTasks.first.learningTaskId;
@@ -2067,23 +2079,15 @@ Future<void> _showLearningTaskCheckinSheet(
                 ? 0
                 : int.tryParse(rawMinutes.replaceAll(RegExp(r"[^0-9]"), ""));
             final task = selectedTask();
-            Navigator.of(sheetContext).pop();
-            await _sendLearningPrompt(
-              context,
-              application,
-              label: "记录进度",
-              actionType: "learning_checkin",
-              intent: _learningCheckinIntent(
-                task: task,
-                summary: summary,
-                blockers: blockers,
-                nextAction: nextAction,
-                minutes: minutes ?? 0,
-                nextState: nextState,
-              ),
-              onBackToChat: onBackToChat,
-              onSendPrompt: onSendPrompt,
+            pendingIntent = _learningCheckinIntent(
+              task: task,
+              summary: summary,
+              blockers: blockers,
+              nextAction: nextAction,
+              minutes: minutes ?? 0,
+              nextState: nextState,
             );
+            Navigator.of(sheetContext).pop();
           }
 
           return SafeArea(
@@ -2184,6 +2188,7 @@ Future<void> _showLearningTaskCheckinSheet(
                           ),
                           const SizedBox(height: 10),
                           TextField(
+                            key: const Key('learning_checkin_summary_field'),
                             controller: summaryController,
                             minLines: 2,
                             maxLines: 4,
@@ -2198,6 +2203,8 @@ Future<void> _showLearningTaskCheckinSheet(
                           LayoutBuilder(
                             builder: (context, constraints) {
                               final blockersField = TextField(
+                                key: const Key(
+                                    'learning_checkin_blockers_field'),
                                 controller: blockersController,
                                 minLines: 2,
                                 maxLines: 3,
@@ -2209,6 +2216,8 @@ Future<void> _showLearningTaskCheckinSheet(
                                 ),
                               );
                               final nextField = TextField(
+                                key: const Key(
+                                    'learning_checkin_next_action_field'),
                                 controller: nextActionController,
                                 minLines: 2,
                                 maxLines: 3,
@@ -2255,6 +2264,8 @@ Future<void> _showLearningTaskCheckinSheet(
                                 }),
                               );
                               final minutesField = TextField(
+                                key:
+                                    const Key('learning_checkin_minutes_field'),
                                 controller: minutesController,
                                 keyboardType: TextInputType.number,
                                 decoration: _noteInputDecoration("投入分钟数"),
@@ -2330,10 +2341,25 @@ Future<void> _showLearningTaskCheckinSheet(
       );
     },
   ).whenComplete(() {
-    summaryController.dispose();
-    blockersController.dispose();
-    nextActionController.dispose();
-    minutesController.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      summaryController.dispose();
+      blockersController.dispose();
+      nextActionController.dispose();
+      minutesController.dispose();
+    });
+  }).then((_) async {
+    final intent = pendingIntent;
+    if (intent == null) return;
+    if (!context.mounted) return;
+    await _sendLearningPrompt(
+      context,
+      application,
+      label: "记录进度",
+      actionType: "learning_checkin",
+      intent: intent,
+      onBackToChat: onBackToChat,
+      onSendPrompt: onSendPrompt,
+    );
   });
 }
 

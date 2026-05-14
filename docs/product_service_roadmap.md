@@ -765,3 +765,5 @@ M21 验收主线：
 - 前端 `flutter analyze` 和 `flutter test` 已通过。
 - M21 低批次 smoke 的产品数据链路和质量门禁通过；`career_resume_version_create` 首次保护性拒绝后成功恢复，已作为 warning 记录。
 - 前端截图第一次发现旧 web-server 空白页，重启 38765 端口后桌面和窄屏首页恢复正常。
+- 工作台关键交互已补充自动化验收：报告预览、笔记编辑、Markdown 实时预览、学习任务详情、从项目推荐、主动新建任务和记录进度。
+- 本轮发现并修复学习任务新建 / 打卡弹层的 controller 生命周期问题：弹层关闭后再发送 Agent 意图，并延后一帧释放输入 controller。
