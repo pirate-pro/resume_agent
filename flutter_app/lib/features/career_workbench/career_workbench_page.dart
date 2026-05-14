@@ -13,7 +13,10 @@ import '../../shared/utils/download_stub.dart'
 import '../../shared/widgets/markdown_body.dart';
 import 'career_workbench_provider.dart';
 
-typedef WorkbenchPromptSender = Future<void> Function(String prompt);
+typedef WorkbenchPromptSender = Future<void> Function(
+  String prompt, {
+  CareerWorkbenchActionRequest? action,
+});
 
 class CareerWorkbenchPage extends ConsumerStatefulWidget {
   final VoidCallback onBackToChat;
@@ -53,6 +56,14 @@ class _CareerWorkbenchPageState extends ConsumerState<CareerWorkbenchPage> {
             onBackToChat: widget.onBackToChat,
             onRefresh: () => unawaited(provider.refresh()),
           ),
+          if (provider.activeAction != null) ...[
+            _WorkbenchActionBanner(
+              provider: provider,
+              action: provider.activeAction!,
+              onBackToChat: widget.onBackToChat,
+            ),
+            const SizedBox(height: 8),
+          ],
           Expanded(
             child: _WorkbenchShell(
               provider: provider,
@@ -62,6 +73,125 @@ class _CareerWorkbenchPageState extends ConsumerState<CareerWorkbenchPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _WorkbenchActionBanner extends StatelessWidget {
+  final CareerWorkbenchProvider provider;
+  final CareerWorkbenchActionRun action;
+  final VoidCallback onBackToChat;
+
+  const _WorkbenchActionBanner({
+    required this.provider,
+    required this.action,
+    required this.onBackToChat,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final state = action.state;
+    final color = _actionStateColor(state);
+    final icon = _actionStateIcon(state);
+    final title = switch (state) {
+      CareerWorkbenchActionState.running => "正在执行：${action.request.label}",
+      CareerWorkbenchActionState.completed => "已完成：${action.request.label}",
+      CareerWorkbenchActionState.failed => "执行失败：${action.request.label}",
+    };
+    final subtitle = switch (state) {
+      CareerWorkbenchActionState.running => "已回到聊天处理，完成后会同步刷新工作台。",
+      CareerWorkbenchActionState.completed => action.resultHints.isEmpty
+          ? "工作台和求职资产已同步刷新。"
+          : action.resultHints.join(" · "),
+      CareerWorkbenchActionState.failed =>
+        action.error?.trim().isNotEmpty == true
+            ? action.error!.trim()
+            : "聊天执行没有完成，可以回到聊天查看错误。",
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 0, 16, 0),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.075),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: color.withValues(alpha: 0.2)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(13),
+                border: Border.all(color: color.withValues(alpha: 0.18)),
+              ),
+              child: action.isRunning
+                  ? Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: color,
+                      ),
+                    )
+                  : Icon(icon, size: 17, color: color),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.ts(
+                      fontSize: 12.3,
+                      fontWeight: FontWeight.w900,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTheme.ts(
+                      fontSize: 11,
+                      height: 1.35,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            if (state == CareerWorkbenchActionState.completed)
+              _SmallTextButton(
+                label: "查看项目",
+                icon: Icons.open_in_new_rounded,
+                onTap: () => unawaited(provider.focusActiveActionTarget()),
+              )
+            else if (state == CareerWorkbenchActionState.failed)
+              _SmallTextButton(
+                label: "回聊天",
+                icon: Icons.chat_bubble_outline_rounded,
+                onTap: onBackToChat,
+              ),
+            if (state != CareerWorkbenchActionState.running) ...[
+              const SizedBox(width: 6),
+              _WorkbenchIconButton(
+                icon: Icons.close_rounded,
+                tooltip: "关闭动作提示",
+                onTap: provider.clearAction,
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -1428,6 +1558,8 @@ class _LearningActionStrip extends StatelessWidget {
             onTap: () => _sendLearningPrompt(
               context,
               application,
+              label: "生成计划",
+              actionType: "learning_plan",
               intent: "请基于当前求职项目的匹配报告、风险和短板，生成一份可执行学习计划和学习任务。",
               onBackToChat: onBackToChat,
               onSendPrompt: onSendPrompt,
@@ -1440,6 +1572,8 @@ class _LearningActionStrip extends StatelessWidget {
             onTap: () => _sendLearningPrompt(
               context,
               application,
+              label: "同步进展",
+              actionType: "learning_sync",
               intent: "请基于当前学习任务，帮我整理今天应该推进的内容，并在需要时更新学习任务状态或打卡。",
               onBackToChat: onBackToChat,
               onSendPrompt: onSendPrompt,
@@ -2382,7 +2516,15 @@ class _DetailActionSection extends StatelessWidget {
     }
     final prompt = _promptForAction(action, view.application);
     onBackToChat();
-    await sender(prompt);
+    await sender(
+      prompt,
+      action: CareerWorkbenchActionRequest(
+        applicationId: view.application.applicationId,
+        actionType: action.actionType,
+        label: action.label,
+        origin: "project",
+      ),
+    );
   }
 }
 
@@ -6009,6 +6151,8 @@ String _reviewTypeLabel(String type) {
 Future<void> _sendLearningPrompt(
   BuildContext context,
   CareerApplicationView application, {
+  required String label,
+  required String actionType,
   required String intent,
   required VoidCallback onBackToChat,
   required WorkbenchPromptSender? onSendPrompt,
@@ -6022,7 +6166,15 @@ Future<void> _sendLearningPrompt(
     return;
   }
   onBackToChat();
-  await sender(_learningActionPrompt(application, intent));
+  await sender(
+    _learningActionPrompt(application, intent),
+    action: CareerWorkbenchActionRequest(
+      applicationId: application.applicationId,
+      actionType: actionType,
+      label: label,
+      origin: "learning",
+    ),
+  );
 }
 
 String _learningActionPrompt(CareerApplicationView application, String intent) {
@@ -6366,11 +6518,29 @@ IconData _actionIcon(String actionType) {
     "pre_apply_check" => Icons.fact_check_rounded,
     "interview_prep" => Icons.psychology_alt_outlined,
     "learning_task" => Icons.school_outlined,
+    "learning_plan" => Icons.route_outlined,
+    "learning_sync" => Icons.update_rounded,
     "resume_diagnosis" => Icons.badge_outlined,
     "jd_analysis" => Icons.article_outlined,
     "job_fit_report" => Icons.fact_check_outlined,
     "save_note" => Icons.sticky_note_2_outlined,
     _ => Icons.arrow_forward_rounded,
+  };
+}
+
+Color _actionStateColor(CareerWorkbenchActionState state) {
+  return switch (state) {
+    CareerWorkbenchActionState.running => const Color(0xFF2563EB),
+    CareerWorkbenchActionState.completed => AppTheme.accent,
+    CareerWorkbenchActionState.failed => const Color(0xFFDC2626),
+  };
+}
+
+IconData _actionStateIcon(CareerWorkbenchActionState state) {
+  return switch (state) {
+    CareerWorkbenchActionState.running => Icons.autorenew_rounded,
+    CareerWorkbenchActionState.completed => Icons.check_rounded,
+    CareerWorkbenchActionState.failed => Icons.error_outline_rounded,
   };
 }
 

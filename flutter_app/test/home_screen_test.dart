@@ -39,6 +39,44 @@ void main() {
 
     expect(api.sentMessages.last, contains('application_home_staragent'));
     expect(api.workbenchListCalls, greaterThan(callsAfterOpen));
+
+    await tester.tap(find.byTooltip('求职工作台'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('已完成：生成定制简历'), findsOneWidget);
+    expect(find.textContaining('已刷新项目状态'), findsOneWidget);
+  });
+
+  testWidgets('工作台动作失败时保留失败提示', (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+
+    final api = _FakeHomeApiService(failChat: true);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiServiceProvider.overrideWithValue(api),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('求职工作台'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('生成定制简历').first);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('求职工作台'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('执行失败：生成定制简历'), findsOneWidget);
+    expect(find.textContaining('模拟聊天失败'), findsOneWidget);
   });
 }
 
@@ -46,8 +84,10 @@ class _FakeHomeApiService extends ApiService {
   final now = DateTime(2026, 5, 14, 9, 30);
   final sentMessages = <String>[];
   int workbenchListCalls = 0;
+  final bool failChat;
 
-  _FakeHomeApiService() : super(baseUrl: 'http://localhost');
+  _FakeHomeApiService({this.failChat = false})
+      : super(baseUrl: 'http://localhost');
 
   CareerRecordMetaView get _meta => CareerRecordMetaView(
         status: 'active',
@@ -118,6 +158,9 @@ class _FakeHomeApiService extends ApiService {
     List<String>? activeArtifactIds,
   }) async {
     sentMessages.add(message);
+    if (failChat) {
+      throw ApiException(500, '{"detail":"模拟聊天失败"}');
+    }
     return ChatResponse(
       sessionId: sessionId ?? 'sess_home',
       answer: '已生成定制简历。',

@@ -131,13 +131,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
   }
 
-  Future<void> _sendWorkbenchPrompt(String prompt) async {
+  Future<void> _sendWorkbenchPrompt(
+    String prompt, {
+    CareerWorkbenchActionRequest? action,
+  }) async {
     setState(() {
       _primaryViewMode = _PrimaryViewMode.chat;
     });
-    await ref.read(chatProvider).sendMessage(prompt);
-    unawaited(ref.read(careerWorkbenchProvider).refresh());
-    unawaited(ref.read(careerAssetsProvider).refresh());
+    final workbench = ref.read(careerWorkbenchProvider);
+    final chat = ref.read(chatProvider);
+    if (action != null) {
+      workbench.beginAction(action);
+    }
+    await chat.sendMessage(prompt);
+    final chatError = ref.read(chatProvider).error;
+    if (chatError != null && action != null) {
+      workbench.failAction(chatError);
+      return;
+    }
+    await workbench.refresh();
+    await ref.read(careerAssetsProvider).refresh();
+    if (action != null) {
+      workbench.completeAction();
+    }
   }
 
   void _toggleDesktopPanel(_RightPanelMode mode) {

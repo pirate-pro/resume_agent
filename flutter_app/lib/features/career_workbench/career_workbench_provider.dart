@@ -30,6 +30,62 @@ enum CareerProjectFilter {
   paused,
 }
 
+enum CareerWorkbenchActionState {
+  running,
+  completed,
+  failed,
+}
+
+class CareerWorkbenchActionRequest {
+  final String applicationId;
+  final String actionType;
+  final String label;
+  final String origin;
+
+  const CareerWorkbenchActionRequest({
+    required this.applicationId,
+    required this.actionType,
+    required this.label,
+    this.origin = "project",
+  });
+}
+
+class CareerWorkbenchActionRun {
+  final CareerWorkbenchActionRequest request;
+  final CareerWorkbenchActionState state;
+  final DateTime startedAt;
+  final DateTime? finishedAt;
+  final List<String> resultHints;
+  final String? error;
+
+  const CareerWorkbenchActionRun({
+    required this.request,
+    required this.state,
+    required this.startedAt,
+    this.finishedAt,
+    this.resultHints = const [],
+    this.error,
+  });
+
+  bool get isRunning => state == CareerWorkbenchActionState.running;
+
+  CareerWorkbenchActionRun copyWith({
+    CareerWorkbenchActionState? state,
+    DateTime? finishedAt,
+    List<String>? resultHints,
+    String? error,
+  }) {
+    return CareerWorkbenchActionRun(
+      request: request,
+      state: state ?? this.state,
+      startedAt: startedAt,
+      finishedAt: finishedAt ?? this.finishedAt,
+      resultHints: resultHints ?? this.resultHints,
+      error: error,
+    );
+  }
+}
+
 class CareerWorkbenchProvider extends ChangeNotifier {
   final ApiService _api;
 
@@ -57,6 +113,8 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   final Map<String, NoteView> _notes = {};
   final Set<String> _loadingApplicationIds = {};
   final Map<String, String> _detailErrors = {};
+  CareerWorkbenchActionRun? _activeAction;
+  _WorkbenchActionSnapshot? _actionSnapshot;
 
   CareerWorkbenchProvider(this._api);
 
@@ -74,6 +132,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
   String? get selectedApplicationId => _selectedApplicationId;
   String? get selectedNoteId => _selectedNoteId;
   CareerWorkbenchListView? get workbench => _workbench;
+  CareerWorkbenchActionRun? get activeAction => _activeAction;
   List<NoteView> get notes {
     final records = [..._noteList]
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
@@ -324,6 +383,64 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     );
   }
 
+  void beginAction(CareerWorkbenchActionRequest request) {
+    final normalizedApplicationId = request.applicationId.trim();
+    final normalized = CareerWorkbenchActionRequest(
+      applicationId: normalizedApplicationId,
+      actionType: request.actionType.trim(),
+      label: request.label.trim().isEmpty ? "执行动作" : request.label.trim(),
+      origin: request.origin.trim().isEmpty ? "project" : request.origin.trim(),
+    );
+    _actionSnapshot = _WorkbenchActionSnapshot.capture(
+      this,
+      normalizedApplicationId,
+    );
+    _activeAction = CareerWorkbenchActionRun(
+      request: normalized,
+      state: CareerWorkbenchActionState.running,
+      startedAt: DateTime.now(),
+    );
+    notifyListeners();
+  }
+
+  void completeAction() {
+    final run = _activeAction;
+    if (run == null) return;
+    final hints = _actionResultHints(run.request, _actionSnapshot);
+    _activeAction = run.copyWith(
+      state: CareerWorkbenchActionState.completed,
+      finishedAt: DateTime.now(),
+      resultHints: hints.isEmpty ? const ["已刷新项目状态和关联资料，可打开项目查看最新结果。"] : hints,
+    );
+    _actionSnapshot = null;
+    notifyListeners();
+  }
+
+  void failAction(Object error) {
+    final run = _activeAction;
+    if (run == null) return;
+    _activeAction = run.copyWith(
+      state: CareerWorkbenchActionState.failed,
+      finishedAt: DateTime.now(),
+      error: error.toString(),
+    );
+    _actionSnapshot = null;
+    notifyListeners();
+  }
+
+  void clearAction() {
+    _activeAction = null;
+    _actionSnapshot = null;
+    notifyListeners();
+  }
+
+  Future<void> focusActiveActionTarget() async {
+    final applicationId = _activeAction?.request.applicationId.trim() ?? "";
+    if (applicationId.isEmpty) return;
+    _activeTab = CareerWorkbenchTab.projects;
+    await selectApplication(applicationId);
+  }
+
   Future<NoteView> loadNote(String noteId, {bool force = false}) async {
     final normalized = noteId.trim();
     if (normalized.isEmpty) {
@@ -451,6 +568,141 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       return;
     }
     _selectedApplicationId = records.first.application.applicationId;
+  }
+
+  List<String> _actionResultHints(
+    CareerWorkbenchActionRequest request,
+    _WorkbenchActionSnapshot? snapshot,
+  ) {
+    if (snapshot == null) {
+      return const ["已刷新项目状态和关联资料，可打开项目查看最新结果。"];
+    }
+    final hints = <String>[];
+    final counts = _workbench?.counts;
+    if (counts != null) {
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.noteCount,
+        after: counts.notes,
+        unit: "条笔记",
+      );
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.learningTaskCount,
+        after: counts.learningTasks,
+        unit: "个学习任务",
+      );
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.resumeVersionCount,
+        after: counts.resumeVersions,
+        unit: "个简历版本",
+      );
+    }
+
+    final detail = _details[request.applicationId.trim()];
+    if (detail != null) {
+      final linkedAssetIds = detail.linkedAssets.map((item) => item.id).toSet();
+      final newAssetCount =
+          linkedAssetIds.difference(snapshot.linkedAssetIds).length;
+      if (newAssetCount > 0) {
+        hints.add("新增 $newAssetCount 个关联资料");
+      }
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.detailNoteCount,
+        after: detail.notes.length,
+        unit: "条项目笔记",
+      );
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.detailLearningTaskCount,
+        after: detail.learning.tasks.length,
+        unit: "个项目学习任务",
+      );
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.detailResumeVersionCount,
+        after: detail.resumeVersions.length,
+        unit: "个项目简历版本",
+      );
+    }
+
+    if (snapshot.assetLibraryLoaded) {
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.resumeVersionLibraryCount,
+        after: _resumeVersions.length,
+        unit: "个简历版本",
+      );
+      _appendIncreaseHint(
+        hints,
+        before: snapshot.jobFitReportLibraryCount,
+        after: _jobFitReports.length,
+        unit: "份匹配报告",
+      );
+    }
+
+    return hints.toSet().toList(growable: false);
+  }
+}
+
+class _WorkbenchActionSnapshot {
+  final int noteCount;
+  final int learningTaskCount;
+  final int resumeVersionCount;
+  final Set<String> linkedAssetIds;
+  final int detailNoteCount;
+  final int detailLearningTaskCount;
+  final int detailResumeVersionCount;
+  final bool assetLibraryLoaded;
+  final int resumeVersionLibraryCount;
+  final int jobFitReportLibraryCount;
+
+  const _WorkbenchActionSnapshot({
+    required this.noteCount,
+    required this.learningTaskCount,
+    required this.resumeVersionCount,
+    required this.linkedAssetIds,
+    required this.detailNoteCount,
+    required this.detailLearningTaskCount,
+    required this.detailResumeVersionCount,
+    required this.assetLibraryLoaded,
+    required this.resumeVersionLibraryCount,
+    required this.jobFitReportLibraryCount,
+  });
+
+  factory _WorkbenchActionSnapshot.capture(
+    CareerWorkbenchProvider provider,
+    String applicationId,
+  ) {
+    final counts = provider._workbench?.counts;
+    final detail = provider._details[applicationId.trim()];
+    return _WorkbenchActionSnapshot(
+      noteCount: counts?.notes ?? 0,
+      learningTaskCount: counts?.learningTasks ?? 0,
+      resumeVersionCount: counts?.resumeVersions ?? 0,
+      linkedAssetIds: detail?.linkedAssets.map((item) => item.id).toSet() ??
+          const <String>{},
+      detailNoteCount: detail?.notes.length ?? 0,
+      detailLearningTaskCount: detail?.learning.tasks.length ?? 0,
+      detailResumeVersionCount: detail?.resumeVersions.length ?? 0,
+      assetLibraryLoaded: provider._hasLoadedAssetLibrary,
+      resumeVersionLibraryCount: provider._resumeVersions.length,
+      jobFitReportLibraryCount: provider._jobFitReports.length,
+    );
+  }
+}
+
+void _appendIncreaseHint(
+  List<String> hints, {
+  required int before,
+  required int after,
+  required String unit,
+}) {
+  final delta = after - before;
+  if (delta > 0) {
+    hints.add("新增 $delta $unit");
   }
 }
 

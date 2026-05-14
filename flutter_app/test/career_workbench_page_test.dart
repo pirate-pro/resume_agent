@@ -15,6 +15,7 @@ void main() {
 
     final api = _FakeCareerWorkbenchApi();
     String? sentPrompt;
+    CareerWorkbenchActionRequest? sentAction;
     var backToChatCount = 0;
 
     await tester.pumpWidget(
@@ -31,8 +32,9 @@ void main() {
               height: 820,
               child: CareerWorkbenchPage(
                 onBackToChat: () => backToChatCount += 1,
-                onSendPrompt: (prompt) async {
+                onSendPrompt: (prompt, {action}) async {
                   sentPrompt = prompt;
+                  sentAction = action;
                 },
               ),
             ),
@@ -207,6 +209,8 @@ void main() {
     expect(sentPrompt, contains('application_staragent_001'));
     expect(sentPrompt, contains('生成定制简历'));
     expect(sentPrompt, contains('不要写 memory'));
+    expect(sentAction?.applicationId, 'application_staragent_001');
+    expect(sentAction?.label, '生成定制简历');
   });
 }
 
