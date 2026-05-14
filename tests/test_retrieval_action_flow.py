@@ -453,6 +453,8 @@ class ReviewAdviceToLearningTaskModel:
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
         assert "用户明确要求把建议加入计划、创建任务或监督完成时，才调用 LearningService" in system_prompt
+        assert "系统推荐添加学习任务时，必须先召回或复用本轮已经召回的上下文" in system_prompt
+        assert "来源：面试复盘建议" in system_prompt
         assert "不要顺手调用 `career_application_merge` 更新求职项目" in system_prompt
         tool_names = _tool_names(tools)
         assert "learning_task_create" in tool_names
@@ -502,6 +504,7 @@ class ReviewAdviceToLearningTaskModel:
                                 "给出召回评估指标和评估集设计",
                                 "讲清 Celery 延迟队列和失败恢复案例",
                             ],
+                            "progress_notes": "来源：面试复盘建议",
                         },
                     )
                 ],
@@ -720,6 +723,7 @@ def test_m17_review_advice_creates_learning_task_only_when_user_confirms(tmp_pat
     assert task.note_refs == ["note_rag_review"]
     assert task.resource_refs == ["resource_stargazer_interview"]
     assert task.question_refs == ["question_rag_chunk_strategy"]
+    assert task.progress_notes == "来源：面试复盘建议"
     assert after.learning_tasks == before.learning_tasks + 1
     assert after.notes == before.notes
     assert after.applications == before.applications

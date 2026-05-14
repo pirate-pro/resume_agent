@@ -247,6 +247,26 @@ M20 第一批后端不新增模型字段。
 7. 低批次 smoke 验证主动添加和推荐转任务。
 ```
 
+## 第一批开发结果
+
+已完成：
+
+- 更新 `app/agents/default/AGENT.md`，明确用户主动添加和系统推荐添加两类学习任务入口。
+- 用户主动添加任务时，允许没有求职项目、复盘 Note 或匹配报告，但必须保留 session ref 和“来源：用户主动添加”。
+- 系统推荐添加任务时，必须先召回或复用上下文，并写明“来源：面试复盘建议”或类似来源。
+- 打卡时必须先定位 LearningTask，再写 ProgressCheckin；用户明确状态变化时才更新 LearningTask 状态。
+- 增加确定性 runtime 测试覆盖：
+  - 用户主动创建无项目关联的 LearningTask。
+  - 复盘建议转 LearningTask 时保留推荐来源。
+  - 用户打卡后创建 ProgressCheckin 并把任务标记为完成。
+
+第一批仍未做：
+
+- 前端学习任务入口。
+- `LearningTask.origin` 字段。
+- 日历提醒。
+- 低批次真实模型 smoke。
+
 ## 后续方向
 
 - 如果来源标签成为高频筛选条件，再为 LearningTask 增加 `origin` 字段。

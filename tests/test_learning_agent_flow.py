@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.core.time import app_now
 from app.domain.models import AgentRunInput, RunContext, ToolCall
 from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.learning.models import LearningRecordStatus, LearningTask
 from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
@@ -120,6 +122,126 @@ class CreateLearningPlanModel:
         raise NotImplementedError("streaming is not used in this test")
 
 
+class ManualLearningTaskModel:
+    """Create a user-initiated task without requiring career evidence."""
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        assert "学习任务有两类入口：用户主动添加和系统推荐添加" in system_prompt
+        assert "如果召回为空，也可以创建任务" in system_prompt
+        assert "来源：用户主动添加" in system_prompt
+        assert "learning_task_create" in _tool_names(tools)
+
+        if not _assistant_called(messages, "learning_task_create"):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="learning_task_create",
+                        arguments={
+                            "learning_task_id": "manual_rag_metrics",
+                            "evidence_refs": ["sess_learning_manual"],
+                            "title": "补 RAG 评估指标基础",
+                            "description": "用户主动添加：整理 precision、recall、hit rate 的定义和适用场景。",
+                            "task_type": "write_answer",
+                            "priority": "medium",
+                            "state": "todo",
+                            "skill_tags": ["RAG", "评估指标"],
+                            "estimated_minutes": 30,
+                            "success_criteria": ["写清 3 个指标定义", "各给一个面试表达例子"],
+                            "progress_notes": "来源：用户主动添加",
+                        },
+                    )
+                ],
+            )
+        return ModelResponse(content="已创建学习任务：补 RAG 评估指标基础。", tool_calls=[])
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        _ = (system_prompt, messages, tools)
+        if False:
+            yield StreamChunk()
+        raise NotImplementedError("streaming is not used in this test")
+
+
+class LearningTaskCheckinModel:
+    """Record progress checkin and update task state after explicit user report."""
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        assert "先定位相关 LearningTask" in system_prompt
+        assert "打卡和任务状态更新不自动写 Note 或 memory" in system_prompt
+        tool_names = _tool_names(tools)
+        assert {"learning_task_list", "learning_checkin_create", "learning_task_update_state"} <= tool_names
+
+        if not _assistant_called(messages, "learning_task_list"):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="learning_task_list",
+                        arguments={"state": "doing"},
+                    )
+                ],
+            )
+        if not _assistant_called(messages, "learning_checkin_create"):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="learning_checkin_create",
+                        arguments={
+                            "checkin_id": "manual_rag_metrics_done",
+                            "evidence_refs": ["learning_task_manual_rag_metrics", "sess_learning_checkin"],
+                            "learning_task_id": "learning_task_manual_rag_metrics",
+                            "minutes_spent": 40,
+                            "progress_state": "completed",
+                            "summary": "完成 RAG 评估指标整理，补了 precision、recall 和 hit rate 示例。",
+                            "confidence": "medium",
+                            "next_action": "下次把这些指标放进项目回答里演练。",
+                        },
+                    )
+                ],
+            )
+        if not _assistant_called(messages, "learning_task_update_state"):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="learning_task_update_state",
+                        arguments={
+                            "learning_task_id": "learning_task_manual_rag_metrics",
+                            "state": "done",
+                        },
+                    )
+                ],
+            )
+        return ModelResponse(content="已记录今日进度，并把任务标记为完成。", tool_calls=[])
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        _ = (system_prompt, messages, tools)
+        if False:
+            yield StreamChunk()
+        raise NotImplementedError("streaming is not used in this test")
+
+
 def test_explicit_learning_plan_flow_creates_plan_and_task_without_memory_write(tmp_path: Path) -> None:
     bundle = _build_learning_flow_bundle(tmp_path, CreateLearningPlanModel())
     bundle.session_repository.create_session("sess_learning_plan")
@@ -152,6 +274,71 @@ def test_explicit_learning_plan_flow_creates_plan_and_task_without_memory_write(
     assert not any(event.type == "memory_write" for event in events)
 
 
+def test_manual_learning_task_can_be_created_without_career_evidence(tmp_path: Path) -> None:
+    bundle = _build_learning_flow_bundle(tmp_path, ManualLearningTaskModel())
+    bundle.session_repository.create_session("sess_learning_manual")
+
+    output = bundle.runtime.run(
+        AgentRunInput(
+            session_id="sess_learning_manual",
+            user_message="我自己想补一下 RAG 评估指标，帮我建一个学习任务。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=2,
+            context=_context("sess_learning_manual"),
+        )
+    )
+
+    task = bundle.learning_store.get_learning_task("learning_task_manual_rag_metrics")
+    events = bundle.session_repository.list_events("sess_learning_manual")
+
+    assert output.answer == "已创建学习任务：补 RAG 评估指标基础。"
+    assert task is not None
+    assert task.learning_plan_id is None
+    assert task.evidence_refs == ["sess_learning_manual"]
+    assert task.progress_notes == "来源：用户主动添加"
+    assert getattr(task.state, "value", task.state) == "todo"
+    assert _tool_call_names(events) == ["learning_task_create"]
+    assert "memory_write" not in _tool_call_names(events)
+    assert bundle.memory_manager.search(query="RAG 评估指标", limit=5, context=_context("sess_learning_manual")) == []
+
+
+def test_learning_checkin_records_progress_and_updates_task_state_without_memory(tmp_path: Path) -> None:
+    bundle = _build_learning_flow_bundle(tmp_path, LearningTaskCheckinModel())
+    bundle.session_repository.create_session("sess_learning_checkin")
+    _seed_learning_task(bundle.learning_store, session_id="sess_learning_checkin")
+
+    output = bundle.runtime.run(
+        AgentRunInput(
+            session_id="sess_learning_checkin",
+            user_message="我刚学了 40 分钟 RAG 评估指标，已经完成了，把任务也标记完成。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=4,
+            context=_context("sess_learning_checkin"),
+        )
+    )
+
+    task = bundle.learning_store.get_learning_task("learning_task_manual_rag_metrics")
+    checkin = bundle.learning_store.get_progress_checkin("checkin_manual_rag_metrics_done")
+    events = bundle.session_repository.list_events("sess_learning_checkin")
+
+    assert output.answer == "已记录今日进度，并把任务标记为完成。"
+    assert checkin is not None
+    assert checkin.learning_task_id == "learning_task_manual_rag_metrics"
+    assert checkin.minutes_spent == 40
+    assert getattr(checkin.progress_state, "value", checkin.progress_state) == "completed"
+    assert "precision、recall" in checkin.summary
+    assert task is not None
+    assert getattr(task.state, "value", task.state) == "done"
+    assert task.completed_at is not None
+    assert _tool_call_names(events) == [
+        "learning_task_list",
+        "learning_checkin_create",
+        "learning_task_update_state",
+    ]
+    assert "memory_write" not in _tool_call_names(events)
+    assert bundle.memory_manager.search(query="今日进度", limit=5, context=_context("sess_learning_checkin")) == []
+
+
 def test_learning_agent_contract_and_capabilities_keep_child_agents_read_only() -> None:
     main_doc = Path("app/agents/default/AGENT.md").read_text(encoding="utf-8")
     capability = load_agent_capability_registry(Path("app/config/agent_capabilities.json"))
@@ -161,6 +348,11 @@ def test_learning_agent_contract_and_capabilities_keep_child_agents_read_only() 
 
     assert "LearningService 用于用户可见、可追踪的学习计划、任务、打卡和能力短板" in main_doc
     assert "才调用 learning 工具" in main_doc
+    assert "学习任务有两类入口：用户主动添加和系统推荐添加" in main_doc
+    assert "如果召回为空，也可以创建任务" in main_doc
+    assert "系统推荐添加学习任务时，必须先召回或复用本轮已经召回的上下文" in main_doc
+    assert "先定位相关 LearningTask" in main_doc
+    assert "打卡和任务状态更新不自动写 Note 或 memory" in main_doc
     assert "Learning 工具不会也不应该触发 memory 写入" in main_doc
     assert "resume_agent` 和 `job_agent` 默认不写 LearningService" in main_doc
     assert main_capability.allows_tool("learning_plan_create")
@@ -234,6 +426,30 @@ def _context(session_id: str) -> RunContext:
     )
 
 
+def _seed_learning_task(store: LearningStore, *, session_id: str) -> None:
+    now = app_now()
+    store.save_learning_task(
+        LearningTask(
+            learning_task_id="learning_task_manual_rag_metrics",
+            status=LearningRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=None,
+            evidence_refs=[session_id],
+            created_at=now,
+            updated_at=now,
+            title="补 RAG 评估指标基础",
+            description="用户主动添加：整理 precision、recall、hit rate。",
+            task_type="write_answer",
+            priority="medium",
+            state="doing",
+            skill_tags=["RAG", "评估指标"],
+            estimated_minutes=30,
+            success_criteria=["写清 3 个指标定义", "各给一个面试表达例子"],
+            progress_notes="来源：用户主动添加",
+        )
+    )
+
+
 def _tool_names(tools: list[dict[str, Any]]) -> set[str]:
     names: set[str] = set()
     for tool in tools:
@@ -291,4 +507,3 @@ def _tool_call_names(events: list[Any]) -> list[str]:
         if isinstance(name, str):
             names.append(name)
     return names
-
