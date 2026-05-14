@@ -583,6 +583,20 @@ M16 的关键判断：
 
 - M16 第一批已完成 Agent 契约和确定性 runtime 测试。
 - M16 第二批已在工作台项目详情增加「求职进展」展示，复用现有 `CareerApplication`、Note 和 timeline 数据，不新增事实源。
+- M16 第三批已增加低成本 live smoke 动作 `--retrieval-action interview_review`，用于验证“面试复盘写 Note + 更新 CareerApplication”的真实链路边界。
+
+M16 低成本真实 smoke 命令：
+
+```bash
+uv run python tools/smoke_career_live_flow.py \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 8 \
+  --retrieval-action interview_review \
+  --data-dir data/live_career_smoke_m16
+```
+
+这条 smoke 只追加一轮面试复盘动作，报告会检查是否先召回、是否写入 Note、是否更新 CareerApplication，以及是否误写 memory、误建学习任务、误重新委派或重新解析核心画像。
 
 ## 当前优先级
 
@@ -598,8 +612,8 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 用低成本方式验证一轮真实“投递 / 面试复盘 / 更新项目”链路。
-2. 观察工作台求职进展区块是否足够表达面试脉络。
+1. 用户手动低批次跑 M16 interview_review live smoke，观察模型真实工具选择。
+2. 如果通过，进入 M17：把复盘记录和项目状态用于下一步准备建议。
 3. 暂不新增面试 store，等复盘记录形态稳定后再抽象。
 ```
 

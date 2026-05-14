@@ -3,6 +3,7 @@
 Run:
   uv run python tools/smoke_career_live_flow.py --runs 1
   uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action interview_prep
+  uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action interview_review
 
 This script uses the real configured model endpoint. It is intentionally not
 part of pytest because model availability, latency, and tool-call behavior are
@@ -565,7 +566,7 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
                 report.errors.append("项目动作未读取 CareerApplication。")
             if "career_application_merge" not in turn.tool_calls:
                 report.errors.append("项目动作未回写 CareerApplication。")
-        if turn.name.startswith("M12动作"):
+        if turn.name.startswith(("M12动作", "M16动作")):
             _validate_retrieval_action_turn(turn=turn, report=report)
 
     quality_report = check_career_product_store(stack.data_dir, session_id=report.session_id)
@@ -587,12 +588,13 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
 
 
 def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> None:
+    action_label = "M16 动作" if turn.name.startswith("M16动作") else "M12 动作"
     if "retrieval_search" not in turn.tool_calls:
-        report.errors.append("M12 动作未先调用 retrieval_search。")
+        report.errors.append(f"{action_label}未先调用 retrieval_search。")
     if "retrieval_context_pack" not in turn.tool_calls:
-        report.errors.append("M12 动作未调用 retrieval_context_pack。")
+        report.errors.append(f"{action_label}未调用 retrieval_context_pack。")
     if "memory_write" in turn.tool_calls:
-        report.errors.append("M12 动作不应写 memory。")
+        report.errors.append(f"{action_label}不应写 memory。")
     if turn.name == "M12动作：召回面试准备":
         forbidden = {"note_create", "note_append", "learning_task_create", "career_application_merge"}
         leaked = sorted(forbidden.intersection(turn.tool_calls))
@@ -618,6 +620,25 @@ def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> 
         leaked = sorted(forbidden.intersection(turn.tool_calls))
         if leaked:
             report.errors.append(f"M12 投递前检查不应重新解析或保存核心画像: {leaked}")
+    if turn.name == "M16动作：面试复盘更新项目":
+        if not {"note_create", "note_append"}.intersection(turn.tool_calls):
+            report.errors.append("M16 面试复盘未写入 Note。")
+        if "career_application_merge" not in turn.tool_calls:
+            report.errors.append("M16 面试复盘未更新 CareerApplication。")
+        forbidden = {
+            "career_application_create",
+            "career_resume_profile_save",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "career_resume_version_create",
+            "delegate_agents",
+            "learning_plan_create",
+            "learning_task_create",
+            "learning_weakness_create",
+        }
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M16 面试复盘出现越界工具调用: {leaked}")
 
 
 def _record_touches_session(
@@ -690,6 +711,7 @@ def _retrieval_action_stage(retrieval_action: str) -> str:
         "learning_task": "M12动作：召回创建学习任务",
         "save_note": "M12动作：召回保存笔记",
         "pre_apply_check": "M12动作：召回投递前检查",
+        "interview_review": "M16动作：面试复盘更新项目",
     }[retrieval_action]
 
 
@@ -726,6 +748,15 @@ def _retrieval_action_message(retrieval_action: str) -> str:
             "请做投递前检查并更新当前求职项目风险。不要重新委派 resume_agent 或 job_agent，"
             "不要重新解析简历或 JD；基于召回到的 CareerApplication、ResumeProfile、JDAnalysis "
             "和 JobFitReport，调用 career_application_merge 更新 summary、next_actions、risks 或 notes。"
+        )
+    if retrieval_action == "interview_review":
+        return (
+            f"{base}"
+            "我刚面完之前那个 AI 应用开发岗位的一面，被问到 RAG chunk 策略、向量召回评估、"
+            "Celery 延迟队列和 Agent 工具调用权限边界。RAG 和权限边界答得还行，Celery 延迟队列"
+            "和召回评估指标答得一般。请把这次面试复盘保存成一条 Note，并更新当前求职项目的阶段、"
+            "风险、下一步行动和项目备注。不要创建学习计划或学习任务，不要创建 WeaknessTracker，"
+            "不要重新委派 child-agent，不要重新解析简历，不要重新分析 JD，不要重新生成匹配报告或简历版本。"
         )
     raise ValueError(f"Unsupported retrieval action: {retrieval_action}")
 
@@ -1034,9 +1065,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--retrieval-action",
-        choices=("none", "interview_prep", "learning_task", "save_note", "pre_apply_check"),
+        choices=("none", "interview_prep", "learning_task", "save_note", "pre_apply_check", "interview_review"),
         default="none",
-        help="是否追加一轮 M12 召回驱动动作验证；默认不追加以控制 live smoke 成本。",
+        help="是否追加一轮召回驱动动作验证；默认不追加以控制 live smoke 成本。",
     )
     parser.add_argument("--verbose", action="store_true", help="打开应用日志。")
     parser.add_argument("--quiet", action="store_true", help="关闭逐 run / 逐阶段进度输出，只打印最终报告。")

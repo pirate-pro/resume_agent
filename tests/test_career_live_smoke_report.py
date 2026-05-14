@@ -415,6 +415,92 @@ def test_live_smoke_report_fails_when_m12_pre_apply_reanalyzes_core_records(tmp_
     assert "M12 投递前检查不应重新解析或保存核心画像: ['career_jd_analysis_save']" in report.errors
 
 
+def test_live_smoke_report_fails_when_m16_review_skips_note_or_application_update(tmp_path: Path) -> None:
+    session_id = "sess_live_m16_review_missing_write"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="M16动作：面试复盘更新项目",
+                answer="只回答了复盘建议，但没有写入产品记录。",
+                elapsed_seconds=1.0,
+                tool_calls=["retrieval_search", "retrieval_context_pack"],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M16 面试复盘未写入 Note。" in report.errors
+    assert "M16 面试复盘未更新 CareerApplication。" in report.errors
+
+
+def test_live_smoke_report_fails_when_m16_review_crosses_boundaries(tmp_path: Path) -> None:
+    session_id = "sess_live_m16_review_boundary"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="M16动作：面试复盘更新项目",
+                answer="记录了复盘，但错误创建学习任务并重新委派。",
+                elapsed_seconds=1.0,
+                tool_calls=[
+                    "retrieval_search",
+                    "retrieval_context_pack",
+                    "note_create",
+                    "career_application_merge",
+                    "delegate_agents",
+                    "learning_task_create",
+                ],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M16 面试复盘出现越界工具调用: ['delegate_agents', 'learning_task_create']" in report.errors
+
+
 def _add_artifact(
     repository: JsonlSessionRepository,
     *,

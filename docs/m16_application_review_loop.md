@@ -173,6 +173,41 @@ flutter_app/test/career_workbench_page_test.dart
 - 不做自动 memory 写入。
 - 不做复杂时间线编辑。
 
+## 第三批开发范围
+
+目标：用低成本 live smoke 验证一条真实“面试复盘 -> 写 Note -> 更新求职项目”的链路，不进入压力测试。
+
+实现：
+
+```text
+tools/smoke_career_live_flow.py
+tests/test_career_live_smoke_report.py
+```
+
+验证命令：
+
+```bash
+uv run python tools/smoke_career_live_flow.py \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 8 \
+  --retrieval-action interview_review \
+  --data-dir data/live_career_smoke_m16
+```
+
+这条验证会先跑原有简历诊断、JD 匹配和定制简历三轮，再追加一轮面试复盘动作。追加动作要求：
+
+- 先调用 `retrieval_search` 定位求职项目。
+- 再调用 `retrieval_context_pack` 读取项目、匹配报告、简历画像、JD 分析和相关资料。
+- 调用 `note_create` 或 `note_append` 保存面试复盘。
+- 调用 `career_application_merge` 更新项目阶段、风险、下一步行动和备注。
+- 不调用 `memory_write`。
+- 不调用 `learning_plan_create`、`learning_task_create` 或 `learning_weakness_create`。
+- 不调用 `delegate_agents`。
+- 不重新保存 `ResumeProfile`、`JDAnalysis`、`JobFitReport` 或 `ResumeVersion`。
+
+这一步只验证链路边界和工具选择，不扩大 smoke 批次，不做性能压力测试。
+
 ## 验收标准
 
 - 用户表达面试复盘并要求记录时，系统先召回项目上下文。
