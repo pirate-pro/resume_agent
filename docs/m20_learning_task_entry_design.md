@@ -267,6 +267,24 @@ M20 第一批后端不新增模型字段。
 - 日历提醒。
 - 低批次真实模型 smoke。
 
+## 第二批前端入口设计
+
+方案文档：`docs/m20_learning_task_ui_design.md`
+
+第二批前端目标：
+
+- 将现有 `LearningActionStrip` 升级为学习任务入口面板。
+- 支持“新建任务 / 从项目推荐 / 记录进度”三个主动作。
+- 优化任务卡片来源、状态、优先级和下一步展示。
+- 增加学习任务详情与打卡入口。
+- 对话建议结果支持“加入学习任务”的确认动作。
+
+关键边界：
+
+- 前端只生成意图，不直接写 `LearningService`。
+- 创建、打卡和状态更新仍由 Agent 调用工具完成。
+- 不新增 `LearningTask.origin` 字段，来源标签先从 `progress_notes` 和 `evidence_refs` 推断。
+
 ## 后续方向
 
 - 如果来源标签成为高频筛选条件，再为 LearningTask 增加 `origin` 字段。
