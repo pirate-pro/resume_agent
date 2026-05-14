@@ -501,6 +501,97 @@ def test_live_smoke_report_fails_when_m16_review_crosses_boundaries(tmp_path: Pa
     assert "M16 面试复盘出现越界工具调用: ['delegate_agents', 'learning_task_create']" in report.errors
 
 
+def test_live_smoke_report_fails_when_m17_advice_writes_products(tmp_path: Path) -> None:
+    session_id = "sess_live_m17_advice_boundary"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="M17动作：复盘准备建议",
+                answer="给出建议时错误创建任务并更新项目。",
+                elapsed_seconds=1.0,
+                tool_calls=[
+                    "retrieval_search",
+                    "retrieval_context_pack",
+                    "career_application_merge",
+                    "learning_task_create",
+                ],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert (
+        "M17 复盘准备建议只读动作出现写入或越界工具: "
+        "['career_application_merge', 'learning_task_create']"
+    ) in report.errors
+
+
+def test_live_smoke_report_fails_when_m17_review_to_task_skips_task_or_updates_project(tmp_path: Path) -> None:
+    session_id = "sess_live_m17_task_boundary"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+        turns=[
+            TurnReport(
+                name="M17动作：复盘建议转学习任务",
+                answer="只更新了项目，没有创建学习任务。",
+                elapsed_seconds=1.0,
+                tool_calls=[
+                    "retrieval_search",
+                    "retrieval_context_pack",
+                    "career_application_merge",
+                ],
+            )
+        ],
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M17 复盘建议转任务未创建 LearningTask。" in report.errors
+    assert "M17 复盘建议转任务出现越界工具调用: ['career_application_merge']" in report.errors
+
+
 def _add_artifact(
     repository: JsonlSessionRepository,
     *,

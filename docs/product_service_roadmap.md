@@ -615,6 +615,27 @@ M17 的关键判断：
 当前状态：
 
 - M17 第一批已完成 Agent 契约和确定性 runtime 测试。
+- M17 第二批已接入低成本真实 smoke 动作，用于验证“复盘建议默认只回答”和“确认后转 LearningTask”的真实模型边界。
+
+M17 低成本真实 smoke 命令：
+
+```bash
+uv run python tools/smoke_career_live_flow.py \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 8 \
+  --retrieval-action review_advice \
+  --data-dir data/live_career_smoke_m17_advice
+
+uv run python tools/smoke_career_live_flow.py \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 8 \
+  --retrieval-action review_to_learning_task \
+  --data-dir data/live_career_smoke_m17_task
+```
+
+这两条 smoke 会先跑基础求职链路，再用 store 种入一条复盘 Note 作为前置状态，避免为了准备条件额外消耗一轮真实模型调用。报告会检查 M17 动作是否先召回、是否误写 memory、是否误更新 CareerApplication、是否误保存 Note，以及转任务动作是否真的创建 LearningTask。
 
 ### M18：质量验收与压力测试
 
@@ -637,9 +658,21 @@ M18 已完成：
 - Career 产品记录 `evidence_refs` 支持 `note_`，用于面试复盘 Note 回写求职项目。
 - `career_resume_version_create` 在写入前拦截占位或替换类表达，避免脏 ResumeVersion 进入 store。
 
+### M19：复盘建议真实链路验证
+
+目标：补上 M17 从确定性测试到真实模型链路的验证入口，确认复盘建议和复盘转学习任务不会越界写入。
+
+M19 已完成：
+
+- `tools/smoke_career_live_flow.py` 新增 `--retrieval-action review_advice`。
+- `tools/smoke_career_live_flow.py` 新增 `--retrieval-action review_to_learning_task`。
+- M17 动作前会种入一条复盘 Note，模拟用户已经完成面试复盘，不额外消耗一轮 M16 真实模型调用。
+- smoke 报告会检查复盘建议只读边界和复盘转任务写入边界。
+- 增加确定性报告测试覆盖 M17 越界写入和未创建 LearningTask 场景。
+
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估、M12 召回驱动动作闭环真实 smoke、M13 只读工作台聚合层、M13 前端项目工作台弹层、M14 一级工作台页面、M14 笔记页、M14 资料与报告库第一版、M14 学习计划页第一版、M14 收口刷新闭环、M15 第一批动作闭环、M16 求职项目推进与面试复盘闭环、M17 复盘驱动准备建议第一批和 M18 质量验收已经完成。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估、M12 召回驱动动作闭环真实 smoke、M13 只读工作台聚合层、M13 前端项目工作台弹层、M14 一级工作台页面、M14 笔记页、M14 资料与报告库第一版、M14 学习计划页第一版、M14 收口刷新闭环、M15 第一批动作闭环、M16 求职项目推进与面试复盘闭环、M17 复盘驱动准备建议第一批、M18 质量验收和 M19 复盘建议真实链路入口已经完成。
 
 当前还不提前接 memory 自动写入、日历同步和提醒系统。
 
@@ -651,7 +684,7 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 增加 M17 真实 smoke：复盘建议默认只回答，用户确认后才转 LearningTask。
+1. 低批次运行 M17 两条真实 smoke，确认真实模型边界。
 2. 如果真实链路稳定，再进入工作台“建议转任务”的显式动作设计。
 3. 暂不新增面试 store、日历提醒和 memory 自动写入。
 ```

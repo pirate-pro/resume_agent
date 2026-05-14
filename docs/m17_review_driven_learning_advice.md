@@ -122,6 +122,44 @@ memory = 不自动写入
 - memory 自动写入。
 - live smoke 压力测试。
 
+## 第二批真实链路验证
+
+M17 第二批把复盘建议链路接入 `tools/smoke_career_live_flow.py`，用于低批次验证真实模型是否遵守边界。
+
+新增两个动作：
+
+```text
+review_advice
+  -> 基于已有复盘 Note 给下一步准备建议
+  -> 只读回答，不创建 LearningTask、不更新 CareerApplication、不写 Note、不写 memory
+
+review_to_learning_task
+  -> 基于已有复盘 Note 创建 LearningTask
+  -> 必须先召回复盘依据
+  -> 创建 LearningTask
+  -> 不顺手更新 CareerApplication、不保存新 Note、不创建 WeaknessTracker、不写 memory
+```
+
+为了控制 token 成本，这两个动作不会额外跑一轮 M16 面试复盘。smoke 会在基础求职链路完成后，用 store 直接种入一条复盘 Note，模拟用户之前已经完成复盘的状态，然后再让模型执行 M17 动作。
+
+可选命令：
+
+```bash
+uv run python tools/smoke_career_live_flow.py \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 8 \
+  --retrieval-action review_advice \
+  --data-dir data/live_career_smoke_m17_advice
+
+uv run python tools/smoke_career_live_flow.py \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 8 \
+  --retrieval-action review_to_learning_task \
+  --data-dir data/live_career_smoke_m17_task
+```
+
 ## 验收标准
 
 - 用户只问复盘后的下一步准备时，系统先召回上下文并只回答。

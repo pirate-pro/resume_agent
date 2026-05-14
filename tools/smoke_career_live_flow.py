@@ -4,6 +4,8 @@ Run:
   uv run python tools/smoke_career_live_flow.py --runs 1
   uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action interview_prep
   uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action interview_review
+  uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action review_advice
+  uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action review_to_learning_task
 
 This script uses the real configured model endpoint. It is intentionally not
 part of pytest because model availability, latency, and tool-call behavior are
@@ -38,6 +40,7 @@ from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.knowledge.store import KnowledgeStore
 from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
+from app.notes.models import Note, NoteRecordStatus, NoteSourceRef, NoteSourceType, NoteType
 from app.notes.store import NoteStore
 from app.retrieval.service import RetrievalService
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
@@ -427,6 +430,9 @@ def run_live_flow(
                 )
             )
         if retrieval_action != "none":
+            if _retrieval_action_requires_review_note(retrieval_action):
+                review_note = _seed_review_note_for_latest_application(stack=stack, session_id=session_id)
+                _progress(progress, run_index, f"已准备 M17 复盘 Note: {review_note.note_id}")
             current_stage = _retrieval_action_stage(retrieval_action)
             report.turns.append(
                 run_turn(
@@ -566,7 +572,7 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
                 report.errors.append("项目动作未读取 CareerApplication。")
             if "career_application_merge" not in turn.tool_calls:
                 report.errors.append("项目动作未回写 CareerApplication。")
-        if turn.name.startswith(("M12动作", "M16动作")):
+        if turn.name.startswith(("M12动作", "M16动作", "M17动作")):
             _validate_retrieval_action_turn(turn=turn, report=report)
 
     quality_report = check_career_product_store(stack.data_dir, session_id=report.session_id)
@@ -588,7 +594,12 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
 
 
 def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> None:
-    action_label = "M16 动作" if turn.name.startswith("M16动作") else "M12 动作"
+    if turn.name.startswith("M17动作"):
+        action_label = "M17 动作"
+    elif turn.name.startswith("M16动作"):
+        action_label = "M16 动作"
+    else:
+        action_label = "M12 动作"
     if "retrieval_search" not in turn.tool_calls:
         report.errors.append(f"{action_label}未先调用 retrieval_search。")
     if "retrieval_context_pack" not in turn.tool_calls:
@@ -639,6 +650,42 @@ def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> 
         leaked = sorted(forbidden.intersection(turn.tool_calls))
         if leaked:
             report.errors.append(f"M16 面试复盘出现越界工具调用: {leaked}")
+    if turn.name == "M17动作：复盘准备建议":
+        forbidden = {
+            "career_application_merge",
+            "note_create",
+            "note_append",
+            "learning_plan_create",
+            "learning_task_create",
+            "learning_weakness_create",
+            "memory_write",
+            "delegate_agents",
+            "career_resume_profile_save",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "career_resume_version_create",
+        }
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M17 复盘准备建议只读动作出现写入或越界工具: {leaked}")
+    if turn.name == "M17动作：复盘建议转学习任务":
+        if "learning_task_create" not in turn.tool_calls:
+            report.errors.append("M17 复盘建议转任务未创建 LearningTask。")
+        forbidden = {
+            "career_application_merge",
+            "note_create",
+            "note_append",
+            "learning_weakness_create",
+            "memory_write",
+            "delegate_agents",
+            "career_resume_profile_save",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "career_resume_version_create",
+        }
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M17 复盘建议转任务出现越界工具调用: {leaked}")
 
 
 def _record_touches_session(
@@ -662,6 +709,88 @@ def _latest_career_application_for_session(stack: LiveStack, session_id: str) ->
     if not records:
         return None
     return max(records, key=lambda item: item.updated_at)
+
+
+def _retrieval_action_requires_review_note(retrieval_action: str) -> bool:
+    return retrieval_action in {"review_advice", "review_to_learning_task"}
+
+
+def _seed_review_note_for_latest_application(*, stack: LiveStack, session_id: str) -> Note:
+    application = _latest_career_application_for_session(stack, session_id)
+    if application is None:
+        raise RuntimeError("M17 动作前未找到 CareerApplication，无法准备复盘 Note。")
+    existing_notes = [
+        note
+        for note in stack.note_store.list_notes(include_archived=True, related_application_id=application.application_id)
+        if "m17_review_seed" in note.tags
+    ]
+    if existing_notes:
+        return max(existing_notes, key=lambda item: item.updated_at)
+
+    evidence_refs = _dedupe_refs(
+        [
+            application.application_id,
+            application.job_fit_report_id,
+            application.resume_profile_id,
+            application.career_profile_id,
+            application.jd_analysis_id,
+            application.source_artifact_id,
+        ]
+    )
+    now = app_now()
+    note = Note(
+        note_id=f"note_live_review_{uuid4().hex[:12]}",
+        status=NoteRecordStatus.ACTIVE,
+        source_session_id=session_id,
+        source_artifact_id=application.source_artifact_id,
+        evidence_refs=evidence_refs,
+        created_at=now,
+        updated_at=now,
+        title="AI 应用开发工程师一面复盘",
+        body_markdown=(
+            "## 一面复盘\n\n"
+            "- RAG chunk 策略能讲清楚基本切分思路，但召回评估指标没有展开到 precision、recall、hit rate。\n"
+            "- Celery 延迟队列只说明了使用场景，没有讲清楚 retry、幂等和任务状态持久化。\n"
+            "- Agent 工具调用权限边界和多 Agent 委派经验表达较清楚，可以继续作为优势项。\n"
+            "- 下一轮准备重点应放在 RAG 评估闭环、异步任务可靠性和项目落地指标表达。"
+        ),
+        body_format="markdown",
+        note_type=NoteType.NOTE,
+        tags=["m17_review_seed", "面试复盘", "RAG", "Celery"],
+        source_refs=_review_note_source_refs(application=application, session_id=session_id),
+        related_application_id=application.application_id,
+        summary="一面复盘显示 RAG 评估指标和 Celery 延迟队列需要补强，Agent 工程经验表达较好。",
+    )
+    return stack.note_store.save_note(note)
+
+
+def _dedupe_refs(values: list[str | None]) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        if value and value not in output:
+            output.append(value)
+    return output
+
+
+def _review_note_source_refs(*, application: CareerApplication, session_id: str) -> list[NoteSourceRef]:
+    refs = [
+        NoteSourceRef(
+            source_type=NoteSourceType.CAREER_APPLICATION,
+            source_id=application.application_id,
+            source_session_id=session_id,
+            title=f"{application.company or '目标公司'} {application.position or '目标岗位'}",
+        )
+    ]
+    if application.job_fit_report_id:
+        refs.append(
+            NoteSourceRef(
+                source_type=NoteSourceType.JOB_FIT_REPORT,
+                source_id=application.job_fit_report_id,
+                source_session_id=session_id,
+                title="岗位匹配报告",
+            )
+        )
+    return refs
 
 
 def _project_action_stage(project_action: str) -> str:
@@ -712,6 +841,8 @@ def _retrieval_action_stage(retrieval_action: str) -> str:
         "save_note": "M12动作：召回保存笔记",
         "pre_apply_check": "M12动作：召回投递前检查",
         "interview_review": "M16动作：面试复盘更新项目",
+        "review_advice": "M17动作：复盘准备建议",
+        "review_to_learning_task": "M17动作：复盘建议转学习任务",
     }[retrieval_action]
 
 
@@ -757,6 +888,23 @@ def _retrieval_action_message(retrieval_action: str) -> str:
             "和召回评估指标答得一般。请把这次面试复盘保存成一条 Note，并更新当前求职项目的阶段、"
             "风险、下一步行动和项目备注。不要创建学习计划或学习任务，不要创建 WeaknessTracker，"
             "不要重新委派 child-agent，不要重新解析简历，不要重新分析 JD，不要重新生成匹配报告或简历版本。"
+        )
+    if retrieval_action == "review_advice":
+        return (
+            f"{base}"
+            "请根据刚才保存过的一面复盘，告诉我下一步应该怎么准备。请按优先级给出准备主题、"
+            "练习产出和验收标准，并指出已有学习任务或短板是否可以复用。"
+            "这轮只给建议，不要创建学习计划或学习任务，不要创建 WeaknessTracker，"
+            "不要保存新笔记，不要更新求职项目，不要写 memory，不要重新委派 child-agent。"
+        )
+    if retrieval_action == "review_to_learning_task":
+        return (
+            f"{base}"
+            "请根据刚才保存过的一面复盘，把 RAG 评估和 Celery 延迟队列补强加入学习任务，监督我完成。"
+            "必须先召回复盘依据，再调用 learning_task_create 创建一个可执行任务。"
+            "任务 evidence_refs 应包含对应 application、复盘 note、匹配报告 fit；如果召回到已有学习计划、"
+            "短板、资料或题目，也一并作为证据或资源引用。不要更新 CareerApplication，不要保存新 Note，"
+            "不要创建 WeaknessTracker，不要写 memory，不要重新委派 child-agent。"
         )
     raise ValueError(f"Unsupported retrieval action: {retrieval_action}")
 
@@ -1065,7 +1213,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--retrieval-action",
-        choices=("none", "interview_prep", "learning_task", "save_note", "pre_apply_check", "interview_review"),
+        choices=(
+            "none",
+            "interview_prep",
+            "learning_task",
+            "save_note",
+            "pre_apply_check",
+            "interview_review",
+            "review_advice",
+            "review_to_learning_task",
+        ),
         default="none",
         help="是否追加一轮召回驱动动作验证；默认不追加以控制 live smoke 成本。",
     )
