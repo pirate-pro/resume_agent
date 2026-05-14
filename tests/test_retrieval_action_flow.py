@@ -293,6 +293,114 @@ class PreApplyCheckModel:
         raise NotImplementedError("streaming is not used in this test")
 
 
+class InterviewReviewModel:
+    """Save interview review as Note and update CareerApplication."""
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        assert "投递或面试进展" in system_prompt
+        assert "先用 `note_create` 或 `note_append` 保存面试复盘" in system_prompt
+        assert "不要因为面试复盘暴露短板就自动创建 LearningTask" in system_prompt
+        tool_names = _tool_names(tools)
+        assert {"retrieval_search", "retrieval_context_pack", "note_create", "career_application_merge"} <= tool_names
+        assert "delegate_agents" not in tool_names
+
+        if not _assistant_called(messages, "retrieval_search"):
+            return _search_application_call("星河智能 一面 复盘 RAG Celery")
+        if not _assistant_called(messages, "retrieval_context_pack"):
+            return _context_pack_call(_latest_search_hit_id(messages, source_type="career_application"))
+        if not _assistant_called(messages, "note_create") or not _assistant_called(
+            messages,
+            "career_application_merge",
+        ):
+            context_pack = _latest_context_pack(messages)
+            assert {"career_application", "job_fit_report", "note", "learning_task"} <= _source_types(context_pack)
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="note_create",
+                        arguments={
+                            "note_id": "note_stargazer_first_round_review",
+                            "evidence_refs": [
+                                "application_alpha",
+                                "fit_stargazer_backend",
+                                "resume_profile_alpha",
+                                "jd_stargazer_backend",
+                            ],
+                            "title": "星河智能一面复盘",
+                            "body_markdown": (
+                                "## 一面复盘\n\n"
+                                "- 被问到：RAG chunk 策略、Celery 延迟队列、Agent Runtime 任务编排。\n"
+                                "- 表现：RAG 评估链路回答不完整，Celery 场景描述偏泛。\n"
+                                "- 后续：补一版 chunk 策略回答，并准备消息队列失败恢复案例。\n"
+                            ),
+                            "note_type": "note",
+                            "tags": ["星河智能", "一面", "复盘", "RAG"],
+                            "related_application_id": "application_alpha",
+                            "source_refs": [
+                                {
+                                    "source_type": "career_application",
+                                    "source_id": "application_alpha",
+                                    "source_session_id": "sess_alpha",
+                                    "title": "星河智能 AI Agent 后端工程师",
+                                },
+                                {
+                                    "source_type": "job_fit_report",
+                                    "source_id": "fit_stargazer_backend",
+                                    "source_session_id": "sess_alpha",
+                                    "title": "星河智能匹配报告",
+                                },
+                            ],
+                            "summary": "星河智能一面复盘：RAG 评估链路和 Celery 场景表达需要补强。",
+                        },
+                    ),
+                    ToolCall(
+                        name="career_application_merge",
+                        arguments={
+                            "application_id": "application_alpha",
+                            "evidence_refs": [
+                                "application_alpha",
+                                "fit_stargazer_backend",
+                                "resume_profile_alpha",
+                                "jd_stargazer_backend",
+                            ],
+                            "updates": {
+                                "stage": "interviewing",
+                                "summary": "一面已完成，候选人后端与 Agent 经验仍匹配，但 RAG 评估和消息队列表达需要补强。",
+                                "next_actions": [
+                                    "补一版 RAG chunk 策略与评估回答",
+                                    "整理 Celery 延迟队列和失败恢复案例",
+                                    "准备二面项目深挖材料",
+                                ],
+                                "risks": [
+                                    "RAG 评估链路回答不完整",
+                                    "消息队列经验表达偏泛",
+                                ],
+                                "notes": "已保存星河智能一面复盘；本次只更新求职项目状态，不创建学习任务。",
+                            },
+                        },
+                    ),
+                ],
+            )
+        return ModelResponse(content="已记录一面复盘并更新求职项目。", tool_calls=[])
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        _ = (system_prompt, messages, tools)
+        if False:
+            yield StreamChunk()
+        raise NotImplementedError("streaming is not used in this test")
+
+
 def test_m12_interview_prep_retrieves_and_answers_without_writes(tmp_path: Path) -> None:
     bundle = _build_action_flow_bundle(tmp_path, InterviewPrepAnswerOnlyModel())
     before = _product_counts(bundle.stores)
@@ -396,6 +504,51 @@ def test_m12_pre_apply_check_retrieves_and_updates_application_without_reanalysi
     assert _tool_call_names(events) == ["retrieval_search", "retrieval_context_pack", "career_application_merge"]
     assert "delegate_agents" not in _tool_call_names(events)
     assert bundle.memory_manager.search(query="投递前检查", limit=5, context=_context("sess_alpha")) == []
+
+
+def test_m16_interview_review_writes_note_and_updates_application_without_memory(tmp_path: Path) -> None:
+    bundle = _build_action_flow_bundle(tmp_path, InterviewReviewModel())
+    before = _product_counts(bundle.stores)
+
+    output = bundle.runtime.run(
+        AgentRunInput(
+            session_id="sess_alpha",
+            user_message="我刚面完星河智能一面，被问到 RAG chunk 策略和 Celery 延迟队列，答得一般，帮我记录复盘并更新项目，先不要建学习任务。",
+            skill_names=["base", "tools", "memory"],
+            max_tool_rounds=4,
+            context=_context("sess_alpha"),
+        )
+    )
+    note = bundle.stores.notes.get_note("note_stargazer_first_round_review")
+    application = bundle.stores.career.get_career_application("application_alpha")
+    events = bundle.stores.sessions.list_events("sess_alpha")
+    after = _product_counts(bundle.stores)
+
+    assert output.answer == "已记录一面复盘并更新求职项目。"
+    assert note is not None
+    assert note.related_application_id == "application_alpha"
+    assert getattr(note.note_type, "value", note.note_type) == "note"
+    assert "RAG chunk 策略" in note.body_markdown
+    assert application is not None
+    assert application.stage == "interviewing"
+    assert "一面已完成" in application.summary
+    assert "RAG 评估链路回答不完整" in application.risks
+    assert "补一版 RAG chunk 策略与评估回答" in application.next_actions
+    assert "不创建学习任务" in application.notes
+    assert after.applications == before.applications
+    assert after.notes == before.notes + 1
+    assert after.learning_tasks == before.learning_tasks
+    assert after.resume_profiles == before.resume_profiles
+    assert after.jd_analyses == before.jd_analyses
+    assert after.job_fit_reports == before.job_fit_reports
+    assert _tool_call_names(events) == [
+        "retrieval_search",
+        "retrieval_context_pack",
+        "note_create",
+        "career_application_merge",
+    ]
+    assert "memory_write" not in _tool_call_names(events)
+    assert bundle.memory_manager.search(query="星河智能一面复盘", limit=5, context=_context("sess_alpha")) == []
 
 
 def _build_action_flow_bundle(tmp_path: Path, model_client: ChatModelClient) -> RetrievalFlowBundle:

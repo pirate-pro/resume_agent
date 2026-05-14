@@ -96,7 +96,7 @@ def test_note_store_persists_notes_and_collections_across_instances(tmp_path: Pa
     assert collection.kind == NoteCollectionKind.INTERVIEW
     assert note is not None
     assert note.title == "星河智能投递前检查复盘"
-    assert note.note_type.value == "note"
+    assert getattr(note.note_type, "value", note.note_type) == "note"
     assert note.body_markdown.startswith("## 结论")
     assert note.source_artifact_id == "artifact_report"
     assert note.source_refs[0].source_id == "artifact_report"
@@ -205,7 +205,7 @@ def test_note_update_and_append_validate_allowed_fields(tmp_path: Path) -> None:
     )
 
     assert updated.title == "更新后的投递复盘"
-    assert updated.note_type.value == "learning"
+    assert getattr(updated.note_type, "value", updated.note_type) == "learning"
     assert updated.tags == ["投递前检查", "面试准备"]
     assert "面试后补充" in appended.body_markdown
     assert appended.evidence_refs[-1] == "sess_alpha"
