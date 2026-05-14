@@ -6,6 +6,7 @@ Run:
   uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action interview_review
   uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action review_advice
   uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action review_to_learning_task
+  uv run python tools/smoke_career_live_flow.py --runs 1 --retrieval-action m20_learning_entries
 
 This script uses the real configured model endpoint. It is intentionally not
 part of pytest because model availability, latency, and tool-call behavior are
@@ -433,7 +434,23 @@ def run_live_flow(
                     progress=progress,
                 )
             )
-        if retrieval_action != "none":
+        if retrieval_action == "m20_learning_entries":
+            review_note = _seed_review_note_for_latest_application(stack=stack, session_id=session_id)
+            _progress(progress, run_index, f"已准备 M20 复盘 Note: {review_note.note_id}")
+            for action in _m20_learning_entry_actions():
+                current_stage = _retrieval_action_stage(action)
+                report.turns.append(
+                    run_turn(
+                        stack=stack,
+                        session_id=session_id,
+                        name=current_stage,
+                        message=_retrieval_action_message(action),
+                        max_tool_rounds=max_tool_rounds,
+                        run_index=run_index,
+                        progress=progress,
+                    )
+                )
+        elif retrieval_action != "none":
             if _retrieval_action_requires_review_note(retrieval_action):
                 review_note = _seed_review_note_for_latest_application(stack=stack, session_id=session_id)
                 _progress(progress, run_index, f"已准备 M17 复盘 Note: {review_note.note_id}")
@@ -540,6 +557,12 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
             if item.source_session_id == report.session_id
         ]
         record_ids["learning_tasks"] = learning_task_ids
+        progress_checkin_ids = [
+            item.checkin_id
+            for item in stack.learning_store.list_progress_checkins(include_archived=True)
+            if item.source_session_id == report.session_id
+        ]
+        record_ids["progress_checkins"] = progress_checkin_ids
 
     required = {
         "resume_profiles": ResumeProfile,
@@ -576,8 +599,10 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
                 report.errors.append("项目动作未读取 CareerApplication。")
             if "career_application_merge" not in turn.tool_calls:
                 report.errors.append("项目动作未回写 CareerApplication。")
-        if turn.name.startswith(("M12动作", "M16动作", "M17动作")):
+        if turn.name.startswith(("M12动作", "M16动作", "M17动作", "M20动作")):
             _validate_retrieval_action_turn(turn=turn, report=report)
+
+    _validate_m20_learning_records(stack=stack, report=report)
 
     quality_report = check_career_product_store(stack.data_dir, session_id=report.session_id)
     report.quality_gate_passed = quality_report.success
@@ -598,15 +623,22 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
 
 
 def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> None:
-    if turn.name.startswith("M17动作"):
+    if turn.name.startswith("M20动作"):
+        action_label = "M20 动作"
+    elif turn.name.startswith("M17动作"):
         action_label = "M17 动作"
     elif turn.name.startswith("M16动作"):
         action_label = "M16 动作"
     else:
         action_label = "M12 动作"
-    if "retrieval_search" not in turn.tool_calls:
+    retrieval_required = turn.name not in {
+        "M20动作：用户主动添加学习任务",
+        "M20动作：记录学习进度",
+    }
+    if retrieval_required and "retrieval_search" not in turn.tool_calls:
         report.errors.append(f"{action_label}未先调用 retrieval_search。")
-    if "retrieval_context_pack" not in turn.tool_calls:
+    context_pack_required = retrieval_required and turn.name != "M20动作：确认建议加入学习任务"
+    if context_pack_required and "retrieval_context_pack" not in turn.tool_calls:
         report.errors.append(f"{action_label}未调用 retrieval_context_pack。")
     if "memory_write" in turn.tool_calls:
         report.errors.append(f"{action_label}不应写 memory。")
@@ -690,6 +722,131 @@ def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> 
         leaked = sorted(forbidden.intersection(turn.tool_calls))
         if leaked:
             report.errors.append(f"M17 复盘建议转任务出现越界工具调用: {leaked}")
+    if turn.name == "M20动作：只问准备建议":
+        forbidden = {
+            "career_application_merge",
+            "note_create",
+            "note_append",
+            "learning_plan_create",
+            "learning_task_create",
+            "learning_weakness_create",
+            "learning_checkin_create",
+            "learning_task_update_state",
+            "memory_write",
+            "delegate_agents",
+            "career_resume_profile_save",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "career_resume_version_create",
+        }
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M20 只问建议动作出现写入或越界工具: {leaked}")
+    if turn.name == "M20动作：确认建议加入学习任务":
+        if "learning_task_create" not in turn.tool_calls:
+            report.errors.append("M20 确认加入动作未创建 LearningTask。")
+        forbidden = {
+            "career_application_merge",
+            "note_create",
+            "note_append",
+            "learning_weakness_create",
+            "learning_checkin_create",
+            "learning_task_update_state",
+            "memory_write",
+            "delegate_agents",
+            "career_resume_profile_save",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "career_resume_version_create",
+        }
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M20 确认加入动作出现越界工具调用: {leaked}")
+    if turn.name == "M20动作：用户主动添加学习任务":
+        if "learning_task_create" not in turn.tool_calls:
+            report.errors.append("M20 用户主动添加动作未创建 LearningTask。")
+        forbidden = {
+            "career_application_merge",
+            "note_create",
+            "note_append",
+            "learning_weakness_create",
+            "learning_checkin_create",
+            "learning_task_update_state",
+            "memory_write",
+            "delegate_agents",
+            "career_resume_profile_save",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "career_resume_version_create",
+        }
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M20 用户主动添加动作出现越界工具调用: {leaked}")
+    if turn.name == "M20动作：记录学习进度":
+        if not {"learning_task_list", "learning_task_get"}.intersection(turn.tool_calls):
+            report.errors.append("M20 记录进度动作未先定位 LearningTask。")
+        if "learning_checkin_create" not in turn.tool_calls:
+            report.errors.append("M20 记录进度动作未创建 ProgressCheckin。")
+        if "learning_task_update_state" not in turn.tool_calls:
+            report.errors.append("M20 记录进度动作未按明确完成状态更新 LearningTask。")
+        forbidden = {
+            "career_application_merge",
+            "note_create",
+            "note_append",
+            "learning_weakness_create",
+            "memory_write",
+            "delegate_agents",
+            "career_resume_profile_save",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "career_resume_version_create",
+        }
+        leaked = sorted(forbidden.intersection(turn.tool_calls))
+        if leaked:
+            report.errors.append(f"M20 记录进度动作出现越界工具调用: {leaked}")
+
+
+def _validate_m20_learning_records(*, stack: LiveStack, report: FlowReport) -> None:
+    if not any(turn.name.startswith("M20动作") for turn in report.turns):
+        return
+    if not hasattr(stack, "learning_store"):
+        return
+
+    tasks = [
+        item
+        for item in stack.learning_store.list_learning_tasks(include_archived=True)
+        if item.source_session_id == report.session_id
+    ]
+    checkins = [
+        item
+        for item in stack.learning_store.list_progress_checkins(include_archived=True)
+        if item.source_session_id == report.session_id
+    ]
+
+    if any(turn.name == "M20动作：确认建议加入学习任务" for turn in report.turns):
+        recommended_tasks = [
+            task
+            for task in tasks
+            if any(label in task.progress_notes for label in ("来源：系统推荐", "来源：面试复盘建议", "来源：岗位匹配短板"))
+        ]
+        if not recommended_tasks:
+            report.errors.append("M20 确认加入动作未保留推荐来源 progress_notes。")
+        if recommended_tasks and not any(
+            _has_all_ref_prefixes(task.evidence_refs, ("application_", "note_", "fit_")) for task in recommended_tasks
+        ):
+            report.errors.append("M20 确认加入动作未保留 application、复盘 note、匹配报告证据引用。")
+
+    if any(turn.name == "M20动作：用户主动添加学习任务" for turn in report.turns):
+        manual_tasks = [task for task in tasks if "来源：用户主动添加" in task.progress_notes]
+        if not manual_tasks:
+            report.errors.append("M20 用户主动添加动作未保留“来源：用户主动添加”。")
+
+    if any(turn.name == "M20动作：记录学习进度" for turn in report.turns) and not checkins:
+        report.errors.append("M20 记录进度动作未产生 ProgressCheckin 记录。")
+
+
+def _has_all_ref_prefixes(refs: list[str], prefixes: tuple[str, ...]) -> bool:
+    return all(any(ref.startswith(prefix) for ref in refs) for prefix in prefixes)
 
 
 def _record_touches_session(
@@ -716,7 +873,11 @@ def _latest_career_application_for_session(stack: LiveStack, session_id: str) ->
 
 
 def _retrieval_action_requires_review_note(retrieval_action: str) -> bool:
-    return retrieval_action in {"review_advice", "review_to_learning_task"}
+    return retrieval_action in {"review_advice", "review_to_learning_task", "m20_advice_only", "m20_confirm_task"}
+
+
+def _m20_learning_entry_actions() -> tuple[str, ...]:
+    return ("m20_advice_only", "m20_confirm_task", "m20_manual_task", "m20_checkin")
 
 
 def _seed_review_note_for_latest_application(*, stack: LiveStack, session_id: str) -> Note:
@@ -847,6 +1008,10 @@ def _retrieval_action_stage(retrieval_action: str) -> str:
         "interview_review": "M16动作：面试复盘更新项目",
         "review_advice": "M17动作：复盘准备建议",
         "review_to_learning_task": "M17动作：复盘建议转学习任务",
+        "m20_advice_only": "M20动作：只问准备建议",
+        "m20_confirm_task": "M20动作：确认建议加入学习任务",
+        "m20_manual_task": "M20动作：用户主动添加学习任务",
+        "m20_checkin": "M20动作：记录学习进度",
     }[retrieval_action]
 
 
@@ -909,6 +1074,40 @@ def _retrieval_action_message(retrieval_action: str) -> str:
             "任务 evidence_refs 应包含对应 application、复盘 note、匹配报告 fit；如果召回到已有学习计划、"
             "短板、资料或题目，也一并作为证据或资源引用。不要更新 CareerApplication，不要保存新 Note，"
             "不要创建 WeaknessTracker，不要写 memory，不要重新委派 child-agent。"
+        )
+    if retrieval_action == "m20_advice_only":
+        return (
+            f"{base}"
+            "请根据刚才保存过的一面复盘和当前求职项目，告诉我下一步应该怎么准备。"
+            "请给出 1 到 3 个按优先级排序的准备建议，说明每个建议的练习产出和验收标准。"
+            "这轮只是询问建议：不要创建学习计划或学习任务，不要创建 ProgressCheckin，"
+            "不要创建 WeaknessTracker，不要保存新笔记，不要更新求职项目，不要写 memory，"
+            "不要重新委派 child-agent。"
+        )
+    if retrieval_action == "m20_confirm_task":
+        return (
+            f"{base}"
+            "请把下面这条 Assistant 建议加入学习任务：优先补齐 RAG 评估指标表达，"
+            "整理 precision、recall、hit rate、chunk 策略和一段项目化回答。"
+            "这是用户点击“加入学习任务”后的确认动作。必须先召回依据，再调用 learning_task_create。"
+            "默认只创建最高优先级的 1 个 LearningTask；如果已有高度相似任务，不要重复创建。"
+            "progress_notes 写明“来源：面试复盘建议”或“来源：系统推荐”，evidence_refs 应包含 "
+            "application、复盘 note、匹配报告 fit；不要更新 CareerApplication，不要保存新 Note，"
+            "不要创建 WeaknessTracker，不要写 memory，不要重新委派 child-agent。"
+        )
+    if retrieval_action == "m20_manual_task":
+        return (
+            "请创建一个用户主动添加的学习任务：这周我要补 RAG 评估指标基础。"
+            "任务要包含标题、说明、优先级、预计时间、能力标签和验收标准。"
+            "如果能召回到当前求职项目或匹配报告，可以加入 evidence_refs；如果召回不到，也不要拒绝创建。"
+            "progress_notes 必须写明“来源：用户主动添加”。不要自动创建 Note、WeaknessTracker、"
+            "CareerApplication 更新或 memory。"
+        )
+    if retrieval_action == "m20_checkin":
+        return (
+            "我今天完成了 RAG 评估指标整理，用了 40 分钟，已经能讲清 precision、recall、hit rate "
+            "和 chunk 策略如何影响召回效果。请先定位相关 LearningTask，再记录今日进度，"
+            "并把对应任务标记为完成。不要自动写 Note、CareerApplication、WeaknessTracker 或 memory。"
         )
     raise ValueError(f"Unsupported retrieval action: {retrieval_action}")
 
@@ -1257,6 +1456,11 @@ def parse_args() -> argparse.Namespace:
             "interview_review",
             "review_advice",
             "review_to_learning_task",
+            "m20_advice_only",
+            "m20_confirm_task",
+            "m20_manual_task",
+            "m20_checkin",
+            "m20_learning_entries",
         ),
         default="none",
         help="是否追加一轮召回驱动动作验证；默认不追加以控制 live smoke 成本。",

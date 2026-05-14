@@ -16,9 +16,11 @@ from app.career.models import (
     ResumeVersion,
 )
 from app.career.store import CareerProductStore
+from app.core.time import app_now
 from app.domain.models import SessionArtifact
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
-from app.core.time import app_now
+from app.learning.models import LearningRecordStatus, LearningTask
+from app.learning.store import LearningStore
 
 from tools.smoke_career_live_flow import (
     FlowReport,
@@ -590,6 +592,126 @@ def test_live_smoke_report_fails_when_m17_review_to_task_skips_task_or_updates_p
     assert not report.success
     assert "M17 复盘建议转任务未创建 LearningTask。" in report.errors
     assert "M17 复盘建议转任务出现越界工具调用: ['career_application_merge']" in report.errors
+
+
+def test_live_smoke_report_fails_when_m20_advice_writes_task(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_m20_advice_boundary")
+    report.turns = [
+        TurnReport(
+            name="M20动作：只问准备建议",
+            answer="给出建议时错误创建了学习任务。",
+            elapsed_seconds=1.0,
+            tool_calls=["retrieval_search", "retrieval_context_pack", "learning_task_create"],
+        )
+    ]
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M20 只问建议动作出现写入或越界工具: ['learning_task_create']" in report.errors
+
+
+def test_live_smoke_report_fails_when_m20_confirm_skips_task_or_updates_project(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_m20_confirm_boundary")
+    report.turns = [
+        TurnReport(
+            name="M20动作：确认建议加入学习任务",
+            answer="错误更新了项目，但没有创建学习任务。",
+            elapsed_seconds=1.0,
+            tool_calls=["retrieval_search", "retrieval_context_pack", "career_application_merge"],
+        )
+    ]
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M20 确认加入动作未创建 LearningTask。" in report.errors
+    assert "M20 确认加入动作出现越界工具调用: ['career_application_merge']" in report.errors
+
+
+def test_live_smoke_report_fails_when_m20_checkin_skips_lookup_or_state_update(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_m20_checkin_boundary")
+    report.turns = [
+        TurnReport(
+            name="M20动作：记录学习进度",
+            answer="记录了进度，但没有先定位任务，也没有更新完成状态。",
+            elapsed_seconds=1.0,
+            tool_calls=["learning_checkin_create"],
+        )
+    ]
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M20 记录进度动作未先定位 LearningTask。" in report.errors
+    assert "M20 记录进度动作未按明确完成状态更新 LearningTask。" in report.errors
+
+
+def test_live_smoke_report_fails_when_m20_confirm_task_misses_core_evidence_refs(tmp_path: Path) -> None:
+    session_id = "sess_live_m20_confirm_evidence"
+    report, base_stack = _base_report_and_stack(tmp_path, session_id=session_id)
+    learning_store = LearningStore(root_dir=tmp_path / "learning", clock=app_now)
+    learning_store.save_learning_task(
+        LearningTask(
+            learning_task_id="learning_task_confirm_missing_refs",
+            status=LearningRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=None,
+            evidence_refs=["note_review_missing_core_refs"],
+            created_at=app_now(),
+            updated_at=app_now(),
+            title="补齐 RAG 评估指标表达",
+            progress_notes="来源：面试复盘建议",
+        )
+    )
+    stack = cast(
+        LiveStack,
+        SimpleNamespace(
+            session_repository=base_stack.session_repository,
+            career_store=base_stack.career_store,
+            learning_store=learning_store,
+            data_dir=tmp_path,
+        ),
+    )
+    report.turns = [
+        TurnReport(
+            name="M20动作：确认建议加入学习任务",
+            answer="已创建学习任务。",
+            elapsed_seconds=1.0,
+            tool_calls=["retrieval_search", "learning_task_create"],
+        )
+    ]
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "M20 确认加入动作未保留 application、复盘 note、匹配报告证据引用。" in report.errors
+
+
+def _base_report_and_stack(tmp_path: Path, *, session_id: str) -> tuple[FlowReport, LiveStack]:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _add_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id="artifact_resume",
+        content="候选人：张三\n项目：Agent 工具调用。\n",
+    )
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_diagnosis", content="诊断报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_jd", content="JD 要求 Python FastAPI RAG")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_report", content="匹配报告")
+    _add_artifact(repository, session_id=session_id, artifact_id="artifact_resume_version", content="定制简历")
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
+    _save_product_records(store, session_id=session_id)
+    report = FlowReport(
+        run_index=1,
+        session_id=session_id,
+        data_dir=tmp_path,
+        success=False,
+        elapsed_seconds=0,
+    )
+    stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
+    return report, stack
 
 
 def _add_artifact(

@@ -303,6 +303,48 @@ M20 第一批后端不新增模型字段。
 - 提示词要求复用已有学习任务，避免重复创建。
 - 提示词要求保留来源语义和 evidence_refs，不写 Note、CareerApplication、WeaknessTracker 或 memory。
 
+## 第三批低批次真实链路验证
+
+第三批目标：用一把低批次 live smoke 覆盖学习任务入口的关键用户路径，避免为每个动作重复跑完整基础求职链路。
+
+新增 smoke 动作：
+
+```bash
+uv run python tools/smoke_career_live_flow.py \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 10 \
+  --retrieval-action m20_learning_entries \
+  --data-dir data/live_career_smoke_m20_entries
+```
+
+`m20_learning_entries` 会先完成基础求职链路，再种入一条面试复盘 Note，随后连续验证：
+
+- 只问准备建议：必须召回并只回答，不创建 LearningTask、Note、WeaknessTracker、CareerApplication 或 memory。
+- 确认建议加入学习任务：必须创建 LearningTask，不更新 CareerApplication，不保存新 Note，不创建 WeaknessTracker，不写 memory。
+- 用户主动添加学习任务：允许没有完整求职上下文，但必须创建 LearningTask，并在 `progress_notes` 保留“来源：用户主动添加”。
+- 记录学习进度：必须先定位 LearningTask，再创建 ProgressCheckin；用户明确完成时更新 LearningTask 状态。
+
+报告检查规则：
+
+- 只读建议动作强制检查 `retrieval_search` 和 `retrieval_context_pack`。
+- 确认加入任务动作强制检查 `retrieval_search`、`learning_task_create`、推荐来源和核心 evidence refs，不再把 `retrieval_context_pack` 作为唯一通过条件。
+- 推荐转任务的 evidence refs 至少要保留 `application_`、`note_`、`fit_` 三类依据。
+- 打卡动作检查 ProgressCheckin 是否落库，以及是否按用户明确状态更新 LearningTask。
+
+2026-05-14 已跑一把低批次真实 smoke：
+
+```text
+data_dir: data/live_career_smoke_m20_entries/run_001
+基础链路: 通过，产出 ResumeProfile / CareerProfile / JDAnalysis / JobFitReport / ResumeVersion / CareerApplication
+M20 只问建议: 只调用 retrieval_search / retrieval_context_pack，未写产品记录
+M20 确认加入任务: 创建 1 个 LearningTask，保留 application / note / fit / jd / resume_profile evidence_refs
+M20 用户主动添加: 创建 1 个 LearningTask，progress_notes 保留“来源：用户主动添加”
+M20 打卡: 创建 1 个 ProgressCheckin，并把对应 LearningTask 标记为 done
+```
+
+本次 smoke 暴露了一个检查规则问题：确认加入学习任务时，真实模型使用 `retrieval_search` 定位上下文并创建了证据完整的 LearningTask，但没有再次调用 `retrieval_context_pack`，旧报告规则因此判失败。已调整为产品意图级检查：确认加入动作重点看是否先定位、是否创建任务、是否保留来源和核心证据，不再把固定工具序列当作唯一成功标准。
+
 ## 后续方向
 
 - 如果来源标签成为高频筛选条件，再为 LearningTask 增加 `origin` 字段。

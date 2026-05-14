@@ -723,4 +723,7 @@ M20 的关键判断：
 - M20 第二批前端入口方案已完成，文档见 `docs/m20_learning_task_ui_design.md`。
 - M20 第二批前端第一阶段已完成：工作台学习页支持“新建任务 / 从项目推荐 / 记录进度”，写入仍回到聊天 Agent 执行。
 - M20 第二批前端第二阶段已完成：Assistant 学习建议类回复支持“加入学习任务”确认动作，并将建议回流给 Agent 创建任务。
-- 下一步进入 M20 低批次真实链路验证，重点检查“只问建议不创建”和“确认加入后创建 LearningTask”的边界。
+- M20 第三批已接入低批次真实链路验证：`--retrieval-action m20_learning_entries`。
+- 该 smoke 一把覆盖“只问建议不创建 / 确认加入后创建 LearningTask / 用户主动添加任务 / 记录进度并更新任务状态”四类入口。
+- 2026-05-14 已完成一次低批次真实 run，实际落库链路完整：创建 2 个 LearningTask、1 个 ProgressCheckin，且未越界写 Note、CareerApplication、WeaknessTracker 或 memory。
+- 本次 run 暴露了 smoke 规则过度依赖固定 `retrieval_context_pack` 调用的问题；已调整为产品意图级检查，确认加入任务时重点检查召回定位、任务创建、来源标记和 `application_ / note_ / fit_` 核心 evidence refs。
