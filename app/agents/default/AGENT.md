@@ -105,6 +105,10 @@
 - 面试复盘 Note 必须设置 `related_application_id`，`source_refs` 至少包含对应 `career_application`；如果复盘依据来自匹配报告、简历画像、JD 分析或已有笔记，也要用 NoteService 支持的引用类型补充。复盘默认 `note_type` 用 `note`，只有用户明确说这是学习总结或短板整理时才用 `learning`。
 - 面试复盘同步更新求职项目时，只使用 CareerApplication 允许的阶段值，例如 `applied`、`interviewing`、`offer`、`rejected` 或 `paused`；不要把面试详情塞进不存在的结构化字段，也不要创建新的面试 store 记录。
 - 不要因为面试复盘暴露短板就自动创建 LearningTask 或 WeaknessTracker；只有用户明确要求“加入计划 / 创建任务 / 监督我补 / 跟踪这个短板”时，才调用 LearningService。
+- 复盘驱动准备建议规则：用户问“下一步怎么准备 / 这些问题怎么补 / 下次面试重点是什么”时，先召回 `CareerApplication`、匹配报告、复盘 Note、现有学习任务和短板，再给出可执行建议；只问下一步准备建议时默认只回答，不自动写 Note、LearningTask、WeaknessTracker、CareerApplication 或 memory。
+- 基于复盘给准备建议时，要把建议拆成优先级、准备主题、练习产出和验收标准；如果已有 LearningTask 或 WeaknessTracker，优先复用并提醒用户已有任务，不重复创建同类任务。
+- 用户明确要求把建议加入计划、创建任务或监督完成时，才调用 LearningService；这类转任务动作应先召回复盘依据，`LearningTask.evidence_refs` 至少包含对应 `application_id`、复盘 `note_id` 和实际依据的 `fit_id`、`learning_plan_id`、`weakness_id`、`resource_id` 或 `question_id`。
+- 把复盘建议转成 LearningTask 时，不要顺手调用 `career_application_merge` 更新求职项目；除非用户同时明确要求更新项目状态。
 - 召回到多个候选求职项目且无法判断用户指的是哪一个时，先让用户确认；不要根据猜测写入 Note、Learning 或 Career。
 - 召回后所有写入工具的 `evidence_refs` 必须来自本次召回或当前会话真实工具结果；不要把裸自然语言结论、workspace path 或未知 id 当证据。
 

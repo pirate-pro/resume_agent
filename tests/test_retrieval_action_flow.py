@@ -401,6 +401,125 @@ class InterviewReviewModel:
         raise NotImplementedError("streaming is not used in this test")
 
 
+class ReviewNextStepAdviceModel:
+    """Generate next-step preparation advice from interview review without writes."""
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        assert "复盘驱动准备建议规则" in system_prompt
+        assert "只问下一步准备建议时默认只回答" in system_prompt
+        assert {"retrieval_search", "retrieval_context_pack", "learning_task_create"} <= _tool_names(tools)
+
+        if not _assistant_called(messages, "retrieval_search"):
+            return _search_application_call("星河智能 一面复盘 下一步准备")
+        if not _assistant_called(messages, "retrieval_context_pack"):
+            return _context_pack_call(_latest_search_hit_id(messages, source_type="career_application"))
+
+        context_pack = _latest_context_pack(messages)
+        assert {"career_application", "job_fit_report", "note", "learning_task", "weakness_tracker"} <= _source_types(
+            context_pack
+        )
+        return ModelResponse(
+            content=(
+                "下一步准备建议：优先补 RAG 检索评估闭环，其次整理 Celery 延迟队列和失败恢复案例，"
+                "最后用 Agent Runtime 项目串起权限边界与审计日志。本轮只给建议，不创建学习任务。"
+            ),
+            tool_calls=[],
+        )
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        _ = (system_prompt, messages, tools)
+        if False:
+            yield StreamChunk()
+        raise NotImplementedError("streaming is not used in this test")
+
+
+class ReviewAdviceToLearningTaskModel:
+    """Turn interview-review preparation advice into a learning task after explicit intent."""
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        assert "用户明确要求把建议加入计划、创建任务或监督完成时，才调用 LearningService" in system_prompt
+        assert "不要顺手调用 `career_application_merge` 更新求职项目" in system_prompt
+        tool_names = _tool_names(tools)
+        assert "learning_task_create" in tool_names
+        assert "career_application_merge" in tool_names
+
+        if not _assistant_called(messages, "retrieval_search"):
+            return _search_application_call("星河智能 一面复盘 RAG Celery 学习任务")
+        if not _assistant_called(messages, "retrieval_context_pack"):
+            return _context_pack_call(_latest_search_hit_id(messages, source_type="career_application"))
+        if not _assistant_called(messages, "learning_task_create"):
+            context_pack = _latest_context_pack(messages)
+            assert {"career_application", "job_fit_report", "note", "learning_plan", "weakness_tracker"} <= _source_types(
+                context_pack
+            )
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="learning_task_create",
+                        arguments={
+                            "learning_task_id": "learning_task_review_rag_celery_drill",
+                            "evidence_refs": [
+                                "application_alpha",
+                                "fit_stargazer_backend",
+                                "note_rag_review",
+                                "learning_plan_stargazer",
+                                "weakness_rag_depth",
+                                "resource_stargazer_interview",
+                                "question_rag_chunk_strategy",
+                            ],
+                            "title": "补强一面复盘暴露的 RAG 评估与 Celery 表达",
+                            "learning_plan_id": "learning_plan_stargazer",
+                            "description": (
+                                "基于星河智能一面复盘，写一版 RAG chunk 策略、召回评估和 Celery "
+                                "延迟队列失败恢复的面试回答。"
+                            ),
+                            "task_type": "write_answer",
+                            "priority": "high",
+                            "state": "todo",
+                            "skill_tags": ["RAG", "异步任务"],
+                            "estimated_minutes": 60,
+                            "resource_refs": ["resource_stargazer_interview"],
+                            "question_refs": ["question_rag_chunk_strategy"],
+                            "note_refs": ["note_rag_review"],
+                            "success_criteria": [
+                                "说明 chunk 粒度选择和权衡",
+                                "给出召回评估指标和评估集设计",
+                                "讲清 Celery 延迟队列和失败恢复案例",
+                            ],
+                        },
+                    )
+                ],
+            )
+        return ModelResponse(content="已把复盘建议转成学习任务。", tool_calls=[])
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        _ = (system_prompt, messages, tools)
+        if False:
+            yield StreamChunk()
+        raise NotImplementedError("streaming is not used in this test")
+
+
 def test_m12_interview_prep_retrieves_and_answers_without_writes(tmp_path: Path) -> None:
     bundle = _build_action_flow_bundle(tmp_path, InterviewPrepAnswerOnlyModel())
     before = _product_counts(bundle.stores)
@@ -549,6 +668,65 @@ def test_m16_interview_review_writes_note_and_updates_application_without_memory
     ]
     assert "memory_write" not in _tool_call_names(events)
     assert bundle.memory_manager.search(query="星河智能一面复盘", limit=5, context=_context("sess_alpha")) == []
+
+
+def test_m17_review_advice_retrieves_context_and_answers_without_creating_task(tmp_path: Path) -> None:
+    bundle = _build_action_flow_bundle(tmp_path, ReviewNextStepAdviceModel())
+    before = _product_counts(bundle.stores)
+
+    output = bundle.runtime.run(
+        AgentRunInput(
+            session_id="sess_alpha",
+            user_message="根据星河智能一面复盘，我下一步该怎么准备？先不要建任务。",
+            skill_names=["base", "tools", "memory"],
+            max_tool_rounds=2,
+            context=_context("sess_alpha"),
+        )
+    )
+    events = bundle.stores.sessions.list_events("sess_alpha")
+
+    assert "下一步准备建议" in output.answer
+    assert "不创建学习任务" in output.answer
+    assert _product_counts(bundle.stores) == before
+    assert _tool_call_names(events) == ["retrieval_search", "retrieval_context_pack"]
+    assert "learning_task_create" not in _tool_call_names(events)
+    assert "career_application_merge" not in _tool_call_names(events)
+    assert "memory_write" not in _tool_call_names(events)
+    assert bundle.memory_manager.search(query="下一步准备建议", limit=5, context=_context("sess_alpha")) == []
+
+
+def test_m17_review_advice_creates_learning_task_only_when_user_confirms(tmp_path: Path) -> None:
+    bundle = _build_action_flow_bundle(tmp_path, ReviewAdviceToLearningTaskModel())
+    before = _product_counts(bundle.stores)
+
+    output = bundle.runtime.run(
+        AgentRunInput(
+            session_id="sess_alpha",
+            user_message="根据星河智能一面复盘，把 RAG 评估和 Celery 补强加入学习任务，监督我完成。",
+            skill_names=["base", "tools", "memory"],
+            max_tool_rounds=3,
+            context=_context("sess_alpha"),
+        )
+    )
+    task = bundle.stores.learning.get_learning_task("learning_task_review_rag_celery_drill")
+    events = bundle.stores.sessions.list_events("sess_alpha")
+    after = _product_counts(bundle.stores)
+
+    assert output.answer == "已把复盘建议转成学习任务。"
+    assert task is not None
+    assert task.source_session_id == "sess_alpha"
+    assert task.learning_plan_id == "learning_plan_stargazer"
+    assert "note_rag_review" in task.evidence_refs
+    assert task.note_refs == ["note_rag_review"]
+    assert task.resource_refs == ["resource_stargazer_interview"]
+    assert task.question_refs == ["question_rag_chunk_strategy"]
+    assert after.learning_tasks == before.learning_tasks + 1
+    assert after.notes == before.notes
+    assert after.applications == before.applications
+    assert _tool_call_names(events) == ["retrieval_search", "retrieval_context_pack", "learning_task_create"]
+    assert "career_application_merge" not in _tool_call_names(events)
+    assert "memory_write" not in _tool_call_names(events)
+    assert bundle.memory_manager.search(query="复盘建议转成学习任务", limit=5, context=_context("sess_alpha")) == []
 
 
 def _build_action_flow_bundle(tmp_path: Path, model_client: ChatModelClient) -> RetrievalFlowBundle:
