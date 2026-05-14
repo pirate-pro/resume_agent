@@ -17,7 +17,7 @@ from app.career.models import (
 )
 from app.career.store import CareerProductStore
 from app.core.time import app_now
-from app.domain.models import SessionArtifact
+from app.domain.models import EventRecord, SessionArtifact
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.learning.models import LearningRecordStatus, LearningTask
 from app.learning.store import LearningStore
@@ -121,7 +121,7 @@ def test_live_smoke_fails_when_checker_rejects_resume_version(tmp_path: Path) ->
         content="项目成果：检索命中率 85%+，端到端时延 <2s。",
     )
     store = CareerProductStore(root_dir=tmp_path / "career", clock=app_now)
-    _save_product_records(store, session_id=session_id)
+    _save_product_records(store, session_id=session_id, unsafe_resume_version=True)
     report = FlowReport(
         run_index=1,
         session_id=session_id,
@@ -688,6 +688,42 @@ def test_live_smoke_report_fails_when_m20_confirm_task_misses_core_evidence_refs
     assert "M20 确认加入动作未保留 application、复盘 note、匹配报告证据引用。" in report.errors
 
 
+def test_live_smoke_report_warns_when_protective_tool_failure_recovers(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_recovered_protection")
+    _append_tool_result(
+        stack.session_repository,
+        session_id=report.session_id,
+        event_id="evt_failed_resume_version",
+        tool_name="career_resume_version_create",
+        success=False,
+        content=(
+            "ResumeVersion change_summary contains forbidden placeholder or replacement wording. "
+            "Remove that wording; describe only verified changes or missing-fact risks."
+        ),
+        tool_call_id="call_failed_resume_version",
+    )
+    _append_tool_result(
+        stack.session_repository,
+        session_id=report.session_id,
+        event_id="evt_recovered_resume_version",
+        tool_name="career_resume_version_create",
+        success=True,
+        content='{"record_type":"resume_version","record_id":"resume_version_quality"}',
+        tool_call_id="call_recovered_resume_version",
+    )
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert report.success
+    assert report.failed_tools == []
+    assert not report.errors
+    assert report.warnings == [
+        "已恢复的工具保护性拒绝: career_resume_version_create -> "
+        "ResumeVersion change_summary contains forbidden placeholder or replacement wording. "
+        "Remove that wording; describe only verified changes or missing-fact risks."
+    ]
+
+
 def _base_report_and_stack(tmp_path: Path, *, session_id: str) -> tuple[FlowReport, LiveStack]:
     repository = JsonlSessionRepository(data_dir=tmp_path)
     repository.create_session(session_id)
@@ -712,6 +748,36 @@ def _base_report_and_stack(tmp_path: Path, *, session_id: str) -> tuple[FlowRepo
     )
     stack = cast(LiveStack, SimpleNamespace(session_repository=repository, career_store=store, data_dir=tmp_path))
     return report, stack
+
+
+def _append_tool_result(
+    repository: JsonlSessionRepository,
+    *,
+    session_id: str,
+    event_id: str,
+    tool_name: str,
+    success: bool,
+    content: str,
+    tool_call_id: str,
+) -> None:
+    repository.append_agent_event(
+        session_id,
+        "agent_main",
+        EventRecord(
+            event_id=event_id,
+            session_id=session_id,
+            type="tool_result",
+            payload={
+                "tool_name": tool_name,
+                "success": success,
+                "content": content,
+                "tool_call_id": tool_call_id,
+            },
+            created_at=app_now(),
+            agent_id="agent_main",
+            run_id="run_test",
+        ),
+    )
 
 
 def _add_artifact(
@@ -748,7 +814,12 @@ def _add_artifact(
     )
 
 
-def _save_product_records(store: CareerProductStore, *, session_id: str) -> None:
+def _save_product_records(
+    store: CareerProductStore,
+    *,
+    session_id: str,
+    unsafe_resume_version: bool = False,
+) -> None:
     store.save_resume_profile(
         ResumeProfile(
             resume_profile_id="resume_profile_quality",
@@ -819,7 +890,7 @@ def _save_product_records(store: CareerProductStore, *, session_id: str) -> None
             title="质量门禁样本",
             format="markdown",
             artifact_id="artifact_resume_version",
-            change_summary=["补充量化指标占位"],
+            change_summary=["强化 RAG 项目描述"] if not unsafe_resume_version else ["补充量化指标占位"],
         )
     )
     store.save_career_application(

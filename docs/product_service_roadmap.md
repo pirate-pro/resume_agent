@@ -735,6 +735,8 @@ M20 的关键判断：
 
 方案文档：`docs/m21_product_acceptance_plan.md`
 
+第一轮验收报告：`docs/m21_product_acceptance_report.md`
+
 M21 验收主线：
 
 ```text
@@ -756,3 +758,10 @@ M21 验收主线：
 - 只修 P0 / P1 问题。
 - 同时检查后端事实源、Agent 行为、前端体感和低批次真实 smoke。
 - memory 自动写入、外部面经知识库、提醒系统和 RAG / MCP 继续延后。
+
+当前状态：
+
+- 后端 `pytest -q` 和 `mypy` 已通过。
+- 前端 `flutter analyze` 和 `flutter test` 已通过。
+- M21 低批次 smoke 的产品数据链路和质量门禁通过；`career_resume_version_create` 首次保护性拒绝后成功恢复，已作为 warning 记录。
+- 前端截图第一次发现旧 web-server 空白页，重启 38765 端口后桌面和窄屏首页恢复正常。

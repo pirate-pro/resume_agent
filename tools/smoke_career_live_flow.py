@@ -152,6 +152,7 @@ class FlowReport:
     artifact_ids: list[str] = field(default_factory=list)
     tool_call_counts: dict[str, int] = field(default_factory=dict)
     quality_findings: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     last_events: list[str] = field(default_factory=list)
     failed_stage: str | None = None
@@ -580,6 +581,9 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     failed_tool_results = failed_tool_result_payloads(stack.session_repository, report.session_id)
     for payload in failed_tool_results:
         tool_name = str(payload.get("tool_name") or "unknown")
+        if recovered_protective_tool_failure(stack.session_repository, report.session_id, payload):
+            report.warnings.append(f"已恢复的工具保护性拒绝: {tool_name} -> {payload.get('content')}")
+            continue
         if tool_name not in report.failed_tools:
             report.failed_tools.append(tool_name)
         report.errors.append(f"工具失败: {tool_name} -> {payload.get('content')}")
@@ -1256,6 +1260,33 @@ def failed_tool_result_payloads(repository: JsonlSessionRepository, session_id: 
     return payloads
 
 
+def recovered_protective_tool_failure(
+    repository: JsonlSessionRepository,
+    session_id: str,
+    failed_payload: dict[str, Any],
+) -> bool:
+    tool_name = str(failed_payload.get("tool_name") or "")
+    content = str(failed_payload.get("content") or "")
+    if tool_name != "career_resume_version_create" or "forbidden placeholder or replacement wording" not in content:
+        return False
+
+    failed_call_id = failed_payload.get("tool_call_id")
+    if not isinstance(failed_call_id, str) or not failed_call_id:
+        return False
+
+    seen_failure = False
+    for event in _all_relevant_events(repository, session_id):
+        if event.type != "tool_result" or not isinstance(event.payload, dict):
+            continue
+        payload = event.payload
+        if not seen_failure:
+            seen_failure = payload.get("success") is False and payload.get("tool_call_id") == failed_call_id
+            continue
+        if payload.get("tool_name") == tool_name and payload.get("success") is True:
+            return True
+    return False
+
+
 def tool_limit_detected(repository: JsonlSessionRepository, session_id: str) -> bool:
     for event in _all_relevant_events(repository, session_id):
         payload = event.payload if isinstance(event.payload, dict) else {}
@@ -1403,6 +1434,12 @@ def print_report(reports: list[FlowReport]) -> None:
         if item.quality_gate_passed is not None:
             gate = "通过" if item.quality_gate_passed else "失败"
             print(f"  质量门禁: {gate} error_codes={_preview_list(item.quality_error_codes, limit=6)}")
+        if item.warnings:
+            print("  warnings:")
+            for warning in item.warnings[:5]:
+                print(f"    - {_compact_text(warning, 260)}")
+            if len(item.warnings) > 5:
+                print(f"    - ... +{len(item.warnings) - 5} more")
         if not item.success:
             print("  失败摘要:")
             print(f"    失败阶段: {item.failed_stage or '未定位'}")
