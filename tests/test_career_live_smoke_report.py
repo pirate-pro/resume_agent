@@ -647,6 +647,26 @@ def test_live_smoke_report_fails_when_m20_checkin_skips_lookup_or_state_update(t
     assert "M20 记录进度动作未按明确完成状态更新 LearningTask。" in report.errors
 
 
+def test_live_smoke_report_accepts_retrieval_lookup_before_m20_checkin(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_m20_checkin_retrieval")
+    report.turns = [
+        TurnReport(
+            name="M20动作：记录学习进度",
+            answer="先用召回定位到 learning_task_alpha，再记录进度并更新状态。",
+            elapsed_seconds=1.0,
+            tool_calls=[
+                "retrieval_search",
+                "learning_checkin_create",
+                "learning_task_update_state",
+            ],
+        )
+    ]
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert "M20 记录进度动作未先定位 LearningTask。" not in report.errors
+
+
 def test_live_smoke_report_fails_when_m20_confirm_task_misses_core_evidence_refs(tmp_path: Path) -> None:
     session_id = "sess_live_m20_confirm_evidence"
     report, base_stack = _base_report_and_stack(tmp_path, session_id=session_id)

@@ -172,6 +172,10 @@ void main() {
     expect(sentPrompt, contains('title: 补 RAG 评估指标'));
     expect(sentPrompt, contains('estimated_minutes: 40'));
     expect(sentPrompt, contains('progress_notes 写明“来源：用户主动添加”'));
+    expect(sentPrompt, contains('不要因为存在系统推荐的相似任务就跳过创建'));
+    expect(sentPrompt, contains('不要写成 session:sess_'));
+    expect(sentPrompt,
+        contains('不要调用 learning_checkin_create 或 learning_task_update_state'));
     expect(sentAction?.actionType, 'learning_task_manual');
 
     await tester.tap(find.text('记录进度'));

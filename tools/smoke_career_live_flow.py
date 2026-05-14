@@ -787,7 +787,9 @@ def _validate_retrieval_action_turn(*, turn: TurnReport, report: FlowReport) -> 
         if leaked:
             report.errors.append(f"M20 用户主动添加动作出现越界工具调用: {leaked}")
     if turn.name == "M20动作：记录学习进度":
-        if not {"learning_task_list", "learning_task_get"}.intersection(turn.tool_calls):
+        if not {"learning_task_list", "learning_task_get", "retrieval_search", "retrieval_context_pack"}.intersection(
+            turn.tool_calls
+        ):
             report.errors.append("M20 记录进度动作未先定位 LearningTask。")
         if "learning_checkin_create" not in turn.tool_calls:
             report.errors.append("M20 记录进度动作未创建 ProgressCheckin。")
@@ -1104,6 +1106,10 @@ def _retrieval_action_message(retrieval_action: str) -> str:
             "请创建一个用户主动添加的学习任务：这周我要补 RAG 评估指标基础。"
             "任务要包含标题、说明、优先级、预计时间、能力标签和验收标准。"
             "如果能召回到当前求职项目或匹配报告，可以加入 evidence_refs；如果召回不到，也不要拒绝创建。"
+            "这是用户主动新建任务，默认创建独立 LearningTask；不要因为已有系统推荐的相似任务就跳过创建，"
+            "除非用户明确要求合并或去重。"
+            "如果需要会话证据，evidence_refs 使用当前原始 sess_... 会话 id，不要写成 session:sess_...。"
+            "新建任务阶段只创建待办任务，不要调用 learning_checkin_create 或 learning_task_update_state。"
             "progress_notes 必须写明“来源：用户主动添加”。不要自动创建 Note、WeaknessTracker、"
             "CareerApplication 更新或 memory。"
         )

@@ -133,6 +133,9 @@ class ManualLearningTaskModel:
     ) -> ModelResponse:
         assert "学习任务有两类入口：用户主动添加和系统推荐添加" in system_prompt
         assert "如果召回为空，也可以创建任务" in system_prompt
+        assert "不要套用系统推荐任务的去重规则" in system_prompt
+        assert "不要写成 `session:sess_...`" in system_prompt
+        assert "不要顺手调用 `learning_checkin_create` 或 `learning_task_update_state`" in system_prompt
         assert "来源：用户主动添加" in system_prompt
         assert "learning_task_create" in _tool_names(tools)
 
@@ -350,6 +353,9 @@ def test_learning_agent_contract_and_capabilities_keep_child_agents_read_only() 
     assert "才调用 learning 工具" in main_doc
     assert "学习任务有两类入口：用户主动添加和系统推荐添加" in main_doc
     assert "如果召回为空，也可以创建任务" in main_doc
+    assert "不要套用系统推荐任务的去重规则" in main_doc
+    assert "不要写成 `session:sess_...`" in main_doc
+    assert "不要顺手调用 `learning_checkin_create` 或 `learning_task_update_state`" in main_doc
     assert "系统推荐添加学习任务时，必须先召回或复用本轮已经召回的上下文" in main_doc
     assert "先定位相关 LearningTask" in main_doc
     assert "打卡和任务状态更新不自动写 Note 或 memory" in main_doc

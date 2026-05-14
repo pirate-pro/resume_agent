@@ -7258,7 +7258,7 @@ $intent
 执行要求：
 1. 先读取并复用当前求职项目、匹配报告、已有学习计划和学习任务。
 2. 只有确实需要沉淀时，才创建或更新 LearningPlan、LearningTask、WeaknessTracker、ProgressCheckin。
-3. 不要重复创建已有学习计划或任务。
+3. 系统推荐或计划生成时不要重复创建已有学习计划或任务；如果动作意图是用户主动新建任务，默认按用户草稿创建独立 LearningTask，除非用户明确要求合并、去重或继续已有任务。
 4. 不要写 memory。
 5. 最终回复请说明本次更新了哪些学习记录，以及下一步建议。
 ''';
@@ -7281,7 +7281,10 @@ ${estimatedMinutes <= 0 ? "" : "- estimated_minutes: $estimatedMinutes\n"}
 1. 调用 learning_task_create。
 2. progress_notes 写明“来源：用户主动添加”。
 3. 如果当前有求职项目上下文，将 application_id 加入 evidence_refs；如果没有项目，也不要拒绝创建。
-4. 不要自动创建 Note、WeaknessTracker、CareerApplication 更新或 memory。
+4. 这是用户主动新建任务，默认创建独立 LearningTask；不要因为存在系统推荐的相似任务就跳过创建，除非用户明确要求合并或去重。
+5. 如果需要会话证据，evidence_refs 使用原始 sess_... 会话 id，不要写成 session:sess_...。
+6. 新建任务阶段只创建待办任务，不要调用 learning_checkin_create 或 learning_task_update_state。
+7. 不要自动创建 Note、WeaknessTracker、CareerApplication 更新或 memory。
 ''';
 }
 

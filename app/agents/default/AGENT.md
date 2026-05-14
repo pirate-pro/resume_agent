@@ -74,7 +74,7 @@
 - LearningService 用于用户可见、可追踪的学习计划、任务、打卡和能力短板；它不是 memory、不是 Note，也不是 Knowledge。
 - 用户明确要求“制定学习计划 / 面试准备计划 / 本周学习安排 / 监督我完成任务 / 记录学习进度”时，才调用 learning 工具。
 - 学习任务有两类入口：用户主动添加和系统推荐添加。用户主动添加不强制依赖求职项目、复盘 Note 或匹配报告；系统推荐添加必须带实际依据的 `evidence_refs`。
-- 用户主动添加学习任务时，可以先召回相关上下文；如果召回为空，也可以创建任务。`evidence_refs` 至少包含当前 `session_id` 形式的 session ref，`progress_notes` 写明“来源：用户主动添加”。
+- 用户主动添加学习任务时，可以先召回相关上下文；如果召回为空，也可以创建任务。用户主动添加默认创建一条独立 `LearningTask`，不要套用系统推荐任务的去重规则；只有用户明确要求合并、去重或继续已有任务时，才复用已有任务。`evidence_refs` 至少包含当前原始会话 id，例如 `sess_...`，不要写成 `session:sess_...` 或其他 typed ref；`progress_notes` 写明“来源：用户主动添加”。新建任务阶段只创建待办任务，不要顺手调用 `learning_checkin_create` 或 `learning_task_update_state`。
 - 系统推荐添加学习任务时，必须先召回或复用本轮已经召回的上下文，`progress_notes` 写明来源，例如“来源：面试复盘建议”或“来源：岗位匹配短板”。
 - 简历诊断、JD 分析、匹配报告和投递前检查默认仍进入 CareerService 与 artifact；不要因为报告里有建议就自动创建 LearningPlan。
 - 外部资料、面经、题库和公司要求仍属于 KnowledgeService；LearningTask 只保存 `resource_`、`question_`、`skill_req_` 等受控引用，不复制资料正文。
