@@ -768,6 +768,22 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
     assert version_fallback_payload["record_id"] == "resume_version_zhangsan_ai_app_dev"
     assert version_fallback_payload["requested_record_id"] == "resume_version_001"
 
+    with pytest.raises(ToolExecutionError, match="forbidden placeholder"):
+        registry.execute(
+            ToolCall(
+                name="career_resume_version_create",
+                arguments={
+                    "base_resume_profile_id": "resume_profile_alpha",
+                    "target_jd_analysis_id": "jd_alpha",
+                    "title": "含禁用词的简历版本",
+                    "content": "# 定制简历\n\n突出 RAG 项目。",
+                    "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+                    "change_summary": ["省略缺失事实，避免占位表达"],
+                },
+            ),
+            context=_context(agent_id="agent_main"),
+        )
+
     with pytest.raises(ToolExecutionError, match="Unsupported CareerProfile merge field"):
         registry.execute(
             ToolCall(

@@ -97,6 +97,38 @@ def test_retrieval_tools_accept_source_group_aliases(tmp_path: Path) -> None:
     assert "session_artifact" in source_types
 
 
+def test_retrieval_tools_accept_common_career_source_aliases(tmp_path: Path) -> None:
+    stores = _seed_stores(tmp_path)
+    tool = RetrievalSearchTool(retrieval_service=_service(stores))
+
+    resume_result = tool.execute(
+        {
+            "query": "张明 Python RAG",
+            "source_types": ["resume"],
+            "top_k": 3,
+        },
+        context=_context("sess_alpha"),
+    )
+    resume_payload = json.loads(resume_result.content)
+    resume_source_types = {hit["source"]["source_type"] for hit in resume_payload["hits"]}
+    result = tool.execute(
+        {
+            "query": "星河智能 匹配报告",
+            "source_types": ["resume", "career_job_fit_report", "job_fit_reports", "career_jd_analysis", "jd"],
+            "top_k": 8,
+        },
+        context=_context("sess_alpha"),
+    )
+    payload = json.loads(result.content)
+    source_types = {hit["source"]["source_type"] for hit in payload["hits"]}
+
+    assert resume_result.success is True
+    assert "resume_profile" in resume_source_types
+    assert result.success is True
+    assert "job_fit_report" in source_types
+    assert "jd_analysis" in source_types
+
+
 def test_retrieval_tools_reject_path_store_owned_and_invalid_source_type(tmp_path: Path) -> None:
     tool = RetrievalSearchTool(retrieval_service=RetrievalService())
 

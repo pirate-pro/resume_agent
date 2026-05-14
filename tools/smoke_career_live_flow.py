@@ -397,7 +397,7 @@ def run_live_flow(
                     "不要把风险项、证据不足、缺失、需补充、需用户提供写进 keyword_strategy。"
                     "career_resume_version_create 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
                     "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
-                    "这些禁用词本身也不能出现在否定说明里，例如不要写“避免占位表达”，改写为“省略缺失事实”。"
+                    "这些禁用词本身也不能出现在否定说明里；只描述实际改动、已验证事实或缺失事实风险。"
                     "如果公司、学校、时间、联系方式等事实缺失，不要在简历正文里写“待补充”，"
                     "应省略对应字段或使用更保守的已知事实，并把缺失项写入 CareerApplication 的 risks/next_actions。"
                     "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
@@ -700,7 +700,7 @@ def _project_action_message(project_action: str, application_id: str) -> str:
             "简历正文只能使用已有产品记录和源 artifact 明确出现的事实，不要编造指标或经历。"
             "ResumeVersion 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
             "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
-            "这些禁用词本身也不能出现在否定说明里，例如不要写“避免占位表达”。"
+            "这些禁用词本身也不能出现在否定说明里；只描述实际改动、已验证事实或缺失事实风险。"
         )
     raise ValueError(f"Unsupported project action: {project_action}")
 

@@ -616,9 +616,30 @@ M17 的关键判断：
 
 - M17 第一批已完成 Agent 契约和确定性 runtime 测试。
 
+### M18：质量验收与压力测试
+
+目标：对当前 MVP 主闭环做一次质量验收，确认后端、Agent、前端、压力测试和真实模型 smoke 能支撑继续产品化。
+
+报告文档：`docs/m18_quality_validation_report.md`
+
+M18 已完成：
+
+- Python 全量测试通过。
+- `mypy` 通过。
+- Flutter analyze / widget tests 通过。
+- memory / flush / compaction 本地压力测试通过。
+- 桌面和移动端 UI 截图检查完成。
+- `interview_review` 低批次真实模型 smoke 最终通过。
+
+本轮真实 smoke 暴露并修复：
+
+- Retrieval 工具补充 `resume`、`jd`、`fit`、`career_job_fit_report` 等常见 source type 别名。
+- Career 产品记录 `evidence_refs` 支持 `note_`，用于面试复盘 Note 回写求职项目。
+- `career_resume_version_create` 在写入前拦截占位或替换类表达，避免脏 ResumeVersion 进入 store。
+
 ## 当前优先级
 
-M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估、M12 召回驱动动作闭环真实 smoke、M13 只读工作台聚合层、M13 前端项目工作台弹层、M14 一级工作台页面、M14 笔记页、M14 资料与报告库第一版、M14 学习计划页第一版、M14 收口刷新闭环、M15 第一批动作闭环、M16 求职项目推进与面试复盘闭环、M17 复盘驱动准备建议第一批已经完成。
+M7 主线闭环和 M8 NoteService 后端主闭环已经完成低成本验证。M9-1 资料与题库后端底座和 M9-2 API 已经完成，M9-3 聊天 Agent 写入工具暂停。M10-1 LearningService 后端底座、M10-2 API、M10-3 工具 / agent 契约、M10-4 低成本主链路验证、M10 收口、M11-1 RetrievalService 领域层、M11-2 只读工具 / agent 契约、M11-3 主线链路验证、M11 收口评估、M12 召回驱动动作闭环真实 smoke、M13 只读工作台聚合层、M13 前端项目工作台弹层、M14 一级工作台页面、M14 笔记页、M14 资料与报告库第一版、M14 学习计划页第一版、M14 收口刷新闭环、M15 第一批动作闭环、M16 求职项目推进与面试复盘闭环、M17 复盘驱动准备建议第一批和 M18 质量验收已经完成。
 
 当前还不提前接 memory 自动写入、日历同步和提醒系统。
 
@@ -630,9 +651,9 @@ M10 收口已完成：
 推荐下一步：
 
 ```text
-1. 用确定性测试继续守住 M17 的建议 / 任务边界。
-2. 低成本抽样验证真实模型是否会在用户未确认时误建 LearningTask。
-3. 如果真实链路稳定，再进入工作台“建议转任务”的显式动作设计。
+1. 增加 M17 真实 smoke：复盘建议默认只回答，用户确认后才转 LearningTask。
+2. 如果真实链路稳定，再进入工作台“建议转任务”的显式动作设计。
+3. 暂不新增面试 store、日历提醒和 memory 自动写入。
 ```
 
 这样可以把“目标岗位项目、用户笔记资产、资料题库和学习计划”都作为稳定事实源，再进入自动召回层。

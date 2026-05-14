@@ -53,6 +53,26 @@ _SOURCE_TYPE_GROUP_ALIASES = {
     ),
     "artifacts": (RetrievalSourceType.SESSION_ARTIFACT,),
     "artifact": (RetrievalSourceType.SESSION_ARTIFACT,),
+    "application": (RetrievalSourceType.CAREER_APPLICATION,),
+    "applications": (RetrievalSourceType.CAREER_APPLICATION,),
+    "resume": (RetrievalSourceType.RESUME_PROFILE,),
+    "resumes": (RetrievalSourceType.RESUME_PROFILE,),
+    "profile": (RetrievalSourceType.CAREER_PROFILE,),
+    "jd": (RetrievalSourceType.JD_ANALYSIS,),
+    "jds": (RetrievalSourceType.JD_ANALYSIS,),
+    "fit": (RetrievalSourceType.JOB_FIT_REPORT,),
+    "fit_report": (RetrievalSourceType.JOB_FIT_REPORT,),
+    "fit_reports": (RetrievalSourceType.JOB_FIT_REPORT,),
+    "career_resume_profile": (RetrievalSourceType.RESUME_PROFILE,),
+    "career_career_profile": (RetrievalSourceType.CAREER_PROFILE,),
+    "career_jd_analysis": (RetrievalSourceType.JD_ANALYSIS,),
+    "career_job_fit_report": (RetrievalSourceType.JOB_FIT_REPORT,),
+    "career_resume_version": (RetrievalSourceType.RESUME_VERSION,),
+    "resume_profiles": (RetrievalSourceType.RESUME_PROFILE,),
+    "career_profiles": (RetrievalSourceType.CAREER_PROFILE,),
+    "jd_analyses": (RetrievalSourceType.JD_ANALYSIS,),
+    "job_fit_reports": (RetrievalSourceType.JOB_FIT_REPORT,),
+    "resume_versions": (RetrievalSourceType.RESUME_VERSION,),
 }
 
 
@@ -79,7 +99,8 @@ class RetrievalSearchTool:
                         "items": {"type": "string"},
                         "description": (
                             "Optional source type filters. Accepts concrete types such as career_application, "
-                            "note, learning_task, or group aliases: career, notes, knowledge, learning, artifacts."
+                            "note, learning_task, group aliases like career/notes/knowledge/learning/artifacts, "
+                            "and common career aliases like career_job_fit_report."
                         ),
                     },
                     "related_application_id": {"type": "string"},
@@ -132,7 +153,8 @@ class RetrievalContextPackTool:
                         "items": {"type": "string"},
                         "description": (
                             "Optional source type filters. Accepts concrete types such as career_application, "
-                            "note, learning_task, or group aliases: career, notes, knowledge, learning, artifacts."
+                            "note, learning_task, group aliases like career/notes/knowledge/learning/artifacts, "
+                            "and common career aliases like career_job_fit_report."
                         ),
                     },
                     "related_application_id": {"type": "string"},

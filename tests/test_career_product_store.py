@@ -443,7 +443,13 @@ def test_evidence_refs_validate_format_but_not_cross_record_existence(tmp_path: 
         status=CareerRecordStatus.ACTIVE,
         source_session_id="sess_alpha",
         source_artifact_id="artifact_missing_jd",
-        evidence_refs=["resume_profile_missing", "career_profile_missing", "jd_missing", "artifact_missing_jd"],
+        evidence_refs=[
+            "resume_profile_missing",
+            "career_profile_missing",
+            "jd_missing",
+            "note_missing_review",
+            "artifact_missing_jd",
+        ],
         created_at=_now(),
         updated_at=_now(),
         jd_analysis_id="jd_missing",
@@ -457,6 +463,7 @@ def test_evidence_refs_validate_format_but_not_cross_record_existence(tmp_path: 
     loaded = store.get_job_fit_report("fit_orphan")
     assert loaded is not None
     assert loaded.jd_analysis_id == "jd_missing"
+    assert "note_missing_review" in loaded.evidence_refs
     assert loaded.report_artifact_id == "artifact_missing_report"
 
 

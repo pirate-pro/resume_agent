@@ -734,8 +734,19 @@ class CareerResumeVersionCreateTool:
             base_resume_profile_id = _resolve_resume_version_base_profile_id(args, evidence_refs)
             target_jd_analysis_id = _optional_prefixed_id(args.get("target_jd_analysis_id"), "jd")
             title = _required_string(args.get("title"), field_name="title")
+            change_summary = _optional_string_list(args.get("change_summary"), field_name="change_summary")
+            keyword_strategy = _optional_string_list(args.get("keyword_strategy"), field_name="keyword_strategy")
+            risk_notes = _optional_string_list(args.get("risk_notes"), field_name="risk_notes")
             raw_artifact_id = args.get("artifact_id")
             if raw_artifact_id is None:
+                content = _required_string(args.get("content"), field_name="content")
+                _reject_resume_version_placeholder_text(
+                    title=title,
+                    content=content,
+                    change_summary=change_summary,
+                    keyword_strategy=keyword_strategy,
+                    risk_notes=risk_notes,
+                )
                 existing = _find_current_session_record(
                     self._career_store.list_resume_versions(),
                     run_context.session_id,
@@ -757,9 +768,16 @@ class CareerResumeVersionCreateTool:
                     self._session_repository,
                     run_context,
                     title=_optional_string(args.get("artifact_title")) or title,
-                    content=_required_string(args.get("content"), field_name="content"),
+                    content=content,
                 )
             else:
+                _reject_resume_version_placeholder_text(
+                    title=title,
+                    content=None,
+                    change_summary=change_summary,
+                    keyword_strategy=keyword_strategy,
+                    risk_notes=risk_notes,
+                )
                 artifact_id = _require_current_artifact(
                     self._session_repository,
                     run_context.session_id,
@@ -799,9 +817,9 @@ class CareerResumeVersionCreateTool:
                 title=title,
                 format="markdown",
                 artifact_id=artifact_id,
-                change_summary=_optional_string_list(args.get("change_summary"), field_name="change_summary"),
-                keyword_strategy=_optional_string_list(args.get("keyword_strategy"), field_name="keyword_strategy"),
-                risk_notes=_optional_string_list(args.get("risk_notes"), field_name="risk_notes"),
+                change_summary=change_summary,
+                keyword_strategy=keyword_strategy,
+                risk_notes=risk_notes,
             )
             saved = self._career_store.save_resume_version(record)
         except (StorageError, ValidationError) as exc:
@@ -1447,6 +1465,41 @@ def _normalize_score_value(raw: Any, *, field_name: str) -> int:
     if score < 0 or score > 100:
         raise ToolExecutionError(f"'{field_name}' must be a score in range 0..100.")
     return score
+
+
+_RESUME_VERSION_PLACEHOLDER_PATTERNS = (
+    re.compile(r"占位", re.IGNORECASE),
+    re.compile(r"替换为真实数据", re.IGNORECASE),
+    re.compile(r"待填", re.IGNORECASE),
+    re.compile(r"待补", re.IGNORECASE),
+    re.compile(r"待完善", re.IGNORECASE),
+    re.compile(r"\bTODO\b", re.IGNORECASE),
+    re.compile(r"\bTBD\b", re.IGNORECASE),
+)
+
+
+def _reject_resume_version_placeholder_text(
+    *,
+    title: str,
+    content: str | None,
+    change_summary: list[str],
+    keyword_strategy: list[str],
+    risk_notes: list[str],
+) -> None:
+    fields = {
+        "title": title,
+        "content": content or "",
+        "change_summary": "\n".join(change_summary),
+        "keyword_strategy": "\n".join(keyword_strategy),
+        "risk_notes": "\n".join(risk_notes),
+    }
+    for field_name, text in fields.items():
+        if any(pattern.search(text) for pattern in _RESUME_VERSION_PLACEHOLDER_PATTERNS):
+            raise ToolExecutionError(
+                "ResumeVersion "
+                f"{field_name} contains forbidden placeholder or replacement wording. "
+                "Remove that wording; describe only verified changes or missing-fact risks."
+            )
 
 
 def _optional_bool(raw: Any) -> bool:
