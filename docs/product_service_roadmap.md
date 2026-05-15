@@ -826,12 +826,6 @@ app/retrieval/chunking.py
 tests/test_retrieval_chunking.py
 ```
 
-当前状态：
-
-- M23-1 已完成：新增 debug Token 历史成本聚合 API 与调试面板历史基线视图，只读取 `llm_usage` 事件，不进入普通产品路径。
-- M23-2 已完成底座第一批：新增 `RetrievalChunk`、确定性 Markdown / 长文本分块、JSONL 索引存储和损坏 JSON 稳定失败测试。
-- 该阶段尚未接入 `RetrievalService` 融合搜索；下一步进入 M23-3，从 Note / Knowledge / SessionArtifact 构建可重建索引，并做本地 sparse 检索。
-
 验收重点：
 
 - 可以查看历史 Token 消耗聚合，且该能力只存在于调试 / 管理侧。
