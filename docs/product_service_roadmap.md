@@ -789,3 +789,48 @@ M22 的关键判断：
 - 低批次真实链路质量门禁通过，产品记录完整。
 - 修复用户主动添加学习任务边界：主动新建默认创建独立任务，不套用系统推荐去重规则；session evidence 使用 `sess_...`；新建任务阶段不顺手打卡或改状态。
 - 当前可以作为候选版基线继续人工试用。
+
+### M23：RAG 质量层与 Token 管理观测
+
+目标：把候选版从“流程可用”推进到“资料召回质量可验证、Token 消耗可观测”。
+
+方案文档：`docs/m23_rag_token_observability_plan.md`
+
+M23 的关键判断：
+
+- RAG 是产品质量能力，优先级高于 LangGraph、提醒系统和 memory 自动写入。
+- Token 当前只做观测和基线，不做强制优化；等看清真实消耗后再定向调整。
+- M23 不推翻 M11 RetrievalService，而是在现有 RetrievalService 下增加可重建的 chunk / index / search 能力。
+- RAG 索引只是 projection / cache，不是新的事实源。
+- 用户自己的面经、复盘和答案草稿仍进入 Note；外部资料、公开面经、面试题和资料链接进入 Knowledge。
+- 第一阶段不做 MCP server、不做自动爬虫、不做 memory 自动写入、不改变普通用户产品入口。
+
+推荐实施顺序：
+
+```text
+1. M23-1 Token 管理观测增强：历史会话、Agent、阶段和模型维度聚合。
+2. M23-2 RetrievalChunk / IndexStore / chunking 底座。
+3. M23-3 Indexer：从 Note / Knowledge / SessionArtifact 构建 chunk。
+4. M23-4 Search：本地 sparse 检索和 RetrievalService 融合。
+5. M23-5 RAG 质量评估集和评估脚本。
+6. M23-6 Agent 契约微调和低批次真实链路验证。
+```
+
+第一批建议先做：
+
+```text
+app/debug/token_usage.py
+tests/test_token_usage_debug_service.py
+app/retrieval/index_models.py
+app/retrieval/chunking.py
+tests/test_retrieval_chunking.py
+```
+
+验收重点：
+
+- 可以查看历史 Token 消耗聚合，且该能力只存在于调试 / 管理侧。
+- Note / Knowledge / SessionArtifact 能被稳定分块并重建索引。
+- RetrievalService 能融合 chunk 检索结果，回答时带可追溯来源。
+- 固定 RAG 评估集通过。
+- 低批次真实链路能基于资料和笔记回答面试准备问题。
+- 不写 memory，不暴露内部路径，不新增产品事实源。
