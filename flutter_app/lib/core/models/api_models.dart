@@ -178,6 +178,219 @@ class HealthView {
   }
 }
 
+class TokenUsageCallView {
+  final String eventId;
+  final String sessionId;
+  final String sessionTitle;
+  final String agentId;
+  final String runId;
+  final String? parentRunId;
+  final String api;
+  final String operation;
+  final String mode;
+  final String phase;
+  final int? roundIndex;
+  final String model;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final bool estimated;
+  final String usageSource;
+  final int messageCount;
+  final int toolSchemaCount;
+  final int returnedToolCallCount;
+  final int contentChars;
+  final int reasoningChars;
+  final DateTime createdAt;
+
+  TokenUsageCallView({
+    required this.eventId,
+    required this.sessionId,
+    required this.sessionTitle,
+    required this.agentId,
+    required this.runId,
+    required this.parentRunId,
+    required this.api,
+    required this.operation,
+    required this.mode,
+    required this.phase,
+    required this.roundIndex,
+    required this.model,
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+    required this.estimated,
+    required this.usageSource,
+    required this.messageCount,
+    required this.toolSchemaCount,
+    required this.returnedToolCallCount,
+    required this.contentChars,
+    required this.reasoningChars,
+    required this.createdAt,
+  });
+
+  factory TokenUsageCallView.fromJson(Map<String, dynamic> json) {
+    return TokenUsageCallView(
+      eventId: (json["event_id"] ?? "").toString(),
+      sessionId: (json["session_id"] ?? "").toString(),
+      sessionTitle: (json["session_title"] ?? "").toString(),
+      agentId: (json["agent_id"] ?? "").toString(),
+      runId: (json["run_id"] ?? "").toString(),
+      parentRunId: _readOptionalString(json["parent_run_id"]),
+      api: (json["api"] ?? "").toString(),
+      operation: (json["operation"] ?? "").toString(),
+      mode: (json["mode"] ?? "").toString(),
+      phase: (json["phase"] ?? "").toString(),
+      roundIndex: _readOptionalInt(json["round_index"]),
+      model: (json["model"] ?? "").toString(),
+      promptTokens: _readInt(json["prompt_tokens"]),
+      completionTokens: _readInt(json["completion_tokens"]),
+      totalTokens: _readInt(json["total_tokens"]),
+      estimated: json["estimated"] == true,
+      usageSource: (json["usage_source"] ?? "").toString(),
+      messageCount: _readInt(json["message_count"]),
+      toolSchemaCount: _readInt(json["tool_schema_count"]),
+      returnedToolCallCount: _readInt(json["returned_tool_call_count"]),
+      contentChars: _readInt(json["content_chars"]),
+      reasoningChars: _readInt(json["reasoning_chars"]),
+      createdAt: _readDateTime(json["created_at"]),
+    );
+  }
+}
+
+class TokenUsageBucketView {
+  final String key;
+  final int callCount;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final int estimatedCount;
+  final int providerCount;
+
+  TokenUsageBucketView({
+    required this.key,
+    required this.callCount,
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+    required this.estimatedCount,
+    required this.providerCount,
+  });
+
+  factory TokenUsageBucketView.fromJson(Map<String, dynamic> json) {
+    return TokenUsageBucketView(
+      key: (json["key"] ?? "").toString(),
+      callCount: _readInt(json["call_count"]),
+      promptTokens: _readInt(json["prompt_tokens"]),
+      completionTokens: _readInt(json["completion_tokens"]),
+      totalTokens: _readInt(json["total_tokens"]),
+      estimatedCount: _readInt(json["estimated_count"]),
+      providerCount: _readInt(json["provider_count"]),
+    );
+  }
+}
+
+class TokenUsageSessionView {
+  final String sessionId;
+  final String title;
+  final int callCount;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final int estimatedCount;
+  final int providerCount;
+  final DateTime? firstUsageAt;
+  final DateTime? lastUsageAt;
+  final DateTime updatedAt;
+
+  TokenUsageSessionView({
+    required this.sessionId,
+    required this.title,
+    required this.callCount,
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+    required this.estimatedCount,
+    required this.providerCount,
+    required this.firstUsageAt,
+    required this.lastUsageAt,
+    required this.updatedAt,
+  });
+
+  factory TokenUsageSessionView.fromJson(Map<String, dynamic> json) {
+    return TokenUsageSessionView(
+      sessionId: (json["session_id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      callCount: _readInt(json["call_count"]),
+      promptTokens: _readInt(json["prompt_tokens"]),
+      completionTokens: _readInt(json["completion_tokens"]),
+      totalTokens: _readInt(json["total_tokens"]),
+      estimatedCount: _readInt(json["estimated_count"]),
+      providerCount: _readInt(json["provider_count"]),
+      firstUsageAt: _readOptionalDateTime(json["first_usage_at"]),
+      lastUsageAt: _readOptionalDateTime(json["last_usage_at"]),
+      updatedAt: _readDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class TokenUsageSummaryView {
+  final int sessionCount;
+  final int callCount;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final int estimatedCount;
+  final int providerCount;
+  final List<TokenUsageBucketView> agentBuckets;
+  final List<TokenUsageBucketView> phaseBuckets;
+  final List<TokenUsageBucketView> modelBuckets;
+  final List<TokenUsageSessionView> sessions;
+  final List<TokenUsageCallView> recentCalls;
+
+  TokenUsageSummaryView({
+    required this.sessionCount,
+    required this.callCount,
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+    required this.estimatedCount,
+    required this.providerCount,
+    required this.agentBuckets,
+    required this.phaseBuckets,
+    required this.modelBuckets,
+    required this.sessions,
+    required this.recentCalls,
+  });
+
+  factory TokenUsageSummaryView.fromJson(Map<String, dynamic> json) {
+    return TokenUsageSummaryView(
+      sessionCount: _readInt(json["session_count"]),
+      callCount: _readInt(json["call_count"]),
+      promptTokens: _readInt(json["prompt_tokens"]),
+      completionTokens: _readInt(json["completion_tokens"]),
+      totalTokens: _readInt(json["total_tokens"]),
+      estimatedCount: _readInt(json["estimated_count"]),
+      providerCount: _readInt(json["provider_count"]),
+      agentBuckets: _readList(json["agent_buckets"])
+          .map((item) => TokenUsageBucketView.fromJson(_readMap(item)))
+          .toList(),
+      phaseBuckets: _readList(json["phase_buckets"])
+          .map((item) => TokenUsageBucketView.fromJson(_readMap(item)))
+          .toList(),
+      modelBuckets: _readList(json["model_buckets"])
+          .map((item) => TokenUsageBucketView.fromJson(_readMap(item)))
+          .toList(),
+      sessions: _readList(json["sessions"])
+          .map((item) => TokenUsageSessionView.fromJson(_readMap(item)))
+          .toList(),
+      recentCalls: _readList(json["recent_calls"])
+          .map((item) => TokenUsageCallView.fromJson(_readMap(item)))
+          .toList(),
+    );
+  }
+}
+
 class SkillOption {
   final String name;
   final String description;
@@ -1591,6 +1804,14 @@ int _readInt(dynamic raw) {
   if (raw is num) return raw.toInt();
   if (raw is String) return int.tryParse(raw.trim()) ?? 0;
   return 0;
+}
+
+int? _readOptionalInt(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  if (raw is String) return int.tryParse(raw.trim());
+  return null;
 }
 
 Map<String, int> _readIntMap(dynamic raw) {

@@ -140,6 +140,32 @@ class ApiService {
     return health?.isOnline == true;
   }
 
+  // ── Debug / management telemetry ─────────────────────────────────────
+
+  Future<TokenUsageSummaryView?> fetchTokenUsageSummary({
+    int sessionLimit = 8,
+    int callLimit = 8,
+    int bucketLimit = 6,
+  }) async {
+    try {
+      final uri = _uri("/api/debug/token-usage/summary").replace(
+        queryParameters: {
+          "session_limit": sessionLimit.toString(),
+          "call_limit": callLimit.toString(),
+          "bucket_limit": bucketLimit.toString(),
+        },
+      );
+      final resp = await http.get(uri).timeout(const Duration(seconds: 4));
+      final data = _decodeResponseData(resp);
+      if (data is! Map) {
+        return null;
+      }
+      return TokenUsageSummaryView.fromJson(Map<String, dynamic>.from(data));
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ── Memories ──────────────────────────────────────────────────────────
 
   Future<List<MemoryView>> listMemories({String? q, int limit = 20}) async {

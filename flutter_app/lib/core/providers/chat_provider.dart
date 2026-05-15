@@ -54,6 +54,8 @@ class ChatProvider extends ChangeNotifier {
   List<MemoryView> _lastMemoryHits = [];
   List<EventView> _streamEvents = [];
   List<SessionArtifactView> _sessionArtifacts = [];
+  TokenUsageSummaryView? _tokenUsageSummary;
+  bool _isLoadingTokenUsageSummary = false;
 
   // ── Getters ─────────────────────────────────────────────────────────
   String? get sessionId => _sessionId;
@@ -83,6 +85,8 @@ class ChatProvider extends ChangeNotifier {
   List<EventView> get streamEvents => List.unmodifiable(_streamEvents);
   List<SessionArtifactView> get sessionArtifacts =>
       List.unmodifiable(_sessionArtifacts);
+  TokenUsageSummaryView? get tokenUsageSummary => _tokenUsageSummary;
+  bool get isLoadingTokenUsageSummary => _isLoadingTokenUsageSummary;
   String? get recentActivatedArtifactId => _recentActivatedArtifactId;
 
   ChatProvider(this._api) {
@@ -101,6 +105,7 @@ class ChatProvider extends ChangeNotifier {
     await _loadSessions();
     _checkHealth();
     unawaited(refreshSkills());
+    unawaited(refreshTokenUsageSummary());
     await refreshSessions();
   }
 
@@ -609,6 +614,7 @@ class ChatProvider extends ChangeNotifier {
       _isStreaming = false;
       _stopEventPolling();
       unawaited(_checkHealth());
+      unawaited(refreshTokenUsageSummary());
       notifyListeners();
     }
   }
@@ -967,6 +973,20 @@ class ChatProvider extends ChangeNotifier {
       _streamEvents = await _api.listSessionEvents(_sessionId!);
     } catch (_) {}
     notifyListeners();
+  }
+
+  Future<void> refreshTokenUsageSummary() async {
+    if (_isLoadingTokenUsageSummary) return;
+    _isLoadingTokenUsageSummary = true;
+    notifyListeners();
+    try {
+      _tokenUsageSummary = await _api.fetchTokenUsageSummary();
+    } catch (_) {
+      _tokenUsageSummary = null;
+    } finally {
+      _isLoadingTokenUsageSummary = false;
+      notifyListeners();
+    }
   }
 
   void clearError() {

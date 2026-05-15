@@ -370,6 +370,7 @@ class _DebugPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tokenUsage = _TokenUsageSnapshot.fromEvents(provider.streamEvents);
+    final tokenSummary = provider.tokenUsageSummary;
     return Container(
       decoration: AppTheme.floatingPanelDecoration(
         radius: compact ? 28 : 30,
@@ -412,6 +413,7 @@ class _DebugPanel extends ConsumerWidget {
                     unawaited(provider.refreshHealth());
                     provider.refreshEvents();
                     provider.refreshSessionArtifacts();
+                    unawaited(provider.refreshTokenUsageSummary());
                   },
                 ),
                 const SizedBox(width: 6),
@@ -460,6 +462,11 @@ class _DebugPanel extends ConsumerWidget {
               padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
               children: [
                 _TokenUsageSection(snapshot: tokenUsage),
+                const SizedBox(height: 14),
+                _TokenUsageBaselineSection(
+                  summary: tokenSummary,
+                  loading: provider.isLoadingTokenUsageSummary,
+                ),
                 const SizedBox(height: 14),
                 _section(
                   '系统状态',
@@ -713,6 +720,287 @@ class _TokenUsageSection extends StatelessWidget {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TokenUsageBaselineSection extends StatelessWidget {
+  final TokenUsageSummaryView? summary;
+  final bool loading;
+
+  const _TokenUsageBaselineSection({
+    required this.summary,
+    required this.loading,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final data = summary;
+    final hasData = data != null && data.callCount > 0;
+    final maxSessionTokens = data?.sessions
+            .fold<int>(0, (max, item) => math.max(max, item.totalTokens)) ??
+        0;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.86),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppTheme.border),
+        boxShadow: [
+          BoxShadow(
+            color:
+                Colors.black.withValues(alpha: AppTheme.isDark ? 0.16 : 0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2563EB).withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.20),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.query_stats_rounded,
+                  size: 16,
+                  color: Color(0xFF2563EB),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '历史成本基线',
+                      style: AppTheme.ts(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      hasData
+                          ? '${data.sessionCount} 个会话 · ${data.callCount} 次调用'
+                          : loading
+                              ? '正在读取历史 llm_usage 事件'
+                              : '暂无历史 token 记录',
+                      style: AppTheme.ts(
+                        fontSize: 10,
+                        color: AppTheme.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (loading)
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppTheme.accent,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (!hasData)
+            Text(
+              '完成一次模型调用后，这里会展示最近会话的总量、Agent 分布和高消耗会话，便于后续做成本优化对比。',
+              style: AppTheme.ts(
+                fontSize: 11,
+                color: AppTheme.textSecondary,
+                height: 1.45,
+              ),
+            )
+          else ...[
+            Row(
+              children: [
+                Expanded(
+                  child: _TokenMetric(
+                    label: '历史总量',
+                    value: _formatTokenCount(data.totalTokens),
+                    strong: true,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _TokenMetric(
+                    label: 'Provider',
+                    value: data.providerCount.toString(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _TokenMetric(
+                    label: '估算',
+                    value: data.estimatedCount.toString(),
+                  ),
+                ),
+              ],
+            ),
+            if (data.agentBuckets.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Agent 分布',
+                style: AppTheme.ts(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textTertiary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...data.agentBuckets.take(4).map(_TokenBucketRow.new),
+            ],
+            if (data.sessions.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                '最近高消耗会话',
+                style: AppTheme.ts(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textTertiary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...data.sessions.take(4).map(
+                    (item) => _TokenSessionCostRow(
+                      item: item,
+                      maxTokens: maxSessionTokens,
+                    ),
+                  ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TokenBucketRow extends StatelessWidget {
+  final TokenUsageBucketView bucket;
+
+  const _TokenBucketRow(this.bucket);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceHover.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.78)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _formatAgentName(bucket.key),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppTheme.ts(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+          ),
+          Text(
+            '${_formatTokenCount(bucket.totalTokens)} · ${bucket.callCount} 次',
+            style: AppTheme.ts(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TokenSessionCostRow extends StatelessWidget {
+  final TokenUsageSessionView item;
+  final int maxTokens;
+
+  const _TokenSessionCostRow({
+    required this.item,
+    required this.maxTokens,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio =
+        maxTokens <= 0 ? 0.0 : (item.totalTokens / maxTokens).clamp(0.0, 1.0);
+    final time = item.lastUsageAt ?? item.updatedAt;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceHover.withValues(alpha: 0.66),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border.withValues(alpha: 0.78)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.title.isEmpty ? item.sessionId : item.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ),
+              Text(
+                _formatTokenCount(item.totalTokens),
+                style: AppTheme.ts(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.accent,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: ratio,
+              minHeight: 5,
+              backgroundColor: AppTheme.border.withValues(alpha: 0.55),
+              color: AppTheme.accent,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${item.callCount} 次调用 · ${DateFormat('MM-dd HH:mm').format(time)}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTheme.ts(fontSize: 10, color: AppTheme.textTertiary),
+          ),
         ],
       ),
     );
@@ -1031,6 +1319,25 @@ String _formatTokenCount(int value) {
     return '${(value / 1000).toStringAsFixed(1)}K';
   }
   return value.toString();
+}
+
+String _formatAgentName(String value) {
+  switch (value) {
+    case 'agent_main':
+      return '主控 Agent';
+    case 'resume_agent':
+      return '简历 Agent';
+    case 'job_agent':
+      return '岗位 Agent';
+    case 'retrieval_agent':
+      return '检索 Agent';
+    case 'note_agent':
+      return '笔记 Agent';
+    case 'learning_agent':
+      return '学习 Agent';
+    default:
+      return value.isEmpty ? '未知 Agent' : value;
+  }
 }
 
 class _PanelIconButton extends StatelessWidget {

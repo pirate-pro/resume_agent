@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.api.dependencies.config import get_settings
+from app.api.dependencies.debug import get_token_usage_debug_service
 from app.api.dependencies.infrastructure import (
     get_agent_document_repository,
     get_career_product_store,
@@ -81,4 +82,5 @@ __all__ = [
     "get_state_manager",
     "get_state_store",
     "get_tool_registry",
+    "get_token_usage_debug_service",
 ]
