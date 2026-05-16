@@ -119,6 +119,7 @@ class RetrievalIndexer:
         workspace_id: str = _DEFAULT_WORKSPACE_ID,
         index_version: int = 1,
         clock: Callable[[], datetime] | None = None,
+        session_repository: SessionRepository | None = None,
     ) -> None:
         if not isinstance(index_store, RetrievalIndexStore):
             raise ValidationError("index_store must be RetrievalIndexStore.")
@@ -128,6 +129,7 @@ class RetrievalIndexer:
         self._workspace_id = _normalize_text("workspace_id", workspace_id, allow_empty=False)
         self._index_version = _normalize_int("index_version", index_version, min_value=1)
         self._clock = clock or app_now
+        self._session_repository = session_repository
 
     def index_documents(self, documents: Iterable[RetrievalIndexDocument]) -> RetrievalIndexingResult:
         """Replace or archive chunks for normalized documents."""
@@ -191,7 +193,7 @@ class RetrievalIndexer:
             raise ValidationError("knowledge_store must be KnowledgeStore.")
         documents: list[RetrievalIndexDocument] = []
         documents.extend(
-            _external_resource_document(item)
+            _external_resource_document(item, raw_text=self._read_resource_artifact_text(item))
             for item in knowledge_store.list_external_resources(include_archived=include_archived)
         )
         documents.extend(
@@ -211,6 +213,17 @@ class RetrievalIndexer:
             for item in knowledge_store.list_skill_requirements(include_archived=include_archived)
         )
         return self.index_documents(documents)
+
+    def _read_resource_artifact_text(self, resource: ExternalResource) -> str:
+        if self._session_repository is None:
+            return ""
+        artifact_id = resource.raw_artifact_id or resource.source_artifact_id
+        if artifact_id is None:
+            return ""
+        try:
+            return self._session_repository.read_session_artifact_text(resource.source_session_id, artifact_id)
+        except (SessionNotFoundError, StorageError):
+            return ""
 
     def sync_session_artifacts(
         self,
@@ -267,7 +280,7 @@ def _note_document(note: Note) -> RetrievalIndexDocument:
     )
 
 
-def _external_resource_document(resource: ExternalResource) -> RetrievalIndexDocument:
+def _external_resource_document(resource: ExternalResource, *, raw_text: str = "") -> RetrievalIndexDocument:
     resource_type = _enum_value(resource.resource_type)
     text = _document_text(
         ("标题", resource.title),
@@ -280,6 +293,7 @@ def _external_resource_document(resource: ExternalResource) -> RetrievalIndexDoc
         ("目标方向", resource.target_roles),
         ("技能标签", resource.skill_tags),
         ("要点", resource.key_points),
+        ("原文", raw_text),
     )
     return RetrievalIndexDocument(
         source_ref=RetrievalSourceRef(

@@ -21,6 +21,9 @@ migrate_working_dir/
 data/*
 !data/.gitkeep
 
+# Local imported knowledge materials
+docs/*.pdf
+
 # IntelliJ related
 *.iml
 *.ipr

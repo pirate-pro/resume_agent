@@ -809,6 +809,7 @@ M23 的关键判断：
 - 2026-05-16 已撤回提前实现的 RAG 分块索引底座，先回到架构设计评审阶段；设计确认后，第一批只恢复内部检索投影底座开发，不接 MCP、Agent 工具、prompt 或 RetrievalService 融合。
 - 2026-05-16 已完成 M23-3 第一批 indexer：`Note / Knowledge / SessionArtifact` 可以构建到 `RetrievalIndexStore`，归档记录和未 ready artifact 不进入 active index；仍不接 MCP、Agent 工具、prompt 或 RetrievalService 融合。
 - 2026-05-16 已完成 M23-4 第一批 sparse search：`RetrievalService` 可以融合 chunk 检索结果，保留原始 `source_type/source_id`，chunk 追溯信息只放在 hit metadata；仍不改 Agent prompt，不做 embedding、rerank、MCP 或中期记忆召回。
+- 2026-05-16 已完成外部 PDF 资料导入链路：本地 PDF 先成为 `SessionArtifact`，再创建 `ExternalResource`，并读取 artifact 原文构建 RAG chunk。已用 `docs/` 下 C++ / Java 两份代码随想录 PDF 做真实导入验证。
 
 推荐实施顺序：
 
@@ -829,10 +830,13 @@ app/retrieval/chunking.py
 app/retrieval/index_store.py
 app/retrieval/indexer.py
 app/retrieval/search.py
+app/knowledge/pdf_importer.py
+tools/import_knowledge_pdf.py
 tests/test_retrieval_chunking.py
 tests/test_retrieval_index_store.py
 tests/test_retrieval_indexer.py
 tests/test_retrieval_index_search.py
+tests/test_knowledge_pdf_importer.py
 ```
 
 验收重点：

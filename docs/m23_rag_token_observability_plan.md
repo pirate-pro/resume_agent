@@ -375,10 +375,33 @@ tests/test_retrieval_indexer.py
 - `sync_session_artifacts`
 - `index_documents`
 
-仍不做：
+### 7.3 PDF 外部资料导入
 
-- search。
-- RetrievalService 融合。
+已落地：
+
+```text
+app/knowledge/pdf_importer.py
+tools/import_knowledge_pdf.py
+tests/test_knowledge_pdf_importer.py
+```
+
+当前行为：
+
+- 本地 PDF 先复制为导入会话下的 `SessionArtifact`。
+- 使用现有 `pdftotext` 解析 PDF 文本，解析结果写入 artifact 的 `content.txt`。
+- 创建 `ExternalResource`，`raw_artifact_id/source_artifact_id` 指向 PDF artifact。
+- `RetrievalIndexer` 在构建 Knowledge chunk 时会读取关联 artifact 原文，而不是只索引资料摘要。
+- 导入完成后可自动重建 `RetrievalIndexStore`。
+
+已用 `docs/` 下两份代码随想录 PDF 做真实导入验证：
+
+```text
+C++ 篇：artifact_pdf_6f1217bc88bb8f5a -> resource_pdf_6f1217bc88bb8f5a
+Java 篇：artifact_pdf_b0c73c85cbd61f85 -> resource_pdf_b0c73c85cbd61f85
+```
+
+PDF 导入层仍不做：
+
 - Agent 工具。
 - prompt 修改。
 - MCP server。
