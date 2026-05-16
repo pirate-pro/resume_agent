@@ -6,6 +6,8 @@
 
 当前以 `docs/m23_rag_mcp_architecture_design.md` 作为 RAG / MCP 检索架构讨论草案。该草案确认前，不继续开发 chunking、index store、indexer、search 或 RetrievalService 融合。
 
+2026-05-16 补充：架构边界已确认，开始第一批内部检索投影底座开发。第一批只做 `RetrievalChunk`、确定性分块和 JSONL 索引存储；不做 MCP server、不接 Agent 工具、不改 prompt、不接 RetrievalService 融合。
+
 需要先明确：
 
 - RAG Index 只是检索投影，不是新的事实源。
@@ -266,6 +268,11 @@ RetrievalChunk
   char_end
   text
   token_estimate
+  owner_user_id
+  workspace_id
+  scope
+  sensitivity
+  index_version
   tags
   metadata
   status
@@ -320,6 +327,12 @@ data/retrieval_index/manifest.json
 - 可按 source 重建。
 - 源记录归档后 chunk 不进入 active search。
 - 不做跨 store 强存在性校验，只在 indexer 读取源记录时自然发现。
+
+当前第一批实现状态：
+
+- 已落地 `app/retrieval/index_models.py`、`app/retrieval/chunking.py`、`app/retrieval/index_store.py`。
+- 索引记录包含 `owner_user_id`、`workspace_id`、`scope`、`sensitivity`、`index_version`，为后续用户私有资料、公共资料和中期记忆摘要投影预留边界。
+- 当前不索引真实业务 store，不做跨事实源引用校验，后续由 M23-3 indexer 统一读取事实源并构建投影。
 
 ## 7. M23-3：检索与融合
 
