@@ -455,6 +455,32 @@ chunk_id: chunk_resource_resource_stargazer_interview_9b2a41
 match_reason: 命中 RAG chunk 策略、召回评估和失败恢复
 ```
 
+### 8.4 当前实现状态
+
+已落地：
+
+```text
+app/retrieval/search.py
+tests/test_retrieval_index_search.py
+```
+
+当前行为：
+
+- `build_index_hits` 对 `RetrievalIndexStore` 中的 chunk 做本地 sparse 检索。
+- `RetrievalService` 已可融合 index chunk hit，但工具名称和参数不变。
+- hit 的 `source_type/source_id` 仍指向原始事实源，不新增 `rag_chunk` source type。
+- chunk 追溯信息放在 hit payload 的 `metadata.chunk_id / metadata.chunk_index`。
+- `session_only` chunk 只在当前 session 召回。
+- `sensitive` 和 `memory_private` chunk 暂不进入召回。
+
+仍不做：
+
+- embedding。
+- rerank。
+- Agent prompt 修改。
+- MCP server。
+- 中期记忆索引召回。
+
 ## 9. Agent 使用方式
 
 第一阶段不新增 Agent 写入权限。

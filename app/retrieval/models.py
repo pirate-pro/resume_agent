@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -119,6 +121,7 @@ class RetrievalHit:
     match_reason: str
     updated_at: datetime
     evidence_refs: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.source, RetrievalSourceRef):
@@ -132,6 +135,7 @@ class RetrievalHit:
         self.match_reason = _normalize_text("match_reason", self.match_reason, allow_empty=True)
         self.updated_at = _normalize_datetime("updated_at", self.updated_at)
         self.evidence_refs = _normalize_string_list("evidence_refs", self.evidence_refs)
+        self.metadata = _normalize_metadata(self.metadata)
 
     def copy(self) -> Self:
         return type(self)(
@@ -144,13 +148,14 @@ class RetrievalHit:
             match_reason=self.match_reason,
             updated_at=self.updated_at,
             evidence_refs=list(self.evidence_refs),
+            metadata=deepcopy(self.metadata),
         )
 
     def content_length(self) -> int:
         return len(self.title) + len(self.summary) + len(self.snippet)
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "evidence_refs": list(self.evidence_refs),
             "match_reason": self.match_reason,
             "score": self.score,
@@ -161,6 +166,9 @@ class RetrievalHit:
             "title": self.title,
             "updated_at": to_app_iso(self.updated_at),
         }
+        if self.metadata:
+            payload["metadata"] = deepcopy(self.metadata)
+        return payload
 
 
 @dataclass(slots=True)
@@ -329,6 +337,16 @@ def _normalize_string_list(field_name: str, values: list[str]) -> list[str]:
         output.append(item)
         seen.add(item)
     return output
+
+
+def _normalize_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValidationError("metadata must be dict.")
+    try:
+        json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("metadata must be JSON serializable.") from exc
+    return deepcopy(value)
 
 
 def _normalize_score(value: float) -> float:

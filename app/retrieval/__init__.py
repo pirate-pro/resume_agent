@@ -14,6 +14,7 @@ from app.retrieval.index_models import (
     RetrievalIndexScope,
 )
 from app.retrieval.indexer import RetrievalIndexDocument, RetrievalIndexer, RetrievalIndexingResult
+from app.retrieval.search import build_index_hits
 from app.retrieval.service import RetrievalService
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "RetrievalService",
     "RetrievalSourceRef",
     "RetrievalSourceType",
+    "build_index_hits",
 ]

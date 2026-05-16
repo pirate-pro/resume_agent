@@ -9,6 +9,7 @@ from app.api.dependencies.infrastructure import (
     get_knowledge_store,
     get_learning_store,
     get_note_store,
+    get_retrieval_index_store,
     get_session_repository,
 )
 from app.retrieval.service import RetrievalService
@@ -24,4 +25,5 @@ def get_retrieval_service() -> RetrievalService:
         knowledge_store=get_knowledge_store(),
         learning_store=get_learning_store(),
         session_repository=get_session_repository(),
+        index_store=get_retrieval_index_store(),
     )

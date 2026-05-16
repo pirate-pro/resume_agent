@@ -15,6 +15,7 @@ from app.knowledge.store import KnowledgeStore
 from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
 from app.notes.store import NoteStore
+from app.retrieval.index_store import RetrievalIndexStore
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "get_lock_manager",
     "get_memory_store",
     "get_note_store",
+    "get_retrieval_index_store",
     "get_session_repository",
     "get_skill_repository",
     "get_state_store",
@@ -65,6 +67,12 @@ def get_learning_store() -> LearningStore:
 def get_memory_store() -> FileMemoryStore:
     settings = get_settings()
     return FileMemoryStore(root_dir=settings.data_dir / "memory")
+
+
+@lru_cache(maxsize=1)
+def get_retrieval_index_store() -> RetrievalIndexStore:
+    settings = get_settings()
+    return RetrievalIndexStore(root_dir=settings.data_dir / "retrieval_index")
 
 
 @lru_cache(maxsize=1)

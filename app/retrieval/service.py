@@ -16,7 +16,9 @@ from app.retrieval.adapters import (
     build_note_hits,
     build_session_artifact_hits,
 )
+from app.retrieval.index_store import RetrievalIndexStore
 from app.retrieval.models import ContextPack, RetrievalHit, RetrievalQuery, group_for_source_type, validate_source_type
+from app.retrieval.search import build_index_hits
 
 __all__ = ["RetrievalService"]
 
@@ -30,6 +32,7 @@ class RetrievalService:
     knowledge_store: KnowledgeStore | None = None
     learning_store: LearningStore | None = None
     session_repository: SessionRepository | None = None
+    index_store: RetrievalIndexStore | None = None
 
     def search(self, request: RetrievalQuery) -> list[RetrievalHit]:
         """Return ranked retrieval hits."""
@@ -84,11 +87,13 @@ class RetrievalService:
             hits.extend(build_learning_hits(self.learning_store, request))
         if self.session_repository is not None:
             hits.extend(build_session_artifact_hits(self.session_repository, request))
+        if self.index_store is not None:
+            hits.extend(build_index_hits(self.index_store, request))
         return hits
 
 
 def _rank_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
-    return sorted(
+    ranked = sorted(
         hits,
         key=lambda hit: (
             -hit.score,
@@ -97,6 +102,19 @@ def _rank_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
             hit.source.source_id,
         ),
     )
+    return _dedupe_ranked_hits(ranked)
+
+
+def _dedupe_ranked_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    output: list[RetrievalHit] = []
+    seen: set[tuple[str, str]] = set()
+    for hit in hits:
+        key = (validate_source_type(hit.source.source_type).value, hit.source.source_id)
+        if key in seen:
+            continue
+        output.append(hit)
+        seen.add(key)
+    return output
 
 
 def _group_hits(hits: list[RetrievalHit]) -> dict[str, list[RetrievalHit]]:
