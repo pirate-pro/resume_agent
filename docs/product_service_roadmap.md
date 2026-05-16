@@ -796,6 +796,8 @@ M22 的关键判断：
 
 方案文档：`docs/m23_rag_token_observability_plan.md`
 
+RAG / MCP 架构讨论草案：`docs/m23_rag_mcp_architecture_design.md`
+
 M23 的关键判断：
 
 - RAG 是产品质量能力，优先级高于 LangGraph、提醒系统和 memory 自动写入。
@@ -804,6 +806,7 @@ M23 的关键判断：
 - RAG 索引只是 projection / cache，不是新的事实源。
 - 用户自己的面经、复盘和答案草稿仍进入 Note；外部资料、公开面经、面试题和资料链接进入 Knowledge。
 - 第一阶段不做 MCP server、不做自动爬虫、不做 memory 自动写入、不改变普通用户产品入口。
+- 2026-05-16 已撤回提前实现的 RAG 分块索引底座，先回到架构设计评审阶段；设计确认前不继续开发 chunking、index store、indexer 或 RetrievalService 融合。
 
 推荐实施顺序：
 

@@ -1,5 +1,18 @@
 # M23 RAG 质量层与 Token 管理观测方案
 
+## 0. 设计前置说明
+
+2026-05-16 调整：RAG 底座实现先暂停，进入架构设计评审。
+
+当前以 `docs/m23_rag_mcp_architecture_design.md` 作为 RAG / MCP 检索架构讨论草案。该草案确认前，不继续开发 chunking、index store、indexer、search 或 RetrievalService 融合。
+
+需要先明确：
+
+- RAG Index 只是检索投影，不是新的事实源。
+- Note / Knowledge / Memory / SessionArtifact 保持各自事实源边界。
+- 笔记和中期记忆不是迁移到 RAG，而是由后台任务生成可重建索引。
+- MCP 先作为边界预留，不先实现 server。
+
 ## 1. 一句话目标
 
 M23 的目标是把当前候选版从“流程可用”推进到“资料召回质量可验证、Token 消耗可观测”。
