@@ -13,13 +13,17 @@ from app.retrieval.index_models import (
     RetrievalChunkStatus,
     RetrievalIndexScope,
 )
+from app.retrieval.indexer import RetrievalIndexDocument, RetrievalIndexer, RetrievalIndexingResult
 from app.retrieval.service import RetrievalService
 
 __all__ = [
     "ContextPack",
     "RetrievalChunk",
+    "RetrievalIndexDocument",
     "RetrievalChunkSensitivity",
     "RetrievalChunkStatus",
+    "RetrievalIndexer",
+    "RetrievalIndexingResult",
     "RetrievalIndexScope",
     "RetrievalHit",
     "RetrievalQuery",

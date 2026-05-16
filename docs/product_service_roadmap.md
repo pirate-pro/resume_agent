@@ -807,6 +807,7 @@ M23 的关键判断：
 - 用户自己的面经、复盘和答案草稿仍进入 Note；外部资料、公开面经、面试题和资料链接进入 Knowledge。
 - 第一阶段不做 MCP server、不做自动爬虫、不做 memory 自动写入、不改变普通用户产品入口。
 - 2026-05-16 已撤回提前实现的 RAG 分块索引底座，先回到架构设计评审阶段；设计确认后，第一批只恢复内部检索投影底座开发，不接 MCP、Agent 工具、prompt 或 RetrievalService 融合。
+- 2026-05-16 已完成 M23-3 第一批 indexer：`Note / Knowledge / SessionArtifact` 可以构建到 `RetrievalIndexStore`，归档记录和未 ready artifact 不进入 active index；仍不接 MCP、Agent 工具、prompt 或 RetrievalService 融合。
 
 推荐实施顺序：
 
@@ -819,14 +820,16 @@ M23 的关键判断：
 6. M23-6 Agent 契约微调和低批次真实链路验证。
 ```
 
-第一批建议先做：
+当前已完成：
 
 ```text
-app/debug/token_usage.py
-tests/test_token_usage_debug_service.py
 app/retrieval/index_models.py
 app/retrieval/chunking.py
+app/retrieval/index_store.py
+app/retrieval/indexer.py
 tests/test_retrieval_chunking.py
+tests/test_retrieval_index_store.py
+tests/test_retrieval_indexer.py
 ```
 
 验收重点：

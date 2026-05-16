@@ -334,9 +334,59 @@ data/retrieval_index/manifest.json
 - 索引记录包含 `owner_user_id`、`workspace_id`、`scope`、`sensitivity`、`index_version`，为后续用户私有资料、公共资料和中期记忆摘要投影预留边界。
 - 当前不索引真实业务 store，不做跨事实源引用校验，后续由 M23-3 indexer 统一读取事实源并构建投影。
 
-## 7. M23-3：检索与融合
+## 7. M23-3：Indexer 索引构建
 
-### 7.1 第一阶段检索方式
+### 7.1 构建范围
+
+Indexer 负责把事实源记录构建成可重建的 chunk 投影。
+
+第一批只接：
+
+- `Note`
+- `ExternalResource`
+- `ExperiencePost`
+- `InterviewQuestion`
+- `CompanyProfile`
+- `SkillRequirement`
+- 当前会话内 `SessionArtifact`
+
+边界：
+
+- `Note` 使用 `user_private / private`。
+- `Knowledge` 使用 `user_library / internal`。
+- `SessionArtifact` 使用 `session_only / private`。
+- 归档记录只归档已有 chunk，不参与 active search。
+- ready 之外的 artifact 不进入 active index。
+- 不做跨 store 引用存在性校验。
+
+### 7.2 当前实现状态
+
+已落地：
+
+```text
+app/retrieval/indexer.py
+tests/test_retrieval_indexer.py
+```
+
+当前 `RetrievalIndexer` 支持：
+
+- `sync_notes`
+- `sync_knowledge`
+- `sync_session_artifacts`
+- `index_documents`
+
+仍不做：
+
+- search。
+- RetrievalService 融合。
+- Agent 工具。
+- prompt 修改。
+- MCP server。
+- 中期记忆索引。
+
+## 8. M23-4：检索与融合
+
+### 8.1 第一阶段检索方式
 
 第一阶段先做本地 sparse / lexical 检索，不强依赖 embedding。
 
@@ -348,7 +398,7 @@ data/retrieval_index/manifest.json
 
 但模型要预留 embedding 字段和接口边界，后续可以升级为 hybrid search。
 
-### 7.2 检索评分
+### 8.2 检索评分
 
 建议评分因素：
 
@@ -375,7 +425,7 @@ match_reason
 citations
 ```
 
-### 7.3 融合到 RetrievalService
+### 8.3 融合到 RetrievalService
 
 RetrievalService 现有输出是 `RetrievalHit` 和 `ContextPack`。
 
@@ -405,7 +455,7 @@ chunk_id: chunk_resource_resource_stargazer_interview_9b2a41
 match_reason: 命中 RAG chunk 策略、召回评估和失败恢复
 ```
 
-## 8. M23-4：Agent 使用方式
+## 9. Agent 使用方式
 
 第一阶段不新增 Agent 写入权限。
 
@@ -426,11 +476,11 @@ retrieval_context_pack
 
 `resume_agent` 和 `job_agent` 仍不直接开放全局 RetrievalService，除非后续证明有必要。
 
-## 9. M23-5：RAG 质量评估
+## 10. M23-5：RAG 质量评估
 
 RAG 不应该只靠肉眼感觉，需要最小评估集。
 
-### 9.1 评估集
+### 10.1 评估集
 
 先做 10 条以内固定查询：
 
@@ -455,7 +505,7 @@ forbidden_source_types
 min_recall_at_k
 ```
 
-### 9.2 指标
+### 10.2 指标
 
 第一阶段指标：
 
@@ -470,7 +520,7 @@ max_context_chars_respected
 
 暂不做复杂语义评分。
 
-### 9.3 测试文件
+### 10.3 测试文件
 
 ```text
 tests/test_retrieval_rag_index.py
@@ -485,7 +535,7 @@ tools/evaluate_retrieval_rag.py
 
 输出 JSON 报告，后续可以和 Token 消耗一起看。
 
-## 10. M23-6：低批次真实链路验证
+## 11. M23-6：低批次真实链路验证
 
 真实模型验证只跑低批次。
 
@@ -519,7 +569,7 @@ Agent 调用 retrieval
 - 不越界写入。
 - 记录 token 消耗。
 
-## 11. 开发顺序
+## 12. 开发顺序
 
 推荐顺序：
 
@@ -548,7 +598,7 @@ tests/test_retrieval_chunking.py
 - chunking 是 RAG 的底座，必须先稳定。
 - 先不碰 Agent prompt，避免没有评估集就改变模型行为。
 
-## 12. 验收标准
+## 13. 验收标准
 
 M23 完成时应该满足：
 
@@ -563,9 +613,9 @@ M23 完成时应该满足：
 - 不提前引入 MCP。
 - 不暴露内部文件路径。
 
-## 13. 风险与处理
+## 14. 风险与处理
 
-### 13.1 RAG 变成第二套知识库
+### 14.1 RAG 变成第二套知识库
 
 风险：chunk 索引保存太多业务字段，最后和 Knowledge / Note 事实源冲突。
 
@@ -575,7 +625,7 @@ M23 完成时应该满足：
 - 源记录更新后重建 chunk。
 - 对用户展示和编辑仍回到源记录。
 
-### 13.2 召回太多导致上下文变大
+### 14.2 召回太多导致上下文变大
 
 风险：RAG 提升召回后，ContextPack 变长，回答质量未必提升。
 
@@ -587,7 +637,7 @@ M23 完成时应该满足：
 
 M23 暂不做自动 Token 优化，但不能让 RAG 无限制扩张。
 
-### 13.3 用户笔记和外部资料混淆
+### 14.3 用户笔记和外部资料混淆
 
 风险：用户自己的面经被当外部资料，外部资料被当用户经历。
 
@@ -597,7 +647,7 @@ M23 暂不做自动 Token 优化，但不能让 RAG 无限制扩张。
 - 外部资料进入 Knowledge。
 - RAG 搜索结果必须保留 source_type。
 
-### 13.4 过早上 embedding 导致调试困难
+### 14.4 过早上 embedding 导致调试困难
 
 风险：embedding 接入后召回不稳定，问题难定位。
 
@@ -607,7 +657,7 @@ M23 暂不做自动 Token 优化，但不能让 RAG 无限制扩张。
 - 先有固定评估集。
 - embedding 作为后续 hybrid search 增强，不作为 M23-2 的前置条件。
 
-## 14. 结论
+## 15. 结论
 
 M23 应该优先做 RAG，但要从“可评估的最小闭环”开始。
 
