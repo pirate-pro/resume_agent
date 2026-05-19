@@ -527,6 +527,30 @@ def test_delegate_agents_tool_returns_aggregated_results(tmp_path: Path) -> None
     assert all(item["target_agent_id"] == "resume_agent" for item in payload["results"])
 
 
+def test_delegate_agents_tool_accepts_json_string_tasks(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.tool_registry.execute(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "wait": True,
+                "tasks": json.dumps(
+                    [{"target_agent_id": "resume_agent", "instruction": "解析简历文件", "max_tool_rounds": 0}],
+                    ensure_ascii=False,
+                ),
+            },
+        ),
+        _source_context(),
+    )
+    payload = json.loads(result.content)
+
+    assert result.success is True
+    assert payload["status"] == "completed"
+    assert payload["results"][0]["target_agent_id"] == "resume_agent"
+
+
 def test_delegate_agents_tool_returns_noop_for_empty_task_list(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_delegate")
@@ -551,6 +575,16 @@ def test_delegate_agents_tool_returns_noop_for_empty_task_list(tmp_path: Path) -
     assert missing_tasks_result.success is True
     assert missing_tasks_payload["status"] == "skipped"
     assert missing_tasks_payload["results"] == []
+
+    invalid_tasks_result = bundle.tool_registry.execute(
+        ToolCall(name="delegate_agents", arguments={"wait": True, "tasks": "not-json"}),
+        _source_context(),
+    )
+    invalid_tasks_payload = json.loads(invalid_tasks_result.content)
+
+    assert invalid_tasks_result.success is True
+    assert invalid_tasks_payload["status"] == "skipped"
+    assert invalid_tasks_payload["results"] == []
 
 
 def test_agent_task_status_tool_returns_persisted_task_group(tmp_path: Path) -> None:

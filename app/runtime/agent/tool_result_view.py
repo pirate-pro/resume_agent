@@ -195,12 +195,30 @@ def _compact_delegate_result(item: Any) -> dict[str, Any]:
             "summary": _text(data.get("summary"), 500),
             "answer_preview": _text(data.get("answer"), 700),
             "extracted_ids": _extract_known_ids(data),
+            "followup_hints": _delegate_followup_hints(data),
             "child_run_id": data.get("child_run_id"),
             "artifact_refs": _compact_string_list(data.get("artifact_refs"), limit=12, item_chars=120),
             "next_steps": _compact_string_list(data.get("next_steps"), limit=6, item_chars=160),
             "error": _text(data.get("error"), 300),
         }
     )
+
+
+def _delegate_followup_hints(data: dict[str, Any]) -> list[str] | None:
+    if data.get("status") != "completed":
+        return None
+    target_agent_id = data.get("target_agent_id")
+    if target_agent_id == "resume_agent":
+        return [
+            "If the result includes a resume_profile_id, update career_profile_default with career_profile_merge before finalizing the resume diagnosis turn.",
+            "If career tools are not visible yet, call tool_search for the career group first.",
+        ]
+    if target_agent_id == "job_agent":
+        return [
+            "Use returned jd_analysis_id, job_fit_report_id, report_artifact_id, resume_profile_id, and career_profile_id directly.",
+            "Do not call status/list/get tools only to reconfirm completed child results.",
+        ]
+    return None
 
 
 def _compact_product_payload(*, tool_name: str, payload: Any) -> dict[str, Any]:

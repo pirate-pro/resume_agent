@@ -136,6 +136,7 @@ def test_learning_task_create_normalizes_typed_evidence_refs(tmp_path: Path) -> 
             "description": "根据面试复盘创建学习任务。",
             "evidence_refs": [
                 "career_application:application_alpha",
+                "",
                 "job_fit_report:fit_alpha",
                 "note:note_review_alpha",
             ],

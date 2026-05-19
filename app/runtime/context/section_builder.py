@@ -24,6 +24,7 @@ from app.runtime.context.short_term import (
     format_context_summary_lines,
 )
 from app.runtime.context.workflow_rules import WorkflowRulePack
+from app.runtime.context.workflow_state import format_current_workflow_state_lines
 
 
 def build_assembly_plan(
@@ -134,6 +135,20 @@ def build_assembly_plan(
                     for item in short_term_plan.orchestration_state
                 ),
                 item_count=len(short_term_plan.orchestration_state),
+            )
+        )
+    workflow_state_lines = format_current_workflow_state_lines(short_term_plan.workflow_state)
+    if workflow_state_lines:
+        sections.append(
+            ContextSection(
+                name="current_workflow_state",
+                content=(
+                    "Current workflow state from successful tool results:\n"
+                    + "\n".join(workflow_state_lines)
+                    + "\n\nUse these ids directly for follow-up get/read/update calls. "
+                    "Call list tools only when an id is missing or the user asks to enumerate records."
+                ),
+                item_count=len(workflow_state_lines),
             )
         )
     context_summary_lines = format_context_summary_lines(short_term_plan.context_summaries)

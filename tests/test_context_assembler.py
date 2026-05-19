@@ -484,6 +484,121 @@ def test_context_assembler_includes_agent_and_shared_state_prompt(tmp_path: Path
     assert "- shared_goal: 让协作 agent 看到阶段目标 [owner_agent_id: agent_main]" in bundle.system_prompt
 
 
+def test_context_assembler_injects_current_workflow_state_from_tool_results(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_workflow_state"
+    session_repo.create_session(session_id)
+    now = datetime.now(UTC)
+    tool_results = [
+        (
+            "evt_resume_profile",
+            "career_resume_profile_save",
+            {
+                "record_type": "resume_profile",
+                "record_id": "resume_profile_alpha",
+                "status": "active",
+                "record": {
+                    "resume_profile_id": "resume_profile_alpha",
+                    "source_artifact_id": "artifact_resume_source",
+                    "diagnosis_artifact_id": "artifact_resume_diagnosis",
+                },
+            },
+            True,
+        ),
+        (
+            "evt_fit_report",
+            "career_job_fit_report_save",
+            {
+                "record_type": "job_fit_report",
+                "record_id": "fit_ai_backend_001",
+                "status": "active",
+                "record": {
+                    "job_fit_report_id": "fit_ai_backend_001",
+                    "jd_analysis_id": "jd_ai_backend_001",
+                    "resume_profile_id": "resume_profile_alpha",
+                    "career_profile_id": "career_profile_default",
+                    "source_artifact_id": "artifact_jd_source",
+                    "report_artifact_id": "artifact_fit_report",
+                },
+            },
+            True,
+        ),
+        (
+            "evt_application",
+            "career_application_create",
+            {
+                "record_type": "career_application",
+                "record_id": "application_ai_backend",
+                "status": "active",
+                "record": {
+                    "application_id": "application_ai_backend",
+                    "resume_profile_id": "resume_profile_alpha",
+                    "career_profile_id": "career_profile_default",
+                    "jd_analysis_id": "jd_ai_backend_001",
+                    "job_fit_report_id": "fit_ai_backend_001",
+                    "source_artifact_id": "artifact_jd_source",
+                },
+            },
+            True,
+        ),
+        (
+            "evt_failed",
+            "career_resume_version_create",
+            {"record_type": "resume_version", "record_id": "resume_version_failed"},
+            False,
+        ),
+    ]
+    for event_id, tool_name, content, success in tool_results:
+        session_repo.append_event(
+            session_id,
+            EventRecord(
+                event_id=event_id,
+                session_id=session_id,
+                type="tool_result",
+                payload={
+                    "tool_name": tool_name,
+                    "success": success,
+                    "content": json.dumps(content, ensure_ascii=False),
+                    "tool_call_id": f"call_{event_id}",
+                },
+                created_at=now,
+                agent_id="agent_main",
+                run_id="run_main",
+            ),
+        )
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
+    )
+
+    bundle = assembler.assemble(
+        context=_context(session_id, agent_id="agent_main", entry_agent_id="agent_main"),
+        user_message="继续生成定制简历",
+        skill_names=["base"],
+    )
+
+    assert "Current workflow state from successful tool results:" in bundle.system_prompt
+    assert "resume_source_artifact_id=artifact_resume_source via career_resume_profile_save" in bundle.system_prompt
+    assert "resume_profile_id=resume_profile_alpha via career_application_create" in bundle.system_prompt
+    assert "career_profile_id=career_profile_default via career_application_create" in bundle.system_prompt
+    assert "jd_analysis_id=jd_ai_backend_001 via career_application_create" in bundle.system_prompt
+    assert "job_fit_report_id=fit_ai_backend_001 via career_application_create" in bundle.system_prompt
+    assert "report_artifact_id=artifact_fit_report via career_job_fit_report_save" in bundle.system_prompt
+    assert "application_id=application_ai_backend via career_application_create" in bundle.system_prompt
+    assert "Call list tools only when an id is missing" in bundle.system_prompt
+    assert "resume_version_failed" not in bundle.system_prompt
+    workflow_sections = [
+        section for section in bundle.system_prompt_sections if section["name"] == "current_workflow_state"
+    ]
+    assert workflow_sections
+    assert workflow_sections[0]["item_count"] >= 7
+
+
 def test_context_assembler_excludes_shared_state_for_other_agent(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     capability_registry = _capability_registry()

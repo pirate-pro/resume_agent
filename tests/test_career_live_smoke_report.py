@@ -799,6 +799,42 @@ def test_live_smoke_report_warns_when_protective_tool_failure_recovers(tmp_path:
     ]
 
 
+def test_live_smoke_report_warns_when_unverified_metric_failure_recovers(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_recovered_metric")
+    _append_tool_result(
+        stack.session_repository,
+        session_id=report.session_id,
+        event_id="evt_failed_resume_version_metric",
+        tool_name="career_resume_version_create",
+        success=False,
+        content=(
+            "ResumeVersion validation failed: ResumeVersion content contains unverified quantitative metrics "
+            "not present in the base resume artifact: 40%, 68%."
+        ),
+        tool_call_id="call_failed_resume_version_metric",
+    )
+    _append_tool_result(
+        stack.session_repository,
+        session_id=report.session_id,
+        event_id="evt_recovered_resume_version_metric",
+        tool_name="career_resume_version_create",
+        success=True,
+        content='{"record_type":"resume_version","record_id":"resume_version_quality"}',
+        tool_call_id="call_recovered_resume_version_metric",
+    )
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert report.success
+    assert report.failed_tools == []
+    assert not report.errors
+    assert report.warnings == [
+        "已恢复的工具保护性拒绝: career_resume_version_create -> "
+        "ResumeVersion validation failed: ResumeVersion content contains unverified quantitative metrics "
+        "not present in the base resume artifact: 40%, 68%."
+    ]
+
+
 def _base_report_and_stack(tmp_path: Path, *, session_id: str) -> tuple[FlowReport, LiveStack]:
     repository = JsonlSessionRepository(data_dir=tmp_path)
     repository.create_session(session_id)

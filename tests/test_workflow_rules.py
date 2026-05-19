@@ -42,6 +42,9 @@ def test_sparse_rules_select_job_fit_and_delegation() -> None:
         "career_job_fit",
         "delegate_agents",
     ]
+    content = "\n".join(pack.content for pack in packs)
+    assert "career_profile_default" in content
+    assert "never invent profile ids" in content
 
 
 def test_sparse_rules_select_retrieval_and_learning_for_previous_job() -> None:

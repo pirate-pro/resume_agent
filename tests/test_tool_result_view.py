@@ -109,6 +109,10 @@ def test_delegate_agents_model_view_keeps_task_summaries_and_artifacts() -> None
         "resume_profile_alpha",
         "artifact_resume_diagnosis",
     ]
+    assert compact_payload["results"][0]["followup_hints"] == [
+        "If the result includes a resume_profile_id, update career_profile_default with career_profile_merge before finalizing the resume diagnosis turn.",
+        "If career tools are not visible yet, call tool_search for the career group first.",
+    ]
     assert "子 agent 完整回答。" * 80 not in compact
     assert len(compact_payload["results"][0]["answer_preview"]) < len(long_answer)
 

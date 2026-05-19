@@ -81,6 +81,36 @@ class ContextAssemblyPlan:
 
 
 @dataclass(slots=True)
+class CurrentWorkflowState:
+    """Compact current-turn product refs derived from successful tool results."""
+
+    refs: dict[str, str] = field(default_factory=dict)
+    source_tools: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.refs, dict):
+            raise ValidationError("workflow state refs must be a dictionary.")
+        if not isinstance(self.source_tools, dict):
+            raise ValidationError("workflow state source_tools must be a dictionary.")
+        normalized_refs: dict[str, str] = {}
+        for raw_key, raw_value in self.refs.items():
+            key = _normalize_non_empty("workflow state key", str(raw_key))
+            value = _normalize_non_empty("workflow state value", str(raw_value))
+            normalized_refs[key] = value
+        normalized_sources: dict[str, str] = {}
+        for raw_key, raw_value in self.source_tools.items():
+            key = _normalize_non_empty("workflow state source key", str(raw_key))
+            value = _normalize_non_empty("workflow state source value", str(raw_value))
+            if key in normalized_refs:
+                normalized_sources[key] = value
+        self.refs = normalized_refs
+        self.source_tools = normalized_sources
+
+    def is_empty(self) -> bool:
+        return not self.refs
+
+
+@dataclass(slots=True)
 class ShortTermContextPlan:
     """Role-aware short-term context selected for one invocation."""
 
@@ -91,6 +121,7 @@ class ShortTermContextPlan:
     context_summaries: list[EventRecord]
     assigned_tasks: list[AgentTaskAssignedPayload]
     child_result_summaries: list[AgentResultSummaryPayload]
+    workflow_state: CurrentWorkflowState = field(default_factory=CurrentWorkflowState)
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, ContextAssemblyRole):
@@ -107,6 +138,8 @@ class ShortTermContextPlan:
             raise ValidationError("assigned_tasks must be a list.")
         if not isinstance(self.child_result_summaries, list):
             raise ValidationError("child_result_summaries must be a list.")
+        if not isinstance(self.workflow_state, CurrentWorkflowState):
+            raise ValidationError("workflow_state must be CurrentWorkflowState.")
 
 
 @dataclass(slots=True)

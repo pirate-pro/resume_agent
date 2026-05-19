@@ -146,7 +146,7 @@ _PACKS: dict[str, WorkflowRulePack] = {
         content=(
             "- Resume source material must come from a current session artifact.\n"
             "- For resume parsing/diagnosis, delegate to resume_agent when available and confirm resume_profile_id plus diagnosis artifact id from results.\n"
-            "- After a usable ResumeProfile exists, merge stable career facts into career_profile_default instead of writing them to memory.\n"
+            "- After a usable ResumeProfile exists, you must merge stable career facts into career_profile_default before finalizing the turn; reveal career tools first if needed.\n"
             "- Reuse an existing resume_profile_id when the current turn already provides one; do not parse the same resume again."
         ),
     ),
@@ -165,6 +165,7 @@ _PACKS: dict[str, WorkflowRulePack] = {
         title="Job Fit Report",
         content=(
             "- For resume + JD matching, reuse existing ResumeProfile, CareerProfile, JDAnalysis, and JobFitReport when available.\n"
+            "- CareerProfile id should be career_profile_default unless a tool result provides another existing career_profile_id; never invent profile ids.\n"
             "- A saved JobFitReport should have a report_artifact_id for the user-visible Markdown report.\n"
             "- Create or update a CareerApplication to connect resume_profile_id, career_profile_id, jd_analysis_id, job_fit_report_id, and next actions.\n"
             "- A ResumeVersion must not add quantified metrics unless they are present in the base resume source artifact; missing metrics belong in risks or next_actions.\n"

@@ -559,7 +559,13 @@ class CareerJobFitReportSaveTool:
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
                     "jd_analysis_id": {"type": "string"},
                     "resume_profile_id": {"type": "string"},
-                    "career_profile_id": {"type": "string"},
+                    "career_profile_id": {
+                        "type": "string",
+                        "description": (
+                            "Use career_profile_default unless an existing career_profile_id was returned by "
+                            "career_profile_get/merge or current workflow state. Do not invent profile ids."
+                        ),
+                    },
                     "overall_score": {"type": "integer", "minimum": 0, "maximum": 100},
                     "score_breakdown": {
                         "type": "object",

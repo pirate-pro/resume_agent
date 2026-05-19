@@ -78,8 +78,8 @@ class DelegateAgentsTool:
         if not wait:
             raise ToolExecutionError("delegate_agents currently supports wait=true only.")
         max_concurrency = min(parse_positive_int(arguments.get("max_concurrency", 3), "max_concurrency"), 8)
-        raw_tasks = arguments.get("tasks")
-        if raw_tasks is None or (isinstance(raw_tasks, list) and not raw_tasks):
+        raw_tasks = _normalize_raw_tasks(arguments.get("tasks"))
+        if not raw_tasks:
             return _empty_delegation_result()
         specs = _parse_task_specs(raw_tasks)
         try:
@@ -104,7 +104,7 @@ def _empty_delegation_result() -> ToolExecutionResult:
     payload = {
         "status": "skipped",
         "results": [],
-        "message": "No tasks were delegated because tasks was empty.",
+        "message": "No tasks were delegated because tasks was empty or not a valid task list.",
         "hint": "Call delegate_agents only when at least one target_agent_id and instruction are ready.",
     }
     return ToolExecutionResult(
@@ -184,6 +184,21 @@ class AgentTaskStatusTool:
 def _parse_wait(raw: Any) -> bool:
     if not isinstance(raw, bool):
         raise ToolExecutionError("'wait' must be a boolean.")
+    return raw
+
+
+def _normalize_raw_tasks(raw: Any) -> Any:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return []
+        try:
+            decoded = json.loads(stripped)
+        except ValueError:
+            return []
+        return decoded
     return raw
 
 

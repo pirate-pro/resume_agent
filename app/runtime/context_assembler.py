@@ -51,6 +51,7 @@ from app.runtime.context.workflow_rules import (
     select_full_workflow_skill_names,
     select_sparse_workflow_rule_packs,
 )
+from app.runtime.context.workflow_state import extract_current_workflow_state
 from app.runtime.agent.tool_reveal import normalize_always_visible_tool_names, normalize_tool_schema_disclosure_mode
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
@@ -163,7 +164,7 @@ class ContextAssembler:
         )
         system_prompt = assembly_plan.render_prompt()
         _logger.debug(
-            "上下文组装: session_id=%s role=%s sections=%s skills=%s workflow_packs=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
+            "上下文组装: session_id=%s role=%s sections=%s skills=%s workflow_packs=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s workflow_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
             normalized_session_id,
             assembly_plan.role.value,
             assembly_plan.section_names(),
@@ -174,6 +175,7 @@ class ContextAssembler:
             len(invokable_agents),
             len(short_term_plan.agent_state),
             len(short_term_plan.orchestration_state),
+            len(short_term_plan.workflow_state.refs),
             len(short_term_plan.assigned_tasks),
             len(short_term_plan.child_result_summaries),
             len(memory_hits),
@@ -321,6 +323,7 @@ class ContextAssembler:
             orchestration_events = self._session_repository.list_orchestration_events(context.session_id)
             main_view_events = _merge_context_events(agent_events, orchestration_events)
             visible_events = [event for event in main_view_events if is_main_agent_orchestration_event(event, context)]
+            workflow_state = extract_current_workflow_state(visible_events, context)
             context_summaries = latest_context_summaries(visible_events, context)
             recent_events = exclude_context_summaries(visible_events)[-limit:]
             child_result_summaries = extract_child_result_summaries(recent_events, context)[
@@ -338,6 +341,7 @@ class ContextAssembler:
             recent_events = exclude_context_summaries(related_events)[-limit:]
             assigned_tasks = extract_assigned_tasks(all_events, context)[-AGENT_TASK_CONTEXT_MAX_COUNT:]
             child_result_summaries = []
+            workflow_state = extract_current_workflow_state(related_events, context)
 
         return ShortTermContextPlan(
             role=role,
@@ -347,6 +351,7 @@ class ContextAssembler:
             context_summaries=context_summaries,
             assigned_tasks=assigned_tasks,
             child_result_summaries=child_result_summaries,
+            workflow_state=workflow_state,
         )
 
     def _safe_memory_search(

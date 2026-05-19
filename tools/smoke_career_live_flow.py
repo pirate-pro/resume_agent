@@ -1288,7 +1288,11 @@ def recovered_protective_tool_failure(
 ) -> bool:
     tool_name = str(failed_payload.get("tool_name") or "")
     content = str(failed_payload.get("content") or "")
-    if tool_name != "career_resume_version_create" or "forbidden placeholder or replacement wording" not in content:
+    protective_markers = (
+        "forbidden placeholder or replacement wording",
+        "unverified quantitative metrics",
+    )
+    if tool_name != "career_resume_version_create" or not any(marker in content for marker in protective_markers):
         return False
 
     failed_call_id = failed_payload.get("tool_call_id")

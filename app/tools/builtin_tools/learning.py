@@ -838,7 +838,7 @@ def _optional_string_list(raw: Any, *, field_name: str) -> list[str]:
 
 
 def _required_evidence_refs(raw: Any) -> list[str]:
-    refs = _optional_string_list(raw, field_name="evidence_refs")
+    refs = _optional_evidence_ref_list(raw)
     if not refs:
         raise ToolExecutionError("'evidence_refs' must include at least one reference.")
     output: list[str] = []
@@ -849,6 +849,25 @@ def _required_evidence_refs(raw: Any) -> list[str]:
             continue
         output.append(normalized)
         seen.add(normalized)
+    return output
+
+
+def _optional_evidence_ref_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        return [stripped] if stripped else []
+    if not isinstance(raw, list):
+        raise ToolExecutionError("'evidence_refs' must be a list of strings.")
+    output: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                output.append(stripped)
+            continue
+        raise ToolExecutionError("each 'evidence_refs' item must be a string.")
     return output
 
 
