@@ -29,6 +29,7 @@ from tools.smoke_career_live_flow import (
     infer_failure_stage,
     inspect_flow_outputs,
     print_report,
+    retrieval_quality_summary,
     run_all,
 )
 
@@ -243,6 +244,60 @@ def test_live_smoke_passes_retrieval_action_argument_to_run(
 
     assert reports[0].success is True
     assert seen["retrieval_action"] == "learning_task"
+
+
+def test_retrieval_quality_summary_reports_context_budget(tmp_path: Path) -> None:
+    session_id = "sess_live_rag_quality"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_call_search",
+        tool_name="retrieval_search",
+        arguments={"query": "RAG 一面复盘", "top_k": 5},
+        tool_call_id="call_search",
+    )
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_result_search",
+        tool_name="retrieval_search",
+        success=True,
+        content='{"hits":[{"source":{"source_type":"note","source_id":"note_1"}}]}',
+        tool_call_id="call_search",
+    )
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_call_pack",
+        tool_name="retrieval_context_pack",
+        arguments={"query": "RAG 一面复盘", "max_chars": 500},
+        tool_call_id="call_pack",
+    )
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_result_pack",
+        tool_name="retrieval_context_pack",
+        success=True,
+        content=(
+            '{"max_chars":500,"context_char_count":420,'
+            '"context_pack":{"context_char_count":420,'
+            '"hits":[{"source":{"source_type":"career_application","source_id":"application_1"}},'
+            '{"source":{"source_type":"note","source_id":"note_1"}}]}}'
+        ),
+        tool_call_id="call_pack",
+    )
+
+    summary = retrieval_quality_summary(repository, session_id)
+
+    assert summary["search_calls"] == 1
+    assert summary["context_pack_calls"] == 1
+    assert summary["max_context_chars"] == 420
+    assert summary["max_requested_chars"] == 500
+    assert summary["budget_violations"] == 0
+    assert summary["source_type_counts"] == {"note": 2, "career_application": 1}
 
 
 def test_live_smoke_report_fails_when_m12_action_skips_retrieval(tmp_path: Path) -> None:
@@ -791,6 +846,34 @@ def _append_tool_result(
                 "tool_name": tool_name,
                 "success": success,
                 "content": content,
+                "tool_call_id": tool_call_id,
+            },
+            created_at=app_now(),
+            agent_id="agent_main",
+            run_id="run_test",
+        ),
+    )
+
+
+def _append_tool_call(
+    repository: JsonlSessionRepository,
+    *,
+    session_id: str,
+    event_id: str,
+    tool_name: str,
+    arguments: dict[str, object],
+    tool_call_id: str,
+) -> None:
+    repository.append_agent_event(
+        session_id,
+        "agent_main",
+        EventRecord(
+            event_id=event_id,
+            session_id=session_id,
+            type="tool_call",
+            payload={
+                "name": tool_name,
+                "arguments": arguments,
                 "tool_call_id": tool_call_id,
             },
             created_at=app_now(),

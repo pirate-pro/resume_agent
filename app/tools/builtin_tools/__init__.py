@@ -65,6 +65,7 @@ from app.tools.builtin_tools.session_artifacts import (
     SessionSearchArtifactTool,
 )
 from app.tools.builtin_tools.state import StateListTool, StatePublishTool, StateSetTool
+from app.tools.builtin_tools.tool_search import ToolSearchTool
 from app.tools.builtin_tools.workspace import PublishArtifactTool, WorkspaceReadFileTool, WorkspaceWriteFileTool
 
 __all__ = [
@@ -125,6 +126,7 @@ __all__ = [
     "StateListTool",
     "StatePublishTool",
     "StateSetTool",
+    "ToolSearchTool",
     "PublishArtifactTool",
     "WorkspaceReadFileTool",
     "WorkspaceWriteFileTool",

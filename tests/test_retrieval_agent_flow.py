@@ -140,7 +140,7 @@ def test_main_agent_recalls_product_context_without_user_ids_or_memory_write(tmp
 
 
 def test_retrieval_contract_and_capabilities_are_main_agent_only() -> None:
-    main_doc = Path("app/agents/default/AGENT.md").read_text(encoding="utf-8")
+    main_doc = Path("app/skills/retrieval-workflow/SKILL.md").read_text(encoding="utf-8")
     capability = load_agent_capability_registry(Path("app/config/agent_capabilities.json"))
     main_capability = capability.require("agent_main")
     resume_capability = capability.require("resume_agent")

@@ -9,10 +9,18 @@ from pydantic import BaseModel
 __all__ = [
     "TokenUsageBucketView",
     "TokenUsageCallView",
+    "TokenUsageContextSectionView",
     "TokenUsageSessionDetailView",
     "TokenUsageSessionView",
     "TokenUsageSummaryView",
 ]
+
+
+class TokenUsageContextSectionView(BaseModel):
+    name: str
+    tokens: int
+    chars: int
+    item_count: int
 
 
 class TokenUsageCallView(BaseModel):
@@ -35,9 +43,25 @@ class TokenUsageCallView(BaseModel):
     usage_source: str
     message_count: int
     tool_schema_count: int
+    prompt_estimate_total_tokens: int
+    system_prompt_estimate_tokens: int
+    system_prompt_section_count: int
+    system_prompt_sections: list[TokenUsageContextSectionView]
+    messages_estimate_tokens: int
+    tools_estimate_tokens: int
+    message_user_estimate_tokens: int
+    message_assistant_estimate_tokens: int
+    message_tool_estimate_tokens: int
+    message_other_estimate_tokens: int
     returned_tool_call_count: int
     content_chars: int
     reasoning_chars: int
+    tool_context_window_mode: str
+    pending_tool_exchange_count: int
+    pending_tool_message_count: int
+    compacted_tool_observation_count: int
+    tool_state_message_estimate_tokens: int
+    tool_pending_message_estimate_tokens: int
     created_at: datetime
 
 

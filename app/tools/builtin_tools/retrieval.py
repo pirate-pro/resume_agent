@@ -177,14 +177,17 @@ class RetrievalContextPackTool:
         run_context = validate_context(context)
         request = _retrieval_query_from_arguments(arguments, run_context=run_context)
         pack = self._retrieval_service.build_context_pack(request)
-        grouped = pack.to_payload()["grouped_context"]
+        pack_payload = pack.to_payload(compact_grouped_context=True, compact_omitted=True)
+        grouped = pack_payload["grouped_context"]
         payload = {
             "query": request.query,
             "session_id": run_context.session_id,
             "count": len(pack.hits),
+            "context_char_count": pack.context_char_count(),
+            "max_chars": request.max_chars,
             "omitted_count": len(pack.omitted),
             "group_counts": {group: len(items) for group, items in grouped.items()},
-            "context_pack": pack.to_payload(),
+            "context_pack": pack_payload,
         }
         return ToolExecutionResult(
             tool_name="retrieval_context_pack",

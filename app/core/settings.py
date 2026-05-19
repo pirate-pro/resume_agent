@@ -76,6 +76,18 @@ class Settings(BaseSettings):
         default=3,
         validation_alias=AliasChoices("AGENT_TASK_MAX_CONCURRENCY"),
     )
+    tool_schema_disclosure_mode: str = Field(
+        default="full",
+        validation_alias=AliasChoices("TOOL_SCHEMA_DISCLOSURE_MODE"),
+    )
+    tool_schema_always_visible: str = Field(
+        default="tool_search,memory_write",
+        validation_alias=AliasChoices("TOOL_SCHEMA_ALWAYS_VISIBLE"),
+    )
+    tool_context_window_mode: str = Field(
+        default="off",
+        validation_alias=AliasChoices("TOOL_CONTEXT_WINDOW_MODE"),
+    )
     mid_term_flush_worker_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("MID_TERM_FLUSH_WORKER_ENABLED"),
@@ -243,6 +255,22 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {"event_count", "token_count", "context_ratio"}:
             raise ValidationError("CONTEXT_COMPACTION_RETENTION_STRATEGY must be event_count/token_count/context_ratio.")
+        return normalized
+
+    @field_validator("tool_schema_disclosure_mode")
+    @classmethod
+    def _validate_tool_schema_disclosure_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"full", "search"}:
+            raise ValidationError("TOOL_SCHEMA_DISCLOSURE_MODE must be full/search.")
+        return normalized
+
+    @field_validator("tool_context_window_mode")
+    @classmethod
+    def _validate_tool_context_window_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"off", "compact"}:
+            raise ValidationError("TOOL_CONTEXT_WINDOW_MODE must be off/compact.")
         return normalized
 
     @field_validator(

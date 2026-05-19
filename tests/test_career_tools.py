@@ -704,11 +704,10 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
         registry,
         "career_resume_version_create",
         {
-            "target_jd_analysis_id": "jd_alpha",
             "title": "AI 应用开发简历版本 inferred",
             "artifact_id": inferred_version_artifact_id,
             "evidence_refs": ["resume_profile_alpha", "jd_alpha", inferred_version_artifact_id],
-            "change_summary": ["验证 evidence_refs 推断 base_resume_profile_id"],
+            "change_summary": ["验证 evidence_refs 推断 base_resume_profile_id 和 target_jd_analysis_id"],
         },
         _context(agent_id="agent_main"),
     )
@@ -759,6 +758,7 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
     assert duplicate_version_payload["idempotent_reused"] is True
     assert alias_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
     assert inferred_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
+    assert inferred_version_payload["record"]["target_jd_analysis_id"] == "jd_alpha"
     assert atomic_version_payload["record"]["base_resume_profile_id"] == "resume_profile_alpha"
     assert atomic_version_payload["record"]["source_artifact_id"].startswith("artifact_")
     assert atomic_version_payload["record"]["source_artifact_id"] in atomic_version_payload["record"]["evidence_refs"]
@@ -914,6 +914,15 @@ def test_main_agent_creates_gets_lists_and_merges_career_application(tmp_path: P
         },
         _context(agent_id="agent_main"),
     )
+    alias_evidence_payload = _execute(
+        registry,
+        "career_application_create",
+        {
+            "job_fit_report_id": "fit_star_agent",
+            "evidence_refs": ["job_fit_report_star_agent", "job_fit_report:job_fit_report_star_agent"],
+        },
+        _context(agent_id="agent_main"),
+    )
     loaded_payload = _execute(
         registry,
         "career_application_get",
@@ -964,6 +973,8 @@ def test_main_agent_creates_gets_lists_and_merges_career_application(tmp_path: P
     )
     assert duplicate_payload["record_id"] == application_payload["record_id"]
     assert duplicate_payload["idempotent_reused"] is True
+    assert alias_evidence_payload["record_id"] == application_payload["record_id"]
+    assert alias_evidence_payload["idempotent_reused"] is True
     assert loaded_payload["record"]["company"] == "星河智能"
     assert [record["application_id"] for record in list_payload["records"]] == [application_payload["record_id"]]
     assert merged_payload["record"]["stage"] == "applied"
@@ -972,13 +983,25 @@ def test_main_agent_creates_gets_lists_and_merges_career_application(tmp_path: P
     assert fallback_payload["record_id"] == application_payload["record_id"]
     assert fallback_payload["resolved_from_missing_id"] is True
 
+    ignored_readonly_payload = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application_payload["record_id"],
+            "updates": {"company": "不允许覆盖公司"},
+            "evidence_refs": ["fit_star_agent"],
+        },
+        _context(agent_id="agent_main"),
+    )
+    assert ignored_readonly_payload["record"]["company"] == "星河智能"
+
     with pytest.raises(ToolExecutionError, match="Unsupported CareerApplication merge field"):
         registry.execute(
             ToolCall(
                 name="career_application_merge",
                 arguments={
                     "application_id": application_payload["record_id"],
-                    "updates": {"company": "不允许覆盖公司"},
+                    "updates": {"unexpected_field": "不支持"},
                     "evidence_refs": ["fit_star_agent"],
                 },
             ),

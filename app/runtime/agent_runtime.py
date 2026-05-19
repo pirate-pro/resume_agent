@@ -12,14 +12,24 @@ from app.domain.protocols import ChatModelClient, ModelResponse, TokenUsage, Too
 from app.prompts.agent_runtime import FINAL_ANSWER_RECOVERY_PROMPT
 from app.runtime.agent import (
     PostRunMaintenanceScheduler,
+    ToolContextWindow,
     ToolExecutionRunner,
     build_assistant_tool_call_message,
     build_tool_result_message,
+    build_tool_observation,
+    compact_tool_result_for_model,
     ensure_tool_call_ids,
+    normalize_tool_context_window_mode,
     to_model_tool_schema,
 )
+from app.runtime.agent.tool_reveal import (
+    ToolRevealState,
+    hidden_tool_result,
+    normalize_always_visible_tool_names,
+    normalize_tool_schema_disclosure_mode,
+)
 from app.runtime.context_assembler import ContextAssembler
-from app.runtime.context_compaction.text_utils import estimate_tokens_from_object
+from app.runtime.context_compaction.text_utils import estimate_tokens_from_object, estimate_tokens_from_text
 from app.runtime.context_compactor import ContextCompactor
 from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
@@ -43,6 +53,9 @@ class AgentRuntime:
         tool_executor: ToolExecutor,
         mid_term_flusher: MidTermFlusher | None = None,
         context_compactor: ContextCompactor | None = None,
+        tool_schema_disclosure_mode: str = "full",
+        tool_schema_always_visible: str | list[str] | None = None,
+        tool_context_window_mode: str = "off",
     ) -> None:
         self._session_manager = session_manager
         self._event_recorder = event_recorder
@@ -51,6 +64,9 @@ class AgentRuntime:
         self._tool_executor = tool_executor
         self._mid_term_flusher = mid_term_flusher
         self._context_compactor = context_compactor
+        self._tool_schema_disclosure_mode = normalize_tool_schema_disclosure_mode(tool_schema_disclosure_mode)
+        self._tool_schema_always_visible = normalize_always_visible_tool_names(tool_schema_always_visible)
+        self._tool_context_window_mode = normalize_tool_context_window_mode(tool_context_window_mode)
         self._answer_normalizer = AnswerNormalizer()
         self._tool_runner = ToolExecutionRunner(tool_executor=tool_executor)
         self._post_run_maintenance = PostRunMaintenanceScheduler(
@@ -102,13 +118,23 @@ class AgentRuntime:
             payload=context.memory_summary,
         )
 
-        tools_payload = [to_model_tool_schema(tool) for tool in context.tool_definitions]
-        messages = list(context.messages)
+        tool_reveal_state = ToolRevealState.create(
+            mode=self._tool_schema_disclosure_mode_for_context(run_context),
+            available_definitions=context.tool_definitions,
+            always_visible_tool_names=self._tool_schema_always_visible,
+        )
+        tool_context_window = ToolContextWindow(
+            base_messages=list(context.messages),
+            mode=self._tool_context_window_mode,
+        )
         used_tool_calls: list[ToolCall] = []
         answer = ""
 
         # 轮次上限是 `max_tool_rounds + 1`：最后一轮用于拿到最终回答。
         for round_index in range(run_input.max_tool_rounds + 1):
+            messages = tool_context_window.render_messages()
+            visible_tool_definitions = tool_reveal_state.visible_definitions()
+            tools_payload = [to_model_tool_schema(tool) for tool in visible_tool_definitions]
             _logger.debug("模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
             model_response = self._model_client.generate(
                 system_prompt=context.system_prompt,
@@ -127,6 +153,7 @@ class AgentRuntime:
             self._record_llm_usage(
                 run_context=run_context,
                 system_prompt=context.system_prompt,
+                system_prompt_sections=context.system_prompt_sections,
                 messages=messages,
                 tools=tools_payload,
                 model_response=model_response,
@@ -134,6 +161,8 @@ class AgentRuntime:
                 mode="sync",
                 phase="tool_loop",
                 round_index=round_index,
+                tool_disclosure=tool_reveal_state.usage_payload(visible_definitions=visible_tool_definitions),
+                tool_context=tool_context_window.usage_payload(),
             )
 
             if not resolved_tool_calls:
@@ -163,13 +192,14 @@ class AgentRuntime:
 
             # 遇到工具调用时，必须先把 assistant 的 tool_calls 消息回填到上下文，
             # 后续 tool 角色消息才是协议上合法的。
-            messages.append(
-                build_assistant_tool_call_message(
-                    model_response.content,
-                    resolved_tool_calls,
-                    reasoning_content=model_response.reasoning_content,
-                )
+            assistant_tool_call_message = build_assistant_tool_call_message(
+                model_response.content,
+                resolved_tool_calls,
+                reasoning_content=model_response.reasoning_content,
             )
+            tool_context_window.consume_pending_exchange()
+            tool_messages: list[dict[str, Any]] = []
+            tool_observations = []
 
             for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)
@@ -182,7 +212,10 @@ class AgentRuntime:
                         "tool_call_id": tool_call.tool_call_id,
                     },
                 )
-                result = self._tool_runner.execute_safely(tool_call, run_context)
+                if not tool_reveal_state.is_visible(tool_call.name):
+                    result = hidden_tool_result(tool_call.name)
+                else:
+                    result = self._tool_runner.execute_safely(tool_call, run_context)
                 _logger.info(
                     "工具调用完成: session_id=%s tool=%s success=%s content_len=%s",
                     session_id,
@@ -209,7 +242,33 @@ class AgentRuntime:
                             "result": result.content,
                         },
                     )
-                messages.append(build_tool_result_message(tool_call_id=tool_call.tool_call_id, content=result.content))
+                if tool_call.name == "tool_search" and result.success:
+                    tool_reveal_state.apply_tool_search_result(result.content)
+                model_visible_content = compact_tool_result_for_model(
+                    tool_name=result.tool_name,
+                    success=result.success,
+                    content=result.content,
+                )
+                tool_message = (
+                    build_tool_result_message(
+                        tool_call_id=tool_call.tool_call_id,
+                        content=model_visible_content,
+                    )
+                )
+                tool_messages.append(tool_message)
+                tool_observations.append(
+                    build_tool_observation(
+                        tool_call=tool_call,
+                        result=result,
+                        model_visible_content=model_visible_content,
+                    )
+                )
+
+            tool_context_window.set_pending_exchange(
+                assistant_message=assistant_tool_call_message,
+                tool_messages=tool_messages,
+                observations=tool_observations,
+            )
 
         if not answer:
             answer = "(no answer)"
@@ -289,12 +348,22 @@ class AgentRuntime:
             channel=channel,
         )
 
-        tools_payload = [to_model_tool_schema(tool) for tool in context.tool_definitions]
-        messages = list(context.messages)
+        tool_reveal_state = ToolRevealState.create(
+            mode=self._tool_schema_disclosure_mode_for_context(run_context),
+            available_definitions=context.tool_definitions,
+            always_visible_tool_names=self._tool_schema_always_visible,
+        )
+        tool_context_window = ToolContextWindow(
+            base_messages=list(context.messages),
+            mode=self._tool_context_window_mode,
+        )
         used_tool_calls: list[ToolCall] = []
         answer = ""
 
         for round_index in range(run_input.max_tool_rounds + 1):
+            messages = tool_context_window.render_messages()
+            visible_tool_definitions = tool_reveal_state.visible_definitions()
+            tools_payload = [to_model_tool_schema(tool) for tool in visible_tool_definitions]
             _logger.debug("流式模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
             round_content_parts: list[str] = []
             round_content_deltas: list[str] = []
@@ -333,6 +402,7 @@ class AgentRuntime:
             await self._record_llm_usage_async(
                 run_context=run_context,
                 system_prompt=context.system_prompt,
+                system_prompt_sections=context.system_prompt_sections,
                 messages=messages,
                 tools=tools_payload,
                 content=round_content,
@@ -344,6 +414,8 @@ class AgentRuntime:
                 phase="tool_loop",
                 round_index=round_index,
                 channel=channel,
+                tool_disclosure=tool_reveal_state.usage_payload(visible_definitions=visible_tool_definitions),
+                tool_context=tool_context_window.usage_payload(),
             )
 
             if not resolved_tool_calls:
@@ -385,13 +457,14 @@ class AgentRuntime:
                     channel=channel,
                 )
 
-            messages.append(
-                build_assistant_tool_call_message(
-                    round_content,
-                    resolved_tool_calls,
-                    reasoning_content=round_reasoning,
-                )
+            assistant_tool_call_message = build_assistant_tool_call_message(
+                round_content,
+                resolved_tool_calls,
+                reasoning_content=round_reasoning,
             )
+            tool_context_window.consume_pending_exchange()
+            tool_messages: list[dict[str, Any]] = []
+            tool_observations = []
 
             for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)
@@ -405,7 +478,10 @@ class AgentRuntime:
                     },
                     channel=channel,
                 )
-                result = await self._tool_runner.execute_safely_async(tool_call, run_context)
+                if not tool_reveal_state.is_visible(tool_call.name):
+                    result = hidden_tool_result(tool_call.name)
+                else:
+                    result = await self._tool_runner.execute_safely_async(tool_call, run_context)
                 _logger.info(
                     "流式工具调用完成: session_id=%s tool=%s success=%s content_len=%s",
                     session_id,
@@ -434,7 +510,33 @@ class AgentRuntime:
                         },
                         channel=channel,
                     )
-                messages.append(build_tool_result_message(tool_call_id=tool_call.tool_call_id, content=result.content))
+                if tool_call.name == "tool_search" and result.success:
+                    tool_reveal_state.apply_tool_search_result(result.content)
+                model_visible_content = compact_tool_result_for_model(
+                    tool_name=result.tool_name,
+                    success=result.success,
+                    content=result.content,
+                )
+                tool_message = (
+                    build_tool_result_message(
+                        tool_call_id=tool_call.tool_call_id,
+                        content=model_visible_content,
+                    )
+                )
+                tool_messages.append(tool_message)
+                tool_observations.append(
+                    build_tool_observation(
+                        tool_call=tool_call,
+                        result=result,
+                        model_visible_content=model_visible_content,
+                    )
+                )
+
+            tool_context_window.set_pending_exchange(
+                assistant_message=assistant_tool_call_message,
+                tool_messages=tool_messages,
+                observations=tool_observations,
+            )
 
         if not answer:
             answer = "(no answer)"
@@ -619,6 +721,7 @@ class AgentRuntime:
         *,
         run_context: RunContext,
         system_prompt: str,
+        system_prompt_sections: list[dict[str, Any]] | None = None,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         model_response: ModelResponse,
@@ -626,9 +729,12 @@ class AgentRuntime:
         mode: str,
         phase: str,
         round_index: int | None,
+        tool_disclosure: dict[str, Any] | None = None,
+        tool_context: dict[str, Any] | None = None,
     ) -> None:
         payload = _build_llm_usage_payload(
             system_prompt=system_prompt,
+            system_prompt_sections=system_prompt_sections,
             messages=messages,
             tools=tools,
             content=model_response.content,
@@ -639,6 +745,8 @@ class AgentRuntime:
             mode=mode,
             phase=phase,
             round_index=round_index,
+            tool_disclosure=tool_disclosure,
+            tool_context=tool_context,
         )
         self._event_recorder.record(
             context=run_context,
@@ -651,6 +759,7 @@ class AgentRuntime:
         *,
         run_context: RunContext,
         system_prompt: str,
+        system_prompt_sections: list[dict[str, Any]] | None = None,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         content: str,
@@ -662,9 +771,12 @@ class AgentRuntime:
         phase: str,
         round_index: int | None,
         channel: EventChannel,
+        tool_disclosure: dict[str, Any] | None = None,
+        tool_context: dict[str, Any] | None = None,
     ) -> None:
         payload = _build_llm_usage_payload(
             system_prompt=system_prompt,
+            system_prompt_sections=system_prompt_sections,
             messages=messages,
             tools=tools,
             content=content,
@@ -675,6 +787,8 @@ class AgentRuntime:
             mode=mode,
             phase=phase,
             round_index=round_index,
+            tool_disclosure=tool_disclosure,
+            tool_context=tool_context,
         )
         await self._event_recorder.record_async(
             context=run_context,
@@ -690,10 +804,18 @@ class AgentRuntime:
             raise ValidationError("run_input.context.session_id must match resolved session_id.")
         return run_input.context
 
+    def _tool_schema_disclosure_mode_for_context(self, context: RunContext) -> str:
+        if self._tool_schema_disclosure_mode != "search":
+            return "full"
+        if context.agent_id == "agent_main" and context.agent_id == context.entry_agent_id:
+            return "search"
+        return "full"
+
 
 def _build_llm_usage_payload(
     *,
     system_prompt: str,
+    system_prompt_sections: list[dict[str, Any]] | None = None,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     content: str,
@@ -704,6 +826,8 @@ def _build_llm_usage_payload(
     mode: str,
     phase: str,
     round_index: int | None,
+    tool_disclosure: dict[str, Any] | None = None,
+    tool_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_usage = usage or _estimate_usage(
         system_prompt=system_prompt,
@@ -731,7 +855,90 @@ def _build_llm_usage_payload(
         "content_chars": len(content or ""),
         "reasoning_chars": len(reasoning_content or ""),
     }
+    payload.update(
+        _estimate_prompt_breakdown(
+            system_prompt=system_prompt,
+            system_prompt_sections=system_prompt_sections,
+            messages=messages,
+            tools=tools,
+        )
+    )
+    if tool_disclosure:
+        payload.update(tool_disclosure)
+    if tool_context:
+        payload.update(tool_context)
     return payload
+
+
+def _estimate_prompt_breakdown(
+    *,
+    system_prompt: str,
+    system_prompt_sections: list[dict[str, Any]] | None = None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    message_tokens_by_role = {
+        "assistant": 0,
+        "other": 0,
+        "tool": 0,
+        "user": 0,
+    }
+    for message in messages:
+        role = str(message.get("role") or "other")
+        role_key = role if role in message_tokens_by_role else "other"
+        message_tokens_by_role[role_key] += estimate_tokens_from_object(message)
+
+    system_tokens = estimate_tokens_from_text(system_prompt)
+    section_items = _normalize_system_prompt_sections(system_prompt_sections or [])
+    messages_tokens = estimate_tokens_from_object(messages)
+    tools_tokens = estimate_tokens_from_object(tools) if tools else 0
+    prompt_estimate_total = estimate_tokens_from_object(
+        {
+            "messages": [{"role": "system", "content": system_prompt}, *messages],
+            "tools": tools,
+        }
+        if tools
+        else {"messages": [{"role": "system", "content": system_prompt}, *messages]}
+    )
+    return {
+        "prompt_estimate_total_tokens": prompt_estimate_total,
+        "system_prompt_estimate_tokens": system_tokens,
+        "system_prompt_section_count": len(section_items),
+        "system_prompt_sections": section_items,
+        "messages_estimate_tokens": messages_tokens,
+        "tools_estimate_tokens": tools_tokens,
+        "message_user_estimate_tokens": message_tokens_by_role["user"],
+        "message_assistant_estimate_tokens": message_tokens_by_role["assistant"],
+        "message_tool_estimate_tokens": message_tokens_by_role["tool"],
+        "message_other_estimate_tokens": message_tokens_by_role["other"],
+    }
+
+
+def _normalize_system_prompt_sections(sections: list[dict[str, Any]]) -> list[dict[str, int | str]]:
+    normalized: list[dict[str, int | str]] = []
+    for item in sections:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        normalized.append(
+            {
+                "name": name,
+                "tokens": _safe_int(item.get("tokens")),
+                "chars": _safe_int(item.get("chars")),
+                "item_count": _safe_int(item.get("item_count")),
+            }
+        )
+    return normalized
+
+
+def _safe_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    return 0
 
 
 def _estimate_usage(

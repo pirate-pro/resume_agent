@@ -37,6 +37,7 @@ __all__ = [
     "LearningWeaknessUpdateTool",
 ]
 
+_RESOURCE_REF_RE = re.compile(r"^(resource|skill_req|artifact|experience|company)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _PLAN_UPDATE_FIELDS = {
     "description",
     "end_date",
@@ -359,7 +360,7 @@ class LearningTaskCreateTool:
                 estimated_minutes=_optional_int(args.get("estimated_minutes"), field_name="estimated_minutes"),
                 planned_start_date=_optional_datetime(args.get("planned_start_date"), field_name="planned_start_date"),
                 due_date=_optional_datetime(args.get("due_date"), field_name="due_date"),
-                resource_refs=_optional_string_list(args.get("resource_refs"), field_name="resource_refs"),
+                resource_refs=_optional_resource_refs(args.get("resource_refs")),
                 question_refs=_optional_prefixed_id_list(args.get("question_refs"), "question", field_name="question_refs"),
                 note_refs=_optional_prefixed_id_list(args.get("note_refs"), "note", field_name="note_refs"),
                 output_artifact_id=_optional_current_artifact(
@@ -798,6 +799,20 @@ def _required_evidence_refs(raw: Any) -> list[str]:
     return refs
 
 
+def _optional_resource_refs(raw: Any) -> list[str]:
+    refs = _optional_string_list(raw, field_name="resource_refs")
+    output: list[str] = []
+    seen: set[str] = set()
+    for ref in refs:
+        if not _RESOURCE_REF_RE.fullmatch(ref):
+            continue
+        if ref in seen:
+            continue
+        output.append(ref)
+        seen.add(ref)
+    return output
+
+
 def _optional_datetime(raw: Any, *, field_name: str) -> datetime | None:
     if raw is None:
         return None
@@ -845,7 +860,11 @@ def _learning_update_payload(raw: Any, *, allowed_fields: set[str]) -> dict[str,
         "source_report_ids",
     ):
         if list_field in payload:
-            payload[list_field] = _optional_string_list(payload[list_field], field_name=list_field)
+            payload[list_field] = (
+                _optional_resource_refs(payload[list_field])
+                if list_field == "resource_refs"
+                else _optional_string_list(payload[list_field], field_name=list_field)
+            )
     for datetime_field in (
         "completed_at",
         "due_date",

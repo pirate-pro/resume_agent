@@ -72,6 +72,29 @@ def test_retrieval_context_pack_tool_groups_context_and_uses_run_session(tmp_pat
     assert not _contains_path_key(payload)
 
 
+def test_retrieval_context_pack_tool_reports_budgeted_context_size(tmp_path: Path) -> None:
+    stores = _seed_stores(tmp_path)
+    tool = RetrievalContextPackTool(retrieval_service=_service(stores))
+
+    result = tool.execute(
+        {
+            "query": "星河智能 RAG 二面准备",
+            "source_types": ["career", "notes", "knowledge", "learning", "artifacts"],
+            "top_k": 20,
+            "max_chars": 800,
+        },
+        context=_context("sess_alpha"),
+    )
+    payload = json.loads(result.content)
+    context_pack = payload["context_pack"]
+
+    assert result.success is True
+    assert payload["context_char_count"] <= 800
+    assert context_pack["context_char_count"] <= 800
+    assert context_pack["omitted_count"] == payload["omitted_count"]
+    assert all("snippet" not in hit for hit in context_pack["omitted"])
+
+
 def test_retrieval_tools_accept_source_group_aliases(tmp_path: Path) -> None:
     stores = _seed_stores(tmp_path)
     tool = RetrievalContextPackTool(retrieval_service=_service(stores))

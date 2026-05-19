@@ -29,6 +29,7 @@ def build_assembly_plan(
     *,
     role: ContextAssemblyRole,
     skill_descriptions: dict[str, str],
+    workflow_instructions: dict[str, str],
     tool_definitions: list[ToolDefinition],
     agent_documents: AgentIdentityDocuments,
     invokable_agents: list[AgentCatalogItem],
@@ -73,6 +74,17 @@ def build_assembly_plan(
                     for definition in tool_definitions
                 ),
                 item_count=len(tool_definitions),
+            )
+        )
+    if workflow_instructions:
+        sections.append(
+            ContextSection(
+                name="workflow_rules",
+                content="Sparse-selected workflow rules:\n\n"
+                + "\n\n".join(
+                    f"## {name}\n{instructions}" for name, instructions in workflow_instructions.items()
+                ),
+                item_count=len(workflow_instructions),
             )
         )
     if role == ContextAssemblyRole.MAIN_AGENT and invokable_agents:

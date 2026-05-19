@@ -4,6 +4,7 @@
     {
       "agent_id": "agent_main",
       "allowed_tools": [
+        "tool_search",
         "delegate_agents",
         "agent_task_status",
         "session_list_artifacts",

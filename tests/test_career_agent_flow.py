@@ -1053,7 +1053,8 @@ def test_career_agent_flow_permissions_prevent_role_bypass(tmp_path: Path) -> No
 
 
 def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
-    main_doc = Path("app/agents/default/AGENT.md").read_text(encoding="utf-8")
+    main_doc = Path("app/skills/career-workflow/SKILL.md").read_text(encoding="utf-8")
+    main_agent_doc = Path("app/agents/default/AGENT.md").read_text(encoding="utf-8")
     resume_doc = Path("app/agents/resume_agent/AGENT.md").read_text(encoding="utf-8")
     job_doc = Path("app/agents/job_agent/AGENT.md").read_text(encoding="utf-8")
     main_capability = load_agent_capability_registry(Path("app/config/agent_capabilities.json")).require("agent_main")
@@ -1086,8 +1087,8 @@ def test_career_agent_contracts_capture_live_smoke_stability_rules() -> None:
     assert "项目级动作的 `evidence_refs` 至少包含当前 `application_id`" in main_doc
     assert "`career_application_merge.updates` 只使用这些字段" in main_doc
     assert "不要先写入或读取 workspace 文件" in main_doc
-    assert "不要向 `delegate_agents` 传 `depends_on`" in main_doc
-    assert "child-agent id 不是工具名" in main_doc
+    assert "不要向 `delegate_agents` 传 `depends_on`" in main_agent_doc
+    assert "child-agent id 不是工具名" in main_agent_doc
     assert "`career_profile_merge.updates` 只使用这些字段" in main_doc
     assert main_capability.allows_tool("career_resume_version_create")
     assert main_capability.allows_tool("career_application_create")

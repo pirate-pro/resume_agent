@@ -77,7 +77,7 @@ class DelegateAgentsTool:
             raise ToolExecutionError("delegate_agents currently supports wait=true only.")
         max_concurrency = min(parse_positive_int(arguments.get("max_concurrency", 3), "max_concurrency"), 8)
         raw_tasks = arguments.get("tasks")
-        if isinstance(raw_tasks, list) and not raw_tasks:
+        if raw_tasks is None or (isinstance(raw_tasks, list) and not raw_tasks):
             return _empty_delegation_result()
         specs = _parse_task_specs(raw_tasks)
         try:

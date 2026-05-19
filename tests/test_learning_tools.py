@@ -162,7 +162,7 @@ def test_main_agent_creates_reads_lists_checkins_and_updates_learning_records(tm
             "priority": "high",
             "skill_tags": ["RAG"],
             "estimated_minutes": 45,
-            "resource_refs": ["resource_rag_eval", "skill_req_rag_engineering"],
+            "resource_refs": ["resource_rag_eval", "skill_req_rag_engineering", "rag_chunking_strategy_resource_001"],
             "question_refs": ["question_rag_chunk_strategy"],
             "success_criteria": ["覆盖指标", "说明失败恢复"],
         },
@@ -247,6 +247,7 @@ def test_main_agent_creates_reads_lists_checkins_and_updates_learning_records(tm
     assert plan_payload["source_artifact_id"] == source_artifact_id
     assert task_payload["record_id"] == "learning_task_rag_eval"
     assert task_payload["record"]["learning_plan_id"] == plan_payload["record_id"]
+    assert task_payload["record"]["resource_refs"] == ["resource_rag_eval", "skill_req_rag_engineering"]
     assert weakness_payload["record_id"] == "weakness_rag_depth"
     assert checkin_payload["record_type"] == "checkin"
     assert completed_payload["record"]["state"] == "done"
@@ -330,4 +331,3 @@ def test_learning_tools_return_not_found_payloads(tmp_path: Path) -> None:
 
     assert plan_payload["found"] is False
     assert task_payload["found"] is False
-

@@ -72,6 +72,7 @@ from app.tools.builtins import (
     StateListTool,
     StatePublishTool,
     StateSetTool,
+    ToolSearchTool,
     PublishArtifactTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
@@ -95,6 +96,7 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(StateSetTool(state_manager=get_state_manager()))
     registry.register(StatePublishTool(state_manager=get_state_manager()))
     registry.register(StateListTool(state_manager=get_state_manager()))
+    registry.register(ToolSearchTool(tool_definitions_provider=registry.list_definitions_for_agent))
     registry.register(PublishArtifactTool(session_repository=get_session_repository()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))

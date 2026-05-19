@@ -87,6 +87,7 @@ def get_context_compactor() -> ContextCompactor:
 
 @lru_cache(maxsize=1)
 def get_context_assembler() -> ContextAssembler:
+    settings = get_settings()
     return ContextAssembler(
         session_repository=get_session_repository(),
         skill_repository=get_skill_repository(),
@@ -95,11 +96,14 @@ def get_context_assembler() -> ContextAssembler:
         state_manager=get_state_manager(),
         tool_executor=get_tool_registry(),
         agent_registry=get_agent_registry(),
+        tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
+        tool_schema_always_visible=settings.tool_schema_always_visible,
     )
 
 
 @lru_cache(maxsize=1)
 def get_agent_runtime() -> AgentRuntime:
+    settings = get_settings()
     return AgentRuntime(
         session_manager=get_session_manager(),
         event_recorder=get_event_recorder(),
@@ -108,4 +112,7 @@ def get_agent_runtime() -> AgentRuntime:
         tool_executor=get_tool_registry(),
         mid_term_flusher=get_mid_term_flusher(),
         context_compactor=get_context_compactor(),
+        tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
+        tool_schema_always_visible=settings.tool_schema_always_visible,
+        tool_context_window_mode=settings.tool_context_window_mode,
     )

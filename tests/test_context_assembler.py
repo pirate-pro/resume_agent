@@ -123,6 +123,53 @@ def test_context_assembler_injects_invokable_agent_catalog_for_main_agent(tmp_pa
     assert any(definition.name == "delegate_agents" for definition in bundle.tool_definitions)
 
 
+def test_context_assembler_sparse_selects_workflow_rules(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    for session_id in ["sess_plain", "sess_career", "sess_note", "sess_learning", "sess_interview"]:
+        session_repo.create_session(session_id)
+    capability_registry = _capability_registry()
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path, capability_registry),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=capability_registry),
+    )
+
+    plain = assembler.assemble(
+        context=_context("sess_plain"),
+        user_message="你好",
+        skill_names=["base"],
+    )
+    career = assembler.assemble(
+        context=_context("sess_career"),
+        user_message="请诊断这份简历，并生成简历画像。",
+        skill_names=["base"],
+    )
+    note = assembler.assemble(
+        context=_context("sess_note"),
+        user_message="把这次面试复盘保存为笔记。",
+        skill_names=["base"],
+    )
+    learning = assembler.assemble(
+        context=_context("sess_learning"),
+        user_message="根据之前短板给我今天学习任务，并加入计划监督我完成。",
+        skill_names=["base"],
+    )
+    interview = assembler.assemble(
+        context=_context("sess_interview"),
+        user_message="帮我准备之前那个星河智能二面。",
+        skill_names=["base"],
+    )
+
+    assert "Sparse-selected workflow rules" not in plain.system_prompt
+    assert "# Career Workflow" in career.system_prompt
+    assert "# Note Workflow" in note.system_prompt
+    assert "# Learning Workflow" in learning.system_prompt
+    assert "召回驱动求职动作规则" in interview.system_prompt
+
+
 def test_context_assembler_does_not_inject_agent_catalog_for_other_agent(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_agent_catalog_child")

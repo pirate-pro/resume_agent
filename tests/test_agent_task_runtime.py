@@ -542,6 +542,16 @@ def test_delegate_agents_tool_returns_noop_for_empty_task_list(tmp_path: Path) -
     assert payload["results"] == []
     assert "target_agent_id" in payload["hint"]
 
+    missing_tasks_result = bundle.tool_registry.execute(
+        ToolCall(name="delegate_agents", arguments={"wait": True}),
+        _source_context(),
+    )
+    missing_tasks_payload = json.loads(missing_tasks_result.content)
+
+    assert missing_tasks_result.success is True
+    assert missing_tasks_payload["status"] == "skipped"
+    assert missing_tasks_payload["results"] == []
+
 
 def test_agent_task_status_tool_returns_persisted_task_group(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)

@@ -162,6 +162,72 @@ def test_token_usage_missing_total_uses_prompt_plus_completion(tmp_path: Path) -
     call = TokenUsageDebugService(session_repository=repository).list_calls(limit=1)[0]
 
     assert call.total_tokens == 20
+    assert call.prompt_estimate_total_tokens == 0
+    assert call.system_prompt_estimate_tokens == 0
+    assert call.system_prompt_section_count == 0
+    assert call.system_prompt_sections == []
+    assert call.messages_estimate_tokens == 0
+    assert call.tools_estimate_tokens == 0
+
+
+def test_token_usage_reads_prompt_breakdown_fields(tmp_path: Path) -> None:
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    _create_session(repository, "sess_breakdown", "上下文拆分")
+    event = _usage_event(
+        "evt_breakdown",
+        "sess_breakdown",
+        created_at=datetime(2026, 5, 15, 12, 30, tzinfo=UTC),
+        agent_id="agent_main",
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+    )
+    event.payload.update(
+        {
+            "prompt_estimate_total_tokens": 90,
+            "system_prompt_estimate_tokens": 30,
+            "system_prompt_section_count": 2,
+            "system_prompt_sections": [
+                {"name": "agent_identity", "tokens": 20, "chars": 80, "item_count": 1},
+                {"name": "active_artifacts", "tokens": 10, "chars": 40, "item_count": 2},
+            ],
+            "messages_estimate_tokens": 40,
+            "tools_estimate_tokens": 20,
+            "message_user_estimate_tokens": 12,
+            "message_assistant_estimate_tokens": 13,
+            "message_tool_estimate_tokens": 14,
+            "message_other_estimate_tokens": 1,
+            "tool_context_window_mode": "compact",
+            "pending_tool_exchange_count": 1,
+            "pending_tool_message_count": 3,
+            "compacted_tool_observation_count": 5,
+            "tool_state_message_estimate_tokens": 120,
+            "tool_pending_message_estimate_tokens": 240,
+        }
+    )
+    repository.append_event("sess_breakdown", event)
+
+    call = TokenUsageDebugService(session_repository=repository).list_calls(limit=1)[0]
+
+    assert call.prompt_estimate_total_tokens == 90
+    assert call.system_prompt_estimate_tokens == 30
+    assert call.system_prompt_section_count == 2
+    assert [(item.name, item.tokens) for item in call.system_prompt_sections] == [
+        ("agent_identity", 20),
+        ("active_artifacts", 10),
+    ]
+    assert call.messages_estimate_tokens == 40
+    assert call.tools_estimate_tokens == 20
+    assert call.message_user_estimate_tokens == 12
+    assert call.message_assistant_estimate_tokens == 13
+    assert call.message_tool_estimate_tokens == 14
+    assert call.message_other_estimate_tokens == 1
+    assert call.tool_context_window_mode == "compact"
+    assert call.pending_tool_exchange_count == 1
+    assert call.pending_tool_message_count == 3
+    assert call.compacted_tool_observation_count == 5
+    assert call.tool_state_message_estimate_tokens == 120
+    assert call.tool_pending_message_estimate_tokens == 240
 
 
 def test_token_usage_session_detail_handles_missing_session(tmp_path: Path) -> None:
@@ -198,6 +264,10 @@ def test_token_usage_debug_api_exposes_summary(tmp_path: Path) -> None:
             assert payload["call_count"] == 1
             assert payload["total_tokens"] == 30
             assert payload["sessions"][0]["session_id"] == "sess_api"
+            assert payload["recent_calls"][0]["system_prompt_estimate_tokens"] == 0
+            assert payload["recent_calls"][0]["system_prompt_sections"] == []
+            assert payload["recent_calls"][0]["tool_context_window_mode"] == "off"
+            assert payload["recent_calls"][0]["compacted_tool_observation_count"] == 0
             assert str(tmp_path) not in response.text
     finally:
         app.dependency_overrides.clear()

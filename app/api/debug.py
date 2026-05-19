@@ -18,6 +18,7 @@ from app.schemas.common import StandardResponse
 from app.schemas.debug import (
     TokenUsageBucketView,
     TokenUsageCallView,
+    TokenUsageContextSectionView,
     TokenUsageSessionDetailView,
     TokenUsageSessionView,
     TokenUsageSummaryView,
@@ -168,8 +169,32 @@ def _call_view(item: TokenUsageCall) -> TokenUsageCallView:
         usage_source=item.usage_source,
         message_count=item.message_count,
         tool_schema_count=item.tool_schema_count,
+        prompt_estimate_total_tokens=item.prompt_estimate_total_tokens,
+        system_prompt_estimate_tokens=item.system_prompt_estimate_tokens,
+        system_prompt_section_count=item.system_prompt_section_count,
+        system_prompt_sections=[
+            TokenUsageContextSectionView(
+                name=section.name,
+                tokens=section.tokens,
+                chars=section.chars,
+                item_count=section.item_count,
+            )
+            for section in item.system_prompt_sections
+        ],
+        messages_estimate_tokens=item.messages_estimate_tokens,
+        tools_estimate_tokens=item.tools_estimate_tokens,
+        message_user_estimate_tokens=item.message_user_estimate_tokens,
+        message_assistant_estimate_tokens=item.message_assistant_estimate_tokens,
+        message_tool_estimate_tokens=item.message_tool_estimate_tokens,
+        message_other_estimate_tokens=item.message_other_estimate_tokens,
         returned_tool_call_count=item.returned_tool_call_count,
         content_chars=item.content_chars,
         reasoning_chars=item.reasoning_chars,
+        tool_context_window_mode=item.tool_context_window_mode,
+        pending_tool_exchange_count=item.pending_tool_exchange_count,
+        pending_tool_message_count=item.pending_tool_message_count,
+        compacted_tool_observation_count=item.compacted_tool_observation_count,
+        tool_state_message_estimate_tokens=item.tool_state_message_estimate_tokens,
+        tool_pending_message_estimate_tokens=item.tool_pending_message_estimate_tokens,
         created_at=item.created_at,
     )

@@ -267,6 +267,7 @@ class ContextBundle:
     tool_definitions: list[ToolDefinition]
     memory_summary: dict[str, Any] = field(default_factory=dict)
     memory_lanes: dict[str, list[MemoryItem]] = field(default_factory=dict)
+    system_prompt_sections: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.system_prompt = _require_non_empty("system_prompt", self.system_prompt)
@@ -280,6 +281,8 @@ class ContextBundle:
             raise ValidationError("memory_summary must be a dictionary.")
         if not isinstance(self.memory_lanes, dict):
             raise ValidationError("memory_lanes must be a dictionary.")
+        if not isinstance(self.system_prompt_sections, list):
+            raise ValidationError("system_prompt_sections must be a list.")
         normalized_lanes: dict[str, list[MemoryItem]] = {}
         for raw_key, raw_items in self.memory_lanes.items():
             key = _require_non_empty("memory_lane", str(raw_key))

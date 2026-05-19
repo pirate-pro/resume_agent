@@ -13,11 +13,20 @@ from app.domain.protocols import SessionRepository
 __all__ = [
     "TokenUsageBucket",
     "TokenUsageCall",
+    "TokenUsageContextSection",
     "TokenUsageDebugService",
     "TokenUsageSessionDetail",
     "TokenUsageSessionSummary",
     "TokenUsageSummary",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class TokenUsageContextSection:
+    name: str
+    tokens: int
+    chars: int
+    item_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,9 +50,25 @@ class TokenUsageCall:
     usage_source: str
     message_count: int
     tool_schema_count: int
+    prompt_estimate_total_tokens: int
+    system_prompt_estimate_tokens: int
+    system_prompt_section_count: int
+    system_prompt_sections: list[TokenUsageContextSection]
+    messages_estimate_tokens: int
+    tools_estimate_tokens: int
+    message_user_estimate_tokens: int
+    message_assistant_estimate_tokens: int
+    message_tool_estimate_tokens: int
+    message_other_estimate_tokens: int
     returned_tool_call_count: int
     content_chars: int
     reasoning_chars: int
+    tool_context_window_mode: str
+    pending_tool_exchange_count: int
+    pending_tool_message_count: int
+    compacted_tool_observation_count: int
+    tool_state_message_estimate_tokens: int
+    tool_pending_message_estimate_tokens: int
     created_at: datetime
 
 
@@ -352,9 +377,25 @@ def _call_from_event(session: SessionMeta, event: EventRecord) -> TokenUsageCall
         usage_source=_read_str(payload.get("usage_source"), default="provider"),
         message_count=_read_int(payload.get("message_count")),
         tool_schema_count=_read_int(payload.get("tool_schema_count")),
+        prompt_estimate_total_tokens=_read_int(payload.get("prompt_estimate_total_tokens")),
+        system_prompt_estimate_tokens=_read_int(payload.get("system_prompt_estimate_tokens")),
+        system_prompt_section_count=_read_int(payload.get("system_prompt_section_count")),
+        system_prompt_sections=_read_context_sections(payload.get("system_prompt_sections")),
+        messages_estimate_tokens=_read_int(payload.get("messages_estimate_tokens")),
+        tools_estimate_tokens=_read_int(payload.get("tools_estimate_tokens")),
+        message_user_estimate_tokens=_read_int(payload.get("message_user_estimate_tokens")),
+        message_assistant_estimate_tokens=_read_int(payload.get("message_assistant_estimate_tokens")),
+        message_tool_estimate_tokens=_read_int(payload.get("message_tool_estimate_tokens")),
+        message_other_estimate_tokens=_read_int(payload.get("message_other_estimate_tokens")),
         returned_tool_call_count=_read_int(payload.get("returned_tool_call_count")),
         content_chars=_read_int(payload.get("content_chars")),
         reasoning_chars=_read_int(payload.get("reasoning_chars")),
+        tool_context_window_mode=_read_str(payload.get("tool_context_window_mode"), default="off"),
+        pending_tool_exchange_count=_read_int(payload.get("pending_tool_exchange_count")),
+        pending_tool_message_count=_read_int(payload.get("pending_tool_message_count")),
+        compacted_tool_observation_count=_read_int(payload.get("compacted_tool_observation_count")),
+        tool_state_message_estimate_tokens=_read_int(payload.get("tool_state_message_estimate_tokens")),
+        tool_pending_message_estimate_tokens=_read_int(payload.get("tool_pending_message_estimate_tokens")),
         created_at=event.created_at,
     )
 
@@ -364,6 +405,27 @@ def _summarize_calls(calls: list[TokenUsageCall]) -> _Totals:
     for call in calls:
         totals.add(call)
     return totals
+
+
+def _read_context_sections(value: object) -> list[TokenUsageContextSection]:
+    if not isinstance(value, list):
+        return []
+    sections: list[TokenUsageContextSection] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _read_str(item.get("name"))
+        if not name:
+            continue
+        sections.append(
+            TokenUsageContextSection(
+                name=name,
+                tokens=_read_int(item.get("tokens")),
+                chars=_read_int(item.get("chars")),
+                item_count=_read_int(item.get("item_count")),
+            )
+        )
+    return sections
 
 
 def _bucketize(

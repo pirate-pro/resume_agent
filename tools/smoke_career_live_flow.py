@@ -114,6 +114,7 @@ from app.tools.builtins import (
     StateListTool,
     StatePublishTool,
     StateSetTool,
+    ToolSearchTool,
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
@@ -161,6 +162,7 @@ class FlowReport:
     consistency_errors: list[str] = field(default_factory=list)
     quality_gate_passed: bool | None = None
     quality_error_codes: list[str] = field(default_factory=list)
+    retrieval_quality: dict[str, Any] = field(default_factory=dict)
 
 
 def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
@@ -191,6 +193,8 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         memory_manager=memory_manager,
         state_manager=state_manager,
         tool_executor=tool_registry,
+        tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
+        tool_schema_always_visible=settings.tool_schema_always_visible,
     )
     event_recorder = EventRecorder(session_repository=session_repository)
     runtime = AgentRuntime(
@@ -199,6 +203,9 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         context_assembler=context_assembler,
         model_client=model_client,
         tool_executor=tool_registry,
+        tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
+        tool_schema_always_visible=settings.tool_schema_always_visible,
+        tool_context_window_mode=settings.tool_context_window_mode,
     )
     agent_registry = load_agent_registry(
         settings.agent_registry_path,
@@ -267,6 +274,7 @@ def register_live_tools(
     registry.register(StateSetTool(state_manager=state_manager))
     registry.register(StatePublishTool(state_manager=state_manager))
     registry.register(StateListTool(state_manager=state_manager))
+    registry.register(ToolSearchTool(tool_definitions_provider=registry.list_definitions_for_agent))
     registry.register(PublishArtifactTool(session_repository=session_repository))
     registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     registry.register(WorkspaceReadFileTool(session_repository=session_repository))
@@ -546,6 +554,9 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     report.record_ids = record_ids
     report.artifact_ids = [item.artifact_id for item in artifacts]
     report.tool_call_counts = tool_call_counts(stack.session_repository, report.session_id)
+    report.retrieval_quality = retrieval_quality_summary(stack.session_repository, report.session_id)
+    if report.retrieval_quality.get("budget_violations"):
+        report.errors.append("RAG 召回上下文超过 max_chars 预算。")
     if hasattr(stack, "note_store"):
         note_ids = [
             item.note_id for item in stack.note_store.list_notes(include_archived=True) if item.source_session_id == report.session_id
@@ -1025,7 +1036,9 @@ def _retrieval_action_message(retrieval_action: str) -> str:
     base = (
         "请不要让我提供任何产品记录 id。你需要先根据历史求职资产自动召回相关上下文："
         "先用 retrieval_search 定位相关求职项目，再用 retrieval_context_pack 读取项目、匹配报告、"
-        "简历画像、JD 分析和相关资料。不要使用 workspace path，不要写 memory。"
+        "简历画像、JD 分析和相关资料。retrieval_search 只用于定位候选记录，不能替代 "
+        "retrieval_context_pack；创建任务、保存笔记或更新项目之前必须读取 context pack。"
+        "不要使用 workspace path，不要写 memory。"
     )
     if retrieval_action == "interview_prep":
         return (
@@ -1078,7 +1091,8 @@ def _retrieval_action_message(retrieval_action: str) -> str:
             "请根据刚才保存过的一面复盘，把 RAG 评估和 Celery 延迟队列补强加入学习任务，监督我完成。"
             "必须先召回复盘依据，再调用 learning_task_create 创建一个可执行任务。"
             "任务 evidence_refs 应包含对应 application、复盘 note、匹配报告 fit；如果召回到已有学习计划、"
-            "短板、资料或题目，也一并作为证据或资源引用。不要更新 CareerApplication，不要保存新 Note，"
+            "短板、资料或题目，也一并作为证据或资源引用；如果没有召回到真实 resource_、question_ "
+            "或 skill_req_ id，resource_refs 和 question_refs 留空，不要自造资源 id。不要更新 CareerApplication，不要保存新 Note，"
             "不要创建 WeaknessTracker，不要写 memory，不要重新委派 child-agent。"
         )
     if retrieval_action == "m20_advice_only":
@@ -1313,6 +1327,67 @@ def path_argument_leaked(repository: JsonlSessionRepository, session_id: str) ->
     return False
 
 
+def retrieval_quality_summary(repository: JsonlSessionRepository, session_id: str) -> dict[str, Any]:
+    events = sorted(_all_relevant_events(repository, session_id), key=lambda item: item.created_at)
+    call_args_by_id: dict[str, dict[str, Any]] = {}
+    source_type_counts: dict[str, int] = {}
+    summary: dict[str, Any] = {
+        "budget_violations": 0,
+        "context_pack_calls": 0,
+        "max_context_chars": 0,
+        "max_hit_count": 0,
+        "max_payload_chars": 0,
+        "max_requested_chars": 0,
+        "search_calls": 0,
+        "source_type_counts": source_type_counts,
+        "total_context_chars": 0,
+    }
+    for event in events:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if event.type == "tool_call" and payload.get("name") in {"retrieval_search", "retrieval_context_pack"}:
+            tool_call_id = payload.get("tool_call_id")
+            args = payload.get("arguments")
+            if isinstance(tool_call_id, str) and isinstance(args, dict):
+                call_args_by_id[tool_call_id] = args
+            continue
+        if event.type != "tool_result" or payload.get("tool_name") not in {"retrieval_search", "retrieval_context_pack"}:
+            continue
+        tool_name = str(payload.get("tool_name") or "")
+        content = str(payload.get("content") or "")
+        parsed = _json_object(content)
+        if parsed is None:
+            continue
+        if tool_name == "retrieval_search":
+            summary["search_calls"] += 1
+            hits = parsed.get("hits")
+            if isinstance(hits, list):
+                _add_source_type_counts(source_type_counts, hits)
+                summary["max_hit_count"] = max(int(summary["max_hit_count"]), len(hits))
+            continue
+        summary["context_pack_calls"] += 1
+        summary["max_payload_chars"] = max(int(summary["max_payload_chars"]), len(content))
+        tool_call_id = payload.get("tool_call_id")
+        call_args = call_args_by_id.get(tool_call_id, {}) if isinstance(tool_call_id, str) else {}
+        requested_chars = _int_value(parsed.get("max_chars")) or _int_value(call_args.get("max_chars")) or 0
+        raw_context_pack = parsed.get("context_pack")
+        context_pack: dict[str, Any] = raw_context_pack if isinstance(raw_context_pack, dict) else {}
+        context_chars = (
+            _int_value(parsed.get("context_char_count"))
+            or _int_value(context_pack.get("context_char_count"))
+            or 0
+        )
+        hits = context_pack.get("hits") if isinstance(context_pack, dict) else None
+        if isinstance(hits, list):
+            _add_source_type_counts(source_type_counts, hits)
+            summary["max_hit_count"] = max(int(summary["max_hit_count"]), len(hits))
+        summary["max_context_chars"] = max(int(summary["max_context_chars"]), context_chars)
+        summary["max_requested_chars"] = max(int(summary["max_requested_chars"]), requested_chars)
+        summary["total_context_chars"] = int(summary["total_context_chars"]) + context_chars
+        if requested_chars and context_chars > requested_chars:
+            summary["budget_violations"] = int(summary["budget_violations"]) + 1
+    return summary
+
+
 def latest_event_summaries(repository: JsonlSessionRepository, session_id: str, *, limit: int = 8) -> list[str]:
     events = sorted(_all_relevant_events(repository, session_id), key=lambda item: item.created_at)
     output: list[str] = []
@@ -1361,6 +1436,34 @@ def _compact_json(value: Any) -> str:
         return str(value)[:240]
 
 
+def _json_object(value: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _int_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _add_source_type_counts(counts: dict[str, int], hits: list[Any]) -> None:
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        source = hit.get("source")
+        if not isinstance(source, dict):
+            continue
+        source_type = source.get("source_type")
+        if isinstance(source_type, str) and source_type:
+            counts[source_type] = counts.get(source_type, 0) + 1
+
+
 def _compact_text(value: str, max_chars: int) -> str:
     normalized = " ".join(value.replace("\r\n", "\n").replace("\r", "\n").split())
     if len(normalized) <= max_chars:
@@ -1381,6 +1484,22 @@ def _record_counts(record_ids: dict[str, list[str]]) -> str:
         return "{}"
     counts = {key: len(value) for key, value in sorted(record_ids.items())}
     return json.dumps(counts, ensure_ascii=False, sort_keys=True)
+
+
+def _retrieval_quality_text(value: dict[str, Any]) -> str:
+    source_counts = value.get("source_type_counts")
+    source_text = "{}"
+    if isinstance(source_counts, dict) and source_counts:
+        source_text = json.dumps(source_counts, ensure_ascii=False, sort_keys=True)
+    return (
+        f"search={value.get('search_calls', 0)} "
+        f"context_pack={value.get('context_pack_calls', 0)} "
+        f"max_context_chars={value.get('max_context_chars', 0)}/{value.get('max_requested_chars', 0)} "
+        f"max_payload_chars={value.get('max_payload_chars', 0)} "
+        f"max_hits={value.get('max_hit_count', 0)} "
+        f"budget_violations={value.get('budget_violations', 0)} "
+        f"source_types={source_text}"
+    )
 
 
 async def run_all(args: argparse.Namespace) -> list[FlowReport]:
@@ -1437,6 +1556,8 @@ def print_report(reports: list[FlowReport]) -> None:
         print(f"  record_counts: {_record_counts(item.record_ids)}")
         print(f"  artifact_count: {len(item.artifact_ids)} ids={_preview_list(item.artifact_ids, limit=8)}")
         print(f"  tool_call_counts: {_compact_json(item.tool_call_counts)}")
+        if item.retrieval_quality:
+            print(f"  RAG召回: {_retrieval_quality_text(item.retrieval_quality)}")
         if item.quality_gate_passed is not None:
             gate = "通过" if item.quality_gate_passed else "失败"
             print(f"  质量门禁: {gate} error_codes={_preview_list(item.quality_error_codes, limit=6)}")

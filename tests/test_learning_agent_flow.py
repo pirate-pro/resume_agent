@@ -343,7 +343,7 @@ def test_learning_checkin_records_progress_and_updates_task_state_without_memory
 
 
 def test_learning_agent_contract_and_capabilities_keep_child_agents_read_only() -> None:
-    main_doc = Path("app/agents/default/AGENT.md").read_text(encoding="utf-8")
+    main_doc = Path("app/skills/learning-workflow/SKILL.md").read_text(encoding="utf-8")
     capability = load_agent_capability_registry(Path("app/config/agent_capabilities.json"))
     main_capability = capability.require("agent_main")
     resume_capability = capability.require("resume_agent")

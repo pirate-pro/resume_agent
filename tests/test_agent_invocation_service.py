@@ -246,11 +246,12 @@ def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_pa
 
     orchestration_events = bundle.session_repository.list_orchestration_events("sess_invoke")
     event_types = [event.type for event in orchestration_events]
+    task_event_types = [event.type for event in orchestration_events if event.type != "llm_usage"]
     assert result.status == "completed"
     assert result.source_agent_id == "agent_main"
     assert result.target_agent_id == "resume_agent"
     assert result.summary == "简历解析完成"
-    assert event_types == [
+    assert task_event_types == [
         AGENT_TASK_ASSIGNED_EVENT,
         AGENT_TASK_PROGRESS_EVENT,
         AGENT_TASK_PROGRESS_EVENT,
@@ -258,6 +259,13 @@ def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_pa
         AGENT_TASK_PROGRESS_EVENT,
         AGENT_RESULT_SUMMARY_EVENT,
     ]
+    usage_events = [event for event in orchestration_events if event.type == "llm_usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].agent_id == "resume_agent"
+    assert usage_events[0].run_id == result.child_run_id
+    assert usage_events[0].parent_run_id == "run_agent_main"
+    assert usage_events[0].payload["operation"] == "model.generate"
+    assert usage_events[0].payload["total_tokens"] > 0
     progress_events = [event for event in orchestration_events if event.type == AGENT_TASK_PROGRESS_EVENT]
     assert [event.payload["source_event_type"] for event in progress_events] == [
         "run_started",
@@ -278,6 +286,7 @@ def test_agent_invocation_records_assignment_child_run_and_result_summary(tmp_pa
         "run_started",
         "user_message",
         "memory_retrieval",
+        "llm_usage",
         "assistant_message",
         "run_finished",
         AGENT_RESULT_SUMMARY_EVENT,

@@ -34,6 +34,7 @@ from app.runtime.context.models import (
     ContextSection,
     ShortTermContextPlan,
 )
+from app.runtime.context_compaction.text_utils import estimate_tokens_from_text
 from app.runtime.agent_registry import AgentRegistry
 from app.runtime.context.section_builder import build_assembly_plan
 from app.runtime.context.short_term import (
@@ -44,6 +45,8 @@ from app.runtime.context.short_term import (
     is_other_agent_related_event,
     latest_context_summaries,
 )
+from app.runtime.context.workflow_rules import select_workflow_skill_names
+from app.runtime.agent.tool_reveal import normalize_always_visible_tool_names, normalize_tool_schema_disclosure_mode
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 
@@ -69,6 +72,8 @@ class ContextAssembler:
         state_manager: StateManager,
         tool_executor: ToolExecutor,
         agent_registry: AgentRegistry | None = None,
+        tool_schema_disclosure_mode: str = "full",
+        tool_schema_always_visible: str | list[str] | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._skill_repository = skill_repository
@@ -77,6 +82,8 @@ class ContextAssembler:
         self._state_manager = state_manager
         self._tool_executor = tool_executor
         self._agent_registry = agent_registry
+        self._tool_schema_disclosure_mode = normalize_tool_schema_disclosure_mode(tool_schema_disclosure_mode)
+        self._tool_schema_always_visible = normalize_always_visible_tool_names(tool_schema_always_visible)
 
     @staticmethod
     def determine_role(context: RunContext) -> ContextAssemblyRole:
@@ -98,7 +105,13 @@ class ContextAssembler:
         normalized_message = user_message.strip()
         assembly_role = self.determine_role(context)
 
+        active_artifacts = self._load_active_artifacts(normalized_session_id)
         skills = self._skill_repository.load_skills(skill_names) if skill_names else {}
+        workflow_skills = self._load_workflow_skills(
+            role=assembly_role,
+            user_message=normalized_message,
+            active_artifacts=active_artifacts,
+        )
         skill_descriptions = self._load_skill_descriptions(loaded_skills=skills)
         agent_documents = self._load_agent_documents(context)
         invokable_agents = self._load_invokable_agents(context=context, role=assembly_role)
@@ -112,17 +125,29 @@ class ContextAssembler:
             limit=5,
             context=context,
         )
-        active_artifacts = self._load_active_artifacts(normalized_session_id)
         messages = self._build_messages_from_events(short_term_plan.recent_events)
         # 用户当前这条输入必须进入模型消息，否则会出现“模型只看历史不看当前”的问题。
         if not messages or messages[-1].get("role") != "user" or messages[-1].get("content") != normalized_message:
             messages.append({"role": "user", "content": normalized_message})
 
-        tool_definitions = self._list_tool_definitions(context.agent_id)
+        available_tool_definitions = self._list_tool_definitions(context.agent_id)
+        tool_definitions = available_tool_definitions
+        if self._uses_search_disclosure(context=context, role=assembly_role):
+            prompt_tool_definitions = [
+                definition
+                for definition in available_tool_definitions
+                if definition.name in set(self._tool_schema_always_visible)
+            ]
+        else:
+            # Full mode is an explicit debugging and rollback path: expose all
+            # capability-allowed schemas instead of maintaining a second
+            # intent-based selection mechanism alongside tool_search.
+            prompt_tool_definitions = tool_definitions
         assembly_plan = build_assembly_plan(
             role=assembly_role,
             skill_descriptions=skill_descriptions,
-            tool_definitions=tool_definitions,
+            workflow_instructions=workflow_skills,
+            tool_definitions=prompt_tool_definitions,
             agent_documents=agent_documents,
             invokable_agents=invokable_agents,
             short_term_plan=short_term_plan,
@@ -155,6 +180,7 @@ class ContextAssembler:
             tool_definitions=tool_definitions,
             memory_summary=memory_summary,
             memory_lanes=memory_lanes,
+            system_prompt_sections=_system_prompt_section_usage(assembly_plan),
         )
 
     def _load_skill_descriptions(self, *, loaded_skills: dict[str, str]) -> dict[str, str]:
@@ -179,6 +205,33 @@ class ContextAssembler:
                 resolved_description = fallback_skill_description(name=name, instructions=loaded_skills[name])
             output[name] = resolved_description
         return output
+
+    def _uses_search_disclosure(self, *, context: RunContext, role: ContextAssemblyRole) -> bool:
+        return (
+            self._tool_schema_disclosure_mode == "search"
+            and context.agent_id == "agent_main"
+            and role == ContextAssemblyRole.MAIN_AGENT
+        )
+
+    def _load_workflow_skills(
+        self,
+        *,
+        role: ContextAssemblyRole,
+        user_message: str,
+        active_artifacts: list[SessionArtifact],
+    ) -> dict[str, str]:
+        skill_names = select_workflow_skill_names(
+            role=role,
+            user_message=user_message,
+            active_artifacts=active_artifacts,
+        )
+        if not skill_names:
+            return {}
+        try:
+            return self._skill_repository.load_skills(skill_names)
+        except (StorageError, ValidationError) as exc:
+            _logger.warning("Workflow skill loading failed, skipped: skills=%s error=%s", skill_names, exc)
+            return {}
 
     def _load_agent_documents(self, context: RunContext) -> AgentIdentityDocuments:
         try:
@@ -348,3 +401,15 @@ def _merge_context_events(*event_groups: list[EventRecord]) -> list[EventRecord]
         for event in group:
             by_id.setdefault(event.event_id, event)
     return sorted(by_id.values(), key=lambda item: item.created_at)
+
+
+def _system_prompt_section_usage(assembly_plan: ContextAssemblyPlan) -> list[dict[str, int | str]]:
+    return [
+        {
+            "name": section.name,
+            "tokens": estimate_tokens_from_text(section.content),
+            "chars": len(section.content),
+            "item_count": section.item_count,
+        }
+        for section in assembly_plan.sections
+    ]

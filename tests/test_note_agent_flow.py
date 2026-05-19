@@ -257,7 +257,7 @@ def test_plain_career_answer_does_not_auto_create_note(tmp_path: Path) -> None:
 
 
 def test_note_agent_contract_and_capabilities_keep_note_memory_boundary() -> None:
-    main_doc = Path("app/agents/default/AGENT.md").read_text(encoding="utf-8")
+    main_doc = Path("app/skills/note-workflow/SKILL.md").read_text(encoding="utf-8")
     capability = load_agent_capability_registry(Path("app/config/agent_capabilities.json"))
     main_capability = capability.require("agent_main")
     resume_capability = capability.require("resume_agent")

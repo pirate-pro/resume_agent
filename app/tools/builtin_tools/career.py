@@ -90,6 +90,32 @@ _CAREER_PROFILE_IGNORED_UPDATE_FIELDS = {
     "summary",
     "work_experience_years",
 }
+_CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS = {
+    "career_profile_id",
+    "jd_analysis_id",
+    "job_fit_report_id",
+    "next_actions",
+    "notes",
+    "priority",
+    "resume_profile_id",
+    "resume_version_ids",
+    "risks",
+    "stage",
+    "summary",
+}
+_CAREER_APPLICATION_IGNORED_UPDATE_FIELDS = {
+    "application_id",
+    "company",
+    "created_at",
+    "evidence_refs",
+    "job_url",
+    "location",
+    "position",
+    "source_artifact_id",
+    "source_session_id",
+    "status",
+    "updated_at",
+}
 _EVIDENCE_REF_TYPE_ALIASES = {
     "artifact": "artifact",
     "artifact_id": "artifact",
@@ -732,7 +758,7 @@ class CareerResumeVersionCreateTool:
             args = _require_arguments(arguments)
             evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
             base_resume_profile_id = _resolve_resume_version_base_profile_id(args, evidence_refs)
-            target_jd_analysis_id = _optional_prefixed_id(args.get("target_jd_analysis_id"), "jd")
+            target_jd_analysis_id = _resolve_resume_version_target_jd_analysis_id(args, evidence_refs)
             title = _required_string(args.get("title"), field_name="title")
             change_summary = _optional_string_list(args.get("change_summary"), field_name="change_summary")
             keyword_strategy = _optional_string_list(args.get("keyword_strategy"), field_name="keyword_strategy")
@@ -1156,7 +1182,7 @@ class CareerApplicationMergeTool:
             )
             record = self._career_store.merge_career_application(
                 record_id,
-                updates=_required_dict(args.get("updates"), field_name="updates"),
+                updates=_career_application_merge_updates(args.get("updates")),
                 evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
                 source_artifact_id=source_artifact_id,
             )
@@ -1179,6 +1205,19 @@ def _require_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
         if normalized_key in store_owned_fields:
             raise ToolExecutionError(f"Store-owned fields are not accepted: {key}")
     return arguments
+
+
+def _career_application_merge_updates(raw: Any) -> dict[str, Any]:
+    payload = _required_dict(raw, field_name="updates")
+    output: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS:
+            output[key] = value
+            continue
+        if key in _CAREER_APPLICATION_IGNORED_UPDATE_FIELDS:
+            continue
+        raise ToolExecutionError(f"Unsupported CareerApplication merge field: {key}")
+    return output
 
 
 def _required_current_artifact(
@@ -1264,6 +1303,16 @@ def _resolve_resume_version_base_profile_id(arguments: dict[str, Any], evidence_
     if len(candidates) == 1:
         return candidates[0]
     raise ToolExecutionError("'base_resume_profile_id' must be a non-empty string.")
+
+
+def _resolve_resume_version_target_jd_analysis_id(arguments: dict[str, Any], evidence_refs: list[str]) -> str | None:
+    explicit = _optional_prefixed_id(arguments.get("target_jd_analysis_id"), "jd")
+    if explicit is not None:
+        return explicit
+    candidates = sorted({ref for ref in evidence_refs if ref.startswith("jd_")})
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
 
 
 def _optional_prefixed_id_list(raw: Any, *, prefix: str, field_name: str) -> list[str]:
@@ -1389,6 +1438,8 @@ def _required_evidence_refs(raw: Any) -> list[str]:
 
 def _normalize_evidence_ref(raw: str) -> str:
     value = raw.strip().strip("`")
+    if value.startswith("job_fit_report_") or value.startswith("fit_report_"):
+        return _normalize_prefixed_alias(value, "fit")
     if ":" not in value:
         return value
     raw_kind, raw_id = value.split(":", 1)
@@ -1404,6 +1455,8 @@ def _normalize_evidence_ref(raw: str) -> str:
         return record_id
     if kind == "fit" and record_id.startswith("fit_"):
         return record_id
+    if kind == "fit" and (record_id.startswith("job_fit_report_") or record_id.startswith("fit_report_")):
+        return _normalize_prefixed_alias(record_id, "fit")
     if kind == "jd" and record_id.startswith("jd_"):
         return record_id
     if kind == "resume_profile" and record_id.startswith("resume_profile_"):
@@ -1413,6 +1466,13 @@ def _normalize_evidence_ref(raw: str) -> str:
     if kind == "sess" and record_id.startswith("sess_"):
         return record_id
     return value
+
+
+def _normalize_prefixed_alias(value: str, prefix: str) -> str:
+    marker = f"{prefix}_"
+    stem = value[len(marker):] if value.startswith(marker) else value
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_")
+    return f"{marker}{slug[:100]}" if slug else value
 
 
 def _optional_string_list(raw: Any, *, field_name: str) -> list[str]:
