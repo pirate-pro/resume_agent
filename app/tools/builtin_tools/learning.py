@@ -38,6 +38,51 @@ __all__ = [
 ]
 
 _RESOURCE_REF_RE = re.compile(r"^(resource|skill_req|artifact|experience|company)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_EVIDENCE_REF_TYPE_ALIASES = {
+    "application": "application",
+    "application_id": "application",
+    "career_application": "application",
+    "career_application_id": "application",
+    "artifact": "artifact",
+    "artifact_id": "artifact",
+    "career_profile": "career_profile",
+    "career_profile_id": "career_profile",
+    "checkin": "checkin",
+    "checkin_id": "checkin",
+    "company": "company",
+    "company_id": "company",
+    "experience": "experience",
+    "experience_id": "experience",
+    "fit": "fit",
+    "fit_report": "fit",
+    "job_fit_report": "fit",
+    "job_fit_report_id": "fit",
+    "jd": "jd",
+    "jd_analysis": "jd",
+    "jd_analysis_id": "jd",
+    "learning_plan": "learning_plan",
+    "learning_plan_id": "learning_plan",
+    "learning_task": "learning_task",
+    "learning_task_id": "learning_task",
+    "note": "note",
+    "note_id": "note",
+    "question": "question",
+    "question_id": "question",
+    "resource": "resource",
+    "resource_id": "resource",
+    "resume_profile": "resume_profile",
+    "resume_profile_id": "resume_profile",
+    "resume_version": "resume_version",
+    "resume_version_id": "resume_version",
+    "review": "review",
+    "review_id": "review",
+    "session": "sess",
+    "session_id": "sess",
+    "skill_requirement": "skill_req",
+    "skill_requirement_id": "skill_req",
+    "weakness": "weakness",
+    "weakness_id": "weakness",
+}
 _PLAN_UPDATE_FIELDS = {
     "description",
     "end_date",
@@ -796,7 +841,65 @@ def _required_evidence_refs(raw: Any) -> list[str]:
     refs = _optional_string_list(raw, field_name="evidence_refs")
     if not refs:
         raise ToolExecutionError("'evidence_refs' must include at least one reference.")
-    return refs
+    output: list[str] = []
+    seen: set[str] = set()
+    for ref in refs:
+        normalized = _normalize_evidence_ref(ref)
+        if normalized in seen:
+            continue
+        output.append(normalized)
+        seen.add(normalized)
+    return output
+
+
+def _normalize_evidence_ref(raw: str) -> str:
+    value = raw.strip().strip("`")
+    if ":" not in value:
+        return value
+    raw_kind, raw_id = value.split(":", 1)
+    kind = _EVIDENCE_REF_TYPE_ALIASES.get(raw_kind.strip().lower())
+    record_id = raw_id.strip().strip("`")
+    if kind is None or not record_id:
+        return value
+    if kind == "application" and record_id.startswith("application_"):
+        return record_id
+    if kind == "artifact" and record_id.startswith("artifact_"):
+        return record_id
+    if kind == "career_profile" and record_id.startswith("career_profile_"):
+        return record_id
+    if kind == "checkin" and record_id.startswith("checkin_"):
+        return record_id
+    if kind == "company" and record_id.startswith("company_"):
+        return record_id
+    if kind == "experience" and record_id.startswith("experience_"):
+        return record_id
+    if kind == "fit" and record_id.startswith("fit_"):
+        return record_id
+    if kind == "jd" and (record_id.startswith("jd_") or record_id.startswith("jd_analysis_")):
+        return record_id
+    if kind == "learning_plan" and record_id.startswith("learning_plan_"):
+        return record_id
+    if kind == "learning_task" and record_id.startswith("learning_task_"):
+        return record_id
+    if kind == "note" and record_id.startswith("note_"):
+        return record_id
+    if kind == "question" and record_id.startswith("question_"):
+        return record_id
+    if kind == "resource" and record_id.startswith("resource_"):
+        return record_id
+    if kind == "resume_profile" and record_id.startswith("resume_profile_"):
+        return record_id
+    if kind == "resume_version" and record_id.startswith("resume_version_"):
+        return record_id
+    if kind == "review" and record_id.startswith("review_"):
+        return record_id
+    if kind == "sess" and record_id.startswith("sess_"):
+        return record_id
+    if kind == "skill_req" and record_id.startswith("skill_req_"):
+        return record_id
+    if kind == "weakness" and record_id.startswith("weakness_"):
+        return record_id
+    return value
 
 
 def _optional_resource_refs(raw: Any) -> list[str]:

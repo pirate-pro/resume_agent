@@ -87,8 +87,8 @@ def test_delegate_agents_model_view_keeps_task_summaries_and_artifacts() -> None
                 "task_id": "task_alpha_001",
                 "target_agent_id": "resume_agent",
                 "status": "completed",
-                "summary": "已完成简历画像和诊断。",
-                "answer": long_answer,
+                "summary": "已完成简历画像和诊断，resume_profile_id=resume_profile_alpha。",
+                "answer": long_answer + " diagnosis artifact: artifact_resume_diagnosis",
                 "child_run_id": "run_child_001",
                 "artifact_refs": ["artifact_resume_diagnosis"],
             }
@@ -105,6 +105,10 @@ def test_delegate_agents_model_view_keeps_task_summaries_and_artifacts() -> None
     assert compact_payload["task_group_id"] == "task_group_alpha"
     assert compact_payload["results"][0]["target_agent_id"] == "resume_agent"
     assert compact_payload["results"][0]["artifact_refs"] == ["artifact_resume_diagnosis"]
+    assert compact_payload["results"][0]["extracted_ids"] == [
+        "resume_profile_alpha",
+        "artifact_resume_diagnosis",
+    ]
     assert "子 agent 完整回答。" * 80 not in compact
     assert len(compact_payload["results"][0]["answer_preview"]) < len(long_answer)
 

@@ -97,6 +97,7 @@ def build_assembly_plan(
                     + "\n\nDelegation rules:\n"
                     "- If the user's task clearly matches a listed child agent's role, you must call delegate_agents before finalizing the answer.\n"
                     "- Do not directly complete specialized child-agent work yourself when a matching child agent is available.\n"
+                    "- If delegate_agents has already returned completed results for the same subtask in this run, do not delegate that same subtask again; use the returned ids/artifacts.\n"
                     "- A single specialized task is enough reason to delegate; delegation is not limited to multi-step tasks.\n"
                     "- Delegate one or more subtasks when they clearly match a child agent's role.\n"
                     "- Put multiple independent subtasks in one delegate_agents call so they can run concurrently.\n"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 __all__ = ["compact_tool_result_for_model"]
@@ -193,6 +194,7 @@ def _compact_delegate_result(item: Any) -> dict[str, Any]:
             "status": data.get("status"),
             "summary": _text(data.get("summary"), 500),
             "answer_preview": _text(data.get("answer"), 700),
+            "extracted_ids": _extract_known_ids(data),
             "child_run_id": data.get("child_run_id"),
             "artifact_refs": _compact_string_list(data.get("artifact_refs"), limit=12, item_chars=120),
             "next_steps": _compact_string_list(data.get("next_steps"), limit=6, item_chars=160),
@@ -506,6 +508,55 @@ def _compact_plain_result(*, tool_name: str, content: str, max_chars: int) -> st
         "full_result_hint": _FULL_RESULT_HINT,
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+_KNOWN_ID_PATTERN = re.compile(
+    r"\b(?:artifact|resume_profile|career_profile|resume_version|application|fit|jd|note|learning_task|learning_plan|weakness)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}\b"
+)
+_KNOWN_ID_FIELD_NAMES = {
+    "artifact_id",
+    "resume_profile_id",
+    "career_profile_id",
+    "resume_version_id",
+    "application_id",
+    "jd_analysis_id",
+    "job_fit_report_id",
+    "learning_task_id",
+    "learning_plan_id",
+    "note_id",
+    "weakness_id",
+}
+
+
+def _extract_known_ids(value: Any) -> list[str] | None:
+    text = _collect_text(value)
+    if not text:
+        return None
+    output: list[str] = []
+    seen: set[str] = set()
+    for match in _KNOWN_ID_PATTERN.finditer(text):
+        item = match.group(0)
+        if item in _KNOWN_ID_FIELD_NAMES or item in seen:
+            continue
+        output.append(item)
+        seen.add(item)
+        if len(output) >= 24:
+            break
+    return output or None
+
+
+def _collect_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int | float | bool):
+        return str(value)
+    if isinstance(value, list):
+        return "\n".join(_collect_text(item) for item in value)
+    if isinstance(value, dict):
+        return "\n".join(_collect_text(item) for item in value.values())
+    return str(value)
 
 
 def _truncate(text: str, limit: int) -> str:

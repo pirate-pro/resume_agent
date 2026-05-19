@@ -566,6 +566,56 @@ def test_resume_profile_save_accepts_single_string_for_list_fields(tmp_path: Pat
     assert payload["record"]["project_experience"] == ["简历诊断 Agent"]
 
 
+def test_resume_version_create_rejects_unverified_quantified_metrics(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n项目：优化接口性能，响应速度提升 30%。\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+
+    allowed_payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "证实量化指标版本",
+            "content": "# 张三\n\n优化接口性能，响应速度提升 30%。",
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    assert allowed_payload["record"]["artifact_id"].startswith("artifact_")
+
+    with pytest.raises(ToolExecutionError, match="unverified quantitative metrics"):
+        registry.execute(
+            ToolCall(
+                name="career_resume_version_create",
+                arguments={
+                    "base_resume_profile_id": "resume_profile_alpha",
+                    "target_jd_analysis_id": "jd_alpha",
+                    "title": "未证实量化指标版本",
+                    "content": "# 张三\n\n上线后客服效率提升 60%，问题解决率达 85%，服务可用性达 99.99%。",
+                    "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+                },
+            ),
+            context=_context(agent_id="agent_main"),
+        )
+
+
 def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")

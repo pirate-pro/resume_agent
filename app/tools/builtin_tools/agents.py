@@ -28,6 +28,8 @@ class DelegateAgentsTool:
                 "Delegate one or more specialized subtasks to registered child agents and wait for their results. "
                 "Use this when the user task clearly matches an available child agent's role. "
                 "A single specialized subtask is valid. Multiple subtasks must be logically independent. "
+                "Do not call this again for the same completed subtask in the same run; reuse ids and artifacts "
+                "from the completed delegate result. "
                 "Do not pass depends_on; sequential dependencies must be resolved by separate calls. "
                 "If source material is already pasted in the current user message, include the relevant text directly "
                 "inside each child instruction. artifact_refs must reference current session artifact ids only."
@@ -123,7 +125,8 @@ class AgentTaskStatusTool:
             name="agent_task_status",
             description=(
                 "Inspect a delegated child-agent task group in the current session. "
-                "Use this to check durable task status, child_run_id, summaries, artifact refs, and errors."
+                "Use this only when the original delegate_agents result is unavailable, pending, or failed; "
+                "do not call it after wait=true returned a completed result."
             ),
             parameters_schema={
                 "type": "object",

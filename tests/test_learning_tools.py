@@ -124,6 +124,33 @@ def _create_text_artifact(registry: ToolRegistry, *, session_id: str = "sess_lea
     return str(payload["artifact_id"])
 
 
+def test_learning_task_create_normalizes_typed_evidence_refs(tmp_path: Path) -> None:
+    registry, session_repository, _ = _registry(tmp_path)
+    session_repository.create_session("sess_learning")
+
+    payload = _execute(
+        registry,
+        "learning_task_create",
+        {
+            "title": "补强 RAG 评估",
+            "description": "根据面试复盘创建学习任务。",
+            "evidence_refs": [
+                "career_application:application_alpha",
+                "job_fit_report:fit_alpha",
+                "note:note_review_alpha",
+            ],
+            "priority": "high",
+        },
+        _context(),
+    )
+
+    assert payload["record"]["evidence_refs"] == [
+        "application_alpha",
+        "fit_alpha",
+        "note_review_alpha",
+    ]
+
+
 def test_main_agent_creates_reads_lists_checkins_and_updates_learning_records(tmp_path: Path) -> None:
     registry, session_repository, learning_store = _registry(tmp_path)
     session_repository.create_session("sess_learning")

@@ -127,7 +127,8 @@ _PACKS: dict[str, WorkflowRulePack] = {
             "- Career records, notes, learning tasks, knowledge/RAG resources, and memory are separate facts; do not mix them.\n"
             "- Write memory only when the user explicitly asks to remember something or states a stable long-term preference/fact.\n"
             "- Do not expose workspace paths to users or child agents; use artifact ids and product record ids.\n"
-            "- If a tool fails, fix the arguments based on the error; if the task is impossible, state the missing prerequisite."
+            "- If a tool fails, fix the arguments based on the error; if the task is impossible, state the missing prerequisite.\n"
+            "- Never show local filesystem paths as user-facing output; refer to artifacts by title or artifact id instead."
         ),
     ),
     "retrieval_required": WorkflowRulePack(
@@ -166,6 +167,8 @@ _PACKS: dict[str, WorkflowRulePack] = {
             "- For resume + JD matching, reuse existing ResumeProfile, CareerProfile, JDAnalysis, and JobFitReport when available.\n"
             "- A saved JobFitReport should have a report_artifact_id for the user-visible Markdown report.\n"
             "- Create or update a CareerApplication to connect resume_profile_id, career_profile_id, jd_analysis_id, job_fit_report_id, and next actions.\n"
+            "- A ResumeVersion must not add quantified metrics unless they are present in the base resume source artifact; missing metrics belong in risks or next_actions.\n"
+            "- If child-agent results already include jd_analysis_id, job_fit_report_id, report_artifact_id, resume_profile_id, and career_profile_id, use those ids directly; do not call status/list/get tools just to reconfirm.\n"
             "- Match conclusions must include evidence-backed strengths, risks, and executable next steps."
         ),
     ),
@@ -204,6 +207,7 @@ _PACKS: dict[str, WorkflowRulePack] = {
         title="Delegation",
         content=(
             "- If a task clearly matches resume_agent or job_agent expertise, use delegate_agents instead of doing specialized parsing yourself.\n"
+            "- Do not delegate the same resume/JD/matching subtask more than once in a run after a completed delegate result exists.\n"
             "- Keep child instructions narrow and include real artifact_refs when shared files matter.\n"
             "- Child agent ids are not tool names; call delegate_agents with tasks[].target_agent_id.\n"
             "- After child results return, synthesize the answer and expose user-facing assets, not raw orchestration details."

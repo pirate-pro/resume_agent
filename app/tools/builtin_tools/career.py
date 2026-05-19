@@ -756,9 +756,10 @@ class CareerResumeVersionCreateTool:
         run_context = validate_context(context)
         try:
             args = _require_arguments(arguments)
-            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
+            evidence_refs = _optional_evidence_refs(args.get("evidence_refs"))
             base_resume_profile_id = _resolve_resume_version_base_profile_id(args, evidence_refs)
             target_jd_analysis_id = _resolve_resume_version_target_jd_analysis_id(args, evidence_refs)
+            evidence_refs = _append_evidence_refs(evidence_refs, base_resume_profile_id, target_jd_analysis_id)
             title = _required_string(args.get("title"), field_name="title")
             change_summary = _optional_string_list(args.get("change_summary"), field_name="change_summary")
             keyword_strategy = _optional_string_list(args.get("keyword_strategy"), field_name="keyword_strategy")
@@ -766,7 +767,11 @@ class CareerResumeVersionCreateTool:
             raw_artifact_id = args.get("artifact_id")
             if raw_artifact_id is None:
                 content = _required_string(args.get("content"), field_name="content")
-                _reject_resume_version_placeholder_text(
+                _reject_invalid_resume_version_text(
+                    career_store=self._career_store,
+                    session_repository=self._session_repository,
+                    session_id=run_context.session_id,
+                    base_resume_profile_id=base_resume_profile_id,
                     title=title,
                     content=content,
                     change_summary=change_summary,
@@ -797,18 +802,27 @@ class CareerResumeVersionCreateTool:
                     content=content,
                 )
             else:
-                _reject_resume_version_placeholder_text(
-                    title=title,
-                    content=None,
-                    change_summary=change_summary,
-                    keyword_strategy=keyword_strategy,
-                    risk_notes=risk_notes,
-                )
                 artifact_id = _require_current_artifact(
                     self._session_repository,
                     run_context.session_id,
                     _required_string(raw_artifact_id, field_name="artifact_id"),
                     field_name="artifact_id",
+                )
+                content = _read_current_artifact_text_or_empty(
+                    self._session_repository,
+                    run_context.session_id,
+                    artifact_id,
+                )
+                _reject_invalid_resume_version_text(
+                    career_store=self._career_store,
+                    session_repository=self._session_repository,
+                    session_id=run_context.session_id,
+                    base_resume_profile_id=base_resume_profile_id,
+                    title=title,
+                    content=content,
+                    change_summary=change_summary,
+                    keyword_strategy=keyword_strategy,
+                    risk_notes=risk_notes,
                 )
                 existing = _find_current_session_record(
                     self._career_store.list_resume_versions(),
@@ -1425,6 +1439,15 @@ def _required_string_list(raw: Any, *, field_name: str) -> list[str]:
 
 def _required_evidence_refs(raw: Any) -> list[str]:
     refs = _required_string_list(raw, field_name="evidence_refs")
+    return _normalize_evidence_refs(refs)
+
+
+def _optional_evidence_refs(raw: Any) -> list[str]:
+    refs = _optional_string_list(raw, field_name="evidence_refs")
+    return _normalize_evidence_refs(refs)
+
+
+def _normalize_evidence_refs(refs: list[str]) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
     for ref in refs:
@@ -1536,16 +1559,55 @@ _RESUME_VERSION_PLACEHOLDER_PATTERNS = (
     re.compile(r"\bTODO\b", re.IGNORECASE),
     re.compile(r"\bTBD\b", re.IGNORECASE),
 )
+_RESUME_VERSION_METRIC_PATTERNS = (
+    re.compile(r"\d+(?:\.\d+)?\s*%"),
+    re.compile(r"\d+(?:\.\d+)?\s*(?:ms|毫秒|秒|qps|tps|rps)", re.IGNORECASE),
+    re.compile(r"\d+(?:\.\d+)?\s*(?:倍|x)", re.IGNORECASE),
+    re.compile(r"(?:千|万|百万|千万|亿)级"),
+)
 
 
-def _reject_resume_version_placeholder_text(
+def _reject_invalid_resume_version_text(
     *,
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    session_id: str,
+    base_resume_profile_id: str,
     title: str,
     content: str | None,
     change_summary: list[str],
     keyword_strategy: list[str],
     risk_notes: list[str],
 ) -> None:
+    issues = _resume_version_placeholder_issues(
+        title=title,
+        content=content,
+        change_summary=change_summary,
+        keyword_strategy=keyword_strategy,
+        risk_notes=risk_notes,
+    )
+    if content:
+        issues.extend(
+            _resume_version_unverified_metric_issues(
+                career_store=career_store,
+                session_repository=session_repository,
+                session_id=session_id,
+                base_resume_profile_id=base_resume_profile_id,
+                content=content,
+            )
+        )
+    if issues:
+        raise ToolExecutionError("ResumeVersion validation failed: " + " ".join(issues))
+
+
+def _resume_version_placeholder_issues(
+    *,
+    title: str,
+    content: str | None,
+    change_summary: list[str],
+    keyword_strategy: list[str],
+    risk_notes: list[str],
+) -> list[str]:
     fields = {
         "title": title,
         "content": content or "",
@@ -1553,13 +1615,107 @@ def _reject_resume_version_placeholder_text(
         "keyword_strategy": "\n".join(keyword_strategy),
         "risk_notes": "\n".join(risk_notes),
     }
+    issues: list[str] = []
     for field_name, text in fields.items():
         if any(pattern.search(text) for pattern in _RESUME_VERSION_PLACEHOLDER_PATTERNS):
-            raise ToolExecutionError(
-                "ResumeVersion "
-                f"{field_name} contains forbidden placeholder or replacement wording. "
+            issues.append(
+                f"ResumeVersion {field_name} contains forbidden placeholder or replacement wording. "
                 "Remove that wording; describe only verified changes or missing-fact risks."
             )
+    return issues
+
+
+def _resume_version_unverified_metric_issues(
+    *,
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    session_id: str,
+    base_resume_profile_id: str,
+    content: str,
+) -> list[str]:
+    try:
+        profile = career_store.get_resume_profile(base_resume_profile_id)
+    except (StorageError, ValidationError):
+        return []
+    if profile is None or profile.source_session_id != session_id:
+        return []
+    source_text = _resume_profile_source_text(
+        session_repository,
+        session_id=session_id,
+        profile=profile,
+    )
+    if not source_text.strip():
+        return []
+    source_metric_text = _normalize_metric_text(source_text)
+    unverified: list[str] = []
+    for metric in _extract_resume_version_metrics(content):
+        if _normalize_metric_text(metric) not in source_metric_text:
+            unverified.append(metric)
+    if not unverified:
+        return []
+    return [
+        "ResumeVersion content contains unverified quantitative metrics not present in the base resume artifact: "
+        + ", ".join(unverified[:8])
+        + ". Remove unsupported metrics or first add verified source evidence."
+    ]
+
+
+def _resume_profile_source_text(
+    session_repository: SessionRepository,
+    *,
+    session_id: str,
+    profile: ResumeProfile,
+) -> str:
+    artifact_ids = [
+        artifact_id
+        for artifact_id in (profile.source_artifact_id, profile.raw_text_artifact_id)
+        if isinstance(artifact_id, str) and artifact_id.strip()
+    ]
+    texts: list[str] = []
+    seen: set[str] = set()
+    for artifact_id in artifact_ids:
+        if artifact_id in seen:
+            continue
+        seen.add(artifact_id)
+        text = _read_current_artifact_text_or_empty(session_repository, session_id, artifact_id)
+        if text:
+            texts.append(text)
+    return "\n".join(texts)
+
+
+def _read_current_artifact_text_or_empty(
+    session_repository: SessionRepository,
+    session_id: str,
+    artifact_id: str,
+) -> str:
+    try:
+        _require_current_artifact(
+            session_repository,
+            session_id,
+            artifact_id,
+            field_name="artifact_id",
+        )
+        return session_repository.read_session_artifact_text(session_id, artifact_id)
+    except (StorageError, ToolExecutionError, ValidationError):
+        return ""
+
+
+def _extract_resume_version_metrics(content: str) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for pattern in _RESUME_VERSION_METRIC_PATTERNS:
+        for match in pattern.finditer(content):
+            metric = match.group(0).strip()
+            key = _normalize_metric_text(metric)
+            if not key or key in seen:
+                continue
+            output.append(metric)
+            seen.add(key)
+    return output
+
+
+def _normalize_metric_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).lower()
 
 
 def _optional_bool(raw: Any) -> bool:
