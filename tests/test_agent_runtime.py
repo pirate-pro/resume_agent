@@ -600,6 +600,100 @@ def test_runtime_search_disclosure_reveals_tool_schema_after_tool_search(tmp_pat
     assert "retrieval_context_pack" in usage_events[1].payload["revealed_tool_names"]
 
 
+def test_runtime_search_disclosure_does_not_charge_schema_search_against_tool_round_limit(tmp_path: Path) -> None:
+    class RetrievalTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="retrieval_context_pack",
+                description="Build context from saved records.",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="retrieval_context_pack",
+                success=True,
+                content=json.dumps({"context_pack": {"hits": []}}, ensure_ascii=False),
+            )
+
+    class SearchBudgetModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                assert tool_names == {"tool_search", "memory_write"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="tool_search",
+                            arguments={"query": "召回之前保存过的求职项目"},
+                            tool_call_id="call_tool_search_budget",
+                        )
+                    ],
+                )
+            if self.calls == 2:
+                assert "retrieval_context_pack" in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="retrieval_context_pack",
+                            arguments={"query": "星河智能"},
+                            tool_call_id="call_retrieval_budget",
+                        )
+                    ],
+                )
+            return ModelResponse(content="done", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = SearchBudgetModelClient()
+    runtime, _, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[RetrievalTool()],
+        register_tool_search=True,
+        tool_schema_disclosure_mode="search",
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_tool_search_budget",
+            user_message="根据之前保存过的内容帮我准备面试。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=1,
+            context=_context("sess_tool_search_budget"),
+        )
+    )
+
+    assert output.answer == "done"
+    assert model.calls == 3
+
+
 def test_runtime_search_disclosure_rejects_unrevealed_tool_call(tmp_path: Path) -> None:
     class RetrievalTool:
         def definition(self) -> ToolDefinition:

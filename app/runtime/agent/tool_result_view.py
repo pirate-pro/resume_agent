@@ -11,6 +11,7 @@ __all__ = ["compact_tool_result_for_model"]
 _SMALL_RESULT_LIMIT = 1600
 _DEFAULT_COMPACT_LIMIT = 5000
 _FULL_RESULT_HINT = "完整工具结果已写入事件日志；如需更多细节，请基于保留的 id / artifact_id 继续读取。"
+_TOOL_SEARCH_NAME = "tool_search"
 _RETRIEVAL_TOOLS = {"retrieval_search", "retrieval_context_pack"}
 _DELEGATION_TOOLS = {"delegate_agents", "agent_task_status"}
 
@@ -29,6 +30,10 @@ def compact_tool_result_for_model(
     payloads otherwise get replayed on every tool round.
     """
 
+    if tool_name == _TOOL_SEARCH_NAME and success:
+        payload = _loads_json(content)
+        if payload is not None:
+            return _dump_bounded(_compact_tool_search_payload(payload), max_chars=1800)
     if len(content) <= _SMALL_RESULT_LIMIT:
         return content
     if not success:
@@ -55,6 +60,25 @@ def _loads_json(content: str) -> Any | None:
         return json.loads(content)
     except (TypeError, ValueError):
         return None
+
+
+def _compact_tool_search_payload(payload: Any) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    revealed_tool_names = _compact_string_list(data.get("revealed_tool_names"), limit=40, item_chars=80)
+    return _drop_none(
+        {
+            "tool": _TOOL_SEARCH_NAME,
+            "model_view": "compact",
+            "query": _text(data.get("query"), 180),
+            "matched_groups": _compact_string_list(data.get("matched_groups"), limit=8, item_chars=40),
+            "reveal_packs": _compact_string_list(data.get("reveal_packs"), limit=8, item_chars=40),
+            "revealed_tool_count": data.get("revealed_tool_count"),
+            "revealed_tool_names": revealed_tool_names,
+            "available_tool_count": data.get("available_tool_count"),
+            "next_step": _text(data.get("next_step"), 240),
+            "search_guidance": _text(data.get("search_guidance"), 240),
+        }
+    )
 
 
 def _compact_retrieval_payload(*, tool_name: str, payload: Any) -> dict[str, Any]:
@@ -255,9 +279,20 @@ def _compact_product_payload(*, tool_name: str, payload: Any) -> dict[str, Any]:
         "risks": _compact_string_list(data.get("risks"), limit=6, item_chars=180),
         "record": _compact_product_record(record, record_type=record_type),
         "items_preview": _compact_nested_items(data),
+        "completion_hint": _product_completion_hint(tool_name=tool_name),
         "full_result_hint": _FULL_RESULT_HINT,
     }
     return _drop_none(compact)
+
+
+def _product_completion_hint(*, tool_name: str) -> str | None:
+    if tool_name == "career_resume_version_create":
+        return "ResumeVersion 已保存；除非工具失败或用户明确要求另一版，否则不要再次创建 ResumeVersion。"
+    if tool_name == "career_application_merge":
+        return "CareerApplication 已更新；如果本轮目标已完成，直接给最终答复，不要重新读取全部关联记录。"
+    if tool_name in {"career_jd_analysis_save", "career_job_fit_report_save"}:
+        return "记录已保存；不要重复保存同一份分析结果。"
+    return None
 
 
 def _compact_product_record(record: Any, *, record_type: str | None) -> dict[str, Any] | None:

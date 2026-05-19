@@ -39,6 +39,8 @@ from app.services.answer_normalizer import AnswerNormalizer
 
 __all__ = ["AgentRuntime"]
 _logger = logging.getLogger(__name__)
+_SCHEMA_SEARCH_TOOL_NAME = "tool_search"
+_MAX_SCHEMA_SEARCH_ROUNDS = 3
 
 
 class AgentRuntime:
@@ -130,8 +132,13 @@ class AgentRuntime:
         used_tool_calls: list[ToolCall] = []
         answer = ""
 
-        # 轮次上限是 `max_tool_rounds + 1`：最后一轮用于拿到最终回答。
-        for round_index in range(run_input.max_tool_rounds + 1):
+        # `max_tool_rounds` 约束业务工具轮次；纯 tool_search 只是 schema 揭示，
+        # 单独给少量额外轮次，避免 search 模式天然少一次业务动作。
+        round_index = 0
+        business_tool_rounds = 0
+        schema_search_rounds = 0
+        max_model_rounds = run_input.max_tool_rounds + _MAX_SCHEMA_SEARCH_ROUNDS + 1
+        while round_index <= max_model_rounds:
             messages = tool_context_window.render_messages()
             visible_tool_definitions = tool_reveal_state.visible_definitions()
             tools_payload = [to_model_tool_schema(tool) for tool in visible_tool_definitions]
@@ -177,10 +184,19 @@ class AgentRuntime:
                 answer = answer or "(no answer)"
                 break
 
-            if round_index == run_input.max_tool_rounds:
+            schema_search_only = _is_schema_search_only(resolved_tool_calls)
+            if schema_search_only:
+                if schema_search_rounds >= _MAX_SCHEMA_SEARCH_ROUNDS:
+                    _logger.warning("达到工具 schema 搜索轮次上限: session_id=%s round=%s", session_id, round_index)
+                    answer = "Tool schema search limit reached before generating final answer."
+                    break
+                schema_search_rounds += 1
+            elif business_tool_rounds >= run_input.max_tool_rounds:
                 _logger.warning("达到工具调用上限: session_id=%s round=%s", session_id, round_index)
                 answer = "Tool call limit reached before generating final answer."
                 break
+            else:
+                business_tool_rounds += 1
 
             if model_response.content.strip():
                 # 一些模型会在 tool_call 前返回推理摘要，记录下来供前端“执行过程/思考”展示。
@@ -269,6 +285,7 @@ class AgentRuntime:
                 tool_messages=tool_messages,
                 observations=tool_observations,
             )
+            round_index += 1
 
         if not answer:
             answer = "(no answer)"
@@ -360,7 +377,11 @@ class AgentRuntime:
         used_tool_calls: list[ToolCall] = []
         answer = ""
 
-        for round_index in range(run_input.max_tool_rounds + 1):
+        round_index = 0
+        business_tool_rounds = 0
+        schema_search_rounds = 0
+        max_model_rounds = run_input.max_tool_rounds + _MAX_SCHEMA_SEARCH_ROUNDS + 1
+        while round_index <= max_model_rounds:
             messages = tool_context_window.render_messages()
             visible_tool_definitions = tool_reveal_state.visible_definitions()
             tools_payload = [to_model_tool_schema(tool) for tool in visible_tool_definitions]
@@ -444,10 +465,19 @@ class AgentRuntime:
                 answer = answer or "(no answer)"
                 break
 
-            if round_index == run_input.max_tool_rounds:
+            schema_search_only = _is_schema_search_only(resolved_tool_calls)
+            if schema_search_only:
+                if schema_search_rounds >= _MAX_SCHEMA_SEARCH_ROUNDS:
+                    _logger.warning("达到工具 schema 搜索轮次上限(流式): session_id=%s round=%s", session_id, round_index)
+                    answer = "Tool schema search limit reached before generating final answer."
+                    break
+                schema_search_rounds += 1
+            elif business_tool_rounds >= run_input.max_tool_rounds:
                 _logger.warning("达到工具调用上限(流式): session_id=%s round=%s", session_id, round_index)
                 answer = "Tool call limit reached before generating final answer."
                 break
+            else:
+                business_tool_rounds += 1
 
             if round_content:
                 await self._event_recorder.record_async(
@@ -537,6 +567,7 @@ class AgentRuntime:
                 tool_messages=tool_messages,
                 observations=tool_observations,
             )
+            round_index += 1
 
         if not answer:
             answer = "(no answer)"
@@ -810,6 +841,10 @@ class AgentRuntime:
         if context.agent_id == "agent_main" and context.agent_id == context.entry_agent_id:
             return "search"
         return "full"
+
+
+def _is_schema_search_only(tool_calls: list[ToolCall]) -> bool:
+    return bool(tool_calls) and all(tool_call.name == _SCHEMA_SEARCH_TOOL_NAME for tool_call in tool_calls)
 
 
 def _build_llm_usage_payload(

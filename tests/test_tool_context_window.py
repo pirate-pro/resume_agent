@@ -201,3 +201,68 @@ def test_compact_state_carries_revealed_tools_guidance() -> None:
     assert "career_resume_version_create" in state_content
     assert "revealed_tool_groups" in state_content
     assert "不要为了这些工具再次调用 tool_search" in state_content
+
+
+def test_compact_state_tells_model_to_stop_after_completed_resume_version_flow() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    create_call = ToolCall(
+        name="career_resume_version_create",
+        arguments={"base_resume_profile_id": "resume_profile_alpha", "content": "# 简历"},
+        tool_call_id="call_create",
+    )
+    create_content = json.dumps(
+        {
+            "record_type": "resume_version",
+            "record_id": "resume_version_alpha",
+            "record": {"resume_version_id": "resume_version_alpha", "artifact_id": "artifact_resume_alpha"},
+        },
+        ensure_ascii=False,
+    )
+    merge_call = ToolCall(
+        name="career_application_merge",
+        arguments={"application_id": "application_alpha"},
+        tool_call_id="call_merge",
+    )
+    merge_content = json.dumps(
+        {
+            "record_type": "career_application",
+            "record_id": "application_alpha",
+            "record": {"resume_version_ids": ["resume_version_alpha"]},
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [create_call, merge_call]),
+        tool_messages=[
+            build_tool_result_message(tool_call_id="call_create", content=create_content),
+            build_tool_result_message(tool_call_id="call_merge", content=merge_content),
+        ],
+        observations=[
+            build_tool_observation(
+                tool_call=create_call,
+                result=ToolExecutionResult(
+                    tool_name="career_resume_version_create",
+                    success=True,
+                    content=create_content,
+                ),
+                model_visible_content=create_content,
+            ),
+            build_tool_observation(
+                tool_call=merge_call,
+                result=ToolExecutionResult(
+                    tool_name="career_application_merge",
+                    success=True,
+                    content=merge_content,
+                ),
+                model_visible_content=merge_content,
+            ),
+        ],
+    )
+    window.consume_pending_exchange()
+
+    state_content = str(window.render_messages()[1]["content"])
+
+    assert "workflow_completion_guidance" in state_content
+    assert "下一步应给最终答复" in state_content
+    assert "不要再次创建 ResumeVersion" in state_content

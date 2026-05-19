@@ -9,6 +9,71 @@ from app.runtime.agent.tool_result_view import compact_tool_result_for_model
 __all__ = []
 
 
+def test_tool_search_model_view_keeps_names_and_drops_descriptions() -> None:
+    payload = {
+        "query": "创建定制简历版本并更新求职项目",
+        "matched_groups": ["career"],
+        "reveal_packs": ["career"],
+        "revealed_tool_count": 2,
+        "revealed_tools": [
+            {
+                "name": "career_resume_version_create",
+                "description": "LONG_DESCRIPTION_MARKER" * 200,
+                "group": "career",
+                "why": "需要处理简历版本。",
+            },
+            {
+                "name": "career_application_merge",
+                "description": "LONG_DESCRIPTION_MARKER" * 200,
+                "group": "career",
+                "why": "需要更新求职项目。",
+            },
+        ],
+        "revealed_tool_names": ["career_resume_version_create", "career_application_merge"],
+        "available_tool_count": 55,
+        "next_step": "下一轮直接调用工具。",
+        "search_guidance": "不要重复搜索。",
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="tool_search",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["model_view"] == "compact"
+    assert compact_payload["revealed_tool_names"] == [
+        "career_resume_version_create",
+        "career_application_merge",
+    ]
+    assert "revealed_tools" not in compact_payload
+    assert "LONG_DESCRIPTION_MARKER" not in compact
+    assert len(compact) < 1000
+
+
+def test_product_model_view_includes_completion_hint_for_resume_version() -> None:
+    payload = {
+        "record_type": "resume_version",
+        "record_id": "resume_version_alpha",
+        "record": {
+            "resume_version_id": "resume_version_alpha",
+            "artifact_id": "artifact_resume_alpha",
+            "content": "简历正文" * 500,
+        },
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="career_resume_version_create",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["model_view"] == "compact"
+    assert "不要再次创建 ResumeVersion" in compact_payload["completion_hint"]
+
+
 def test_retrieval_context_pack_model_view_keeps_refs_and_drops_full_grouped_context() -> None:
     payload = {
         "query": "星河智能 RAG 二面准备",

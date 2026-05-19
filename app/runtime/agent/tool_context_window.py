@@ -202,6 +202,7 @@ class ToolContextWindow:
                 "tool_search_guidance": _tool_search_guidance(revealed_tool_names),
                 "revealed_tool_names": revealed_tool_names,
                 "revealed_tool_groups": revealed_tool_groups,
+                "workflow_completion_guidance": _workflow_completion_guidance(self._observations),
                 "latest_refs": latest_refs,
                 "observations": [observation.to_payload() for observation in observations],
                 "latest_errors": list(reversed(latest_errors)),
@@ -329,6 +330,18 @@ def _tool_group_for_name(name: str) -> str:
     if name.startswith("state_"):
         return "state"
     return "other"
+
+
+def _workflow_completion_guidance(observations: list[ToolObservation]) -> list[str]:
+    successful_tools = {observation.tool_name for observation in observations if observation.success}
+    hints: list[str] = []
+    if {"career_jd_analysis_save", "career_job_fit_report_save"} <= successful_tools:
+        hints.append("JDAnalysis 和 JobFitReport 已在本 run 成功保存；不要重复保存同一份 JD 分析或匹配报告。")
+    if "career_resume_version_create" in successful_tools:
+        hints.append("ResumeVersion 已在本 run 成功创建；除非用户明确要求另一版，否则不要再次创建 ResumeVersion。")
+    if {"career_resume_version_create", "career_application_merge"} <= successful_tools:
+        hints.append("定制简历已创建并已合并进 CareerApplication；下一步应给最终答复，不要重新读取全部关联记录。")
+    return hints
 
 
 def _compact_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -480,6 +493,7 @@ def _dump_bounded(payload: dict[str, Any], *, max_chars: int) -> str:
         "tool_search_guidance": payload.get("tool_search_guidance"),
         "revealed_tool_names": payload.get("revealed_tool_names"),
         "revealed_tool_groups": payload.get("revealed_tool_groups"),
+        "workflow_completion_guidance": payload.get("workflow_completion_guidance"),
         "latest_refs": payload.get("latest_refs"),
         "latest_errors": payload.get("latest_errors"),
         "truncated": True,
