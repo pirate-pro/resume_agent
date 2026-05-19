@@ -160,3 +160,44 @@ def test_observation_drops_large_content_arguments_and_extracts_tool_search_reve
     assert "content" not in observation.arguments_preview
     assert observation.revealed_tool_names == ["career_resume_version_create", "career_application_merge"]
     assert "revealed 2 tools" in str(observation.summary)
+
+
+def test_compact_state_carries_revealed_tools_guidance() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    call = ToolCall(
+        name="tool_search",
+        arguments={"query": "创建定制简历并更新求职项目"},
+        tool_call_id="call_search",
+    )
+    content = json.dumps(
+        {
+            "matched_groups": ["career"],
+            "revealed_tool_count": 3,
+            "revealed_tool_names": [
+                "career_resume_profile_get",
+                "career_resume_version_create",
+                "career_application_merge",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [call]),
+        tool_messages=[build_tool_result_message(tool_call_id="call_search", content=content)],
+        observations=[
+            build_tool_observation(
+                tool_call=call,
+                result=ToolExecutionResult(tool_name="tool_search", success=True, content=content),
+                model_visible_content=content,
+            )
+        ],
+    )
+    window.consume_pending_exchange()
+
+    rendered = window.render_messages()
+    state_content = str(rendered[1]["content"])
+
+    assert "career_resume_version_create" in state_content
+    assert "revealed_tool_groups" in state_content
+    assert "不要为了这些工具再次调用 tool_search" in state_content

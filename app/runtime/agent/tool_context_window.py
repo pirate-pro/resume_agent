@@ -21,6 +21,7 @@ __all__ = [
 _VALID_MODES = {"off", "compact"}
 _DEFAULT_MAX_OBSERVATIONS = 12
 _DEFAULT_MAX_STATE_CHARS = 2500
+_MAX_REVEALED_TOOL_NAMES = 32
 _TEXT_LIMIT = 180
 _ID_PREFIX_RE = re.compile(
     r"^(artifact|resume_profile|career_profile|jd|fit|resume_version|application|note|learning_task|learning_plan|weakness|checkin|task_group|task)_[A-Za-z0-9_-]+$"
@@ -183,6 +184,8 @@ class ToolContextWindow:
     def _state_payload(self) -> dict[str, Any]:
         observations = self._observations[-self._max_observations :]
         latest_refs = _latest_refs(self._observations)
+        revealed_tool_names = _latest_revealed_tool_names(self._observations)
+        revealed_tool_groups = _revealed_tool_groups(revealed_tool_names)
         latest_errors = [
             observation.error
             for observation in reversed(self._observations)
@@ -196,6 +199,9 @@ class ToolContextWindow:
                 "runtime_tool_state": "compact",
                 "tool_call_count": len(self._observations),
                 "successful_tools": successful_tools,
+                "tool_search_guidance": _tool_search_guidance(revealed_tool_names),
+                "revealed_tool_names": revealed_tool_names,
+                "revealed_tool_groups": revealed_tool_groups,
                 "latest_refs": latest_refs,
                 "observations": [observation.to_payload() for observation in observations],
                 "latest_errors": list(reversed(latest_errors)),
@@ -271,6 +277,58 @@ def _summary_for_payload(*, tool_name: str, success: bool, payload: Any, content
         if isinstance(message, str) and message.strip():
             return _truncate(message, _TEXT_LIMIT)
     return _truncate(content, _TEXT_LIMIT)
+
+
+def _latest_revealed_tool_names(observations: list[ToolObservation]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for observation in reversed(observations):
+        for name in reversed(observation.revealed_tool_names):
+            if name in seen:
+                continue
+            output.append(name)
+            seen.add(name)
+            if len(output) >= _MAX_REVEALED_TOOL_NAMES:
+                return list(reversed(output))
+    return list(reversed(output))
+
+
+def _revealed_tool_groups(tool_names: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for name in tool_names:
+        group = _tool_group_for_name(name)
+        if group == "other" or group in seen:
+            continue
+        output.append(group)
+        seen.add(group)
+    return output
+
+
+def _tool_search_guidance(revealed_tool_names: list[str]) -> str | None:
+    if not revealed_tool_names:
+        return None
+    return "已在 revealed_tool_names 中的工具可以直接调用；不要为了这些工具再次调用 tool_search，只有缺少新能力时再搜索。"
+
+
+def _tool_group_for_name(name: str) -> str:
+    if name.startswith("session_") or name.startswith("workspace_") or name == "publish_artifact":
+        return "artifact"
+    if name.startswith("retrieval_"):
+        return "retrieval"
+    if name.startswith("career_"):
+        return "career"
+    if name.startswith("note_"):
+        return "note"
+    if name.startswith("learning_"):
+        return "learning"
+    if name.startswith("memory_"):
+        return "memory"
+    if name in {"delegate_agents", "agent_task_status"}:
+        return "delegation"
+    if name.startswith("state_"):
+        return "state"
+    return "other"
 
 
 def _compact_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -418,6 +476,10 @@ def _dump_bounded(payload: dict[str, Any], *, max_chars: int) -> str:
     fallback = {
         "runtime_tool_state": "compact",
         "tool_call_count": payload.get("tool_call_count"),
+        "successful_tools": payload.get("successful_tools"),
+        "tool_search_guidance": payload.get("tool_search_guidance"),
+        "revealed_tool_names": payload.get("revealed_tool_names"),
+        "revealed_tool_groups": payload.get("revealed_tool_groups"),
         "latest_refs": payload.get("latest_refs"),
         "latest_errors": payload.get("latest_errors"),
         "truncated": True,

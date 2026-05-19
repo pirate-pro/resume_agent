@@ -27,7 +27,8 @@ class ToolSearchTool:
                 "Search the current agent's tool catalog when you need a capability but do not yet know "
                 "which concrete tool schema is available. The result lists tool names and descriptions only; "
                 "the runtime will reveal matching schemas on the next model round. Search for the final "
-                "capability you need, not only the first small lookup step."
+                "capability you need, not only the first small lookup step. After a tool name has been revealed, "
+                "call that tool directly instead of searching for it again."
             ),
             parameters_schema={
                 "type": "object",

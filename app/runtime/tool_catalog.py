@@ -139,6 +139,7 @@ class ToolCatalogSearchResult:
     available_tool_count: int
 
     def to_payload(self) -> dict[str, Any]:
+        revealed_tool_names = [entry.name for entry in self.revealed_tools]
         return {
             "query": self.query,
             "matched_groups": self.matched_groups,
@@ -147,13 +148,18 @@ class ToolCatalogSearchResult:
                 entry.to_payload(why=_why_for_group(entry.group))
                 for entry in self.revealed_tools
             ],
-            "revealed_tool_names": [entry.name for entry in self.revealed_tools],
+            "revealed_tool_names": revealed_tool_names,
             "available_tool_count": self.available_tool_count,
             "revealed_tool_count": len(self.revealed_tools),
             "next_step": (
-                "下一轮可以调用 revealed_tools 中的真实工具。"
+                "下一轮这些工具 schema 会变为可见；如果目标工具已在 revealed_tool_names 中，请直接调用它，不要再次 tool_search。"
                 if self.revealed_tools
                 else "没有找到明确工具；可以直接回答，或用更具体的能力描述重新搜索。"
+            ),
+            "search_guidance": (
+                "tool_search 只用于发现尚未可见的能力；同一任务里已经揭示过的工具可连续调用。"
+                if revealed_tool_names
+                else "仅当缺少能力或工具名不确定时再搜索。"
             ),
         }
 
