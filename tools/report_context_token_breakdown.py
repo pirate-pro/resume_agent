@@ -60,6 +60,9 @@ def _read_usage_calls(path: Path) -> list[dict[str, Any]]:
                 "compacted_tool_observation_count": _int(payload.get("compacted_tool_observation_count")),
                 "tool_state_message_estimate_tokens": _int(payload.get("tool_state_message_estimate_tokens")),
                 "tool_pending_message_estimate_tokens": _int(payload.get("tool_pending_message_estimate_tokens")),
+                "workflow_rule_selection_mode": str(payload.get("workflow_rule_selection_mode") or "none"),
+                "workflow_rule_pack_names": _read_string_list(payload.get("workflow_rule_pack_names")),
+                "workflow_rules_estimate_tokens": _int(payload.get("workflow_rules_estimate_tokens")),
                 "system_prompt_sections": _read_sections(payload.get("system_prompt_sections")),
             }
         )
@@ -82,6 +85,7 @@ def _print_summary(calls: list[dict[str, Any]]) -> None:
         ("message_other", "message_other_estimate_tokens"),
         ("tool_state_message", "tool_state_message_estimate_tokens"),
         ("tool_pending_message", "tool_pending_message_estimate_tokens"),
+        ("workflow_rules", "workflow_rules_estimate_tokens"),
     ]
     for label, field in fields:
         value = sum(item[field] for item in calls)
@@ -104,12 +108,15 @@ def _print_summary(calls: list[dict[str, Any]]) -> None:
         tools = sum(item["tools_estimate_tokens"] for item in items)
         schemas = sorted({item["tool_schema_count"] for item in items})
         window_modes = sorted({str(item["tool_context_window_mode"]) for item in items})
+        workflow_modes = sorted({str(item["workflow_rule_selection_mode"]) for item in items})
+        workflow_packs = sorted({pack for item in items for pack in item["workflow_rule_pack_names"]})
         compacted = sum(item["compacted_tool_observation_count"] for item in items)
         pending_tool_messages = sum(item["pending_tool_message_count"] for item in items)
         print(
             f"{key}: calls={len(items)} provider_prompt={prompt} estimate={estimate} "
             f"system={system} messages={messages} tools={tools} schemas={schemas} "
-            f"tool_window={window_modes} compacted_observations={compacted} "
+            f"tool_window={window_modes} workflow_rules={workflow_modes} "
+            f"workflow_packs={workflow_packs[:8]} compacted_observations={compacted} "
             f"pending_tool_messages={pending_tool_messages}"
         )
         run_sections = _section_totals(items)[:5]
@@ -157,6 +164,8 @@ def _read_sections(value: Any) -> list[dict[str, Any]]:
                 "tokens": _int(item.get("tokens")),
                 "chars": _int(item.get("chars")),
                 "item_count": _int(item.get("item_count")),
+                "pack_names": _read_string_list(item.get("pack_names")),
+                "selection_mode": str(item.get("selection_mode") or ""),
             }
         )
     return sections
@@ -168,6 +177,17 @@ def _int(value: Any) -> int:
     if isinstance(value, int):
         return value
     return 0
+
+
+def _read_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    for item in value:
+        normalized = str(item).strip()
+        if normalized:
+            output.append(normalized)
+    return output
 
 
 if __name__ == "__main__":

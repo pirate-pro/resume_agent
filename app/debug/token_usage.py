@@ -27,6 +27,8 @@ class TokenUsageContextSection:
     tokens: int
     chars: int
     item_count: int
+    pack_names: list[str]
+    selection_mode: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +71,9 @@ class TokenUsageCall:
     compacted_tool_observation_count: int
     tool_state_message_estimate_tokens: int
     tool_pending_message_estimate_tokens: int
+    workflow_rule_selection_mode: str
+    workflow_rule_pack_names: list[str]
+    workflow_rules_estimate_tokens: int
     created_at: datetime
 
 
@@ -396,6 +401,9 @@ def _call_from_event(session: SessionMeta, event: EventRecord) -> TokenUsageCall
         compacted_tool_observation_count=_read_int(payload.get("compacted_tool_observation_count")),
         tool_state_message_estimate_tokens=_read_int(payload.get("tool_state_message_estimate_tokens")),
         tool_pending_message_estimate_tokens=_read_int(payload.get("tool_pending_message_estimate_tokens")),
+        workflow_rule_selection_mode=_read_str(payload.get("workflow_rule_selection_mode"), default="none"),
+        workflow_rule_pack_names=_read_string_list(payload.get("workflow_rule_pack_names")),
+        workflow_rules_estimate_tokens=_read_int(payload.get("workflow_rules_estimate_tokens")),
         created_at=event.created_at,
     )
 
@@ -423,6 +431,8 @@ def _read_context_sections(value: object) -> list[TokenUsageContextSection]:
                 tokens=_read_int(item.get("tokens")),
                 chars=_read_int(item.get("chars")),
                 item_count=_read_int(item.get("item_count")),
+                pack_names=_read_string_list(item.get("pack_names")),
+                selection_mode=_read_optional_str(item.get("selection_mode")),
             )
         )
     return sections
@@ -486,6 +496,22 @@ def _read_str(value: object, *, default: str = "") -> str:
     if value is None:
         return default
     return str(value).strip() or default
+
+
+def _read_optional_str(value: object) -> str | None:
+    normalized = _read_str(value)
+    return normalized or None
+
+
+def _read_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    for item in value:
+        normalized = _read_str(item)
+        if normalized:
+            output.append(normalized)
+    return output
 
 
 def _read_int(value: object) -> int:

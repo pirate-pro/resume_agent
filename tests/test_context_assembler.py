@@ -135,6 +135,7 @@ def test_context_assembler_sparse_selects_workflow_rules(tmp_path: Path) -> None
         memory_manager=_memory_manager(tmp_path, capability_registry),
         state_manager=_state_manager(tmp_path),
         tool_executor=ToolRegistry(capability_registry=capability_registry),
+        workflow_rule_selection_mode="sparse",
     )
 
     plain = assembler.assemble(
@@ -163,11 +164,51 @@ def test_context_assembler_sparse_selects_workflow_rules(tmp_path: Path) -> None
         skill_names=["base"],
     )
 
-    assert "Sparse-selected workflow rules" not in plain.system_prompt
-    assert "# Career Workflow" in career.system_prompt
-    assert "# Note Workflow" in note.system_prompt
-    assert "# Learning Workflow" in learning.system_prompt
-    assert "召回驱动求职动作规则" in interview.system_prompt
+    assert "Selected workflow rules" in plain.system_prompt
+    assert "## Always-On Product Guardrails" in plain.system_prompt
+    assert "## Resume Diagnosis" in career.system_prompt
+    assert "## Note Capture" in note.system_prompt
+    assert "## Learning Task" in learning.system_prompt
+    assert "## Historical Context Retrieval" in interview.system_prompt
+    workflow_sections = [
+        section for section in learning.system_prompt_sections if section["name"] == "workflow_rules"
+    ]
+    assert workflow_sections
+    assert workflow_sections[0]["selection_mode"] == "sparse"
+    assert workflow_sections[0]["pack_names"] == [
+        "always_on",
+        "retrieval_required",
+        "learning_task_create",
+    ]
+
+
+def test_context_assembler_full_workflow_mode_preserves_skill_prompts(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_full_workflow")
+    capability_registry = _capability_registry()
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path, capability_registry),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=capability_registry),
+        workflow_rule_selection_mode="full",
+    )
+
+    bundle = assembler.assemble(
+        context=_context("sess_full_workflow"),
+        user_message="请诊断这份简历，并生成简历画像。",
+        skill_names=["base"],
+    )
+
+    assert "# Career Workflow" in bundle.system_prompt
+    workflow_sections = [
+        section for section in bundle.system_prompt_sections if section["name"] == "workflow_rules"
+    ]
+    assert workflow_sections
+    assert workflow_sections[0]["selection_mode"] == "full"
+    assert workflow_sections[0]["pack_names"] == ["career-workflow"]
 
 
 def test_context_assembler_does_not_inject_agent_catalog_for_other_agent(tmp_path: Path) -> None:

@@ -168,6 +168,9 @@ def test_token_usage_missing_total_uses_prompt_plus_completion(tmp_path: Path) -
     assert call.system_prompt_sections == []
     assert call.messages_estimate_tokens == 0
     assert call.tools_estimate_tokens == 0
+    assert call.workflow_rule_selection_mode == "none"
+    assert call.workflow_rule_pack_names == []
+    assert call.workflow_rules_estimate_tokens == 0
 
 
 def test_token_usage_reads_prompt_breakdown_fields(tmp_path: Path) -> None:
@@ -189,7 +192,14 @@ def test_token_usage_reads_prompt_breakdown_fields(tmp_path: Path) -> None:
             "system_prompt_section_count": 2,
             "system_prompt_sections": [
                 {"name": "agent_identity", "tokens": 20, "chars": 80, "item_count": 1},
-                {"name": "active_artifacts", "tokens": 10, "chars": 40, "item_count": 2},
+                {
+                    "name": "workflow_rules",
+                    "tokens": 10,
+                    "chars": 40,
+                    "item_count": 2,
+                    "pack_names": ["always_on", "learning_task_create"],
+                    "selection_mode": "sparse",
+                },
             ],
             "messages_estimate_tokens": 40,
             "tools_estimate_tokens": 20,
@@ -203,6 +213,9 @@ def test_token_usage_reads_prompt_breakdown_fields(tmp_path: Path) -> None:
             "compacted_tool_observation_count": 5,
             "tool_state_message_estimate_tokens": 120,
             "tool_pending_message_estimate_tokens": 240,
+            "workflow_rule_selection_mode": "sparse",
+            "workflow_rule_pack_names": ["always_on", "learning_task_create"],
+            "workflow_rules_estimate_tokens": 10,
         }
     )
     repository.append_event("sess_breakdown", event)
@@ -214,8 +227,10 @@ def test_token_usage_reads_prompt_breakdown_fields(tmp_path: Path) -> None:
     assert call.system_prompt_section_count == 2
     assert [(item.name, item.tokens) for item in call.system_prompt_sections] == [
         ("agent_identity", 20),
-        ("active_artifacts", 10),
+        ("workflow_rules", 10),
     ]
+    assert call.system_prompt_sections[1].pack_names == ["always_on", "learning_task_create"]
+    assert call.system_prompt_sections[1].selection_mode == "sparse"
     assert call.messages_estimate_tokens == 40
     assert call.tools_estimate_tokens == 20
     assert call.message_user_estimate_tokens == 12
@@ -228,6 +243,9 @@ def test_token_usage_reads_prompt_breakdown_fields(tmp_path: Path) -> None:
     assert call.compacted_tool_observation_count == 5
     assert call.tool_state_message_estimate_tokens == 120
     assert call.tool_pending_message_estimate_tokens == 240
+    assert call.workflow_rule_selection_mode == "sparse"
+    assert call.workflow_rule_pack_names == ["always_on", "learning_task_create"]
+    assert call.workflow_rules_estimate_tokens == 10
 
 
 def test_token_usage_session_detail_handles_missing_session(tmp_path: Path) -> None:

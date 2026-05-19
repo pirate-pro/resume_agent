@@ -23,13 +23,14 @@ from app.runtime.context.short_term import (
     format_child_result_summary_lines,
     format_context_summary_lines,
 )
+from app.runtime.context.workflow_rules import WorkflowRulePack
 
 
 def build_assembly_plan(
     *,
     role: ContextAssemblyRole,
     skill_descriptions: dict[str, str],
-    workflow_instructions: dict[str, str],
+    workflow_rule_packs: list[WorkflowRulePack],
     tool_definitions: list[ToolDefinition],
     agent_documents: AgentIdentityDocuments,
     invokable_agents: list[AgentCatalogItem],
@@ -76,15 +77,14 @@ def build_assembly_plan(
                 item_count=len(tool_definitions),
             )
         )
-    if workflow_instructions:
+    if workflow_rule_packs:
         sections.append(
             ContextSection(
                 name="workflow_rules",
-                content="Sparse-selected workflow rules:\n\n"
-                + "\n\n".join(
-                    f"## {name}\n{instructions}" for name, instructions in workflow_instructions.items()
-                ),
-                item_count=len(workflow_instructions),
+                content="Selected workflow rules:\n\n"
+                + "\n\n".join(f"## {pack.title}\n{pack.content}" for pack in workflow_rule_packs),
+                item_count=len(workflow_rule_packs),
+                metadata={"pack_names": [pack.name for pack in workflow_rule_packs]},
             )
         )
     if role == ContextAssemblyRole.MAIN_AGENT and invokable_agents:

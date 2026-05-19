@@ -178,6 +178,8 @@ def _call_view(item: TokenUsageCall) -> TokenUsageCallView:
                 tokens=section.tokens,
                 chars=section.chars,
                 item_count=section.item_count,
+                pack_names=section.pack_names,
+                selection_mode=section.selection_mode,
             )
             for section in item.system_prompt_sections
         ],
@@ -196,5 +198,8 @@ def _call_view(item: TokenUsageCall) -> TokenUsageCallView:
         compacted_tool_observation_count=item.compacted_tool_observation_count,
         tool_state_message_estimate_tokens=item.tool_state_message_estimate_tokens,
         tool_pending_message_estimate_tokens=item.tool_pending_message_estimate_tokens,
+        workflow_rule_selection_mode=item.workflow_rule_selection_mode,
+        workflow_rule_pack_names=item.workflow_rule_pack_names,
+        workflow_rules_estimate_tokens=item.workflow_rules_estimate_tokens,
         created_at=item.created_at,
     )

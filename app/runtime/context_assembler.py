@@ -45,7 +45,12 @@ from app.runtime.context.short_term import (
     is_other_agent_related_event,
     latest_context_summaries,
 )
-from app.runtime.context.workflow_rules import select_workflow_skill_names
+from app.runtime.context.workflow_rules import (
+    WorkflowRulePack,
+    normalize_workflow_rule_selection_mode,
+    select_full_workflow_skill_names,
+    select_sparse_workflow_rule_packs,
+)
 from app.runtime.agent.tool_reveal import normalize_always_visible_tool_names, normalize_tool_schema_disclosure_mode
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
@@ -74,6 +79,7 @@ class ContextAssembler:
         agent_registry: AgentRegistry | None = None,
         tool_schema_disclosure_mode: str = "full",
         tool_schema_always_visible: str | list[str] | None = None,
+        workflow_rule_selection_mode: str = "full",
     ) -> None:
         self._session_repository = session_repository
         self._skill_repository = skill_repository
@@ -84,6 +90,7 @@ class ContextAssembler:
         self._agent_registry = agent_registry
         self._tool_schema_disclosure_mode = normalize_tool_schema_disclosure_mode(tool_schema_disclosure_mode)
         self._tool_schema_always_visible = normalize_always_visible_tool_names(tool_schema_always_visible)
+        self._workflow_rule_selection_mode = normalize_workflow_rule_selection_mode(workflow_rule_selection_mode)
 
     @staticmethod
     def determine_role(context: RunContext) -> ContextAssemblyRole:
@@ -107,7 +114,7 @@ class ContextAssembler:
 
         active_artifacts = self._load_active_artifacts(normalized_session_id)
         skills = self._skill_repository.load_skills(skill_names) if skill_names else {}
-        workflow_skills = self._load_workflow_skills(
+        workflow_rule_packs = self._load_workflow_rule_packs(
             role=assembly_role,
             user_message=normalized_message,
             active_artifacts=active_artifacts,
@@ -146,7 +153,7 @@ class ContextAssembler:
         assembly_plan = build_assembly_plan(
             role=assembly_role,
             skill_descriptions=skill_descriptions,
-            workflow_instructions=workflow_skills,
+            workflow_rule_packs=workflow_rule_packs,
             tool_definitions=prompt_tool_definitions,
             agent_documents=agent_documents,
             invokable_agents=invokable_agents,
@@ -156,11 +163,12 @@ class ContextAssembler:
         )
         system_prompt = assembly_plan.render_prompt()
         _logger.debug(
-            "上下文组装: session_id=%s role=%s sections=%s skills=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
+            "上下文组装: session_id=%s role=%s sections=%s skills=%s workflow_packs=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
             normalized_session_id,
             assembly_plan.role.value,
             assembly_plan.section_names(),
             len(skills),
+            len(workflow_rule_packs),
             bool(agent_documents.agent_markdown),
             bool(agent_documents.soul_markdown),
             len(invokable_agents),
@@ -180,7 +188,10 @@ class ContextAssembler:
             tool_definitions=tool_definitions,
             memory_summary=memory_summary,
             memory_lanes=memory_lanes,
-            system_prompt_sections=_system_prompt_section_usage(assembly_plan),
+            system_prompt_sections=_system_prompt_section_usage(
+                assembly_plan,
+                workflow_rule_selection_mode=self._workflow_rule_selection_mode,
+            ),
         )
 
     def _load_skill_descriptions(self, *, loaded_skills: dict[str, str]) -> dict[str, str]:
@@ -213,25 +224,41 @@ class ContextAssembler:
             and role == ContextAssemblyRole.MAIN_AGENT
         )
 
-    def _load_workflow_skills(
+    def _load_workflow_rule_packs(
         self,
         *,
         role: ContextAssemblyRole,
         user_message: str,
         active_artifacts: list[SessionArtifact],
-    ) -> dict[str, str]:
-        skill_names = select_workflow_skill_names(
+    ) -> list[WorkflowRulePack]:
+        if self._workflow_rule_selection_mode == "sparse":
+            return select_sparse_workflow_rule_packs(
+                role=role,
+                user_message=user_message,
+                active_artifacts=active_artifacts,
+            )
+
+        skill_names = select_full_workflow_skill_names(
             role=role,
             user_message=user_message,
             active_artifacts=active_artifacts,
         )
         if not skill_names:
-            return {}
+            return []
         try:
-            return self._skill_repository.load_skills(skill_names)
+            skills = self._skill_repository.load_skills(skill_names)
         except (StorageError, ValidationError) as exc:
             _logger.warning("Workflow skill loading failed, skipped: skills=%s error=%s", skill_names, exc)
-            return {}
+            return []
+        return [
+            WorkflowRulePack(
+                name=name,
+                title=name,
+                content=skills[name],
+            )
+            for name in skill_names
+            if name in skills
+        ]
 
     def _load_agent_documents(self, context: RunContext) -> AgentIdentityDocuments:
         try:
@@ -403,13 +430,23 @@ def _merge_context_events(*event_groups: list[EventRecord]) -> list[EventRecord]
     return sorted(by_id.values(), key=lambda item: item.created_at)
 
 
-def _system_prompt_section_usage(assembly_plan: ContextAssemblyPlan) -> list[dict[str, int | str]]:
-    return [
-        {
+def _system_prompt_section_usage(
+    assembly_plan: ContextAssemblyPlan,
+    *,
+    workflow_rule_selection_mode: str,
+) -> list[dict[str, int | str | list[str]]]:
+    output: list[dict[str, int | str | list[str]]] = []
+    for section in assembly_plan.sections:
+        item: dict[str, int | str | list[str]] = {
             "name": section.name,
             "tokens": estimate_tokens_from_text(section.content),
             "chars": len(section.content),
             "item_count": section.item_count,
         }
-        for section in assembly_plan.sections
-    ]
+        if section.name == "workflow_rules":
+            pack_names = section.metadata.get("pack_names")
+            if isinstance(pack_names, list):
+                item["pack_names"] = [str(name) for name in pack_names if str(name).strip()]
+            item["selection_mode"] = workflow_rule_selection_mode
+        output.append(item)
+    return output

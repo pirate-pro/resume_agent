@@ -88,6 +88,10 @@ class Settings(BaseSettings):
         default="off",
         validation_alias=AliasChoices("TOOL_CONTEXT_WINDOW_MODE"),
     )
+    workflow_rule_selection_mode: str = Field(
+        default="full",
+        validation_alias=AliasChoices("WORKFLOW_RULE_SELECTION_MODE"),
+    )
     mid_term_flush_worker_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("MID_TERM_FLUSH_WORKER_ENABLED"),
@@ -271,6 +275,14 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {"off", "compact"}:
             raise ValidationError("TOOL_CONTEXT_WINDOW_MODE must be off/compact.")
+        return normalized
+
+    @field_validator("workflow_rule_selection_mode")
+    @classmethod
+    def _validate_workflow_rule_selection_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"full", "sparse"}:
+            raise ValidationError("WORKFLOW_RULE_SELECTION_MODE must be full/sparse.")
         return normalized
 
     @field_validator(

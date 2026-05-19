@@ -890,6 +890,21 @@ def _estimate_prompt_breakdown(
 
     system_tokens = estimate_tokens_from_text(system_prompt)
     section_items = _normalize_system_prompt_sections(system_prompt_sections or [])
+    workflow_rule_sections = [item for item in section_items if item.get("name") == "workflow_rules"]
+    workflow_rule_pack_names: list[str] = []
+    workflow_rule_selection_mode = "none"
+    workflow_rules_tokens = 0
+    for section in workflow_rule_sections:
+        workflow_rules_tokens += _safe_int(section.get("tokens"))
+        raw_mode = section.get("selection_mode")
+        if isinstance(raw_mode, str) and raw_mode.strip():
+            workflow_rule_selection_mode = raw_mode.strip()
+        raw_pack_names = section.get("pack_names")
+        if isinstance(raw_pack_names, list):
+            for name in raw_pack_names:
+                normalized_name = str(name).strip()
+                if normalized_name and normalized_name not in workflow_rule_pack_names:
+                    workflow_rule_pack_names.append(normalized_name)
     messages_tokens = estimate_tokens_from_object(messages)
     tools_tokens = estimate_tokens_from_object(tools) if tools else 0
     prompt_estimate_total = estimate_tokens_from_object(
@@ -911,25 +926,33 @@ def _estimate_prompt_breakdown(
         "message_assistant_estimate_tokens": message_tokens_by_role["assistant"],
         "message_tool_estimate_tokens": message_tokens_by_role["tool"],
         "message_other_estimate_tokens": message_tokens_by_role["other"],
+        "workflow_rule_selection_mode": workflow_rule_selection_mode,
+        "workflow_rule_pack_names": workflow_rule_pack_names,
+        "workflow_rules_estimate_tokens": workflow_rules_tokens,
     }
 
 
-def _normalize_system_prompt_sections(sections: list[dict[str, Any]]) -> list[dict[str, int | str]]:
-    normalized: list[dict[str, int | str]] = []
+def _normalize_system_prompt_sections(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for item in sections:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or "").strip()
         if not name:
             continue
-        normalized.append(
-            {
-                "name": name,
-                "tokens": _safe_int(item.get("tokens")),
-                "chars": _safe_int(item.get("chars")),
-                "item_count": _safe_int(item.get("item_count")),
-            }
-        )
+        section = {
+            "name": name,
+            "tokens": _safe_int(item.get("tokens")),
+            "chars": _safe_int(item.get("chars")),
+            "item_count": _safe_int(item.get("item_count")),
+        }
+        pack_names = item.get("pack_names")
+        if isinstance(pack_names, list):
+            section["pack_names"] = [str(pack_name) for pack_name in pack_names if str(pack_name).strip()]
+        selection_mode = item.get("selection_mode")
+        if isinstance(selection_mode, str) and selection_mode.strip():
+            section["selection_mode"] = selection_mode.strip()
+        normalized.append(section)
     return normalized
 
 

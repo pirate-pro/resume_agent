@@ -98,6 +98,7 @@ def get_context_assembler() -> ContextAssembler:
         agent_registry=get_agent_registry(),
         tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
         tool_schema_always_visible=settings.tool_schema_always_visible,
+        workflow_rule_selection_mode=settings.workflow_rule_selection_mode,
     )
 
 

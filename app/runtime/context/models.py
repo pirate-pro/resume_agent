@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from app.core.errors import ValidationError
@@ -39,6 +39,7 @@ class ContextSection:
     name: str
     content: str
     item_count: int = 1
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -48,6 +49,8 @@ class ContextSection:
             raise ValidationError("section content must be a non-empty string.")
         if self.item_count < 0:
             raise ValidationError("section item_count cannot be negative.")
+        if not isinstance(self.metadata, dict):
+            raise ValidationError("section metadata must be a dictionary.")
 
 
 @dataclass(slots=True)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 __all__ = [
     "TokenUsageBucketView",
@@ -21,6 +21,8 @@ class TokenUsageContextSectionView(BaseModel):
     tokens: int
     chars: int
     item_count: int
+    pack_names: list[str] = Field(default_factory=list)
+    selection_mode: str | None = None
 
 
 class TokenUsageCallView(BaseModel):
@@ -62,6 +64,9 @@ class TokenUsageCallView(BaseModel):
     compacted_tool_observation_count: int
     tool_state_message_estimate_tokens: int
     tool_pending_message_estimate_tokens: int
+    workflow_rule_selection_mode: str
+    workflow_rule_pack_names: list[str] = Field(default_factory=list)
+    workflow_rules_estimate_tokens: int
     created_at: datetime
 
 

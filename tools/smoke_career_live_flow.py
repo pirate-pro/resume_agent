@@ -195,6 +195,7 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         tool_executor=tool_registry,
         tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
         tool_schema_always_visible=settings.tool_schema_always_visible,
+        workflow_rule_selection_mode=settings.workflow_rule_selection_mode,
     )
     event_recorder = EventRecorder(session_repository=session_repository)
     runtime = AgentRuntime(
