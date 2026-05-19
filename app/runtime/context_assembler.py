@@ -45,6 +45,7 @@ from app.runtime.context.short_term import (
     is_other_agent_related_event,
     latest_context_summaries,
 )
+from app.runtime.context.career_flow_state import extract_career_flow_state
 from app.runtime.context.workflow_rules import (
     WorkflowRulePack,
     normalize_workflow_rule_selection_mode,
@@ -127,6 +128,7 @@ class ContextAssembler:
             context,
             role=assembly_role,
             limit=RECENT_EVENT_MAX_COUNT,
+            user_message=normalized_message,
         )
         memory_hits, memory_summary, memory_lanes = self._safe_memory_search(
             normalized_message,
@@ -164,7 +166,7 @@ class ContextAssembler:
         )
         system_prompt = assembly_plan.render_prompt()
         _logger.debug(
-            "上下文组装: session_id=%s role=%s sections=%s skills=%s workflow_packs=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s workflow_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
+            "上下文组装: session_id=%s role=%s sections=%s skills=%s workflow_packs=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s workflow_state=%s career_flow_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
             normalized_session_id,
             assembly_plan.role.value,
             assembly_plan.section_names(),
@@ -176,6 +178,7 @@ class ContextAssembler:
             len(short_term_plan.agent_state),
             len(short_term_plan.orchestration_state),
             len(short_term_plan.workflow_state.refs),
+            len(short_term_plan.career_flow_state.completed_steps),
             len(short_term_plan.assigned_tasks),
             len(short_term_plan.child_result_summaries),
             len(memory_hits),
@@ -307,6 +310,7 @@ class ContextAssembler:
         *,
         role: ContextAssemblyRole,
         limit: int,
+        user_message: str,
     ) -> ShortTermContextPlan:
         if limit <= 0:
             raise ValidationError("limit must be positive.")
@@ -324,6 +328,12 @@ class ContextAssembler:
             main_view_events = _merge_context_events(agent_events, orchestration_events)
             visible_events = [event for event in main_view_events if is_main_agent_orchestration_event(event, context)]
             workflow_state = extract_current_workflow_state(visible_events, context)
+            career_flow_state = extract_career_flow_state(
+                visible_events,
+                context,
+                user_message=user_message,
+                workflow_state=workflow_state,
+            )
             context_summaries = latest_context_summaries(visible_events, context)
             recent_events = exclude_context_summaries(visible_events)[-limit:]
             child_result_summaries = extract_child_result_summaries(recent_events, context)[
@@ -342,6 +352,12 @@ class ContextAssembler:
             assigned_tasks = extract_assigned_tasks(all_events, context)[-AGENT_TASK_CONTEXT_MAX_COUNT:]
             child_result_summaries = []
             workflow_state = extract_current_workflow_state(related_events, context)
+            career_flow_state = extract_career_flow_state(
+                related_events,
+                context,
+                user_message=user_message,
+                workflow_state=workflow_state,
+            )
 
         return ShortTermContextPlan(
             role=role,
@@ -352,6 +368,7 @@ class ContextAssembler:
             assigned_tasks=assigned_tasks,
             child_result_summaries=child_result_summaries,
             workflow_state=workflow_state,
+            career_flow_state=career_flow_state,
         )
 
     def _safe_memory_search(

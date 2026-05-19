@@ -170,6 +170,7 @@ def test_context_assembler_sparse_selects_workflow_rules(tmp_path: Path) -> None
     assert "## Note Capture" in note.system_prompt
     assert "## Learning Task" in learning.system_prompt
     assert "## Historical Context Retrieval" in interview.system_prompt
+    assert "Current career flow state from deterministic runtime facts:" not in plain.system_prompt
     workflow_sections = [
         section for section in learning.system_prompt_sections if section["name"] == "workflow_rules"
     ]
@@ -591,6 +592,15 @@ def test_context_assembler_injects_current_workflow_state_from_tool_results(tmp_
     assert "report_artifact_id=artifact_fit_report via career_job_fit_report_save" in bundle.system_prompt
     assert "application_id=application_ai_backend via career_application_create" in bundle.system_prompt
     assert "Call list tools only when an id is missing" in bundle.system_prompt
+    assert "Current career flow state from deterministic runtime facts:" in bundle.system_prompt
+    assert "- application_id=application_ai_backend" in bundle.system_prompt
+    assert "- resume_profile_id=resume_profile_alpha" in bundle.system_prompt
+    assert "- jd_analysis_id=jd_ai_backend_001" in bundle.system_prompt
+    assert "- job_fit_report_id=fit_ai_backend_001" in bundle.system_prompt
+    assert "- completed=resume_profile,career_profile,jd_analysis,job_fit_report,career_application" in bundle.system_prompt
+    assert "- missing=resume_version" in bundle.system_prompt
+    assert "career_resume_profile_get,career_jd_analysis_get,career_job_fit_report_get" in bundle.system_prompt
+    assert "current_career_flow_state" in {section["name"] for section in bundle.system_prompt_sections}
     assert "resume_version_failed" not in bundle.system_prompt
     workflow_sections = [
         section for section in bundle.system_prompt_sections if section["name"] == "current_workflow_state"

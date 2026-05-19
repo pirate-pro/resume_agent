@@ -23,6 +23,7 @@ from app.runtime.context.short_term import (
     format_child_result_summary_lines,
     format_context_summary_lines,
 )
+from app.runtime.context.career_flow_state import format_career_flow_state_lines
 from app.runtime.context.workflow_rules import WorkflowRulePack
 from app.runtime.context.workflow_state import format_current_workflow_state_lines
 
@@ -149,6 +150,20 @@ def build_assembly_plan(
                     "Call list tools only when an id is missing or the user asks to enumerate records."
                 ),
                 item_count=len(workflow_state_lines),
+            )
+        )
+    career_flow_state_lines = format_career_flow_state_lines(short_term_plan.career_flow_state)
+    if career_flow_state_lines:
+        sections.append(
+            ContextSection(
+                name="current_career_flow_state",
+                content=(
+                    "Current career flow state from deterministic runtime facts:\n"
+                    + "\n".join(career_flow_state_lines)
+                    + "\n\nUse confirmed ids directly. Do not repeat tools listed in do_not_repeat. "
+                    "If final_answer_ready=true, stop calling tools and produce the final user-facing answer."
+                ),
+                item_count=len(career_flow_state_lines),
             )
         )
     context_summary_lines = format_context_summary_lines(short_term_plan.context_summaries)
