@@ -361,6 +361,7 @@ class AgentRuntime:
                         success_runtime_plan = pending_runtime_plan_from_successful_tool_result(
                             execution_tool_call.name,
                             result.content,
+                            previous_pending_plan=previous_pending_plan,
                         )
                         if success_runtime_plan is not None:
                             pending_runtime_plan = success_runtime_plan
@@ -755,6 +756,7 @@ class AgentRuntime:
                         success_runtime_plan = pending_runtime_plan_from_successful_tool_result(
                             execution_tool_call.name,
                             result.content,
+                            previous_pending_plan=previous_pending_plan,
                         )
                         if success_runtime_plan is not None:
                             pending_runtime_plan = success_runtime_plan

@@ -243,7 +243,7 @@ def pending_runtime_plan_from_context_bundle(payload: dict[str, Any]) -> dict[st
 
 
 def pending_runtime_plan_from_workflow_result(content: str) -> dict[str, Any] | None:
-    """Extract a pending runtime plan from a workflow guard block result."""
+    """Extract a pending runtime plan from a workflow guard result."""
 
     try:
         payload = json.loads(content)
@@ -251,7 +251,7 @@ def pending_runtime_plan_from_workflow_result(content: str) -> dict[str, Any] | 
         return None
     if not isinstance(payload, dict) or payload.get("workflow_runtime_result") is not True:
         return None
-    if payload.get("terminal") is True or payload.get("policy") != "block":
+    if payload.get("terminal") is True or payload.get("policy") not in {"block", "reuse"}:
         return None
     next_allowed_tools = runtime_plan_next_allowed_tools(payload)
     if not next_allowed_tools:
@@ -270,16 +270,24 @@ def pending_runtime_plan_from_workflow_result(content: str) -> dict[str, Any] | 
     }
 
 
-def pending_runtime_plan_from_successful_tool_result(tool_name: str, content: str) -> dict[str, Any] | None:
+def pending_runtime_plan_from_successful_tool_result(
+    tool_name: str,
+    content: str,
+    *,
+    previous_pending_plan: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Infer a required follow-up plan after a successful workflow tool result."""
 
-    if tool_name != "career_resume_version_create":
-        return None
     try:
         payload = json.loads(content)
     except (TypeError, ValueError):
         return None
     if not isinstance(payload, dict):
+        return None
+
+    if tool_name == "career_jd_analysis_save":
+        return _pending_plan_after_jd_analysis_save(payload, previous_pending_plan=previous_pending_plan)
+    if tool_name != "career_resume_version_create":
         return None
     if payload.get("record_type") != "resume_version":
         return None
@@ -300,6 +308,47 @@ def pending_runtime_plan_from_successful_tool_result(tool_name: str, content: st
             "session_read_artifact",
             "career_resume_version_create",
             "career_application_list",
+        ],
+    }
+
+
+def _pending_plan_after_jd_analysis_save(
+    payload: dict[str, Any],
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if payload.get("record_type") != "jd_analysis":
+        return None
+    if previous_pending_plan is None:
+        return None
+    raw_missing_outputs = previous_pending_plan.get("missing_outputs")
+    if not isinstance(raw_missing_outputs, list) or "job_fit_report" not in raw_missing_outputs:
+        return None
+    raw_previous_refs = previous_pending_plan.get("known_refs")
+    previous_refs: dict[str, Any] = raw_previous_refs if isinstance(raw_previous_refs, dict) else {}
+    if not isinstance(previous_refs.get("report_artifact_id"), str):
+        return None
+    known_refs = dict(previous_refs)
+    jd_analysis_id = payload.get("record_id")
+    if isinstance(jd_analysis_id, str) and jd_analysis_id.strip():
+        known_refs["jd_analysis_id"] = jd_analysis_id.strip()
+    return {
+        "phase": previous_pending_plan.get("phase") or "jd_fit",
+        "next_action": "JDAnalysis 已保存；下一步只调用 career_job_fit_report_save，并引用已有 report_artifact_id。",
+        "next_allowed_tools": ["career_job_fit_report_save"],
+        "required_tools": ["career_job_fit_report_save"],
+        "known_refs": known_refs,
+        "missing_outputs": ["job_fit_report"],
+        "discouraged_tools": [
+            "tool_search",
+            "session_read_artifact",
+            "session_list_artifacts",
+            "session_create_text_artifact",
+            "career_jd_analysis_save",
+            "career_jd_analysis_get",
+            "career_job_fit_report_get",
+            "career_resume_profile_get",
+            "career_profile_get",
         ],
     }
 

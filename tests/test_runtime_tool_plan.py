@@ -7,6 +7,7 @@ from app.runtime.workflow.phase import WorkflowPhaseSnapshot, WorkflowRequiredOu
 from app.runtime.workflow.tool_plan import (
     build_runtime_tool_plan,
     format_runtime_tool_plan_lines,
+    pending_runtime_plan_from_successful_tool_result,
     pending_runtime_plan_from_tool_search_result,
     pending_runtime_plan_from_workflow_result,
     runtime_plan_discouraged_tools,
@@ -146,6 +147,56 @@ def test_pending_runtime_plan_from_workflow_result_preserves_discouraged_tools()
     assert plan is not None
     assert plan["next_allowed_tools"] == ["career_application_create"]
     assert runtime_plan_discouraged_tools(plan) == ["delegate_agents", "session_read_artifact"]
+
+
+def test_pending_runtime_plan_from_workflow_reuse_result_can_drive_next_step() -> None:
+    plan = pending_runtime_plan_from_workflow_result(
+        """
+        {
+          "workflow_runtime_result": true,
+          "policy": "reuse",
+          "stage": "jd_fit",
+          "next_allowed_tools": ["career_jd_analysis_save"],
+          "required_tools": ["career_jd_analysis_save"],
+          "missing_outputs": ["jd_analysis", "job_fit_report"],
+          "completed_refs": {"report_artifact_id": "artifact_fit_report"},
+          "blocked_tools": ["session_read_artifact", "career_job_fit_report_save"]
+        }
+        """
+    )
+
+    assert plan is not None
+    assert plan["next_allowed_tools"] == ["career_jd_analysis_save"]
+    assert plan["required_tools"] == ["career_jd_analysis_save"]
+    assert plan["known_refs"] == {"report_artifact_id": "artifact_fit_report"}
+    assert runtime_plan_discouraged_tools(plan) == ["session_read_artifact", "career_job_fit_report_save"]
+
+
+def test_successful_jd_analysis_save_advances_pending_plan_to_job_fit_report_save() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_jd_analysis_save",
+        """
+        {
+          "record_type": "jd_analysis",
+          "record_id": "jd_alpha",
+          "record": {"jd_analysis_id": "jd_alpha"}
+        }
+        """,
+        previous_pending_plan={
+            "phase": "jd_fit",
+            "next_allowed_tools": ["career_jd_analysis_save"],
+            "required_tools": ["career_jd_analysis_save"],
+            "known_refs": {"report_artifact_id": "artifact_fit_report"},
+            "missing_outputs": ["jd_analysis", "job_fit_report"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["next_allowed_tools"] == ["career_job_fit_report_save"]
+    assert plan["required_tools"] == ["career_job_fit_report_save"]
+    assert plan["known_refs"]["jd_analysis_id"] == "jd_alpha"
+    assert plan["known_refs"]["report_artifact_id"] == "artifact_fit_report"
+    assert "career_jd_analysis_save" in runtime_plan_discouraged_tools(plan)
 
 
 def test_pending_runtime_plan_from_tool_search_result_preserves_runtime_discouraged_tools() -> None:
