@@ -12,7 +12,15 @@ from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.core.time import app_now, to_app_iso
 from app.domain.models import RunContext, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
-from app.notes.models import Note, NoteCollection, NoteCollectionKind, NoteRecordStatus, NoteSourceRef, NoteType
+from app.notes.models import (
+    Note,
+    NoteCollection,
+    NoteCollectionKind,
+    NoteOrigin,
+    NoteRecordStatus,
+    NoteSourceRef,
+    NoteType,
+)
 from app.notes.store import NoteStore
 from app.tools.builtin_tools.common import validate_context
 from app.tools.builtin_tools.session_artifact_helpers import require_session_artifact
@@ -141,6 +149,7 @@ class NoteCreateTool:
                 body_markdown=_required_string(args.get("body_markdown"), field_name="body_markdown"),
                 body_format=_optional_string(args.get("body_format")) or "markdown",
                 note_type=_optional_string(args.get("note_type")) or "note",
+                origin=NoteOrigin.AGENT,
                 collection_id=_optional_prefixed_id(args.get("collection_id"), "collection"),
                 tags=_optional_string_list(args.get("tags"), field_name="tags"),
                 source_refs=source_refs,
@@ -701,6 +710,7 @@ def _record_result(
     if isinstance(record, Note):
         payload["source_artifact_id"] = record.source_artifact_id
         payload["evidence_refs"] = record.evidence_refs
+        payload["origin"] = cast(NoteOrigin, record.origin).value
     if extra:
         payload.update(extra)
     return ToolExecutionResult(tool_name=tool_name, success=True, content=json.dumps(payload, ensure_ascii=False))
@@ -741,6 +751,7 @@ def _record_to_payload(record: Note | NoteCollection) -> dict[str, Any]:
                 "body_markdown": record.body_markdown,
                 "body_format": record.body_format,
                 "note_type": cast(NoteType, record.note_type).value,
+                "origin": cast(NoteOrigin, record.origin).value,
                 "collection_id": record.collection_id,
                 "tags": record.tags,
                 "source_refs": [_source_ref_to_payload(source_ref) for source_ref in record.source_refs],

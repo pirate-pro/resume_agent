@@ -496,6 +496,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     List<String> evidenceRefs = const [],
     List<Map<String, dynamic>> sourceRefs = const [],
     String? relatedApplicationId,
+    String origin = "user",
   }) async {
     final note = await _api.createNote(
       sourceSessionId: sourceSessionId.trim(),
@@ -505,6 +506,7 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       bodyMarkdown: bodyMarkdown.trim(),
       bodyFormat: "markdown",
       noteType: _normalizeNoteType(noteType),
+      origin: origin.trim().isEmpty ? "user" : origin.trim(),
       tags: tags,
       sourceRefs: sourceRefs,
       relatedApplicationId: relatedApplicationId,

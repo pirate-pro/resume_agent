@@ -17,7 +17,7 @@ from app.knowledge.models import (
     ResourceType,
 )
 from app.knowledge.store import KnowledgeStore
-from app.notes.models import Note, NoteRecordStatus, NoteType
+from app.notes.models import Note, NoteOrigin, NoteRecordStatus, NoteType
 from app.notes.store import NoteStore
 from app.retrieval.chunking import ChunkingOptions
 from app.retrieval.index_models import RetrievalChunkSensitivity, RetrievalChunkStatus, RetrievalIndexScope
@@ -54,6 +54,8 @@ def test_retrieval_indexer_syncs_notes_and_archives_inactive_notes(tmp_path: Pat
     assert chunks[0].scope == RetrievalIndexScope.USER_PRIVATE
     assert chunks[0].sensitivity == RetrievalChunkSensitivity.PRIVATE
     assert chunks[0].metadata["note_type"] == "learning"
+    assert chunks[0].metadata["origin"] == "user"
+    assert "用户手写" in chunks[0].text
     assert "RAG chunk 策略" in chunks[0].text
 
     note_store.archive_note("note_rag_review")
@@ -170,6 +172,7 @@ def _note() -> Note:
         title="RAG 复盘",
         body_markdown="RAG chunk 策略要说明标题切分、overlap、召回评估和失败恢复。",
         note_type=NoteType.LEARNING,
+        origin=NoteOrigin.USER,
         tags=["RAG", "检索"],
         summary="学习 RAG 检索质量评估。",
     )

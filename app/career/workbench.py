@@ -25,7 +25,7 @@ from app.learning.models import (
     WeaknessTracker,
 )
 from app.learning.store import LearningStore
-from app.notes.models import Note, NoteSourceType, NoteType
+from app.notes.models import Note, NoteOrigin, NoteSourceType, NoteType
 from app.notes.store import NoteStore
 
 __all__ = [
@@ -109,6 +109,7 @@ class CareerNoteSummary:
     status: str
     updated_at: datetime
     note_type: str = "note"
+    origin: str = "unknown"
     source_artifact_id: str | None = None
     related_application_id: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -751,6 +752,7 @@ def _note_summary(note: Note) -> CareerNoteSummary:
         status=_enum_value(note.status),
         updated_at=note.updated_at,
         note_type=cast(NoteType, note.note_type).value,
+        origin=cast(NoteOrigin, note.origin).value,
         source_artifact_id=note.source_artifact_id,
         related_application_id=note.related_application_id,
         tags=note.tags,

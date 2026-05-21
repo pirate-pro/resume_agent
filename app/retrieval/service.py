@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.career.store import CareerProductStore
 from app.domain.protocols import SessionRepository
@@ -17,7 +17,13 @@ from app.retrieval.adapters import (
     build_session_artifact_hits,
 )
 from app.retrieval.index_store import RetrievalIndexStore
-from app.retrieval.models import ContextPack, RetrievalHit, RetrievalQuery, group_for_source_type, validate_source_type
+from app.retrieval.models import (
+    ContextPack,
+    RetrievalHit,
+    RetrievalQuery,
+    group_for_source_type,
+    validate_source_type,
+)
 from app.retrieval.search import build_index_hits
 
 __all__ = ["RetrievalService"]
@@ -45,6 +51,7 @@ class RetrievalService:
         """Return a budgeted context pack grouped by product source."""
 
         candidates = _rank_hits(self._collect_hits(request))
+        candidates = _rank_hits(self._expand_project_context(request, candidates))
         selected: list[RetrievalHit] = []
         omitted: list[RetrievalHit] = []
         per_type_counts: dict[str, int] = {}
@@ -55,11 +62,16 @@ class RetrievalService:
             if count >= request.per_source_type_limit:
                 omitted.append(hit)
                 continue
-            hit_chars = max(hit.content_length(), 1)
+            remaining_chars = request.max_chars - used_chars
+            if remaining_chars <= 0:
+                omitted.append(hit)
+                continue
+            budgeted_hit = _fit_hit_to_budget(hit, remaining_chars)
+            hit_chars = max(budgeted_hit.content_length(), 1)
             if selected and used_chars + hit_chars > request.max_chars:
                 omitted.append(hit)
                 continue
-            selected.append(hit)
+            selected.append(budgeted_hit)
             per_type_counts[source_type] = count + 1
             used_chars += hit_chars
             if len(selected) >= request.top_k:
@@ -91,6 +103,23 @@ class RetrievalService:
             hits.extend(build_index_hits(self.index_store, request))
         return hits
 
+    def _expand_project_context(self, request: RetrievalQuery, candidates: list[RetrievalHit]) -> list[RetrievalHit]:
+        if self.career_store is None:
+            return candidates
+        application_ids = _context_application_ids(request, candidates)
+        if not application_ids:
+            return candidates
+        output = [hit.copy() for hit in candidates]
+        for application_id in application_ids[:1]:
+            related_request = replace(
+                request,
+                related_application_id=application_id,
+                top_k=max(request.top_k, 20),
+            )
+            for hit in self._collect_hits(related_request):
+                output.append(_boost_project_hit(hit, application_id))
+        return output
+
 
 def _rank_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
     ranked = sorted(
@@ -115,6 +144,76 @@ def _dedupe_ranked_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
         output.append(hit)
         seen.add(key)
     return output
+
+
+def _context_application_ids(request: RetrievalQuery, candidates: list[RetrievalHit]) -> list[str]:
+    output: list[str] = []
+    if request.related_application_id is not None:
+        output.append(request.related_application_id)
+    for hit in candidates:
+        for value in _hit_related_ids(hit):
+            if value.startswith("application_") and value not in output:
+                output.append(value)
+        if len(output) >= 2:
+            break
+    return output
+
+
+def _hit_related_ids(hit: RetrievalHit) -> list[str]:
+    values = [
+        hit.source.source_id,
+        hit.source.artifact_id,
+        *hit.evidence_refs,
+    ]
+    related_ids = hit.metadata.get("related_ids")
+    if isinstance(related_ids, list):
+        values.extend(str(item) for item in related_ids)
+    return [item for item in values if isinstance(item, str) and item]
+
+
+def _boost_project_hit(hit: RetrievalHit, application_id: str) -> RetrievalHit:
+    item = hit.copy()
+    related_ids = _hit_related_ids(item)
+    if application_id in related_ids:
+        item.score = min(round(item.score + 0.18, 4), 1.0)
+        item.metadata["related_application_id"] = application_id
+        if item.match_reason:
+            item.match_reason = f"项目上下文扩展；{item.match_reason}"
+        else:
+            item.match_reason = "项目上下文扩展"
+    return item
+
+
+def _fit_hit_to_budget(hit: RetrievalHit, max_chars: int) -> RetrievalHit:
+    item = hit.copy()
+    if item.content_length() <= max_chars:
+        return item
+    if max_chars <= 0:
+        item.summary = ""
+        item.snippet = ""
+        return item
+    title_budget = min(len(item.title), max_chars)
+    item.title = _truncate_text(item.title, title_budget)
+    remaining = max(max_chars - len(item.title), 0)
+    if remaining <= 0:
+        item.summary = ""
+        item.snippet = ""
+        return item
+    summary_budget = min(len(item.summary), max(remaining // 3, 0))
+    item.summary = _truncate_text(item.summary, summary_budget)
+    remaining = max(max_chars - len(item.title) - len(item.summary), 0)
+    item.snippet = _truncate_text(item.snippet, remaining)
+    return item
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(value) <= max_chars:
+        return value
+    if max_chars <= 1:
+        return value[:max_chars]
+    return value[: max_chars - 1].rstrip() + "…"
 
 
 def _group_hits(hits: list[RetrievalHit]) -> dict[str, list[RetrievalHit]]:

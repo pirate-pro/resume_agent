@@ -16,6 +16,7 @@ __all__ = [
     "Note",
     "NoteCollection",
     "NoteCollectionKind",
+    "NoteOrigin",
     "NoteRecordStatus",
     "NoteSourceRef",
     "NoteSourceType",
@@ -56,6 +57,14 @@ class NoteType(str, Enum):
     NOTE = "note"
     LEARNING = "learning"
     RESOURCE = "resource"
+
+
+class NoteOrigin(str, Enum):
+    """How a note was created, independent from its content type."""
+
+    USER = "user"
+    AGENT = "agent"
+    UNKNOWN = "unknown"
 
 
 class NoteSourceType(str, Enum):
@@ -197,6 +206,7 @@ class Note:
     source_refs: list[NoteSourceRef] = field(default_factory=list)
     related_application_id: str | None = None
     summary: str = ""
+    origin: NoteOrigin | str = NoteOrigin.UNKNOWN
 
     def __post_init__(self) -> None:
         self.note_id = validate_note_id(self.note_id)
@@ -220,6 +230,7 @@ class Note:
             self.related_application_id,
         )
         self.summary = _normalize_text("summary", self.summary, allow_empty=True)
+        self.origin = _normalize_note_origin(self.origin)
 
     def copy(self) -> Self:
         return type(self)(
@@ -239,6 +250,7 @@ class Note:
             source_refs=[source_ref.copy() for source_ref in self.source_refs],
             related_application_id=self.related_application_id,
             summary=self.summary,
+            origin=self.origin,
         )
 
 
@@ -353,6 +365,17 @@ def _normalize_note_type(value: NoteType | str) -> NoteType:
         except ValueError as exc:
             raise ValidationError(f"note_type is invalid: {value}") from exc
     raise ValidationError("note_type must be a string.")
+
+
+def _normalize_note_origin(value: NoteOrigin | str) -> NoteOrigin:
+    if isinstance(value, NoteOrigin):
+        return value
+    if isinstance(value, str):
+        try:
+            return NoteOrigin(value.strip().lower())
+        except ValueError as exc:
+            raise ValidationError(f"origin is invalid: {value}") from exc
+    raise ValidationError("origin must be a string.")
 
 
 def _normalize_source_type(value: NoteSourceType | str) -> NoteSourceType:

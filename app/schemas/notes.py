@@ -38,6 +38,7 @@ class NoteView(BaseModel):
     body_markdown: str
     body_format: str = "markdown"
     note_type: str = "note"
+    origin: str = "unknown"
     collection_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     source_refs: list[NoteSourceRefPayload] = Field(default_factory=list)
@@ -66,6 +67,7 @@ class NoteCreateRequest(BaseModel):
     body_markdown: str
     body_format: str = "markdown"
     note_type: str = "note"
+    origin: str = "user"
     collection_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     source_refs: list[NoteSourceRefPayload] = Field(default_factory=list)

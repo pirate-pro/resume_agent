@@ -32,8 +32,10 @@ def build_career_hits(store: CareerProductStore, request: RetrievalQuery) -> lis
     """Build hits from career product records."""
 
     hits: list[RetrievalHit] = []
+    applications = store.list_career_applications(include_archived=request.include_archived)
+    related_applications = _career_application_reverse_index(applications)
     if request.allows(RetrievalSourceType.CAREER_APPLICATION):
-        for application in store.list_career_applications(include_archived=request.include_archived):
+        for application in applications:
             hits.extend(
                 _record_hit(
                     request,
@@ -60,6 +62,7 @@ def build_career_hits(store: CareerProductStore, request: RetrievalQuery) -> lis
             )
     if request.allows(RetrievalSourceType.RESUME_PROFILE):
         for resume in store.list_resume_profiles(include_archived=request.include_archived):
+            reverse_application_ids = related_applications.get(resume.resume_profile_id, [])
             hits.extend(
                 _record_hit(
                     request,
@@ -73,11 +76,17 @@ def build_career_hits(store: CareerProductStore, request: RetrievalQuery) -> lis
                     evidence_refs=resume.evidence_refs,
                     source_session_id=resume.source_session_id,
                     artifact_id=resume.diagnosis_artifact_id or resume.raw_text_artifact_id or resume.source_artifact_id,
-                    related_ids=[resume.resume_profile_id, resume.raw_text_artifact_id, resume.diagnosis_artifact_id],
+                    related_ids=[
+                        resume.resume_profile_id,
+                        resume.raw_text_artifact_id,
+                        resume.diagnosis_artifact_id,
+                        *reverse_application_ids,
+                    ],
                 )
             )
     if request.allows(RetrievalSourceType.CAREER_PROFILE):
         for career in store.list_career_profiles(include_archived=request.include_archived):
+            reverse_application_ids = related_applications.get(career.career_profile_id, [])
             hits.extend(
                 _record_hit(
                     request,
@@ -98,12 +107,13 @@ def build_career_hits(store: CareerProductStore, request: RetrievalQuery) -> lis
                     evidence_refs=career.evidence_refs,
                     source_session_id=career.source_session_id,
                     artifact_id=career.source_artifact_id,
-                    related_ids=[career.career_profile_id, *career.evidence_refs],
+                    related_ids=[career.career_profile_id, *career.evidence_refs, *reverse_application_ids],
                     priority_terms=career.target_roles,
                 )
             )
     if request.allows(RetrievalSourceType.JD_ANALYSIS):
         for jd in store.list_jd_analyses(include_archived=request.include_archived):
+            reverse_application_ids = related_applications.get(jd.jd_analysis_id, [])
             hits.extend(
                 _record_hit(
                     request,
@@ -117,12 +127,13 @@ def build_career_hits(store: CareerProductStore, request: RetrievalQuery) -> lis
                     evidence_refs=jd.evidence_refs,
                     source_session_id=jd.source_session_id,
                     artifact_id=jd.source_artifact_id,
-                    related_ids=[jd.jd_analysis_id, *jd.evidence_refs],
+                    related_ids=[jd.jd_analysis_id, *jd.evidence_refs, *reverse_application_ids],
                     priority_terms=[jd.company, jd.position, *jd.required_skills],
                 )
             )
     if request.allows(RetrievalSourceType.JOB_FIT_REPORT):
         for fit in store.list_job_fit_reports(include_archived=request.include_archived):
+            reverse_application_ids = related_applications.get(fit.job_fit_report_id, [])
             hits.extend(
                 _record_hit(
                     request,
@@ -148,11 +159,13 @@ def build_career_hits(store: CareerProductStore, request: RetrievalQuery) -> lis
                         fit.resume_profile_id,
                         fit.career_profile_id,
                         *fit.evidence_refs,
+                        *reverse_application_ids,
                     ],
                 )
             )
     if request.allows(RetrievalSourceType.RESUME_VERSION):
         for version in store.list_resume_versions(include_archived=request.include_archived):
+            reverse_application_ids = related_applications.get(version.resume_version_id, [])
             hits.extend(
                 _record_hit(
                     request,
@@ -172,6 +185,7 @@ def build_career_hits(store: CareerProductStore, request: RetrievalQuery) -> lis
                         version.target_jd_analysis_id,
                         version.artifact_id,
                         *version.evidence_refs,
+                        *reverse_application_ids,
                     ],
                 )
             )
@@ -189,6 +203,7 @@ def build_note_hits(store: NoteStore, request: RetrievalQuery) -> list[Retrieval
         )
         for note in notes:
             source_ref_ids = [item.source_id for item in note.source_refs if item.source_id is not None]
+            origin = _enum_value(note.origin)
             hits.extend(
                 _record_hit(
                     request,
@@ -196,8 +211,8 @@ def build_note_hits(store: NoteStore, request: RetrievalQuery) -> list[Retrieval
                     source_id=note.note_id,
                     title=note.title,
                     summary=note.summary,
-                    body=note.body_markdown,
-                    tags=note.tags,
+                    body=_join_lists([note.body_markdown], [origin, _note_origin_label(origin)]),
+                    tags=[origin, _note_origin_label(origin), *note.tags],
                     updated_at=note.updated_at,
                     evidence_refs=note.evidence_refs,
                     source_session_id=note.source_session_id,
@@ -224,6 +239,14 @@ def build_note_hits(store: NoteStore, request: RetrievalQuery) -> list[Retrieval
                 )
             )
     return hits
+
+
+def _note_origin_label(origin: str) -> str:
+    if origin == "user":
+        return "用户手写"
+    if origin == "agent":
+        return "Agent整理"
+    return "来源未知"
 
 
 def build_knowledge_hits(store: KnowledgeStore, request: RetrievalQuery) -> list[RetrievalHit]:
@@ -569,6 +592,29 @@ def build_session_artifact_hits(repository: SessionRepository, request: Retrieva
     return hits
 
 
+def _career_application_reverse_index(applications: Sequence[Any]) -> dict[str, list[str]]:
+    index: dict[str, list[str]] = {}
+    for application in applications:
+        application_id = getattr(application, "application_id", "")
+        if not isinstance(application_id, str) or not application_id:
+            continue
+        related_ids = _clean_strings(
+            [
+                getattr(application, "resume_profile_id", None),
+                getattr(application, "career_profile_id", None),
+                getattr(application, "jd_analysis_id", None),
+                getattr(application, "job_fit_report_id", None),
+                *getattr(application, "resume_version_ids", []),
+                *getattr(application, "evidence_refs", []),
+            ]
+        )
+        for related_id in related_ids:
+            bucket = index.setdefault(related_id, [])
+            if application_id not in bucket:
+                bucket.append(application_id)
+    return index
+
+
 def _record_hit(
     request: RetrievalQuery,
     *,
@@ -618,6 +664,7 @@ def _record_hit(
             match_reason=reason,
             updated_at=updated_at,
             evidence_refs=_clean_strings(evidence_refs),
+            metadata={"related_ids": related},
         )
     ]
 

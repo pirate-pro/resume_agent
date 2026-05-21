@@ -79,6 +79,7 @@ class CareerNoteSummaryView(BaseModel):
     status: str = "active"
     updated_at: datetime
     note_type: str = "note"
+    origin: str = "unknown"
     source_artifact_id: str | None = None
     related_application_id: str | None = None
     tags: list[str] = Field(default_factory=list)

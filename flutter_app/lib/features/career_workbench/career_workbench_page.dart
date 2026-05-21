@@ -6133,6 +6133,7 @@ Future<void> _showNewNoteEditorSheet(
     bodyMarkdown: seedBody.trim().isEmpty ? "# $title\n\n" : seedBody,
     bodyFormat: "markdown",
     noteType: _normalizeNoteType(seedNoteType),
+    origin: "user",
     collectionId: null,
     tags: const [],
     sourceRefs:
@@ -6213,6 +6214,7 @@ Future<void> _showNewNoteEditorSheet(
                             summary: noteDraft.summary,
                             tags: noteDraft.tags,
                             noteType: noteDraft.noteType,
+                            origin: "user",
                           );
                           if (sheetContext.mounted) {
                             navigator.pop();
@@ -7895,6 +7897,7 @@ CareerNoteSummaryView _summaryFromNote(NoteView note) {
     status: note.status,
     updatedAt: note.updatedAt,
     noteType: note.noteType,
+    origin: note.origin,
     sourceArtifactId: note.sourceArtifactId,
     relatedApplicationId: note.relatedApplicationId,
     tags: note.tags,
@@ -7906,6 +7909,15 @@ List<_NoteMetaItem> _noteSummaryMetaItems(
   List<String> sourceLabels,
 ) {
   final items = <_NoteMetaItem>[];
+  final originLabel = _noteOriginLabel(note.origin);
+  if (originLabel.isNotEmpty) {
+    items.add(
+      _NoteMetaItem(
+        icon: _noteOriginIcon(note.origin),
+        label: originLabel,
+      ),
+    );
+  }
   final relatedApplicationId = note.relatedApplicationId?.trim() ?? "";
   if (relatedApplicationId.isNotEmpty) {
     items.add(
@@ -7940,6 +7952,28 @@ List<_NoteMetaItem> _noteSummaryMetaItems(
     }
   }
   return items;
+}
+
+String _noteOriginLabel(String origin) {
+  switch (origin.trim().toLowerCase()) {
+    case "user":
+      return "手写";
+    case "agent":
+      return "Agent 整理";
+    default:
+      return "";
+  }
+}
+
+IconData _noteOriginIcon(String origin) {
+  switch (origin.trim().toLowerCase()) {
+    case "user":
+      return Icons.drive_file_rename_outline_rounded;
+    case "agent":
+      return Icons.auto_awesome_outlined;
+    default:
+      return Icons.notes_outlined;
+  }
 }
 
 List<String> _noteSourceLabelsFromNote(NoteView note) {

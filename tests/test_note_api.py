@@ -77,6 +77,7 @@ def test_note_api_creates_lists_and_reads_records(tmp_path: Path) -> None:
             assert note["note_id"] == "note_alpha"
             assert note["status"] == "active"
             assert note["note_type"] == "resource"
+            assert note["origin"] == "user"
             assert note["source_refs"][0]["source_id"] == "artifact_report"
             assert note["created_at"] == "2026-05-12T08:02:00+08:00"
 

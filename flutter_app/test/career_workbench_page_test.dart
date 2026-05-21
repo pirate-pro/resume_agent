@@ -678,6 +678,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
     required String bodyMarkdown,
     String bodyFormat = 'markdown',
     String noteType = 'note',
+    String origin = 'user',
     String? collectionId,
     List<String> tags = const [],
     List<Map<String, dynamic>> sourceRefs = const [],
@@ -699,6 +700,7 @@ class _FakeCareerWorkbenchApi extends ApiService {
       bodyMarkdown: bodyMarkdown,
       bodyFormat: bodyFormat,
       noteType: noteType,
+      origin: origin,
       collectionId: collectionId,
       tags: tags,
       sourceRefs:

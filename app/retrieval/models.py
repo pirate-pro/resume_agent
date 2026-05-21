@@ -231,15 +231,26 @@ class ContextPack:
         self.citations = _normalize_citations(self.citations)
         self.omitted = _normalize_hits("omitted", self.omitted)
 
-    def to_payload(self) -> dict[str, Any]:
+    def context_char_count(self) -> int:
+        return sum(hit.content_length() for hit in self.hits)
+
+    def to_payload(self, *, compact_grouped_context: bool = False, compact_omitted: bool = False) -> dict[str, Any]:
+        grouped_context: dict[str, list[dict[str, Any]]] = {}
+        for group, hits in self.grouped_context.items():
+            if compact_grouped_context:
+                grouped_context[group] = [_compact_hit_payload(hit) for hit in hits]
+            else:
+                grouped_context[group] = [hit.to_payload() for hit in hits]
         return {
             "citations": [citation.to_payload() for citation in self.citations],
-            "grouped_context": {
-                group: [hit.to_payload() for hit in hits]
-                for group, hits in self.grouped_context.items()
-            },
+            "context_char_count": self.context_char_count(),
+            "grouped_context": grouped_context,
             "hits": [hit.to_payload() for hit in self.hits],
-            "omitted": [hit.to_payload() for hit in self.omitted],
+            "omitted": [
+                _compact_hit_payload(hit) if compact_omitted else hit.to_payload()
+                for hit in self.omitted
+            ],
+            "omitted_count": len(self.omitted),
             "query": self.query,
         }
 
@@ -258,6 +269,16 @@ def validate_source_type(value: RetrievalSourceType | str) -> RetrievalSourceTyp
 
 def group_for_source_type(source_type: RetrievalSourceType | str) -> str:
     return _SOURCE_GROUPS[validate_source_type(source_type)]
+
+
+def _compact_hit_payload(hit: RetrievalHit) -> dict[str, Any]:
+    return {
+        "match_reason": hit.match_reason,
+        "score": hit.score,
+        "source": hit.source.to_payload(),
+        "title": hit.title,
+        "updated_at": to_app_iso(hit.updated_at),
+    }
 
 
 def _normalize_source_id(value: str) -> str:

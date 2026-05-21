@@ -22,7 +22,7 @@ from app.knowledge.models import (
     SkillRequirement,
 )
 from app.knowledge.store import KnowledgeStore
-from app.notes.models import Note, NoteRecordStatus
+from app.notes.models import Note, NoteOrigin, NoteRecordStatus
 from app.notes.store import NoteStore
 from app.retrieval.chunking import ChunkingOptions, build_retrieval_chunks
 from app.retrieval.index_models import RetrievalChunkSensitivity, RetrievalIndexScope
@@ -251,10 +251,12 @@ class RetrievalIndexer:
 
 def _note_document(note: Note) -> RetrievalIndexDocument:
     note_type = _enum_value(note.note_type)
+    origin = _enum_value(note.origin)
     text = _document_text(
         ("标题", note.title),
         ("摘要", note.summary),
         ("类型", note_type),
+        ("来源", _note_origin_label(origin)),
         ("标签", note.tags),
         ("正文", note.body_markdown),
     )
@@ -268,9 +270,10 @@ def _note_document(note: Note) -> RetrievalIndexDocument:
         title=note.title,
         text=text,
         updated_at=note.updated_at,
-        tags=[note_type, *note.tags],
+        tags=[note_type, f"origin:{origin}", _note_origin_label(origin), *note.tags],
         metadata={
             "note_type": note_type,
+            "origin": origin,
             "collection_id": note.collection_id,
             "related_application_id": note.related_application_id,
         },
@@ -278,6 +281,14 @@ def _note_document(note: Note) -> RetrievalIndexDocument:
         sensitivity=RetrievalChunkSensitivity.PRIVATE,
         active=note.status == NoteRecordStatus.ACTIVE,
     )
+
+
+def _note_origin_label(origin: str) -> str:
+    if origin == NoteOrigin.USER.value:
+        return "用户手写"
+    if origin == NoteOrigin.AGENT.value:
+        return "Agent整理"
+    return "来源未知"
 
 
 def _external_resource_document(resource: ExternalResource, *, raw_text: str = "") -> RetrievalIndexDocument:

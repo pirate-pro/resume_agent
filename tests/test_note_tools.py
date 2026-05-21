@@ -225,6 +225,8 @@ def test_main_agent_creates_gets_lists_updates_appends_and_archives_note(tmp_pat
     assert collection_payload["record_id"] == "collection_interview"
     assert note_payload["record_id"] == "note_star_agent_review"
     assert note_payload["source_session_id"] == "sess_notes"
+    assert note_payload["origin"] == "agent"
+    assert note_payload["record"]["origin"] == "agent"
     assert note_payload["record"]["source_artifact_id"] == report_artifact_id
     assert note_payload["record"]["note_type"] == "resource"
     assert report_artifact_id in note_payload["record"]["evidence_refs"]

@@ -151,7 +151,7 @@ def test_context_pack_applies_budget_and_does_not_read_cross_session_artifacts(t
                 RetrievalSourceType.SKILL_REQUIREMENT,
                 RetrievalSourceType.COMPANY_PROFILE,
             ],
-            top_k=10,
+            top_k=2,
             max_chars=260,
             per_source_type_limit=1,
         )
@@ -160,11 +160,44 @@ def test_context_pack_applies_budget_and_does_not_read_cross_session_artifacts(t
     assert {hit.source.source_id for hit in artifact_hits} == {"artifact_alpha_jd"}
     assert pack.hits
     assert pack.omitted
+    assert sum(hit.content_length() for hit in pack.hits) <= 260
     assert all(hit.source.source_type != RetrievalSourceType.SESSION_ARTIFACT for hit in pack.omitted)
     assert not list((tmp_path / "career").rglob("*.md"))
     assert not list((tmp_path / "notes").rglob("*.md"))
     assert not list((tmp_path / "knowledge").rglob("*.md"))
     assert not list((tmp_path / "learning").rglob("*.md"))
+
+
+def test_context_pack_expands_around_related_career_application(tmp_path: Path) -> None:
+    stores = _seed_stores(tmp_path)
+    service = _service(stores)
+
+    pack = service.build_context_pack(
+        RetrievalQuery(
+            query="今天怎么准备",
+            session_id="sess_alpha",
+            source_types=[
+                RetrievalSourceType.CAREER_APPLICATION,
+                RetrievalSourceType.RESUME_PROFILE,
+                RetrievalSourceType.CAREER_PROFILE,
+                RetrievalSourceType.JD_ANALYSIS,
+                RetrievalSourceType.JOB_FIT_REPORT,
+                RetrievalSourceType.RESUME_VERSION,
+            ],
+            related_application_id="application_alpha",
+            top_k=10,
+            max_chars=8000,
+        )
+    )
+    source_ids = {hit.source.source_id for hit in pack.hits}
+
+    assert {
+        "application_alpha",
+        "resume_profile_alpha",
+        "career_profile_default",
+        "jd_stargazer_backend",
+        "fit_stargazer_backend",
+    } <= source_ids
 
 
 def _seed_stores(tmp_path: Path) -> RetrievalStores:
