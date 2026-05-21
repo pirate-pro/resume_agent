@@ -27,6 +27,7 @@ from tools.smoke_career_live_flow import (
     LiveStack,
     TurnReport,
     _prepare_clean_run_data_dir,
+    _runtime_config_text,
     infer_failure_stage,
     inspect_flow_outputs,
     print_report,
@@ -46,6 +47,20 @@ def test_live_smoke_prepares_clean_run_data_dir(tmp_path: Path) -> None:
     assert run_dir.exists()
     assert not stale_file.exists()
     assert list(run_dir.iterdir()) == []
+
+
+def test_live_smoke_runtime_config_text() -> None:
+    settings = SimpleNamespace(
+        tool_schema_disclosure_mode="search",
+        tool_context_window_mode="compact",
+        workflow_rule_selection_mode="sparse",
+    )
+
+    assert _runtime_config_text(settings) == (
+        "配置: TOOL_SCHEMA_DISCLOSURE_MODE=search "
+        "TOOL_CONTEXT_WINDOW_MODE=compact "
+        "WORKFLOW_RULE_SELECTION_MODE=sparse"
+    )
 
 
 def test_live_smoke_report_prints_concise_failure_summary(

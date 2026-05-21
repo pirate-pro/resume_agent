@@ -1530,11 +1530,22 @@ def _retrieval_quality_text(value: dict[str, Any]) -> str:
     )
 
 
+def _runtime_config_text(settings: object) -> str:
+    return (
+        "配置: "
+        f"TOOL_SCHEMA_DISCLOSURE_MODE={getattr(settings, 'tool_schema_disclosure_mode', 'unknown')} "
+        f"TOOL_CONTEXT_WINDOW_MODE={getattr(settings, 'tool_context_window_mode', 'unknown')} "
+        f"WORKFLOW_RULE_SELECTION_MODE={getattr(settings, 'workflow_rule_selection_mode', 'unknown')}"
+    )
+
+
 async def run_all(args: argparse.Namespace) -> list[FlowReport]:
     settings = Settings.load()
     root_data_dir = Path(args.data_dir)
     root_data_dir.mkdir(parents=True, exist_ok=True)
     semaphore = asyncio.Semaphore(args.concurrency)
+    if not args.quiet:
+        print(_runtime_config_text(settings), flush=True)
 
     def progress(message: str) -> None:
         if args.quiet:

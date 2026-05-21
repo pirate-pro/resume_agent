@@ -77,7 +77,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AGENT_TASK_MAX_CONCURRENCY"),
     )
     tool_schema_disclosure_mode: str = Field(
-        default="full",
+        default="search",
         validation_alias=AliasChoices("TOOL_SCHEMA_DISCLOSURE_MODE"),
     )
     tool_schema_always_visible: str = Field(
@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("TOOL_CONTEXT_WINDOW_MODE"),
     )
     workflow_rule_selection_mode: str = Field(
-        default="full",
+        default="sparse",
         validation_alias=AliasChoices("WORKFLOW_RULE_SELECTION_MODE"),
     )
     mid_term_flush_worker_enabled: bool = Field(

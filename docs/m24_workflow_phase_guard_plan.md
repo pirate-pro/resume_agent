@@ -10,18 +10,18 @@ tool_search / schema reveal
 workflow_rules sparse
 ```
 
-live smoke 的结论比较清楚：
+live smoke 的阶段性结论比较清楚：
 
 - `ToolContextWindow compact` 稳定，能明显降低历史 tool message 回放成本。
-- `tool_search` 能降低 schema token，但会增加模型探索轮次，并且偶发阶段越界、漏产物。
-- `workflow_rules sparse` 能降低规则 token，但当前会削弱主链路约束，出现缺 `JobFitReport` 但继续往下走的问题。
+- `tool_search` 能降低 schema token，但如果缺少 runtime 阶段守卫，可能增加模型探索轮次。
+- `workflow_rules sparse` 能降低规则 token，但如果缺少 runtime 阶段守卫，可能削弱主链路约束。
 
-因此默认链路先回到稳定优先：
+因此当前默认链路不再回退到 full/full，而是用 runtime 阶段守卫承接质量约束：
 
 ```text
-TOOL_SCHEMA_DISCLOSURE_MODE=full
+TOOL_SCHEMA_DISCLOSURE_MODE=search
 TOOL_CONTEXT_WINDOW_MODE=compact
-WORKFLOW_RULE_SELECTION_MODE=full
+WORKFLOW_RULE_SELECTION_MODE=sparse
 ```
 
 下一步优化不再优先压缩 prompt，而是补一个确定性的“求职流程阶段守卫”。它要解决的问题是：
@@ -465,12 +465,12 @@ app/runtime/workflow/guard.py
 
 ### 第四步：live smoke 验证
 
-稳定配置：
+默认验证配置：
 
 ```text
-TOOL_SCHEMA_DISCLOSURE_MODE=full
+TOOL_SCHEMA_DISCLOSURE_MODE=search
 TOOL_CONTEXT_WINDOW_MODE=compact
-WORKFLOW_RULE_SELECTION_MODE=full
+WORKFLOW_RULE_SELECTION_MODE=sparse
 ```
 
 验证：
@@ -479,14 +479,13 @@ WORKFLOW_RULE_SELECTION_MODE=full
 runs=1 concurrency=1 max_tool_rounds=10 project-action=custom_resume
 ```
 
-### 第五步：再评估降本开关
+### 第五步：再评估质量与成本边界
 
-只有阶段守卫稳定后，再分别评估：
+阶段守卫稳定后，继续在默认降本配置下观察：
 
-- `WORKFLOW_RULE_SELECTION_MODE=sparse`
-- `TOOL_SCHEMA_DISCLOSURE_MODE=search`
-
-不能两个同时开，否则难以定位质量退化来源。
+- `tool_search` 是否导致工具探索轮次增加。
+- `workflow_rules sparse` 是否导致关键阶段漏产物。
+- 质量问题是否应由 runtime 守卫、工具契约或产品 store 兜底，而不是回退到 full/full。
 
 ## 9. 测试计划
 

@@ -1,8 +1,8 @@
 # M24 Workflow Runtime 阶段锁设计
 
-> 状态说明：本文是早期阶段锁方案。经过 M24 多轮 live smoke 后，默认策略已调整为质量优先：
-> `TOOL_SCHEMA_DISCLOSURE_MODE=full`、`TOOL_CONTEXT_WINDOW_MODE=compact`、`WORKFLOW_RULE_SELECTION_MODE=full`。
-> 后续开发依据以 [M24 求职流程阶段守卫方案](m24_workflow_phase_guard_plan.md) 为准；`tool_search` 和 sparse workflow rules 暂作为实验开关，不作为默认主链路。
+> 状态说明：本文是早期阶段锁方案。经过 M24 多轮 live smoke 和成本复盘后，默认策略已回到降本主线：
+> `TOOL_SCHEMA_DISCLOSURE_MODE=search`、`TOOL_CONTEXT_WINDOW_MODE=compact`、`WORKFLOW_RULE_SELECTION_MODE=sparse`。
+> 后续开发依据以 [M24 求职流程阶段守卫方案](m24_workflow_phase_guard_plan.md) 为准；质量问题优先用 runtime 阶段守卫解决，不再通过回退到 full/full 掩盖成本问题。
 
 ## 1. 背景
 
