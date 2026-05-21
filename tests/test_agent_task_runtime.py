@@ -165,6 +165,32 @@ class ToolProgressModelClient:
         )
 
 
+class FixedAnswerModelClient:
+    """Return one deterministic final answer for child completion checks."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        _ = (system_prompt, messages, tools)
+        return ModelResponse(content=self.answer, tool_calls=[])
+
+    async def generate_stream(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[StreamChunk]:
+        _ = (system_prompt, messages, tools)
+        yield StreamChunk(delta=self.answer, finished=False, has_tool_call_delta=False)
+        yield StreamChunk(delta="", tool_calls=[], finished=True, has_tool_call_delta=False)
+
+
 @dataclass(slots=True)
 class RuntimeBundle:
     task_runtime: AgentTaskRuntime
@@ -436,6 +462,59 @@ def test_child_agent_tool_events_are_projected_as_safe_task_progress(tmp_path: P
         assert event.payload["total_steps"] == 7
         assert 1 <= event.payload["step_index"] <= 7
         assert event.payload["phase"]
+
+
+def test_child_task_runtime_marks_tool_limit_answer_as_failed(tmp_path: Path) -> None:
+    bundle = _build_bundle(
+        tmp_path,
+        model_client=FixedAnswerModelClient("Tool call limit reached before generating final answer."),
+    )
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.task_runtime.run_group(
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=1,
+            tasks=[
+                AgentTaskSpec(
+                    target_agent_id="resume_agent",
+                    instruction="解析简历并输出诊断",
+                    max_tool_rounds=0,
+                )
+            ],
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.results[0].status == "failed"
+    assert result.results[0].error is not None
+    assert "工具调用上限" in result.results[0].error
+    failed_events = [event for event in bundle.session_repository.list_events("sess_delegate") if event.type == "agent_task_failed"]
+    assert failed_events
+
+
+def test_job_fit_child_task_requires_report_product_and_artifact(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path, model_client=FixedAnswerModelClient("已完成 JD 分析。"))
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.task_runtime.run_group(
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=1,
+            tasks=[
+                AgentTaskSpec(
+                    target_agent_id="job_agent",
+                    instruction="分析 JD，并生成岗位匹配报告和 JobFitReport。",
+                    max_tool_rounds=0,
+                )
+            ],
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.results[0].status == "failed"
+    assert result.results[0].error is not None
+    assert "缺少 job_fit_report, report_artifact" in result.results[0].error
 
 
 def test_same_target_child_prompt_only_receives_its_own_assigned_task(tmp_path: Path) -> None:

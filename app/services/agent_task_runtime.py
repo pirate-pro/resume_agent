@@ -33,6 +33,7 @@ __all__ = [
 
 _DEFAULT_MAX_CONCURRENCY = 3
 _MAX_TASKS_PER_GROUP = 8
+_TOOL_CALL_LIMIT_MESSAGE = "Tool call limit reached"
 
 
 @dataclass(slots=True)
@@ -236,6 +237,36 @@ class AgentTaskRuntime:
                         product_refs=[],
                         error=error,
                     )
+                completion_error = _child_completion_error(spec=spec, result=result)
+                if completion_error is not None:
+                    failed = self._task_store.mark_failed(
+                        request.source_context.session_id,
+                        record.task_id,
+                        error=completion_error,
+                    )
+                    self._record_progress_event(
+                        request.source_context,
+                        AGENT_TASK_FAILED_EVENT,
+                        {
+                            **_task_progress_payload(failed),
+                            "detail": _shorten(completion_error, 160),
+                            "artifact_refs": result.artifact_refs,
+                            "output_artifact_refs": result.output_artifact_refs,
+                            "product_refs": result.product_refs,
+                        },
+                    )
+                    return AgentTaskResult(
+                        task_id=record.task_id,
+                        target_agent_id=spec.target_agent_id,
+                        status="failed",
+                        summary=completion_error,
+                        answer=result.answer,
+                        child_run_id=result.child_run_id,
+                        artifact_refs=result.artifact_refs,
+                        output_artifact_refs=result.output_artifact_refs,
+                        product_refs=result.product_refs,
+                        error=completion_error,
+                    )
                 completed = self._task_store.mark_completed(
                     request.source_context.session_id,
                     record.task_id,
@@ -379,6 +410,50 @@ def _group_completion_detail(status: str, results: list[AgentTaskResult]) -> str
     if status == "failed":
         return f"{failed} 个 agent 任务失败"
     return f"{completed} 个完成，{failed} 个失败"
+
+
+def _child_completion_error(*, spec: AgentTaskSpec, result: object) -> str | None:
+    answer = _result_text(result, "answer")
+    summary = _result_text(result, "summary")
+    if _TOOL_CALL_LIMIT_MESSAGE in answer or _TOOL_CALL_LIMIT_MESSAGE in summary:
+        return "子 Agent 达到工具调用上限，未生成可靠最终结果；该任务不能标记为完成。"
+    if spec.target_agent_id == "job_agent" and _task_requires_job_fit_report(spec.instruction):
+        product_refs = _result_refs(result, "product_refs")
+        output_artifact_refs = _result_refs(result, "output_artifact_refs")
+        missing: list[str] = []
+        if not any(ref.startswith("fit_") for ref in product_refs):
+            missing.append("job_fit_report")
+        if not output_artifact_refs:
+            missing.append("report_artifact")
+        if missing:
+            return f"job_agent JD 匹配子任务未完成：缺少 {', '.join(missing)}。"
+    return None
+
+
+def _task_requires_job_fit_report(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "匹配报告",
+            "岗位匹配",
+            "jobfitreport",
+            "job_fit_report",
+            "fit report",
+        )
+    )
+
+
+def _result_text(result: object, field_name: str) -> str:
+    value = getattr(result, field_name, "")
+    return value if isinstance(value, str) else ""
+
+
+def _result_refs(result: object, field_name: str) -> list[str]:
+    value = getattr(result, field_name, [])
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 def _shorten(value: str, max_chars: int) -> str:

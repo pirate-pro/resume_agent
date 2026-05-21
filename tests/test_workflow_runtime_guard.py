@@ -356,6 +356,9 @@ def test_child_job_agent_reuses_existing_current_run_match_report_artifact(tmp_p
     assert payload["artifact_id"] == "artifact_fit_report"
     assert payload["output_kind"] == "job_fit_report"
     assert "career_job_fit_report_save" in payload["next_action"]
+    assert payload["next_allowed_tools"] == ["career_jd_analysis_save"]
+    assert payload["required_tools"] == ["career_jd_analysis_save"]
+    assert payload["completed_refs"] == {"report_artifact_id": "artifact_fit_report"}
     assert decision.event_payload is not None
     assert decision.event_payload["policy"] == "reuse"
 
@@ -402,6 +405,9 @@ def test_child_job_agent_blocks_match_report_with_conflicting_candidate_facts(tm
     assert "Python" in payload["supported_candidate_facts"]
     assert "FastAPI" in payload["supported_candidate_facts"]
     assert "重新生成匹配报告正文" in payload["next_action"]
+    assert payload["next_allowed_tools"] == ["session_create_text_artifact"]
+    assert payload["required_tools"] == ["session_create_text_artifact"]
+    assert "session_read_artifact" in payload["blocked_tools"]
 
 
 def test_child_job_agent_allows_missing_jd_keyword_as_gap_in_match_report(tmp_path: Path) -> None:
@@ -496,6 +502,8 @@ def test_child_job_agent_blocks_separate_jd_analysis_artifact_when_fit_report_re
     assert payload["missing_outputs"] == ["job_fit_report_artifact", "job_fit_report"]
     assert "JDAnalysis 只保存为产品记录" in payload["next_action"]
     assert "岗位匹配报告 artifact" in payload["next_action"]
+    assert payload["next_allowed_tools"] == ["session_create_text_artifact"]
+    assert payload["required_tools"] == ["session_create_text_artifact"]
 
 
 def test_child_job_agent_allows_jd_analysis_artifact_when_fit_report_not_required(tmp_path: Path) -> None:
@@ -599,6 +607,8 @@ def test_child_job_agent_blocks_match_report_artifact_without_content_field(tmp_
     assert payload["missing_outputs"] == ["job_fit_report_artifact", "job_fit_report"]
     assert "content 字段" in payload["next_action"]
     assert "不要传 content_chars" in payload["next_action"]
+    assert payload["next_allowed_tools"] == ["session_create_text_artifact"]
+    assert payload["required_tools"] == ["session_create_text_artifact"]
 
 
 def test_child_job_agent_blocks_low_level_action_after_invalid_report_artifact(
@@ -657,6 +667,8 @@ def test_child_job_agent_blocks_low_level_action_after_invalid_report_artifact(
     assert payload["missing_outputs"] == ["valid_job_fit_report_artifact"]
     assert payload["supported_candidate_facts"] == ["Python", "FastAPI", "RAG"]
     assert "不要继续读取或 get/list" in payload["next_action"]
+    assert payload["next_allowed_tools"] == ["session_create_text_artifact"]
+    assert payload["required_tools"] == ["session_create_text_artifact"]
 
 
 def test_child_job_agent_low_level_read_points_to_jd_and_fit_save_after_report_artifact(
@@ -714,6 +726,9 @@ def test_child_job_agent_low_level_read_points_to_jd_and_fit_save_after_report_a
     assert payload["missing_outputs"] == ["jd_analysis", "job_fit_report"]
     assert "career_jd_analysis_save" in payload["next_action"]
     assert "career_job_fit_report_save" in payload["next_action"]
+    assert payload["next_allowed_tools"] == ["career_jd_analysis_save"]
+    assert payload["required_tools"] == ["career_jd_analysis_save"]
+    assert payload["completed_refs"] == {"report_artifact_id": "artifact_fit_report"}
 
 
 def test_child_job_agent_low_level_read_points_to_fit_save_after_jd_saved(tmp_path: Path) -> None:
@@ -785,6 +800,8 @@ def test_child_job_agent_low_level_read_points_to_fit_save_after_jd_saved(tmp_pa
     assert payload["missing_outputs"] == ["job_fit_report"]
     assert "career_job_fit_report_save" in payload["next_action"]
     assert "career_jd_analysis_save" not in payload["next_action"]
+    assert payload["next_allowed_tools"] == ["career_job_fit_report_save"]
+    assert payload["required_tools"] == ["career_job_fit_report_save"]
 
 
 def test_duplicate_product_get_reuses_previous_result_in_same_run(tmp_path: Path) -> None:

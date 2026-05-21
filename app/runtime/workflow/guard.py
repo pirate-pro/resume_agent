@@ -129,6 +129,14 @@ _CAREER_PROFILE_IGNORED_UPDATE_FIELDS = {
     "summary",
     "work_experience_years",
 }
+_CHILD_JOB_FIT_LOW_LEVEL_TOOLS = [
+    "session_read_artifact",
+    "session_list_artifacts",
+    "career_resume_profile_get",
+    "career_profile_get",
+    "career_jd_analysis_get",
+    "career_job_fit_report_get",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -490,6 +498,10 @@ class WorkflowRuntimeGuard:
         output_kind = _child_output_kind(context.agent_id, _string_or_none(args.get("title")) or "")
         if output_kind != "job_fit_report" or not self._current_child_task_requires_job_fit_report(context):
             return None
+        runtime_plan = self._child_job_fit_runtime_plan(
+            context,
+            missing_outputs=["job_fit_report_artifact", "job_fit_report"],
+        )
         return _block_decision(
             tool_call,
             tool_name="session_create_text_artifact",
@@ -502,10 +514,12 @@ class WorkflowRuntimeGuard:
             missing_outputs=["job_fit_report_artifact", "job_fit_report"],
             lock_key=f"child_job_fit_empty_artifact:{context.run_id}",
             extra_payload={
+                **runtime_plan,
                 "output_kind": output_kind,
                 "blocked_actions": ["session_create_text_artifact"],
             },
             extra_event_payload={
+                **runtime_plan,
                 "output_kind": output_kind,
             },
         )
@@ -536,6 +550,10 @@ class WorkflowRuntimeGuard:
             return None
         if not self._current_child_task_requires_job_fit_report(context):
             return None
+        runtime_plan = self._child_job_fit_runtime_plan(
+            context,
+            missing_outputs=["job_fit_report_artifact", "job_fit_report"],
+        )
         return _block_decision(
             tool_call,
             tool_name="session_create_text_artifact",
@@ -548,10 +566,12 @@ class WorkflowRuntimeGuard:
             missing_outputs=["job_fit_report_artifact", "job_fit_report"],
             lock_key=f"child_job_fit_single_report_artifact:{context.run_id}",
             extra_payload={
+                **runtime_plan,
                 "output_kind": output_kind,
                 "blocked_actions": ["session_create_text_artifact"],
             },
             extra_event_payload={
+                **runtime_plan,
                 "output_kind": output_kind,
             },
         )
@@ -589,6 +609,15 @@ class WorkflowRuntimeGuard:
             artifact_id=existing["artifact_id"],
         )
         missing_outputs = self._child_output_missing_outputs(context, output_kind=output_kind)
+        runtime_plan = (
+            self._child_job_fit_runtime_plan(
+                context,
+                missing_outputs=missing_outputs,
+                report_artifact_id=existing["artifact_id"],
+            )
+            if output_kind == "job_fit_report"
+            else {}
+        )
         payload = {
             "workflow_runtime_result": True,
             "policy": "reuse",
@@ -605,6 +634,8 @@ class WorkflowRuntimeGuard:
             "missing_outputs": missing_outputs,
             "blocked_actions": ["session_create_text_artifact"],
         }
+        if output_kind == "job_fit_report":
+            payload.update(runtime_plan)
         return WorkflowGuardDecision(
             tool_call=tool_call,
             result=ToolExecutionResult(
@@ -620,6 +651,7 @@ class WorkflowRuntimeGuard:
                 "artifact_id": existing["artifact_id"],
                 "output_kind": output_kind,
                 "missing_outputs": missing_outputs,
+                **runtime_plan,
             },
         )
 
@@ -654,6 +686,10 @@ class WorkflowRuntimeGuard:
         if not unsupported:
             return None
         supported_facts = self._supported_candidate_facts(context)
+        runtime_plan = self._child_job_fit_runtime_plan(
+            context,
+            missing_outputs=["valid_job_fit_report_artifact"],
+        )
         return _block_decision(
             tool_call,
             tool_name="session_create_text_artifact",
@@ -667,12 +703,14 @@ class WorkflowRuntimeGuard:
             missing_outputs=["valid_job_fit_report_artifact"],
             lock_key=f"child_job_fit_invalid_artifact:{context.run_id}",
             extra_payload={
+                **runtime_plan,
                 "output_kind": output_kind,
                 "unsupported_candidate_facts": unsupported[:10],
                 "supported_candidate_facts": supported_facts,
                 "blocked_actions": ["session_create_text_artifact"],
             },
             extra_event_payload={
+                **runtime_plan,
                 "output_kind": output_kind,
                 "unsupported_candidate_fact_count": len(unsupported),
                 "supported_candidate_facts": supported_facts,
@@ -690,6 +728,10 @@ class WorkflowRuntimeGuard:
         invalid_feedback = self._latest_child_output_invalid_feedback(context, output_kind="job_fit_report")
         if existing is None:
             if invalid_feedback is not None:
+                runtime_plan = self._child_job_fit_runtime_plan(
+                    context,
+                    missing_outputs=["valid_job_fit_report_artifact"],
+                )
                 return _block_decision(
                     tool_call,
                     tool_name=tool_call.name,
@@ -701,6 +743,7 @@ class WorkflowRuntimeGuard:
                     missing_outputs=["valid_job_fit_report_artifact"],
                     lock_key=f"child_job_fit_invalid_retry:{context.run_id}",
                     extra_payload={
+                        **runtime_plan,
                         "output_kind": "job_fit_report",
                         "unsupported_candidate_facts": invalid_feedback.get("unsupported_candidate_facts", []),
                         "supported_candidate_facts": invalid_feedback.get("supported_candidate_facts", []),
@@ -714,6 +757,7 @@ class WorkflowRuntimeGuard:
                         ],
                     },
                     extra_event_payload={
+                        **runtime_plan,
                         "output_kind": "job_fit_report",
                     },
                 )
@@ -738,6 +782,11 @@ class WorkflowRuntimeGuard:
             artifact_id=existing["artifact_id"],
         )
         missing_outputs = self._child_output_missing_outputs(context, output_kind="job_fit_report")
+        runtime_plan = self._child_job_fit_runtime_plan(
+            context,
+            missing_outputs=missing_outputs,
+            report_artifact_id=existing["artifact_id"],
+        )
         return _block_decision(
             tool_call,
             tool_name=tool_call.name,
@@ -746,6 +795,7 @@ class WorkflowRuntimeGuard:
             missing_outputs=missing_outputs,
             lock_key=f"child_job_fit_stage:{context.run_id}:{existing['artifact_id']}",
             extra_payload={
+                **runtime_plan,
                 "output_kind": "job_fit_report",
                 "report_artifact_id": existing["artifact_id"],
                 "blocked_actions": [
@@ -756,6 +806,7 @@ class WorkflowRuntimeGuard:
                 ],
             },
             extra_event_payload={
+                **runtime_plan,
                 "output_kind": "job_fit_report",
                 "report_artifact_id": existing["artifact_id"],
             },
@@ -818,6 +869,61 @@ class WorkflowRuntimeGuard:
         if not self._current_run_has_successful_tool(context, "career_job_fit_report_save"):
             missing.append("job_fit_report")
         return missing
+
+    def _child_job_fit_runtime_plan(
+        self,
+        context: RunContext,
+        *,
+        missing_outputs: list[str],
+        report_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        missing = {item for item in missing_outputs if isinstance(item, str)}
+        if "valid_job_fit_report_artifact" in missing or "job_fit_report_artifact" in missing:
+            return {
+                "next_allowed_tools": ["session_create_text_artifact"],
+                "required_tools": ["session_create_text_artifact"],
+                "blocked_tools": _CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
+                "completed_refs": {},
+            }
+        if "jd_analysis" in missing:
+            completed_refs = {}
+            if report_artifact_id is not None:
+                completed_refs["report_artifact_id"] = report_artifact_id
+            return {
+                "next_allowed_tools": ["career_jd_analysis_save"],
+                "required_tools": ["career_jd_analysis_save"],
+                "blocked_tools": [
+                    *_CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
+                    "session_create_text_artifact",
+                    "career_job_fit_report_save",
+                ],
+                "completed_refs": completed_refs,
+            }
+        if "job_fit_report" in missing:
+            completed_refs = {}
+            if report_artifact_id is not None:
+                completed_refs["report_artifact_id"] = report_artifact_id
+            return {
+                "next_allowed_tools": ["career_job_fit_report_save"],
+                "required_tools": ["career_job_fit_report_save"],
+                "blocked_tools": [
+                    *_CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
+                    "session_create_text_artifact",
+                    "career_jd_analysis_save",
+                ],
+                "completed_refs": completed_refs,
+            }
+        return {
+            "next_allowed_tools": [],
+            "required_tools": [],
+            "blocked_tools": [
+                *_CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
+                "session_create_text_artifact",
+                "career_jd_analysis_save",
+                "career_job_fit_report_save",
+            ],
+            "completed_refs": {"report_artifact_id": report_artifact_id} if report_artifact_id is not None else {},
+        }
 
     def _latest_current_run_output_artifact(self, context: RunContext, *, output_kind: str) -> dict[str, Any] | None:
         latest: dict[str, Any] | None = None
