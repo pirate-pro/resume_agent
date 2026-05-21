@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from app.domain.reference_ids import is_reserved_reference_value
+
 __all__ = ["compact_tool_result_for_model"]
 
 _SMALL_RESULT_LIMIT = 1600
@@ -34,25 +36,31 @@ def compact_tool_result_for_model(
         payload = _loads_json(content)
         if payload is not None:
             return _dump_bounded(_compact_tool_search_payload(payload), max_chars=1800)
+    payload = _loads_json(content) if success else None
+    if payload is not None:
+        if isinstance(payload, dict) and payload.get("event_type") == "tool_schema_not_revealed":
+            return _dump_bounded(payload, max_chars=1200)
+        compact: dict[str, Any] | None = None
+        if tool_name in _RETRIEVAL_TOOLS:
+            compact = _compact_retrieval_payload(tool_name=tool_name, payload=payload)
+        elif tool_name in _DELEGATION_TOOLS:
+            compact = _compact_delegation_payload(tool_name=tool_name, payload=payload)
+        elif _is_product_tool(tool_name):
+            compact = (
+                _compact_product_write_payload(tool_name=tool_name, payload=payload)
+                if _is_product_write_tool(tool_name)
+                else _compact_product_payload(tool_name=tool_name, payload=payload)
+            )
+        if compact is not None:
+            return _dump_bounded(compact, max_chars=max_chars)
     if len(content) <= _SMALL_RESULT_LIMIT:
         return content
     if not success:
         return _compact_plain_result(tool_name=tool_name, content=content, max_chars=max_chars)
 
-    payload = _loads_json(content)
     if payload is None:
         return content
-
-    if tool_name in _RETRIEVAL_TOOLS:
-        compact = _compact_retrieval_payload(tool_name=tool_name, payload=payload)
-    elif tool_name in _DELEGATION_TOOLS:
-        compact = _compact_delegation_payload(tool_name=tool_name, payload=payload)
-    elif _is_product_tool(tool_name):
-        compact = _compact_product_payload(tool_name=tool_name, payload=payload)
-    else:
-        return content
-
-    return _dump_bounded(compact, max_chars=max_chars)
+    return content
 
 
 def _loads_json(content: str) -> Any | None:
@@ -75,6 +83,7 @@ def _compact_tool_search_payload(payload: Any) -> dict[str, Any]:
             "revealed_tool_count": data.get("revealed_tool_count"),
             "revealed_tool_names": revealed_tool_names,
             "available_tool_count": data.get("available_tool_count"),
+            "routing_guidance": _text(data.get("routing_guidance"), 360),
             "next_step": _text(data.get("next_step"), 240),
             "search_guidance": _text(data.get("search_guidance"), 240),
         }
@@ -222,6 +231,12 @@ def _compact_delegate_result(item: Any) -> dict[str, Any]:
             "followup_hints": _delegate_followup_hints(data),
             "child_run_id": data.get("child_run_id"),
             "artifact_refs": _compact_string_list(data.get("artifact_refs"), limit=12, item_chars=120),
+            "output_artifact_refs": _compact_string_list(
+                data.get("output_artifact_refs"),
+                limit=12,
+                item_chars=120,
+            ),
+            "product_refs": _compact_string_list(data.get("product_refs"), limit=12, item_chars=120),
             "next_steps": _compact_string_list(data.get("next_steps"), limit=6, item_chars=160),
             "error": _text(data.get("error"), 300),
         }
@@ -234,12 +249,13 @@ def _delegate_followup_hints(data: dict[str, Any]) -> list[str] | None:
     target_agent_id = data.get("target_agent_id")
     if target_agent_id == "resume_agent":
         return [
-            "If the result includes a resume_profile_id, update career_profile_default with career_profile_merge before finalizing the resume diagnosis turn.",
+            "Use returned product_refs/output_artifact_refs directly; do not list/get only to reconfirm completed child results.",
+            "If product_refs includes a resume_profile_id, update career_profile_default with career_profile_merge before finalizing the resume diagnosis turn.",
             "If career tools are not visible yet, call tool_search for the career group first.",
         ]
     if target_agent_id == "job_agent":
         return [
-            "Use returned jd_analysis_id, job_fit_report_id, report_artifact_id, resume_profile_id, and career_profile_id directly.",
+            "Use returned product_refs/output_artifact_refs directly for jd_analysis_id, job_fit_report_id, and report_artifact_id.",
             "Do not call status/list/get tools only to reconfirm completed child results.",
         ]
     return None
@@ -262,10 +278,11 @@ def _compact_product_payload(*, tool_name: str, payload: Any) -> dict[str, Any]:
         )
 
     record = data.get("record")
+    record_data = record if isinstance(record, dict) else {}
     compact: dict[str, Any] = {
         "tool": tool_name,
         "model_view": "compact",
-        "ids": _collect_id_fields(data),
+        "ids": _merge_id_fields(_collect_id_fields(data), _collect_id_fields(record_data)),
         "status": data.get("status"),
         "found": data.get("found"),
         "record_type": record_type,
@@ -273,16 +290,63 @@ def _compact_product_payload(*, tool_name: str, payload: Any) -> dict[str, Any]:
         "summary": _text(data.get("summary") or data.get("description"), 500),
         "score": data.get("overall_score") or data.get("score") or data.get("fit_score"),
         "recommendation": _text(data.get("recommendation"), 220),
+        "artifact_refs": _compact_artifact_refs(data, record_data),
         "evidence_refs": _compact_string_list(data.get("evidence_refs"), limit=10, item_chars=140),
         "source_refs": _compact_string_list(data.get("source_refs"), limit=10, item_chars=140),
         "next_actions": _compact_string_list(data.get("next_actions"), limit=6, item_chars=160),
         "risks": _compact_string_list(data.get("risks"), limit=6, item_chars=180),
-        "record": _compact_product_record(record, record_type=record_type),
+        "record": _compact_product_record(record, record_type=record_type, include_metadata=False, text_chars=180),
         "items_preview": _compact_nested_items(data),
+        "resume_version_guidance": _job_fit_resume_version_guidance(record_data),
         "completion_hint": _product_completion_hint(tool_name=tool_name),
         "full_result_hint": _FULL_RESULT_HINT,
     }
     return _drop_none(compact)
+
+
+def _compact_product_write_payload(*, tool_name: str, payload: Any) -> dict[str, Any]:
+    data = payload if isinstance(payload, dict) else {}
+    record = data.get("record")
+    record_data = record if isinstance(record, dict) else {}
+    record_type = _text(data.get("record_type"), 80)
+    ids = _merge_id_fields(_collect_id_fields(data), _collect_id_fields(record_data))
+    return _drop_none(
+        {
+            "tool": tool_name,
+            "model_view": "compact",
+            "record_type": record_type,
+            "ids": ids,
+            "status": data.get("status") or record_data.get("status"),
+            "found": data.get("found"),
+            "idempotent_reused": data.get("idempotent_reused"),
+            "workflow_runtime_result": data.get("workflow_runtime_result"),
+            "policy": data.get("policy"),
+            "title": _text(
+                data.get("title")
+                or record_data.get("title")
+                or record_data.get("company")
+                or record_data.get("position")
+                or record_data.get("name"),
+                160,
+            ),
+            "summary": _text(data.get("summary") or record_data.get("summary") or data.get("message"), 360),
+            "score": data.get("overall_score") or record_data.get("overall_score") or data.get("score"),
+            "recommendation": _text(data.get("recommendation") or record_data.get("recommendation"), 160),
+            "artifact_refs": _compact_artifact_refs(data, record_data),
+            "link_refs": _compact_link_refs(record_data),
+            "evidence_refs": _compact_string_list(
+                data.get("evidence_refs") or record_data.get("evidence_refs"),
+                limit=8,
+                item_chars=120,
+            ),
+            "next_actions": _compact_string_list(record_data.get("next_actions"), limit=4, item_chars=140),
+            "risks": _compact_string_list(record_data.get("risks"), limit=4, item_chars=140),
+            "resume_version_guidance": _job_fit_resume_version_guidance(record_data),
+            "updated_at": data.get("updated_at") or record_data.get("updated_at"),
+            "completion_hint": _product_completion_hint(tool_name=tool_name),
+            "full_result_hint": _FULL_RESULT_HINT,
+        }
+    )
 
 
 def _product_completion_hint(*, tool_name: str) -> str | None:
@@ -295,18 +359,53 @@ def _product_completion_hint(*, tool_name: str) -> str | None:
     return None
 
 
-def _compact_product_record(record: Any, *, record_type: str | None) -> dict[str, Any] | None:
+def _job_fit_resume_version_guidance(record: dict[str, Any]) -> dict[str, Any] | None:
+    if "job_fit_report_id" not in record and "overall_score" not in record:
+        return None
+    supported = _compact_mixed_list(record.get("matched_evidence"), limit=5, item_chars=180)
+    gaps = _compact_mixed_list(record.get("gaps"), limit=6, item_chars=180)
+    directions = _compact_mixed_list(record.get("resume_optimization_direction"), limit=4, item_chars=160)
+    focus = _compact_mixed_list(record.get("interview_preparation_focus"), limit=4, item_chars=160)
+    return _drop_none(
+        {
+            "rule": (
+                "matched_evidence 只能用于调整表达重点；gaps/interview_preparation_focus 是缺口或准备项，"
+                "不能写成候选人已具备的简历事实。缺失 JD 关键词只能放入 risk_notes。"
+            ),
+            "supported_evidence_for_resume": supported,
+            "risk_note_candidates": gaps,
+            "safe_resume_optimization_direction": directions,
+            "interview_focus_not_resume_facts": focus,
+        }
+    )
+
+
+def _is_product_write_tool(tool_name: str) -> bool:
+    if not _is_product_tool(tool_name):
+        return False
+    if tool_name.endswith(("_get", "_list")):
+        return False
+    return True
+
+
+def _compact_product_record(
+    record: Any,
+    *,
+    record_type: str | None,
+    include_metadata: bool = True,
+    text_chars: int = 260,
+) -> dict[str, Any] | None:
     if not isinstance(record, dict):
         return None
-    keys = _product_record_keys(record_type=record_type)
+    keys = _product_record_keys(record_type=record_type, include_metadata=include_metadata)
     output: dict[str, Any] = {}
     for key in keys:
         if key in record:
-            output[key] = _compact_value(record[key], text_chars=260)
+            output[key] = _compact_value(record[key], text_chars=text_chars)
     return _drop_none(output)
 
 
-def _product_record_keys(*, record_type: str | None) -> list[str]:
+def _product_record_keys(*, record_type: str | None, include_metadata: bool = True) -> list[str]:
     common = [
         "status",
         "source_artifact_id",
@@ -336,7 +435,6 @@ def _product_record_keys(*, record_type: str | None) -> list[str]:
             "project_experience",
             "skills",
             "self_evaluation",
-            "diagnosis",
         ],
         "career_profile": [
             "career_goal",
@@ -389,17 +487,75 @@ def _product_record_keys(*, record_type: str | None) -> list[str]:
         ],
     }
     specific = type_keys.get(record_type or "", [])
-    return _dedupe_keys(id_keys + common + specific)
+    metadata_keys = id_keys + common if include_metadata else id_keys
+    return _dedupe_keys(metadata_keys + specific)
 
 
 def _collect_id_fields(payload: dict[str, Any]) -> dict[str, Any]:
     output: dict[str, Any] = {}
+    artifact_ref_keys = {
+        "artifact_id",
+        "artifact_ids",
+        "artifact_refs",
+        "diagnosis_artifact_id",
+        "raw_text_artifact_id",
+        "report_artifact_id",
+        "source_artifact_id",
+    }
     for key, value in payload.items():
         if not isinstance(key, str):
             continue
-        if key.endswith("_id") or key.endswith("_ids") or key in {"id", "artifact_id", "artifact_refs"}:
+        if value is None or key == "source_session_id" or key in artifact_ref_keys:
+            continue
+        if key.endswith("_id") or key.endswith("_ids") or key == "id":
             output[key] = _compact_value(value, text_chars=160)
     return output
+
+
+def _merge_id_fields(*items: dict[str, Any]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for item in items:
+        for key, value in item.items():
+            if key not in output:
+                output[key] = value
+    return output
+
+
+def _compact_artifact_refs(*payloads: dict[str, Any]) -> dict[str, Any] | None:
+    keys = (
+        "artifact_id",
+        "report_artifact_id",
+        "source_artifact_id",
+        "raw_text_artifact_id",
+        "diagnosis_artifact_id",
+    )
+    output: dict[str, Any] = {}
+    for payload in payloads:
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip() and key not in output:
+                output[key] = _text(value, 160)
+    return output or None
+
+
+def _compact_link_refs(record: dict[str, Any]) -> dict[str, Any] | None:
+    keys = (
+        "resume_profile_id",
+        "career_profile_id",
+        "jd_analysis_id",
+        "job_fit_report_id",
+        "resume_version_id",
+        "application_id",
+        "base_resume_profile_id",
+        "target_jd_analysis_id",
+        "resume_version_ids",
+    )
+    output: dict[str, Any] = {}
+    for key in keys:
+        value = record.get(key)
+        if value is not None:
+            output[key] = _compact_value(value, text_chars=160)
+    return output or None
 
 
 def _compact_nested_items(payload: dict[str, Any]) -> dict[str, list[Any]]:
@@ -447,6 +603,13 @@ def _compact_string_list(value: Any, *, limit: int, item_chars: int) -> list[str
         compact = _text(item, item_chars)
         if compact:
             output.append(compact)
+    return output or None
+
+
+def _compact_mixed_list(value: Any, *, limit: int, item_chars: int) -> list[Any] | None:
+    if not isinstance(value, list):
+        return None
+    output = [_compact_value(item, text_chars=item_chars) for item in value[:limit]]
     return output or None
 
 
@@ -589,7 +752,7 @@ def _extract_known_ids(value: Any) -> list[str] | None:
     seen: set[str] = set()
     for match in _KNOWN_ID_PATTERN.finditer(text):
         item = match.group(0)
-        if item in _KNOWN_ID_FIELD_NAMES or item in seen:
+        if item in _KNOWN_ID_FIELD_NAMES or is_reserved_reference_value(item) or item in seen:
             continue
         output.append(item)
         seen.add(item)

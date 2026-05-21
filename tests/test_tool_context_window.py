@@ -156,7 +156,7 @@ def test_observation_drops_large_content_arguments_and_extracts_tool_search_reve
         model_visible_content=content,
     )
 
-    assert observation.arguments_preview["content_chars"] == 1000
+    assert observation.arguments_preview["content_omitted"] == {"chars": 1000}
     assert "content" not in observation.arguments_preview
     assert observation.revealed_tool_names == ["career_resume_version_create", "career_application_merge"]
     assert "revealed 2 tools" in str(observation.summary)
@@ -266,3 +266,206 @@ def test_compact_state_tells_model_to_stop_after_completed_resume_version_flow()
     assert "workflow_completion_guidance" in state_content
     assert "下一步应给最终答复" in state_content
     assert "不要再次创建 ResumeVersion" in state_content
+
+
+def test_compact_window_replays_successful_tool_call_arguments_compactly() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    long_content = "# 定制简历\n" * 500
+    call = ToolCall(
+        name="career_resume_version_create",
+        arguments={
+            "resume_version_id": "resume_version_alpha",
+            "base_resume_profile_id": "resume_profile_alpha",
+            "content": long_content,
+            "evidence_refs": ["artifact_resume_alpha", "fit_alpha"],
+        },
+        tool_call_id="call_create",
+    )
+    content = json.dumps(
+        {
+            "record_type": "resume_version",
+            "record_id": "resume_version_alpha",
+            "record": {
+                "resume_version_id": "resume_version_alpha",
+                "artifact_id": "artifact_resume_alpha",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [call]),
+        tool_messages=[build_tool_result_message(tool_call_id="call_create", content=content)],
+        observations=[
+            build_tool_observation(
+                tool_call=call,
+                result=ToolExecutionResult(
+                    tool_name="career_resume_version_create",
+                    success=True,
+                    content=content,
+                ),
+                model_visible_content=content,
+            )
+        ],
+    )
+
+    rendered = window.render_messages()
+    replayed_arguments = json.loads(rendered[1]["tool_calls"][0]["function"]["arguments"])
+
+    assert "content" not in replayed_arguments
+    assert replayed_arguments["content_omitted"] == {"chars": len(long_content)}
+    assert replayed_arguments["resume_version_id"] == "resume_version_alpha"
+    assert replayed_arguments["evidence_refs"] == ["artifact_resume_alpha", "fit_alpha"]
+
+
+def test_compact_window_summarizes_failed_long_content_arguments_for_repair() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    long_content = "# 定制简历\n" * 200
+    call = ToolCall(
+        name="career_resume_version_create",
+        arguments={"content": long_content, "base_resume_profile_id": "resume_profile_alpha"},
+        tool_call_id="call_failed",
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [call]),
+        tool_messages=[build_tool_result_message(tool_call_id="call_failed", content='{"error":"validation"}')],
+        observations=[
+            build_tool_observation(
+                tool_call=call,
+                result=ToolExecutionResult(
+                    tool_name="career_resume_version_create",
+                    success=False,
+                    content='{"error":"validation"}',
+                ),
+                model_visible_content='{"error":"validation"}',
+            )
+        ],
+    )
+
+    rendered = window.render_messages()
+    replayed_arguments = json.loads(rendered[1]["tool_calls"][0]["function"]["arguments"])
+
+    assert replayed_arguments["content_omitted"] == {"chars": len(long_content)}
+    assert replayed_arguments["content_preview"].startswith("# 定制简历")
+    assert "content" not in replayed_arguments
+
+
+def test_compact_state_tells_model_not_to_duplicate_created_text_artifact() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    call = ToolCall(
+        name="session_create_text_artifact",
+        arguments={"title": "简历诊断报告.txt", "content": "诊断报告正文"},
+        tool_call_id="call_artifact",
+    )
+    content = json.dumps(
+        {
+            "artifact_id": "artifact_report_alpha",
+            "title": "简历诊断报告.txt",
+            "status": "ready",
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [call]),
+        tool_messages=[build_tool_result_message(tool_call_id="call_artifact", content=content)],
+        observations=[
+            build_tool_observation(
+                tool_call=call,
+                result=ToolExecutionResult(
+                    tool_name="session_create_text_artifact",
+                    success=True,
+                    content=content,
+                ),
+                model_visible_content=content,
+            )
+        ],
+    )
+    window.consume_pending_exchange()
+
+    state_content = str(window.render_messages()[1]["content"])
+
+    assert "不要为同一标题/内容重复创建" in state_content
+    assert "artifact_report_alpha" in state_content
+
+
+def test_compact_state_surfaces_workflow_runtime_next_action() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    call = ToolCall(
+        name="session_read_artifact",
+        arguments={"artifact_id": "artifact_resume"},
+        tool_call_id="call_blocked_read",
+    )
+    content = json.dumps(
+        {
+            "workflow_runtime_result": True,
+            "policy": "block",
+            "reason": "job_fit_report_artifact_ready_stop_low_level_actions",
+            "next_action": "调用 career_job_fit_report_save，并把 report_artifact_id 设置为已有 artifact_id：artifact_fit_report。",
+            "missing_outputs": ["job_fit_report"],
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [call]),
+        tool_messages=[build_tool_result_message(tool_call_id="call_blocked_read", content=content)],
+        observations=[
+            build_tool_observation(
+                tool_call=call,
+                result=ToolExecutionResult(
+                    tool_name="session_read_artifact",
+                    success=True,
+                    content=content,
+                ),
+                model_visible_content=content,
+            )
+        ],
+    )
+    window.consume_pending_exchange()
+
+    state_content = str(window.render_messages()[1]["content"])
+
+    assert "WorkflowRuntime" in state_content
+    assert "career_job_fit_report_save" in state_content
+    assert "job_fit_report" in state_content
+
+
+def test_compact_state_tells_model_not_to_duplicate_jd_analysis_save() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    call = ToolCall(
+        name="career_jd_analysis_save",
+        arguments={"jd_analysis_id": "jd_analysis_alpha", "source_artifact_id": "artifact_jd_alpha"},
+        tool_call_id="call_jd_save",
+    )
+    content = json.dumps(
+        {
+            "record_type": "jd_analysis",
+            "record_id": "jd_analysis_alpha",
+            "record": {"jd_analysis_id": "jd_analysis_alpha"},
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [call]),
+        tool_messages=[build_tool_result_message(tool_call_id="call_jd_save", content=content)],
+        observations=[
+            build_tool_observation(
+                tool_call=call,
+                result=ToolExecutionResult(
+                    tool_name="career_jd_analysis_save",
+                    success=True,
+                    content=content,
+                ),
+                model_visible_content=content,
+            )
+        ],
+    )
+    window.consume_pending_exchange()
+
+    state_content = str(window.render_messages()[1]["content"])
+
+    assert "JDAnalysis 已在本 run 成功保存" in state_content
+    assert "不要重复保存同一份 JD 分析" in state_content

@@ -31,6 +31,7 @@ def test_tool_search_model_view_keeps_names_and_drops_descriptions() -> None:
         ],
         "revealed_tool_names": ["career_resume_version_create", "career_application_merge"],
         "available_tool_count": 55,
+        "routing_guidance": "请直接调用已揭示的工具，不要继续搜索。",
         "next_step": "下一轮直接调用工具。",
         "search_guidance": "不要重复搜索。",
     }
@@ -47,6 +48,7 @@ def test_tool_search_model_view_keeps_names_and_drops_descriptions() -> None:
         "career_resume_version_create",
         "career_application_merge",
     ]
+    assert compact_payload["routing_guidance"] == "请直接调用已揭示的工具，不要继续搜索。"
     assert "revealed_tools" not in compact_payload
     assert "LONG_DESCRIPTION_MARKER" not in compact
     assert len(compact) < 1000
@@ -72,6 +74,90 @@ def test_product_model_view_includes_completion_hint_for_resume_version() -> Non
 
     assert compact_payload["model_view"] == "compact"
     assert "不要再次创建 ResumeVersion" in compact_payload["completion_hint"]
+    assert compact_payload["ids"]["resume_version_id"] == "resume_version_alpha"
+    assert compact_payload["artifact_refs"]["artifact_id"] == "artifact_resume_alpha"
+    assert "record" not in compact_payload
+    assert "简历正文" not in compact
+
+
+def test_product_write_model_view_keeps_actionable_ids_without_full_record() -> None:
+    payload = {
+        "record_type": "job_fit_report",
+        "record_id": "fit_alpha",
+        "status": "active",
+        "record": {
+            "job_fit_report_id": "fit_alpha",
+            "jd_analysis_id": "jd_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "source_artifact_id": "artifact_jd_alpha",
+            "report_artifact_id": "artifact_report_alpha",
+            "overall_score": 72,
+            "recommendation": "cautious",
+            "matched_evidence": ["Python/FastAPI 与候选人项目经验匹配"],
+            "gaps": ["RAG 深度实践证据不足"],
+        },
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="career_job_fit_report_save",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["model_view"] == "compact"
+    assert compact_payload["ids"]["record_id"] == "fit_alpha"
+    assert compact_payload["ids"]["job_fit_report_id"] == "fit_alpha"
+    assert compact_payload["link_refs"]["jd_analysis_id"] == "jd_alpha"
+    assert compact_payload["artifact_refs"]["report_artifact_id"] == "artifact_report_alpha"
+    assert compact_payload["score"] == 72
+    assert "resume_version_guidance" in compact_payload
+    assert "缺失 JD 关键词只能放入 risk_notes" in compact_payload["resume_version_guidance"]["rule"]
+    assert compact_payload["resume_version_guidance"]["supported_evidence_for_resume"] == [
+        "Python/FastAPI 与候选人项目经验匹配"
+    ]
+    assert "record" not in compact_payload
+
+
+def test_product_get_model_view_deduplicates_metadata_and_keeps_domain_fields() -> None:
+    payload = {
+        "record_type": "resume_profile",
+        "record_id": "resume_profile_alpha",
+        "found": True,
+        "status": "active",
+        "source_artifact_id": "artifact_resume_alpha",
+        "evidence_refs": ["artifact_resume_alpha", "artifact_diagnosis_alpha"],
+        "record": {
+            "resume_profile_id": "resume_profile_alpha",
+            "status": "active",
+            "source_artifact_id": "artifact_resume_alpha",
+            "raw_text_artifact_id": "artifact_resume_alpha",
+            "diagnosis_artifact_id": "artifact_diagnosis_alpha",
+            "evidence_refs": ["artifact_resume_alpha", "artifact_diagnosis_alpha"],
+            "updated_at": "2026-05-20T12:00:00+08:00",
+            "basic_info": {"name": "张三", "target_role": "AI 应用开发工程师"},
+            "skills": ["Python", "FastAPI", "RAG", "Agent"],
+            "diagnosis": {"summary": "FULL_DIAGNOSIS_MARKER" * 80},
+        },
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="career_resume_profile_get",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["model_view"] == "compact"
+    assert compact_payload["ids"]["resume_profile_id"] == "resume_profile_alpha"
+    assert compact_payload["artifact_refs"]["source_artifact_id"] == "artifact_resume_alpha"
+    assert compact_payload["artifact_refs"]["diagnosis_artifact_id"] == "artifact_diagnosis_alpha"
+    assert compact_payload["record"]["skills"] == ["Python", "FastAPI", "RAG", "Agent"]
+    assert "status" not in compact_payload["record"]
+    assert "evidence_refs" not in compact_payload["record"]
+    assert "source_artifact_id" not in compact_payload["record"]
+    assert "FULL_DIAGNOSIS_MARKER" not in compact
 
 
 def test_retrieval_context_pack_model_view_keeps_refs_and_drops_full_grouped_context() -> None:
@@ -156,6 +242,8 @@ def test_delegate_agents_model_view_keeps_task_summaries_and_artifacts() -> None
                 "answer": long_answer + " diagnosis artifact: artifact_resume_diagnosis",
                 "child_run_id": "run_child_001",
                 "artifact_refs": ["artifact_resume_diagnosis"],
+                "output_artifact_refs": ["artifact_resume_diagnosis"],
+                "product_refs": ["resume_profile_alpha"],
             }
         ],
     }
@@ -170,12 +258,15 @@ def test_delegate_agents_model_view_keeps_task_summaries_and_artifacts() -> None
     assert compact_payload["task_group_id"] == "task_group_alpha"
     assert compact_payload["results"][0]["target_agent_id"] == "resume_agent"
     assert compact_payload["results"][0]["artifact_refs"] == ["artifact_resume_diagnosis"]
+    assert compact_payload["results"][0]["output_artifact_refs"] == ["artifact_resume_diagnosis"]
+    assert compact_payload["results"][0]["product_refs"] == ["resume_profile_alpha"]
     assert compact_payload["results"][0]["extracted_ids"] == [
         "resume_profile_alpha",
         "artifact_resume_diagnosis",
     ]
     assert compact_payload["results"][0]["followup_hints"] == [
-        "If the result includes a resume_profile_id, update career_profile_default with career_profile_merge before finalizing the resume diagnosis turn.",
+        "Use returned product_refs/output_artifact_refs directly; do not list/get only to reconfirm completed child results.",
+        "If product_refs includes a resume_profile_id, update career_profile_default with career_profile_merge before finalizing the resume diagnosis turn.",
         "If career tools are not visible yet, call tool_search for the career group first.",
     ]
     assert "子 agent 完整回答。" * 80 not in compact
@@ -266,7 +357,68 @@ def test_product_get_model_view_keeps_nested_record_fields() -> None:
     assert record["job_fit_report_id"] == "fit_alpha"
     assert record["resume_profile_id"] == "resume_profile_alpha"
     assert record["overall_score"] == 72
-    assert record["report_artifact_id"] == "artifact_report_alpha"
+    assert compact_payload["artifact_refs"]["report_artifact_id"] == "artifact_report_alpha"
+    assert compact_payload["resume_version_guidance"]["supported_evidence_for_resume"][0]["title"] == (
+        "Python/FastAPI 匹配"
+    )
+    assert compact_payload["resume_version_guidance"]["risk_note_candidates"][0]["title"] == "RAG 深度不足"
+    assert "不能写成候选人已具备的简历事实" in compact_payload["resume_version_guidance"]["rule"]
+
+
+def test_small_product_result_still_uses_compact_model_view() -> None:
+    payload = {
+        "record_type": "career_application",
+        "record_id": "application_alpha",
+        "found": True,
+        "record": {
+            "application_id": "application_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "jd_analysis_id": "jd_alpha",
+            "job_fit_report_id": "fit_alpha",
+            "summary": "当前求职项目",
+        },
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="career_application_get",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["model_view"] == "compact"
+    assert compact_payload["ids"]["record_id"] == "application_alpha"
+    assert compact_payload["record"]["application_id"] == "application_alpha"
+    assert compact_payload["record"]["job_fit_report_id"] == "fit_alpha"
+    assert "full_result_hint" in compact_payload
+    assert compact != json.dumps(payload, ensure_ascii=False)
+
+
+def test_small_delegate_result_still_uses_compact_model_view() -> None:
+    payload = {
+        "task_group_id": "task_group_alpha",
+        "status": "completed",
+        "results": [
+            {
+                "task_id": "task_alpha",
+                "target_agent_id": "job_agent",
+                "status": "completed",
+                "summary": "已保存 jd_analysis_id=jd_alpha 和 job_fit_report_id=fit_alpha。",
+            }
+        ],
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="delegate_agents",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["model_view"] == "compact"
+    assert compact_payload["results"][0]["target_agent_id"] == "job_agent"
+    assert compact_payload["results"][0]["extracted_ids"] == ["jd_alpha", "fit_alpha"]
+    assert "full_result_hint" in compact_payload
 
 
 def test_small_tool_result_passes_through_unchanged() -> None:

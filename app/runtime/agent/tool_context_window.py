@@ -19,10 +19,13 @@ __all__ = [
 ]
 
 _VALID_MODES = {"off", "compact"}
-_DEFAULT_MAX_OBSERVATIONS = 12
-_DEFAULT_MAX_STATE_CHARS = 2500
+_DEFAULT_MAX_OBSERVATIONS = 10
+_DEFAULT_DETAILED_OBSERVATIONS = 4
+_DEFAULT_MAX_STATE_CHARS = 1800
 _MAX_REVEALED_TOOL_NAMES = 32
 _TEXT_LIMIT = 180
+_FAILED_CONTENT_PREVIEW_CHARS = 220
+_LONG_CONTENT_ARGUMENT_CHARS = 480
 _ID_PREFIX_RE = re.compile(
     r"^(artifact|resume_profile|career_profile|jd|fit|resume_version|application|note|learning_task|learning_plan|weakness|checkin|task_group|task)_[A-Za-z0-9_-]+$"
 )
@@ -151,11 +154,22 @@ class ToolContextWindow:
         tool_messages: list[dict[str, Any]],
         observations: list[ToolObservation],
     ) -> None:
+        replay_assistant_message = assistant_message
+        if self._mode == "compact":
+            replay_assistant_message = _compact_assistant_tool_call_message(assistant_message, observations)
         self._pending_exchange = ToolExchange(
-            assistant_message=assistant_message,
+            assistant_message=replay_assistant_message,
             tool_messages=list(tool_messages),
             observations=list(observations),
         )
+
+    def append_runtime_notice(self, content: str) -> None:
+        """Append a small runtime guard notice to the next model round."""
+
+        text = content.strip()
+        if not text:
+            return
+        self._base_messages.append({"role": "user", "content": text})
 
     def usage_payload(self) -> dict[str, Any]:
         state_message = self._state_message()
@@ -183,6 +197,8 @@ class ToolContextWindow:
 
     def _state_payload(self) -> dict[str, Any]:
         observations = self._observations[-self._max_observations :]
+        detailed_observations = observations[-_DEFAULT_DETAILED_OBSERVATIONS:]
+        older_observations = observations[: -_DEFAULT_DETAILED_OBSERVATIONS]
         latest_refs = _latest_refs(self._observations)
         revealed_tool_names = _latest_revealed_tool_names(self._observations)
         revealed_tool_groups = _revealed_tool_groups(revealed_tool_names)
@@ -204,7 +220,8 @@ class ToolContextWindow:
                 "revealed_tool_groups": revealed_tool_groups,
                 "workflow_completion_guidance": _workflow_completion_guidance(self._observations),
                 "latest_refs": latest_refs,
-                "observations": [observation.to_payload() for observation in observations],
+                "older_observation_summary": _older_observation_summary(older_observations),
+                "recent_observations": [observation.to_payload() for observation in detailed_observations],
                 "latest_errors": list(reversed(latest_errors)),
             }
         )
@@ -251,6 +268,8 @@ def _summary_for_payload(*, tool_name: str, success: bool, payload: Any, content
     if not success:
         return _truncate(_error_from_payload(payload, fallback_content=content) or f"{tool_name} failed", _TEXT_LIMIT)
     if isinstance(payload, dict):
+        if payload.get("workflow_runtime_result") is True:
+            return _workflow_runtime_summary(payload)
         if tool_name == "tool_search":
             groups = _string_list(payload.get("matched_groups"), limit=8)
             count = payload.get("revealed_tool_count")
@@ -335,6 +354,17 @@ def _tool_group_for_name(name: str) -> str:
 def _workflow_completion_guidance(observations: list[ToolObservation]) -> list[str]:
     successful_tools = {observation.tool_name for observation in observations if observation.success}
     hints: list[str] = []
+    runtime_guidance = _latest_runtime_guidance(observations)
+    if runtime_guidance is not None:
+        hints.append(runtime_guidance)
+    if "session_create_text_artifact" in successful_tools:
+        hints.append(
+            "当前 run 已成功创建文本 artifact；如果它就是本任务目标文件，请复用最新 artifact_id，不要为同一标题/内容重复创建。"
+        )
+    if "career_jd_analysis_save" in successful_tools:
+        hints.append("JDAnalysis 已在本 run 成功保存；后续保存 JobFitReport 时复用该 jd_analysis_id，不要重复保存同一份 JD 分析。")
+    if "career_job_fit_report_save" in successful_tools:
+        hints.append("JobFitReport 已在本 run 成功保存；如果报告 artifact 已存在，下一步应汇总结果，不要重新保存匹配报告。")
     if {"career_jd_analysis_save", "career_job_fit_report_save"} <= successful_tools:
         hints.append("JDAnalysis 和 JobFitReport 已在本 run 成功保存；不要重复保存同一份 JD 分析或匹配报告。")
     if "career_resume_version_create" in successful_tools:
@@ -344,18 +374,117 @@ def _workflow_completion_guidance(observations: list[ToolObservation]) -> list[s
     return hints
 
 
-def _compact_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+def _workflow_runtime_summary(payload: dict[str, Any]) -> str:
+    policy = payload.get("policy")
+    reason = payload.get("reason")
+    next_action = payload.get("next_action")
+    missing_outputs = payload.get("missing_outputs")
+    parts = ["WorkflowRuntime", str(policy or "decision")]
+    if isinstance(reason, str) and reason.strip():
+        parts.append(reason.strip())
+    if isinstance(next_action, str) and next_action.strip():
+        parts.append(f"下一步：{next_action.strip()}")
+    if isinstance(missing_outputs, list) and missing_outputs:
+        parts.append(f"缺失产物：{', '.join(str(item) for item in missing_outputs[:5])}")
+    return _truncate("；".join(parts), _TEXT_LIMIT)
+
+
+def _latest_runtime_guidance(observations: list[ToolObservation]) -> str | None:
+    for observation in reversed(observations):
+        if not observation.summary or "WorkflowRuntime" not in observation.summary:
+            continue
+        if "下一步：" not in observation.summary:
+            continue
+        return observation.summary
+    return None
+
+
+def _compact_assistant_tool_call_message(
+    assistant_message: dict[str, Any],
+    observations: list[ToolObservation],
+) -> dict[str, Any]:
+    raw_tool_calls = assistant_message.get("tool_calls")
+    if not isinstance(raw_tool_calls, list):
+        return dict(assistant_message)
+    observation_by_call_id = {
+        observation.tool_call_id: observation
+        for observation in observations
+        if observation.tool_call_id
+    }
+    compacted_tool_calls: list[Any] = []
+    changed = False
+    for raw_call in raw_tool_calls:
+        if not isinstance(raw_call, dict):
+            compacted_tool_calls.append(raw_call)
+            continue
+        call_copy = dict(raw_call)
+        function = raw_call.get("function")
+        if not isinstance(function, dict):
+            compacted_tool_calls.append(call_copy)
+            continue
+        function_copy = dict(function)
+        tool_call_id = raw_call.get("id")
+        observation = observation_by_call_id.get(tool_call_id) if isinstance(tool_call_id, str) else None
+        if observation is not None:
+            raw_arguments = function.get("arguments")
+            parsed_arguments = _loads_json(raw_arguments) if isinstance(raw_arguments, str) else None
+            should_compact = observation.success or _has_long_content_argument(parsed_arguments)
+            if should_compact and isinstance(parsed_arguments, dict):
+                compacted_arguments = _compact_arguments(
+                    parsed_arguments,
+                    content_preview_chars=0 if observation.success else _FAILED_CONTENT_PREVIEW_CHARS,
+                )
+                function_copy["arguments"] = json.dumps(
+                    compacted_arguments,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                changed = True
+        call_copy["function"] = function_copy
+        compacted_tool_calls.append(call_copy)
+    if not changed:
+        return dict(assistant_message)
+    output = dict(assistant_message)
+    output["tool_calls"] = compacted_tool_calls
+    return output
+
+
+def _older_observation_summary(observations: list[ToolObservation]) -> dict[str, Any]:
+    if not observations:
+        return {}
+    counts: dict[str, int] = {}
+    failed_tools: list[str] = []
+    for observation in observations:
+        counts[observation.tool_name] = counts.get(observation.tool_name, 0) + 1
+        if not observation.success and observation.tool_name not in failed_tools:
+            failed_tools.append(observation.tool_name)
+    return _drop_empty(
+        {
+            "count": len(observations),
+            "tool_counts": counts,
+            "failed_tools": failed_tools[:6],
+        }
+    )
+
+
+def _compact_arguments(arguments: dict[str, Any], *, content_preview_chars: int = 0) -> dict[str, Any]:
     output: dict[str, Any] = {}
     for key, value in arguments.items():
         if not isinstance(key, str):
             continue
         if key == "content" and isinstance(value, str):
-            output["content_chars"] = len(value)
+            output["content_omitted"] = {"chars": len(value)}
+            if content_preview_chars > 0:
+                output["content_preview"] = _truncate(value, content_preview_chars)
             continue
         output[key] = _compact_value(value, text_chars=120, depth=0)
         if len(output) >= 12:
             break
     return output
+
+
+def _has_long_content_argument(arguments: Any) -> bool:
+    return isinstance(arguments, dict) and isinstance(arguments.get("content"), str) and len(arguments["content"]) > _LONG_CONTENT_ARGUMENT_CHARS
 
 
 def _collect_ids(payload: Any) -> dict[str, Any]:

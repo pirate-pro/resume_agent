@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.domain.models import AgentIdentityDocuments, MemoryItem, SessionArtifact, ToolDefinition
-from app.runtime.context.catalog import catalog_description
+from app.runtime.context.catalog import render_compact_search_tool_catalog, render_full_tool_catalog
 from app.runtime.context.constants import (
     MEMORY_ACCESS_RULES,
     MEMORY_LANE_LABELS,
@@ -26,6 +26,8 @@ from app.runtime.context.short_term import (
 from app.runtime.context.career_flow_state import format_career_flow_state_lines
 from app.runtime.context.workflow_rules import WorkflowRulePack
 from app.runtime.context.workflow_state import format_current_workflow_state_lines
+from app.runtime.workflow.phase import format_workflow_phase_lines
+from app.runtime.workflow.tool_plan import format_runtime_tool_plan_lines
 
 
 def build_assembly_plan(
@@ -39,6 +41,8 @@ def build_assembly_plan(
     short_term_plan: ShortTermContextPlan,
     memory_lanes: dict[str, list[MemoryItem]],
     active_artifacts: list[SessionArtifact],
+    tool_catalog_mode: str = "full",
+    visible_tool_names: list[str] | None = None,
 ) -> ContextAssemblyPlan:
     memory_slices = split_memory_lanes(memory_lanes)
     sections: list[ContextSection] = [
@@ -68,15 +72,20 @@ def build_assembly_plan(
             )
         )
     if tool_definitions:
+        tool_catalog_content = (
+            render_compact_search_tool_catalog(
+                tool_definitions,
+                visible_tool_names=visible_tool_names or [],
+            )
+            if tool_catalog_mode == "compact_search"
+            else render_full_tool_catalog(tool_definitions)
+        )
         sections.append(
             ContextSection(
                 name="tool_catalog",
-                content="Tools:\n"
-                + "\n".join(
-                    f"- {definition.name}: {catalog_description(definition.description)}"
-                    for definition in tool_definitions
-                ),
+                content=tool_catalog_content,
                 item_count=len(tool_definitions),
+                metadata={"catalog_mode": tool_catalog_mode},
             )
         )
     if workflow_rule_packs:
@@ -164,6 +173,35 @@ def build_assembly_plan(
                     "If final_answer_ready=true, stop calling tools and produce the final user-facing answer."
                 ),
                 item_count=len(career_flow_state_lines),
+            )
+        )
+    workflow_phase_lines = format_workflow_phase_lines(short_term_plan.workflow_phase)
+    if workflow_phase_lines:
+        sections.append(
+            ContextSection(
+                name="current_workflow_phase",
+                content=(
+                    "Current workflow phase guard snapshot:\n"
+                    + "\n".join(workflow_phase_lines)
+                    + "\n\nTreat missing_outputs as product gaps, not narrative gaps. "
+                    "Do not call tools listed in blocked_tool_names unless the user explicitly asks to restart or create another version."
+                ),
+                item_count=len(workflow_phase_lines),
+            )
+        )
+    runtime_tool_plan_lines = format_runtime_tool_plan_lines(short_term_plan.runtime_tool_plan)
+    if runtime_tool_plan_lines:
+        sections.append(
+            ContextSection(
+                name="current_runtime_tool_plan",
+                content=(
+                    "Runtime tool plan for this model round:\n"
+                    + "\n".join(runtime_tool_plan_lines)
+                    + "\n\nIf next_allowed_tools is non-empty, call only those tools for the next step. "
+                    "Do not call tool_search again for the same step. "
+                    "If final_answer_ready=true, stop tool calls and answer the user."
+                ),
+                item_count=len(runtime_tool_plan_lines),
             )
         )
     context_summary_lines = format_context_summary_lines(short_term_plan.context_summaries)

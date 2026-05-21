@@ -26,7 +26,6 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "粘贴",
         "pasted",
         "pdf",
-        "markdown",
     ),
     "retrieval": (
         "retrieval",
@@ -45,21 +44,54 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
     "career": (
         "career",
         "求职",
+    ),
+    "career_read": (
+        "读取",
+        "查询",
+        "查看",
+        "get",
+        "list",
+        "已有",
+        "已保存",
+        "记录",
+        "id",
+        "详情",
+    ),
+    "career_diagnosis": (
         "简历",
         "resume",
+        "诊断",
+        "画像",
+        "解析简历",
+        "简历画像",
+        "职业画像",
+        "resume profile",
+    ),
+    "career_jd_fit": (
         "jd",
         "岗位",
         "职位",
         "匹配",
-        "投递",
-        "诊断",
-        "画像",
-        "定制",
-        "版本",
+        "匹配报告",
+        "岗位分析",
+        "jd analysis",
+        "job fit",
+    ),
+    "career_resume_version": (
+        "定制简历",
         "简历版本",
         "custom resume",
         "resume version",
+        "版本",
+    ),
+    "career_application": (
         "求职项目",
+        "application",
+        "投递",
+        "申请",
+        "投递前",
+        "面试准备",
+        "项目动作",
     ),
     "note": (
         "note",
@@ -107,7 +139,48 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "工作视图",
     ),
 }
-_GROUP_ORDER = ("retrieval", "artifact", "career", "note", "learning", "memory", "delegation", "state")
+_CAREER_GROUPS = (
+    "career_read",
+    "career_diagnosis",
+    "career_jd_fit",
+    "career_resume_version",
+    "career_application",
+)
+_CAREER_DOMAIN_KEYWORDS = (
+    "career",
+    "求职",
+    "简历",
+    "resume",
+    "职业画像",
+    "jd",
+    "岗位",
+    "职位",
+    "匹配",
+    "投递",
+    "申请",
+    "application",
+    "面试",
+    "二面",
+    "终面",
+    "resume profile",
+    "career profile",
+    "job fit",
+)
+_GROUP_ORDER = (
+    "retrieval",
+    "artifact",
+    "career_read",
+    "career_diagnosis",
+    "career_jd_fit",
+    "career_resume_version",
+    "career_application",
+    "career",
+    "note",
+    "learning",
+    "memory",
+    "delegation",
+    "state",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +224,11 @@ class ToolCatalogSearchResult:
             "revealed_tool_names": revealed_tool_names,
             "available_tool_count": self.available_tool_count,
             "revealed_tool_count": len(self.revealed_tools),
+            "routing_guidance": _routing_guidance(
+                query=self.query,
+                matched_groups=self.matched_groups,
+                revealed_tool_names=revealed_tool_names,
+            ),
             "next_step": (
                 "下一轮这些工具 schema 会变为可见；如果目标工具已在 revealed_tool_names 中，请直接调用它，不要再次 tool_search。"
                 if self.revealed_tools
@@ -182,13 +260,27 @@ class ToolCatalog:
         requested_groups = _normalize_groups(groups or [])
         matched_groups = _matched_groups(normalized_query, requested_groups)
         reveal_names = self.resolve_reveal_names(matched_groups=matched_groups)
-        direct_matches = self._direct_matches(normalized_query, requested_groups)
+        reveal_names = _filter_reveal_names_for_query(
+            reveal_names,
+            query=normalized_query,
+            matched_groups=matched_groups,
+        )
+        direct_matches = self._direct_matches(
+            normalized_query,
+            requested_groups,
+            matched_groups=set(matched_groups),
+        )
         if top_k > 0:
             direct_matches = direct_matches[:top_k]
         for entry in direct_matches:
             if entry.group == "state" and "state" not in requested_groups:
                 continue
             reveal_names.append(entry.name)
+        reveal_names = _filter_reveal_names_for_query(
+            reveal_names,
+            query=normalized_query,
+            matched_groups=matched_groups,
+        )
 
         revealed_entries = self._entries_for_names(reveal_names)
         return ToolCatalogSearchResult(
@@ -205,15 +297,42 @@ class ToolCatalog:
             output.extend(_pack_names(group))
         return _dedupe_names(output)
 
-    def _direct_matches(self, query: str, requested_groups: set[str]) -> list[ToolCatalogEntry]:
+    def entries_for_names(self, names: list[str]) -> list[ToolCatalogEntry]:
+        """Return catalog entries for concrete tool names in input order."""
+
+        return self._entries_for_names(names)
+
+    def _direct_matches(
+        self,
+        query: str,
+        requested_groups: set[str],
+        *,
+        matched_groups: set[str],
+    ) -> list[ToolCatalogEntry]:
         if not query and not requested_groups:
             return []
         scored: list[tuple[int, ToolCatalogEntry]] = []
         for entry in self._entries:
             if entry.name == _TOOL_SEARCH_NAME:
                 continue
-            if requested_groups and entry.group not in requested_groups:
+            if (
+                entry.group not in matched_groups
+                and entry.group not in requested_groups
+                and not ("career" in requested_groups and entry.group in _CAREER_GROUPS)
+                and entry.name not in query
+            ):
                 continue
+            if (
+                entry.group in _CAREER_GROUPS
+                and entry.group not in matched_groups
+                and entry.name not in query
+            ):
+                continue
+            if requested_groups and not _entry_matches_requested_groups(entry, requested_groups):
+                continue
+            if "career" in requested_groups and entry.group in _CAREER_GROUPS and entry.group not in matched_groups:
+                if entry.name not in query:
+                    continue
             score = _score_entry(entry, query=query, requested_groups=requested_groups)
             if score > 0:
                 scored.append((score, entry))
@@ -249,8 +368,28 @@ def _group_for_name(name: str) -> str:
         return "artifact"
     if name.startswith("retrieval_"):
         return "retrieval"
-    if name.startswith("career_"):
-        return "career"
+    if name in {
+        "career_resume_profile_get",
+        "career_resume_profile_list",
+        "career_profile_get",
+        "career_jd_analysis_get",
+        "career_jd_analysis_list",
+        "career_job_fit_report_get",
+        "career_job_fit_report_list",
+        "career_resume_version_get",
+        "career_resume_version_list",
+        "career_application_get",
+        "career_application_list",
+    }:
+        return "career_read"
+    if name in {"career_resume_profile_save", "career_profile_merge"}:
+        return "career_diagnosis"
+    if name in {"career_jd_analysis_save", "career_job_fit_report_save"}:
+        return "career_jd_fit"
+    if name == "career_resume_version_create":
+        return "career_resume_version"
+    if name in {"career_application_create", "career_application_merge"}:
+        return "career_application"
     if name.startswith("note_"):
         return "note"
     if name.startswith("learning_"):
@@ -265,19 +404,38 @@ def _group_for_name(name: str) -> str:
 
 
 def _matched_groups(query: str, requested_groups: set[str]) -> list[str]:
-    groups: set[str] = set(requested_groups)
+    groups: set[str] = {group for group in requested_groups if group != "career"}
     for group, keywords in _GROUP_KEYWORDS.items():
         if group == "state" and group not in requested_groups:
+            continue
+        if group == "note":
+            continue
+        if group == "career" or group in _CAREER_GROUPS:
             continue
         if any(keyword in query for keyword in keywords):
             groups.add(group)
 
-    if "career" in groups and _has_any(query, ("简历", "jd", "岗位", "职位", "匹配", "投递")):
+    if "career" in requested_groups or _mentions_career_domain(query):
+        groups.update(_career_groups_for_query(query))
+    if "career_jd_fit" in groups:
+        groups.add("career_application")
+    if "career_resume_version" in groups:
+        groups.add("career_application")
+        if not _has_any(query, ("诊断", "画像", "解析简历", "简历画像", "职业画像")):
+            groups.discard("career_diagnosis")
+
+    if _has_any(
+        query, ("artifact", "文件", "上传", "附件", "资料", "读取文件", "文件内容", "粘贴", "pasted", "pdf")
+    ):
         groups.add("artifact")
-    if "career" in groups and _has_any(query, ("诊断", "分析", "匹配", "画像", "多 agent", "委派")):
+    if groups.intersection({"career_diagnosis", "career_jd_fit"}):
         groups.add("delegation")
     if "note" in groups and _has_any(query, ("之前", "上次", "已有", "保存过", "复盘")):
         groups.add("retrieval")
+    if _is_note_intent(query):
+        groups.add("note")
+        if _has_any(query, ("之前", "上次", "已有", "保存过", "复盘")):
+            groups.add("retrieval")
     if "learning" in groups:
         groups.add("retrieval")
 
@@ -296,22 +454,46 @@ def _pack_names(group: str) -> list[str]:
         ]
     if group == "retrieval":
         return ["retrieval_search", "retrieval_context_pack"]
-    if group == "career":
+    if group == "career_read":
         return [
             "career_resume_profile_get",
-            "career_resume_profile_list",
+            "career_profile_get",
+            "career_jd_analysis_get",
+            "career_job_fit_report_get",
+            "career_resume_version_get",
+            "career_application_get",
+        ]
+    if group == "career_diagnosis":
+        return [
+            "career_resume_profile_save",
+            "career_resume_profile_get",
             "career_profile_get",
             "career_profile_merge",
+        ]
+    if group == "career_jd_fit":
+        return [
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
             "career_jd_analysis_get",
-            "career_jd_analysis_list",
             "career_job_fit_report_get",
-            "career_job_fit_report_list",
+            "career_resume_profile_get",
+            "career_profile_get",
+            "career_application_create",
+        ]
+    if group == "career_resume_version":
+        return [
             "career_resume_version_create",
             "career_resume_version_get",
-            "career_resume_version_list",
+            "career_resume_profile_get",
+            "career_jd_analysis_get",
+            "career_job_fit_report_get",
+            "career_application_get",
+            "career_application_merge",
+        ]
+    if group == "career_application":
+        return [
             "career_application_create",
             "career_application_get",
-            "career_application_list",
             "career_application_merge",
         ]
     if group == "note":
@@ -352,6 +534,12 @@ def _pack_names(group: str) -> list[str]:
     return []
 
 
+def _filter_reveal_names_for_query(names: list[str], *, query: str, matched_groups: list[str]) -> list[str]:
+    if "artifact" not in matched_groups or _is_artifact_write_intent(query):
+        return names
+    return [name for name in names if name != "session_create_text_artifact"]
+
+
 def _score_entry(entry: ToolCatalogEntry, *, query: str, requested_groups: set[str]) -> int:
     score = 0
     if entry.group in requested_groups:
@@ -369,6 +557,33 @@ def _score_entry(entry: ToolCatalogEntry, *, query: str, requested_groups: set[s
         if keyword in description and keyword in query:
             score += 1
     return score
+
+
+def _entry_matches_requested_groups(entry: ToolCatalogEntry, requested_groups: set[str]) -> bool:
+    if entry.group in requested_groups:
+        return True
+    return entry.group in _CAREER_GROUPS and "career" in requested_groups
+
+
+def _career_groups_for_query(query: str) -> set[str]:
+    groups: set[str] = set()
+    if _has_any(query, ("读取", "查询", "查看", "get", "list", "已有", "已保存", "记录", "id", "详情")):
+        groups.add("career_read")
+    if _has_any(query, ("定制简历", "简历版本", "custom resume", "resume version", "版本")):
+        groups.update({"career_resume_version", "career_application"})
+    if _has_any(query, ("简历", "resume", "诊断", "画像", "解析简历", "简历画像", "职业画像", "career profile")):
+        groups.add("career_diagnosis")
+    if _has_any(query, ("jd", "岗位", "职位", "匹配", "匹配报告", "岗位分析", "job fit")):
+        groups.update({"career_jd_fit", "career_application"})
+    if _has_any(query, ("求职项目", "application", "投递", "申请", "投递前", "面试准备", "项目动作", "二面")):
+        groups.add("career_application")
+    if not groups:
+        groups.add("career_read")
+    return groups
+
+
+def _mentions_career_domain(query: str) -> bool:
+    return _has_any(query, _CAREER_DOMAIN_KEYWORDS)
 
 
 def _normalize(value: str) -> str:
@@ -413,7 +628,12 @@ def _why_for_group(group: str) -> str:
     labels = {
         "artifact": "需要读取或创建当前会话资料 artifact。",
         "retrieval": "需要召回已保存的产品记录、笔记、学习任务或资料。",
-        "career": "需要处理简历、JD、匹配报告、简历版本或求职项目。",
+        "career": "需要处理求职产品记录。",
+        "career_read": "需要读取已有求职产品记录。",
+        "career_diagnosis": "需要创建或更新简历画像和职业画像。",
+        "career_jd_fit": "需要创建或读取 JD 分析与岗位匹配报告。",
+        "career_resume_version": "需要创建或读取定制简历版本。",
+        "career_application": "需要创建或更新求职项目。",
         "note": "需要创建、读取或更新用户笔记。",
         "learning": "需要创建、读取或更新学习计划、学习任务或短板记录。",
         "memory": "需要读写长期偏好、稳定事实或记忆。",
@@ -421,6 +641,82 @@ def _why_for_group(group: str) -> str:
         "state": "需要更新运行状态或工作视图。",
     }
     return labels.get(group, "工具描述与当前能力搜索匹配。")
+
+
+def _routing_guidance(*, query: str, matched_groups: list[str], revealed_tool_names: list[str]) -> str | None:
+    names = set(revealed_tool_names)
+    normalized_query = _normalize(query)
+    if (
+        "career_jd_fit" in matched_groups
+        and "delegate_agents" in names
+        and not {"career_jd_analysis_save", "career_job_fit_report_save"}.intersection(names)
+        and _has_any(normalized_query, ("save", "保存", "create", "创建", "jd analysis", "job fit report"))
+    ):
+        return (
+            "当前 agent 未直接暴露 JDAnalysis/JobFitReport 保存工具；请调用 delegate_agents 委派 job_agent "
+            "完成 JD 分析、匹配报告保存，并使用返回的 ids。不要继续 tool_search 查找 save 工具。"
+        )
+    if (
+        "career_diagnosis" in matched_groups
+        and "delegate_agents" in names
+        and "career_resume_profile_save" not in names
+        and _has_any(normalized_query, ("save", "保存", "resume profile", "简历画像", "诊断"))
+    ):
+        return (
+            "当前 agent 未直接暴露 ResumeProfile 保存工具；请调用 delegate_agents 委派 resume_agent "
+            "完成简历解析/诊断，并使用返回的 resume_profile_id 和 artifact_id。不要继续 tool_search 查找 save 工具。"
+        )
+    return None
+
+
+def _is_note_intent(query: str) -> bool:
+    if "笔记" in query:
+        return True
+    if _has_any(query, ("note_create", "note_update", "note_append", "note_get", "note_list")):
+        return True
+    if not _has_any(query, ("note", "notes", "notebook")):
+        return False
+    if _has_any(query, ("risk note", "risk notes", "风险备注", "风险说明", "风险点", "risk section")):
+        return False
+    note_phrases = (
+        "save note",
+        "save as note",
+        "save this note",
+        "save this as a note",
+        "create note",
+        "create a note",
+        "write note",
+        "write a note",
+        "add note",
+        "append note",
+        "update note",
+        "read note",
+        "list note",
+        "my note",
+        "notebook",
+    )
+    return _has_any(query, note_phrases)
+
+
+def _is_artifact_write_intent(query: str) -> bool:
+    return _has_any(
+        query,
+        (
+            "create artifact",
+            "create text artifact",
+            "save artifact",
+            "write artifact",
+            "生成 artifact",
+            "创建 artifact",
+            "保存 artifact",
+            "创建文件",
+            "生成文件",
+            "保存文件",
+            "生成报告文件",
+            "保存报告",
+            "创建报告",
+        ),
+    )
 
 
 def _has_any(text: str, values: tuple[str, ...]) -> bool:
