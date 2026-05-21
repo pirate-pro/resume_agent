@@ -529,19 +529,21 @@ retrieval_context_pack
 
 RAG 不应该只靠肉眼感觉，需要最小评估集。
 
+2026-05-16 补充：评估集必须覆盖用户手写笔记。Note 新增 `origin` 来源字段，用于区分 `user`、`agent` 和历史 `unknown`。这不是新的笔记类型，不影响用户看到的记录 / 学习 / 资料三类，只用于检索评估、召回解释和后续上下文策略。
+
 ### 10.1 评估集
 
-先做 10 条以内固定查询：
+已落地 8 条固定查询：
 
 ```text
-1. RAG chunk 策略怎么回答
-2. 星河智能二面会问哪些 Agent Runtime 问题
-3. Kafka / RabbitMQ 消息队列经验怎么补
-4. FastAPI 项目经验怎么表达
-5. 多 Agent 编排和工具调用如何讲清楚
-6. 面试官问召回评估指标怎么回答
-7. 最近学习任务里和 RAG 相关的内容
-8. 我之前复盘里提到的失败恢复怎么准备
+1. 我自己写的失败恢复怎么准备
+2. Agent 整理的 Star Agent Runtime 编排怎么讲
+3. C++ 指针和引用区别怎么回答
+4. Java HashMap 扩容、红黑树、volatile 和 synchronized 怎么讲
+5. 当前 JD 里的 RAG 召回评估和 chunk 策略
+6. 最近学习任务里和 RAG 相关的内容
+7. 面试官问召回评估指标怎么回答
+8. Kafka / RabbitMQ 消息队列经验怎么补
 ```
 
 每条查询定义：
@@ -550,8 +552,10 @@ RAG 不应该只靠肉眼感觉，需要最小评估集。
 query
 expected_source_ids
 expected_keywords
+forbidden_source_ids
 forbidden_source_types
 min_recall_at_k
+max_context_chars
 ```
 
 ### 10.2 指标
@@ -564,7 +568,9 @@ expected_source_hit
 citation_valid
 snippet_contains_keyword
 no_archived_source
+no_cross_session_artifact
 max_context_chars_respected
+user_note_origin_respected
 ```
 
 暂不做复杂语义评分。
@@ -575,6 +581,17 @@ max_context_chars_respected
 tests/test_retrieval_rag_index.py
 tests/test_retrieval_rag_quality_eval.py
 ```
+
+`tests/test_retrieval_rag_quality_eval.py` 已从示例验证升级为固定评估集，当前覆盖：
+
+- 用户手写 Note：`origin=user`，验证可召回“用户手写”语义和正文关键词。
+- Agent 整理 Note：`origin=agent`，验证不会只围绕用户手写内容召回。
+- 外部 PDF 型资料：通过 `ExternalResource + SessionArtifact` 原文进入 chunk。
+- 外部结构化 Knowledge：面试题、面经和资料记录。
+- Learning 记录：学习计划、学习任务和打卡记录。
+- 当前会话文件：验证 session-only artifact 不跨会话使用。
+- 归档笔记：即使命中关键词，也不能进入 active 检索结果。
+- ContextPack：验证 citation 数量、引用 source_id、match_reason 和上下文长度预算。
 
 必要时补一个脚本：
 

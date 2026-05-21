@@ -625,3 +625,30 @@ runtime 提供确定性 CareerFlowState
 - 而是 main-agent 缺少可信流程状态，导致低层重复确认和重复执行。
 
 先把 CareerFlowState 做稳，后续如果流程节点、依赖和恢复逻辑继续复杂化，再把这层自然迁到 LangGraph / harness。
+
+## 16. 2026-05-19 补充判断：进入阶段锁设计
+
+后续 live smoke 证明，仅靠 `CareerFlowState`、`ToolContextWindow` 和提示词约束还不够。
+
+系统仍会出现：
+
+- 同一阶段重复 `delegate_agents`。
+- 同一 JD artifact 重复保存 `JDAnalysis`。
+- 同一匹配任务重复创建报告 artifact。
+- 定制简历阶段传入不存在的产品 id。
+- 阶段已完成后继续低层 get/list/read。
+
+这些问题不能继续靠 prompt 或单点工具规则补丁处理。M24 下一步升级为 workflow-runtime 阶段锁设计，详见：
+
+```text
+docs/m24_workflow_runtime_stage_lock_plan.md
+```
+
+新的判断是：
+
+```text
+CareerFlowState = 给模型看的短状态摘要
+WorkflowRuntimeGuard = 工具执行前的确定性阶段锁
+```
+
+这不是立即引入 LangGraph，也不是把流程写死成完整 DAG，而是先把“阶段完成态、幂等键、重复调用拦截、错误 id 修正”沉到 runtime 层，避免继续补丁化。

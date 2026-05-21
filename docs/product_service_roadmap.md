@@ -810,6 +810,8 @@ M23 的关键判断：
 - 2026-05-16 已完成 M23-3 第一批 indexer：`Note / Knowledge / SessionArtifact` 可以构建到 `RetrievalIndexStore`，归档记录和未 ready artifact 不进入 active index；仍不接 MCP、Agent 工具、prompt 或 RetrievalService 融合。
 - 2026-05-16 已完成 M23-4 第一批 sparse search：`RetrievalService` 可以融合 chunk 检索结果，保留原始 `source_type/source_id`，chunk 追溯信息只放在 hit metadata；仍不改 Agent prompt，不做 embedding、rerank、MCP 或中期记忆召回。
 - 2026-05-16 已完成外部 PDF 资料导入链路：本地 PDF 先成为 `SessionArtifact`，再创建 `ExternalResource`，并读取 artifact 原文构建 RAG chunk。已用 `docs/` 下 C++ / Java 两份代码随想录 PDF 做真实导入验证。
+- 2026-05-16 已补齐用户手写笔记来源：Note 增加 `origin=user/agent/unknown`，前端新建笔记默认写 `user`，Agent 工具创建笔记默认写 `agent`。RAG index 会把来源写入 chunk metadata 和检索文本，工作台只做克制展示，不新增笔记类型。
+- 2026-05-16 已完成 M23-5 固定 RAG 质量评估集：8 条查询覆盖用户手写笔记、Agent 整理笔记、外部 PDF 型资料、结构化面试题 / 面经 / 资料、学习计划 / 学习任务 / 打卡、当前会话文件、跨会话 artifact 隔离、归档记录排除、citation 和上下文长度约束。
 
 推荐实施顺序：
 
@@ -836,6 +838,7 @@ tests/test_retrieval_chunking.py
 tests/test_retrieval_index_store.py
 tests/test_retrieval_indexer.py
 tests/test_retrieval_index_search.py
+tests/test_retrieval_rag_quality_eval.py
 tests/test_knowledge_pdf_importer.py
 ```
 
