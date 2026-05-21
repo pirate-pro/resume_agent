@@ -13,6 +13,7 @@ from app.core.errors import ValidationError
 from app.core.time import app_now
 from app.domain.models import EventRecord, RunContext
 from app.domain.protocols import SessionRepository
+from app.domain.reference_ids import is_reserved_reference_value
 from app.runtime.agent_events import (
     AGENT_RESULT_SUMMARY_EVENT,
     AGENT_TASK_ASSIGNED_EVENT,
@@ -35,7 +36,9 @@ _ALLOWED_EVENT_TYPES = {
     "tool_call",
     "tool_result",
     "assistant_thinking",
+    "workflow_runtime_decision",
     "assistant_message",
+    "workflow_runtime_decision",
     "memory_write",
     "memory_retrieval",
     AGENT_TASK_ASSIGNED_EVENT,
@@ -503,7 +506,7 @@ def _extract_refs(text: str) -> list[str]:
     refs: list[str] = []
     for pattern in _REF_PATTERNS:
         for match in pattern.findall(text):
-            if match in _REF_FIELD_NAMES or match in refs:
+            if match in _REF_FIELD_NAMES or is_reserved_reference_value(match) or match in refs:
                 continue
             refs.append(match)
             if len(refs) >= 8:

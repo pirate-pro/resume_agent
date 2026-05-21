@@ -41,6 +41,8 @@ description: 求职产品资产流程。用户要求简历诊断、JD 分析、�
 - 一旦已经拿到生成定制简历所需的 `resume_profile_id`、`jd_analysis_id`、`job_fit_report_id` 和必要事实，下一次工具调用应优先执行 `career_resume_version_create`，不要继续做重复确认。
 - 定制简历正文只能使用 `ResumeProfile`、原始简历 artifact、`JDAnalysis`、`JobFitReport` 中已经明确出现的事实；不得新增未被证实的公司、时间、学历、项目、技术栈、工具、指标或成果。
 - JD 中出现但简历证据不足的技能，只能写成“了解 / 证据不足 / 面试前需准备”的风险或建议，不能写进简历正文的“熟练掌握 / 项目使用 / 已落地成果”。
+- `JobFitReport` 中的差距、风险和优化建议不是候选人已有事实；不要把这些建议改写成简历正文、`change_summary` 或 `keyword_strategy` 里的已掌握技能。
+- 源简历没有联系方式、邮箱、期望薪资、学校名称或公司名称时，定制简历中直接省略这些字段；不要填入 `13800138000`、`zhangsan@email.com`、`20k`、`XX 大学` 等演示值。
 - 量化指标必须来自原始简历或已保存产品记录中的明确事实；如果没有真实指标，不要编造百分比、时延、QPS、并发数、成功率等数字，也不要写“占位”“替换为真实数据”这类投递版简历不应出现的内容。
 - `career_resume_version_create.content` 必须是可直接投递的版本；不确定的内容不要混入简历正文，不要写“学校名称待补充”“公司名称待补充”“TODO”“TBD”等占位表达。
 - `career_resume_version_create` 的 `content`、`change_summary`、`keyword_strategy`、`risk_notes` 都不能包含“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”等占位或需替换表达；缺失事实只能用“未提供 / 缺少 / 需用户提供”这类风险描述，并同步写入 `career_application_merge.updates.risks/next_actions`。

@@ -11,6 +11,7 @@ from typing import Any, Self
 
 from app.core.errors import ValidationError
 from app.core.time import normalize_app_datetime
+from app.domain.reference_ids import is_reserved_reference_value
 
 __all__ = [
     "CareerApplication",
@@ -567,7 +568,7 @@ def validate_evidence_refs(values: list[str]) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
     for ref in refs:
-        if not any(pattern.fullmatch(ref) for pattern in _EVIDENCE_REF_PATTERNS):
+        if is_reserved_reference_value(ref) or not any(pattern.fullmatch(ref) for pattern in _EVIDENCE_REF_PATTERNS):
             raise ValidationError(f"evidence_refs contains invalid reference format: {ref}")
         if ref in seen:
             continue

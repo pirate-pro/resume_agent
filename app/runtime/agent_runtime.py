@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from typing import Any
 
 from app.core.errors import ValidationError
-from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall
+from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall, ToolExecutionResult
 from app.domain.protocols import ChatModelClient, ModelResponse, TokenUsage, ToolExecutor
 from app.prompts.agent_runtime import FINAL_ANSWER_RECOVERY_PROMPT
 from app.runtime.agent import (
@@ -35,12 +37,26 @@ from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.mid_term_flusher import MidTermFlusher
 from app.runtime.session_manager import SessionManager
+from app.runtime.workflow import WorkflowGuardDecision, WorkflowRuntimeGuard
+from app.runtime.workflow.tool_plan import (
+    is_premature_runtime_plan_answer,
+    merge_pending_runtime_plan,
+    pending_runtime_plan_from_context_bundle,
+    pending_runtime_plan_from_successful_tool_result,
+    pending_runtime_plan_from_tool_search_result,
+    pending_runtime_plan_from_workflow_result,
+    runtime_plan_completion_tools,
+    runtime_plan_next_allowed_tools,
+    runtime_plan_notice,
+    workflow_incomplete_answer,
+)
 from app.services.answer_normalizer import AnswerNormalizer
 
 __all__ = ["AgentRuntime"]
 _logger = logging.getLogger(__name__)
 _SCHEMA_SEARCH_TOOL_NAME = "tool_search"
 _MAX_SCHEMA_SEARCH_ROUNDS = 3
+_TEXT_TOOL_INVOCATION_RE = re.compile(r"^\s*<tool_invocation\b[^>]*?/>\s*$", re.IGNORECASE | re.DOTALL)
 
 
 class AgentRuntime:
@@ -58,6 +74,7 @@ class AgentRuntime:
         tool_schema_disclosure_mode: str = "full",
         tool_schema_always_visible: str | list[str] | None = None,
         tool_context_window_mode: str = "off",
+        workflow_guard: WorkflowRuntimeGuard | None = None,
     ) -> None:
         self._session_manager = session_manager
         self._event_recorder = event_recorder
@@ -69,6 +86,7 @@ class AgentRuntime:
         self._tool_schema_disclosure_mode = normalize_tool_schema_disclosure_mode(tool_schema_disclosure_mode)
         self._tool_schema_always_visible = normalize_always_visible_tool_names(tool_schema_always_visible)
         self._tool_context_window_mode = normalize_tool_context_window_mode(tool_context_window_mode)
+        self._workflow_guard = workflow_guard
         self._answer_normalizer = AnswerNormalizer()
         self._tool_runner = ToolExecutionRunner(tool_executor=tool_executor)
         self._post_run_maintenance = PostRunMaintenanceScheduler(
@@ -123,7 +141,7 @@ class AgentRuntime:
         tool_reveal_state = ToolRevealState.create(
             mode=self._tool_schema_disclosure_mode_for_context(run_context),
             available_definitions=context.tool_definitions,
-            always_visible_tool_names=self._tool_schema_always_visible,
+            always_visible_tool_names=self._initial_visible_tool_names(context.initial_visible_tool_names),
         )
         tool_context_window = ToolContextWindow(
             base_messages=list(context.messages),
@@ -137,10 +155,16 @@ class AgentRuntime:
         round_index = 0
         business_tool_rounds = 0
         schema_search_rounds = 0
+        premature_workflow_reminders = 0
+        pending_runtime_plan = pending_runtime_plan_from_context_bundle(context.runtime_tool_plan)
         max_model_rounds = run_input.max_tool_rounds + _MAX_SCHEMA_SEARCH_ROUNDS + 1
         while round_index <= max_model_rounds:
             messages = tool_context_window.render_messages()
-            visible_tool_definitions = tool_reveal_state.visible_definitions()
+            visible_tool_definitions = _visible_tool_definitions_for_runtime_plan(
+                tool_reveal_state=tool_reveal_state,
+                pending_runtime_plan=pending_runtime_plan,
+            )
+            visible_tool_names_for_round = {definition.name for definition in visible_tool_definitions}
             tools_payload = [to_model_tool_schema(tool) for tool in visible_tool_definitions]
             _logger.debug("模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
             model_response = self._model_client.generate(
@@ -174,6 +198,27 @@ class AgentRuntime:
 
             if not resolved_tool_calls:
                 answer = (model_response.content or "").strip()
+                if _looks_like_text_tool_invocation(answer):
+                    answer = ""
+                if _is_premature_workflow_answer(
+                    pending_runtime_plan=pending_runtime_plan,
+                    tool_reveal_state=tool_reveal_state,
+                ):
+                    premature_workflow_reminders += 1
+                    notice = runtime_plan_notice(pending_runtime_plan)
+                    self._event_recorder.record(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload={
+                            "policy": "continue",
+                            "reason": "premature_final_answer_with_pending_runtime_tools",
+                            "runtime_plan": pending_runtime_plan,
+                            "reminder_index": premature_workflow_reminders,
+                        },
+                    )
+                    tool_context_window.append_runtime_notice(notice)
+                    round_index += 1
+                    continue
                 if not answer:
                     answer = self._recover_final_answer(
                         run_context=run_context,
@@ -185,6 +230,24 @@ class AgentRuntime:
                 break
 
             schema_search_only = _is_schema_search_only(resolved_tool_calls)
+            if schema_search_only and _is_premature_workflow_answer(
+                pending_runtime_plan=pending_runtime_plan,
+                tool_reveal_state=tool_reveal_state,
+            ):
+                premature_workflow_reminders += 1
+                self._event_recorder.record(
+                    context=run_context,
+                    event_type="workflow_runtime_decision",
+                    payload={
+                        "policy": "continue",
+                        "reason": "schema_search_with_pending_runtime_tools",
+                        "runtime_plan": pending_runtime_plan,
+                        "reminder_index": premature_workflow_reminders,
+                    },
+                )
+                tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
+                round_index += 1
+                continue
             if schema_search_only:
                 if schema_search_rounds >= _MAX_SCHEMA_SEARCH_ROUNDS:
                     _logger.warning("达到工具 schema 搜索轮次上限: session_id=%s round=%s", session_id, round_index)
@@ -197,6 +260,7 @@ class AgentRuntime:
                 break
             else:
                 business_tool_rounds += 1
+                schema_search_rounds = 0
 
             if model_response.content.strip():
                 # 一些模型会在 tool_call 前返回推理摘要，记录下来供前端“执行过程/思考”展示。
@@ -216,6 +280,7 @@ class AgentRuntime:
             tool_context_window.consume_pending_exchange()
             tool_messages: list[dict[str, Any]] = []
             tool_observations = []
+            terminal_workflow_results: list[bool] = []
 
             for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)
@@ -228,10 +293,22 @@ class AgentRuntime:
                         "tool_call_id": tool_call.tool_call_id,
                     },
                 )
-                if not tool_reveal_state.is_visible(tool_call.name):
+                execution_tool_call = tool_call
+                if tool_call.name not in visible_tool_names_for_round:
                     result = hidden_tool_result(tool_call.name)
                 else:
-                    result = self._tool_runner.execute_safely(tool_call, run_context)
+                    guard_decision = self._inspect_workflow_guard(tool_call, run_context)
+                    execution_tool_call = guard_decision.tool_call
+                    if guard_decision.event_payload is not None:
+                        self._event_recorder.record(
+                            context=run_context,
+                            event_type="workflow_runtime_decision",
+                            payload=guard_decision.event_payload,
+                        )
+                    if guard_decision.result is not None:
+                        result = guard_decision.result
+                    else:
+                        result = self._tool_runner.execute_safely(execution_tool_call, run_context)
                 _logger.info(
                     "工具调用完成: session_id=%s tool=%s success=%s content_len=%s",
                     session_id,
@@ -246,20 +323,55 @@ class AgentRuntime:
                         "tool_name": result.tool_name,
                         "success": result.success,
                         "content": result.content,
-                        "tool_call_id": tool_call.tool_call_id,
+                        "tool_call_id": execution_tool_call.tool_call_id,
                     },
                 )
-                if tool_call.name == "memory_write" and result.success:
+                terminal_workflow_results.append(_is_terminal_workflow_result(result))
+                if execution_tool_call.name == "memory_write" and result.success:
                     self._event_recorder.record(
                         context=run_context,
                         event_type="memory_write",
                         payload={
-                            "arguments": tool_call.arguments,
+                            "arguments": execution_tool_call.arguments,
                             "result": result.content,
                         },
                     )
-                if tool_call.name == "tool_search" and result.success:
-                    tool_reveal_state.apply_tool_search_result(result.content)
+                if result.success:
+                    previous_pending_plan = pending_runtime_plan
+                    workflow_runtime_plan = pending_runtime_plan_from_workflow_result(result.content)
+                    if workflow_runtime_plan is not None:
+                        pending_runtime_plan = merge_pending_runtime_plan(
+                            current=pending_runtime_plan,
+                            incoming=workflow_runtime_plan,
+                        )
+                        tool_reveal_state.reveal_tool_names(runtime_plan_next_allowed_tools(workflow_runtime_plan))
+                        premature_workflow_reminders = 0
+                    if execution_tool_call.name == "tool_search":
+                        tool_reveal_state.apply_tool_search_result(result.content)
+                        search_runtime_plan = pending_runtime_plan_from_tool_search_result(result.content)
+                        if search_runtime_plan is not None:
+                            pending_runtime_plan = merge_pending_runtime_plan(
+                                current=pending_runtime_plan,
+                                incoming=search_runtime_plan,
+                            )
+                            tool_reveal_state.reveal_tool_names(runtime_plan_next_allowed_tools(search_runtime_plan))
+                            premature_workflow_reminders = 0
+                    else:
+                        success_runtime_plan = pending_runtime_plan_from_successful_tool_result(
+                            execution_tool_call.name,
+                            result.content,
+                        )
+                        if success_runtime_plan is not None:
+                            pending_runtime_plan = success_runtime_plan
+                            tool_reveal_state.reveal_tool_names(runtime_plan_next_allowed_tools(success_runtime_plan))
+                            premature_workflow_reminders = 0
+                        if (
+                            success_runtime_plan is None
+                            and workflow_runtime_plan is None
+                            and previous_pending_plan is not None
+                            and execution_tool_call.name in runtime_plan_completion_tools(previous_pending_plan)
+                        ):
+                            pending_runtime_plan = None
                 model_visible_content = compact_tool_result_for_model(
                     tool_name=result.tool_name,
                     success=result.success,
@@ -267,14 +379,14 @@ class AgentRuntime:
                 )
                 tool_message = (
                     build_tool_result_message(
-                        tool_call_id=tool_call.tool_call_id,
+                        tool_call_id=execution_tool_call.tool_call_id,
                         content=model_visible_content,
                     )
                 )
                 tool_messages.append(tool_message)
                 tool_observations.append(
                     build_tool_observation(
-                        tool_call=tool_call,
+                        tool_call=execution_tool_call,
                         result=result,
                         model_visible_content=model_visible_content,
                     )
@@ -285,8 +397,22 @@ class AgentRuntime:
                 tool_messages=tool_messages,
                 observations=tool_observations,
             )
+            if terminal_workflow_results and all(terminal_workflow_results):
+                answer = self._recover_final_answer(
+                    run_context=run_context,
+                    system_prompt=context.system_prompt,
+                    messages=tool_context_window.render_messages(),
+                    original_user_message=run_input.user_message,
+                )
+                answer = answer or "(no answer)"
+                break
             round_index += 1
 
+        if not answer and _is_premature_workflow_answer(
+            pending_runtime_plan=pending_runtime_plan,
+            tool_reveal_state=tool_reveal_state,
+        ):
+            answer = workflow_incomplete_answer(pending_runtime_plan)
         if not answer:
             answer = "(no answer)"
 
@@ -368,7 +494,7 @@ class AgentRuntime:
         tool_reveal_state = ToolRevealState.create(
             mode=self._tool_schema_disclosure_mode_for_context(run_context),
             available_definitions=context.tool_definitions,
-            always_visible_tool_names=self._tool_schema_always_visible,
+            always_visible_tool_names=self._initial_visible_tool_names(context.initial_visible_tool_names),
         )
         tool_context_window = ToolContextWindow(
             base_messages=list(context.messages),
@@ -380,10 +506,16 @@ class AgentRuntime:
         round_index = 0
         business_tool_rounds = 0
         schema_search_rounds = 0
+        premature_workflow_reminders = 0
+        pending_runtime_plan = pending_runtime_plan_from_context_bundle(context.runtime_tool_plan)
         max_model_rounds = run_input.max_tool_rounds + _MAX_SCHEMA_SEARCH_ROUNDS + 1
         while round_index <= max_model_rounds:
             messages = tool_context_window.render_messages()
-            visible_tool_definitions = tool_reveal_state.visible_definitions()
+            visible_tool_definitions = _visible_tool_definitions_for_runtime_plan(
+                tool_reveal_state=tool_reveal_state,
+                pending_runtime_plan=pending_runtime_plan,
+            )
+            visible_tool_names_for_round = {definition.name for definition in visible_tool_definitions}
             tools_payload = [to_model_tool_schema(tool) for tool in visible_tool_definitions]
             _logger.debug("流式模型调用开始: session_id=%s round=%s message_count=%s", session_id, round_index, len(messages))
             round_content_parts: list[str] = []
@@ -441,6 +573,29 @@ class AgentRuntime:
 
             if not resolved_tool_calls:
                 answer = round_content
+                if _looks_like_text_tool_invocation(answer):
+                    answer = ""
+                    round_content_deltas = []
+                if _is_premature_workflow_answer(
+                    pending_runtime_plan=pending_runtime_plan,
+                    tool_reveal_state=tool_reveal_state,
+                ):
+                    premature_workflow_reminders += 1
+                    notice = runtime_plan_notice(pending_runtime_plan)
+                    await self._event_recorder.record_async(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload={
+                            "policy": "continue",
+                            "reason": "premature_final_answer_with_pending_runtime_tools",
+                            "runtime_plan": pending_runtime_plan,
+                            "reminder_index": premature_workflow_reminders,
+                        },
+                        channel=channel,
+                    )
+                    tool_context_window.append_runtime_notice(notice)
+                    round_index += 1
+                    continue
                 if round_content_deltas:
                     emitted_answer_meta: tuple[str, str, str, str, str] | None = None
                     cumulative_parts: list[str] = []
@@ -466,6 +621,25 @@ class AgentRuntime:
                 break
 
             schema_search_only = _is_schema_search_only(resolved_tool_calls)
+            if schema_search_only and _is_premature_workflow_answer(
+                pending_runtime_plan=pending_runtime_plan,
+                tool_reveal_state=tool_reveal_state,
+            ):
+                premature_workflow_reminders += 1
+                await self._event_recorder.record_async(
+                    context=run_context,
+                    event_type="workflow_runtime_decision",
+                    payload={
+                        "policy": "continue",
+                        "reason": "schema_search_with_pending_runtime_tools",
+                        "runtime_plan": pending_runtime_plan,
+                        "reminder_index": premature_workflow_reminders,
+                    },
+                    channel=channel,
+                )
+                tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
+                round_index += 1
+                continue
             if schema_search_only:
                 if schema_search_rounds >= _MAX_SCHEMA_SEARCH_ROUNDS:
                     _logger.warning("达到工具 schema 搜索轮次上限(流式): session_id=%s round=%s", session_id, round_index)
@@ -478,6 +652,7 @@ class AgentRuntime:
                 break
             else:
                 business_tool_rounds += 1
+                schema_search_rounds = 0
 
             if round_content:
                 await self._event_recorder.record_async(
@@ -495,6 +670,7 @@ class AgentRuntime:
             tool_context_window.consume_pending_exchange()
             tool_messages: list[dict[str, Any]] = []
             tool_observations = []
+            terminal_workflow_results: list[bool] = []
 
             for tool_call in resolved_tool_calls:
                 used_tool_calls.append(tool_call)
@@ -508,10 +684,23 @@ class AgentRuntime:
                     },
                     channel=channel,
                 )
-                if not tool_reveal_state.is_visible(tool_call.name):
+                execution_tool_call = tool_call
+                if tool_call.name not in visible_tool_names_for_round:
                     result = hidden_tool_result(tool_call.name)
                 else:
-                    result = await self._tool_runner.execute_safely_async(tool_call, run_context)
+                    guard_decision = self._inspect_workflow_guard(tool_call, run_context)
+                    execution_tool_call = guard_decision.tool_call
+                    if guard_decision.event_payload is not None:
+                        await self._event_recorder.record_async(
+                            context=run_context,
+                            event_type="workflow_runtime_decision",
+                            payload=guard_decision.event_payload,
+                            channel=channel,
+                        )
+                    if guard_decision.result is not None:
+                        result = guard_decision.result
+                    else:
+                        result = await self._tool_runner.execute_safely_async(execution_tool_call, run_context)
                 _logger.info(
                     "流式工具调用完成: session_id=%s tool=%s success=%s content_len=%s",
                     session_id,
@@ -526,22 +715,57 @@ class AgentRuntime:
                         "tool_name": result.tool_name,
                         "success": result.success,
                         "content": result.content,
-                        "tool_call_id": tool_call.tool_call_id,
+                        "tool_call_id": execution_tool_call.tool_call_id,
                     },
                     channel=channel,
                 )
-                if tool_call.name == "memory_write" and result.success:
+                terminal_workflow_results.append(_is_terminal_workflow_result(result))
+                if execution_tool_call.name == "memory_write" and result.success:
                     await self._event_recorder.record_async(
                         context=run_context,
                         event_type="memory_write",
                         payload={
-                            "arguments": tool_call.arguments,
+                            "arguments": execution_tool_call.arguments,
                             "result": result.content,
                         },
                         channel=channel,
                     )
-                if tool_call.name == "tool_search" and result.success:
-                    tool_reveal_state.apply_tool_search_result(result.content)
+                if result.success:
+                    previous_pending_plan = pending_runtime_plan
+                    workflow_runtime_plan = pending_runtime_plan_from_workflow_result(result.content)
+                    if workflow_runtime_plan is not None:
+                        pending_runtime_plan = merge_pending_runtime_plan(
+                            current=pending_runtime_plan,
+                            incoming=workflow_runtime_plan,
+                        )
+                        tool_reveal_state.reveal_tool_names(runtime_plan_next_allowed_tools(workflow_runtime_plan))
+                        premature_workflow_reminders = 0
+                    if execution_tool_call.name == "tool_search":
+                        tool_reveal_state.apply_tool_search_result(result.content)
+                        search_runtime_plan = pending_runtime_plan_from_tool_search_result(result.content)
+                        if search_runtime_plan is not None:
+                            pending_runtime_plan = merge_pending_runtime_plan(
+                                current=pending_runtime_plan,
+                                incoming=search_runtime_plan,
+                            )
+                            tool_reveal_state.reveal_tool_names(runtime_plan_next_allowed_tools(search_runtime_plan))
+                            premature_workflow_reminders = 0
+                    else:
+                        success_runtime_plan = pending_runtime_plan_from_successful_tool_result(
+                            execution_tool_call.name,
+                            result.content,
+                        )
+                        if success_runtime_plan is not None:
+                            pending_runtime_plan = success_runtime_plan
+                            tool_reveal_state.reveal_tool_names(runtime_plan_next_allowed_tools(success_runtime_plan))
+                            premature_workflow_reminders = 0
+                        if (
+                            success_runtime_plan is None
+                            and workflow_runtime_plan is None
+                            and previous_pending_plan is not None
+                            and execution_tool_call.name in runtime_plan_completion_tools(previous_pending_plan)
+                        ):
+                            pending_runtime_plan = None
                 model_visible_content = compact_tool_result_for_model(
                     tool_name=result.tool_name,
                     success=result.success,
@@ -549,14 +773,14 @@ class AgentRuntime:
                 )
                 tool_message = (
                     build_tool_result_message(
-                        tool_call_id=tool_call.tool_call_id,
+                        tool_call_id=execution_tool_call.tool_call_id,
                         content=model_visible_content,
                     )
                 )
                 tool_messages.append(tool_message)
                 tool_observations.append(
                     build_tool_observation(
-                        tool_call=tool_call,
+                        tool_call=execution_tool_call,
                         result=result,
                         model_visible_content=model_visible_content,
                     )
@@ -567,8 +791,24 @@ class AgentRuntime:
                 tool_messages=tool_messages,
                 observations=tool_observations,
             )
+            if terminal_workflow_results and all(terminal_workflow_results):
+                answer = await self._recover_final_answer_stream(
+                    run_context=run_context,
+                    system_prompt=context.system_prompt,
+                    messages=tool_context_window.render_messages(),
+                    original_user_message=run_input.user_message,
+                    previous_tool_calls=used_tool_calls,
+                    channel=channel,
+                )
+                answer = answer or "(no answer)"
+                break
             round_index += 1
 
+        if not answer and _is_premature_workflow_answer(
+            pending_runtime_plan=pending_runtime_plan,
+            tool_reveal_state=tool_reveal_state,
+        ):
+            answer = workflow_incomplete_answer(pending_runtime_plan)
         if not answer:
             answer = "(no answer)"
 
@@ -604,6 +844,24 @@ class AgentRuntime:
 
     def _dispatch_post_run_maintenance_async(self, context: RunContext) -> None:
         self._post_run_maintenance.dispatch_async(context)
+
+    def _inspect_workflow_guard(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+        if self._workflow_guard is None:
+            return WorkflowGuardDecision(tool_call=tool_call)
+        return self._workflow_guard.inspect(tool_call, context)
+
+    def _initial_visible_tool_names(self, runtime_plan_tool_names: list[str]) -> list[str]:
+        output: list[str] = []
+        seen: set[str] = set()
+        for raw_name in [*self._tool_schema_always_visible, *runtime_plan_tool_names]:
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                continue
+            name = raw_name.strip()
+            if name in seen:
+                continue
+            output.append(name)
+            seen.add(name)
+        return output
 
     def _recover_final_answer(
         self,
@@ -845,6 +1103,53 @@ class AgentRuntime:
 
 def _is_schema_search_only(tool_calls: list[ToolCall]) -> bool:
     return bool(tool_calls) and all(tool_call.name == _SCHEMA_SEARCH_TOOL_NAME for tool_call in tool_calls)
+
+
+def _looks_like_text_tool_invocation(content: str) -> bool:
+    return bool(_TEXT_TOOL_INVOCATION_RE.fullmatch(content.strip()))
+
+
+def _visible_tool_definitions_for_runtime_plan(
+    *,
+    tool_reveal_state: ToolRevealState,
+    pending_runtime_plan: dict[str, Any] | None,
+) -> list[Any]:
+    visible_definitions = tool_reveal_state.visible_definitions()
+    if pending_runtime_plan is None:
+        return visible_definitions
+    required_tool_is_visible = any(
+        tool_reveal_state.is_visible(tool_name) for tool_name in runtime_plan_completion_tools(pending_runtime_plan)
+    )
+    if not required_tool_is_visible:
+        return visible_definitions
+    return [definition for definition in visible_definitions if definition.name != _SCHEMA_SEARCH_TOOL_NAME]
+
+
+def _is_premature_workflow_answer(
+    *,
+    pending_runtime_plan: dict[str, Any] | None,
+    tool_reveal_state: ToolRevealState,
+) -> bool:
+    visible_tool_names = {definition.name for definition in tool_reveal_state.visible_definitions()}
+    return is_premature_runtime_plan_answer(
+        pending_runtime_plan=pending_runtime_plan,
+        visible_tool_names=visible_tool_names,
+    )
+
+
+def _is_terminal_workflow_result(result: ToolExecutionResult) -> bool:
+    if not result.success:
+        return False
+    try:
+        payload = json.loads(result.content)
+    except (TypeError, ValueError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("workflow_runtime_result") is True
+        and payload.get("policy") == "block"
+        and payload.get("terminal") is True
+    )
 
 
 def _build_llm_usage_payload(

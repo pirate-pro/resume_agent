@@ -8,6 +8,8 @@ from enum import Enum
 from app.core.errors import ValidationError
 from app.domain.models import EventRecord, MemoryItem
 from app.runtime.agent_events import AgentResultSummaryPayload, AgentTaskAssignedPayload
+from app.runtime.workflow.phase import WorkflowPhaseSnapshot
+from app.runtime.workflow.tool_plan import RuntimeToolPlan
 from app.state.models import StateRecord
 
 
@@ -182,6 +184,8 @@ class ShortTermContextPlan:
     child_result_summaries: list[AgentResultSummaryPayload]
     workflow_state: CurrentWorkflowState = field(default_factory=CurrentWorkflowState)
     career_flow_state: CareerFlowState = field(default_factory=CareerFlowState)
+    workflow_phase: WorkflowPhaseSnapshot = field(default_factory=WorkflowPhaseSnapshot)
+    runtime_tool_plan: RuntimeToolPlan = field(default_factory=RuntimeToolPlan)
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, ContextAssemblyRole):
@@ -202,6 +206,10 @@ class ShortTermContextPlan:
             raise ValidationError("workflow_state must be CurrentWorkflowState.")
         if not isinstance(self.career_flow_state, CareerFlowState):
             raise ValidationError("career_flow_state must be CareerFlowState.")
+        if not isinstance(self.workflow_phase, WorkflowPhaseSnapshot):
+            raise ValidationError("workflow_phase must be WorkflowPhaseSnapshot.")
+        if not isinstance(self.runtime_tool_plan, RuntimeToolPlan):
+            raise ValidationError("runtime_tool_plan must be RuntimeToolPlan.")
 
 
 @dataclass(slots=True)

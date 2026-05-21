@@ -89,9 +89,17 @@ def select_sparse_workflow_rule_packs(
     artifact_text = _artifact_text(active_artifacts)
     selected = [_PACKS["always_on"]]
 
+    career_resume_version = _mentions_resume_version(text)
     career_resume = _mentions_resume_diagnosis(text, artifact_text)
     career_jd = _mentions_jd_analysis(text, artifact_text)
     career_fit = _mentions_job_fit(text, artifact_text)
+    if career_resume_version:
+        if _mentions_negated_resume_work(text) or not _mentions_direct_resume_work(text):
+            career_resume = False
+        if _mentions_negated_jd_work(text) or not _mentions_direct_jd_work(text):
+            career_jd = False
+        if _mentions_negated_fit_work(text) or not _mentions_direct_fit_work(text):
+            career_fit = False
     career_application = _mentions_application_action(text)
     note = _mentions_note(text)
     learning = _mentions_learning(text)
@@ -105,13 +113,15 @@ def select_sparse_workflow_rule_packs(
         selected.append(_PACKS["career_jd_analysis"])
     if career_fit:
         selected.append(_PACKS["career_job_fit"])
+    if career_resume_version:
+        selected.append(_PACKS["career_resume_version"])
     if career_application:
         selected.append(_PACKS["career_application"])
     if note:
         selected.append(_PACKS["note_create"])
     if learning:
         selected.append(_PACKS["learning_task_create"])
-    if career_resume or career_jd or career_fit or career_application:
+    if career_resume or career_jd or career_fit:
         selected.append(_PACKS["delegate_agents"])
     return _dedupe_packs(selected)
 
@@ -121,65 +131,73 @@ _PACKS: dict[str, WorkflowRulePack] = {
         name="always_on",
         title="Always-On Product Guardrails",
         content=(
-            "- Do not fabricate tool names, product record ids, artifact ids, or tool results.\n"
-            "- If historical product context is needed and no explicit id is available, search or list first.\n"
-            "- User-visible files are SessionArtifact records; product stores keep structured records and artifact refs.\n"
-            "- Career records, notes, learning tasks, knowledge/RAG resources, and memory are separate facts; do not mix them.\n"
-            "- Write memory only when the user explicitly asks to remember something or states a stable long-term preference/fact.\n"
-            "- Do not expose workspace paths to users or child agents; use artifact ids and product record ids.\n"
-            "- If a tool fails, fix the arguments based on the error; if the task is impossible, state the missing prerequisite.\n"
-            "- Never show local filesystem paths as user-facing output; refer to artifacts by title or artifact id instead."
+            "- Do not invent tool names, ids, artifacts, or tool results.\n"
+            "- If old product context is needed and no id is given, retrieve/list first.\n"
+            "- User-visible files are SessionArtifact; product stores keep structured records and artifact refs.\n"
+            "- Keep career records, notes, learning tasks, RAG resources, and memory separate.\n"
+            "- Write memory only on explicit remember/stable-preference requests.\n"
+            "- Never expose workspace paths; use artifact/product ids.\n"
+            "- On tool failure, repair arguments from the error or state the missing prerequisite."
         ),
     ),
     "retrieval_required": WorkflowRulePack(
         name="retrieval_required",
         title="Historical Context Retrieval",
         content=(
-            "- When the user says previous/last/recent/saved/current profile/current match or refers to a past job without an id, retrieve first.\n"
-            "- Use retrieval_search for candidate discovery; use retrieval_context_pack before producing advice that depends on historical content.\n"
-            "- Retrieval is read-only. Do not create notes, learning tasks, career records, or memory unless the user explicitly asks to save/update."
+            "- For previous/last/recent/saved/current-profile/current-match or past-job references without ids, retrieve first.\n"
+            "- Use retrieval_search for discovery, then retrieval_context_pack before historical-content advice.\n"
+            "- Retrieval is read-only unless the user explicitly asks to save/update."
         ),
     ),
     "career_resume_diagnosis": WorkflowRulePack(
         name="career_resume_diagnosis",
         title="Resume Diagnosis",
         content=(
-            "- Resume source material must come from a current session artifact.\n"
-            "- For resume parsing/diagnosis, delegate to resume_agent when available and confirm resume_profile_id plus diagnosis artifact id from results.\n"
-            "- After a usable ResumeProfile exists, you must merge stable career facts into career_profile_default before finalizing the turn; reveal career tools first if needed.\n"
-            "- Reuse an existing resume_profile_id when the current turn already provides one; do not parse the same resume again."
+            "- Resume source must be a current session artifact.\n"
+            "- Delegate parsing/diagnosis to resume_agent when available; keep resume_profile_id and diagnosis artifact id.\n"
+            "- After ResumeProfile exists, merge stable facts into career_profile_default before final answer.\n"
+            "- Reuse an explicit/current resume_profile_id; do not parse the same resume twice."
         ),
     ),
     "career_jd_analysis": WorkflowRulePack(
         name="career_jd_analysis",
         title="JD Analysis",
         content=(
-            "- Pasted JD text must first become a session text artifact before JD analysis.\n"
-            "- Delegate JD analysis to job_agent when available and pass the real JD artifact id.\n"
-            "- JDAnalysis.source_artifact_id and JobFitReport.source_artifact_id point to the JD input artifact.\n"
-            "- Do not write JD text or analysis into memory."
+            "- Pasted JD text must become a session text artifact before analysis.\n"
+            "- Delegate JD analysis to job_agent when available and pass the JD artifact id.\n"
+            "- JDAnalysis.source_artifact_id and JobFitReport.source_artifact_id mean the JD input artifact.\n"
+            "- Do not write JD text/analysis into memory."
         ),
     ),
     "career_job_fit": WorkflowRulePack(
         name="career_job_fit",
         title="Job Fit Report",
         content=(
-            "- For resume + JD matching, reuse existing ResumeProfile, CareerProfile, JDAnalysis, and JobFitReport when available.\n"
-            "- CareerProfile id should be career_profile_default unless a tool result provides another existing career_profile_id; never invent profile ids.\n"
-            "- A saved JobFitReport should have a report_artifact_id for the user-visible Markdown report.\n"
-            "- Create or update a CareerApplication to connect resume_profile_id, career_profile_id, jd_analysis_id, job_fit_report_id, and next actions.\n"
-            "- A ResumeVersion must not add quantified metrics unless they are present in the base resume source artifact; missing metrics belong in risks or next_actions.\n"
-            "- If child-agent results already include jd_analysis_id, job_fit_report_id, report_artifact_id, resume_profile_id, and career_profile_id, use those ids directly; do not call status/list/get tools just to reconfirm.\n"
-            "- Match conclusions must include evidence-backed strengths, risks, and executable next steps."
+            "- For resume+JD matching, reuse existing ResumeProfile, CareerProfile, JDAnalysis, and JobFitReport.\n"
+            "- Use career_profile_default unless an existing career_profile_id is returned.\n"
+            "- Saved JobFitReport should have report_artifact_id for the Markdown report.\n"
+            "- Create/update CareerApplication linking resume_profile_id, career_profile_id, jd_analysis_id, job_fit_report_id, and next actions.\n"
+            "- If child results include needed ids/artifacts, use them directly; do not list/get just to reconfirm.\n"
+            "- Match conclusions need evidence-backed strengths, risks, and executable next steps."
+        ),
+    ),
+    "career_resume_version": WorkflowRulePack(
+        name="career_resume_version",
+        title="Resume Version",
+        content=(
+            "- ResumeVersion may emphasize JD/Fit priorities, but must not add candidate facts or metrics absent from the resume source or saved ResumeProfile.\n"
+            "- ResumeVersion content is the deliverable resume body only; put match gaps, weak evidence, and interview-prep notes in risk_notes, not in the resume body.\n"
+            "- If career_resume_version_create rejects unverified metrics, retry that tool with the metrics removed instead of reading more records.\n"
+            "- Use current workflow/career-flow ids directly; list only when an id is missing."
         ),
     ),
     "career_application": WorkflowRulePack(
         name="career_application",
         title="Application Tracking",
         content=(
-            "- CareerApplication tracks one target job/application and is not a note, memory, or Markdown report.\n"
-            "- For application-level actions, read the CareerApplication first and reuse its linked records.\n"
-            "- Update application stage, risks, next_actions, summary, or notes with merge semantics; do not overwrite timestamps or source fields.\n"
+            "- CareerApplication tracks one target job; it is not a note, memory, or Markdown report.\n"
+            "- Read the application first for application-level actions and reuse linked records.\n"
+            "- Merge stage, risks, next_actions, summary, or notes; do not overwrite timestamps/source fields.\n"
             "- Evidence refs must come from this turn, retrieval results, or existing product records."
         ),
     ),
@@ -187,10 +205,9 @@ _PACKS: dict[str, WorkflowRulePack] = {
         name="note_create",
         title="Note Capture",
         content=(
-            "- Create or append a note only when the user explicitly asks to save, record, organize, or keep content as a note.\n"
-            "- Notes are user-visible and editable; they do not automatically enter memory.\n"
-            "- Use a compact note type: note for general content, learning for learning summaries, resource for interview/resource excerpts.\n"
-            "- Include source_refs/evidence_refs when the note is derived from an artifact, application, fit report, JD analysis, or resume profile."
+            "- Create/append notes only on explicit save/record/organize-as-note requests.\n"
+            "- Notes are user-visible/editable and do not automatically enter memory.\n"
+            "- Use note, learning, or resource types; cite source_refs/evidence_refs when derived from records/artifacts."
         ),
     ),
     "learning_task_create": WorkflowRulePack(
@@ -198,29 +215,59 @@ _PACKS: dict[str, WorkflowRulePack] = {
         title="Learning Task",
         content=(
             "- Learning tasks can be user-created or system-recommended.\n"
-            "- User-created tasks may stand alone; system-recommended tasks must cite evidence such as fit report, application, note, artifact, or resource refs.\n"
-            "- Do not invent resource ids. If no real resource id exists, describe the resource in progress_notes or the task body.\n"
-            "- Check-ins and state changes are separate from creating a task; do them only when the user reports progress or asks to track progress."
+            "- Recommended tasks must cite fit/application/note/artifact/resource evidence.\n"
+            "- Do not invent resource ids; if absent, describe the resource in the task/progress_notes.\n"
+            "- Check-ins/state changes only when the user reports progress or asks to track it."
         ),
     ),
     "delegate_agents": WorkflowRulePack(
         name="delegate_agents",
         title="Delegation",
         content=(
-            "- If a task clearly matches resume_agent or job_agent expertise, use delegate_agents instead of doing specialized parsing yourself.\n"
-            "- Do not delegate the same resume/JD/matching subtask more than once in a run after a completed delegate result exists.\n"
-            "- Keep child instructions narrow and include real artifact_refs when shared files matter.\n"
-            "- Child agent ids are not tool names; call delegate_agents with tasks[].target_agent_id.\n"
-            "- After child results return, synthesize the answer and expose user-facing assets, not raw orchestration details."
+            "- Use delegate_agents for resume_agent/job_agent parsing or matching work.\n"
+            "- Do not redelegate a completed same-run subtask.\n"
+            "- Keep child instructions narrow; pass real artifact_refs when files matter.\n"
+            "- Child agent ids are not tools; use tasks[].target_agent_id.\n"
+            "- Synthesize child results into user-facing assets, not raw orchestration details."
         ),
     ),
 }
 
 
 def _mentions_resume_diagnosis(text: str, artifact_text: str) -> bool:
-    return _has_any(text, ("简历", "resume", "画像", "诊断", "优化简历")) or (
+    return (
+        _has_any(text, ("画像", "诊断", "优化简历", "解析简历", "分析简历", "resume profile"))
+        or (_has_any(text, ("简历", "resume")) and _has_any(text, ("诊断", "解析", "画像", "优化", "分析", "看看", "怎么样")))
+    ) or (
         _has_any(artifact_text, ("简历", "resume", "pdf", "markdown"))
-        and _has_any(text, ("诊断", "解析", "画像", "优化", "分析"))
+        and _has_any(text, ("诊断", "解析", "画像", "优化", "分析", "匹配", "适配"))
+    )
+
+
+def _mentions_direct_resume_work(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "请诊断",
+            "诊断这份简历",
+            "解析这份简历",
+            "简历画像",
+            "分析这份简历",
+            "优化简历",
+        ),
+    )
+
+
+def _mentions_negated_resume_work(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "不要重新诊断简历",
+            "不要重新解析简历",
+            "无需重新诊断简历",
+            "不用重新诊断简历",
+            "不要再次委派 resume_agent",
+        ),
     )
 
 
@@ -231,10 +278,73 @@ def _mentions_jd_analysis(text: str, artifact_text: str) -> bool:
     )
 
 
+def _mentions_direct_jd_work(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "分析 jd",
+            "分析这个 jd",
+            "分析这份 jd",
+            "jd 分析",
+            "岗位分析",
+            "分析岗位",
+            "分析岗位描述",
+            "分析职位描述",
+        ),
+    )
+
+
+def _mentions_negated_jd_work(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "不要重新分析 jd",
+            "不要重新分析jd",
+            "无需重新分析 jd",
+            "不用重新分析 jd",
+            "不要创建新的 jdanalysis",
+            "不要再次委派 job_agent",
+        ),
+    )
+
+
 def _mentions_job_fit(text: str, artifact_text: str) -> bool:
-    return _has_any(text, ("匹配", "适配", "岗位匹配", "匹配报告", "投递建议", "面试准备", "定制简历")) or (
+    return _has_any(text, ("匹配", "适配", "岗位匹配", "匹配报告", "投递建议", "面试准备")) or (
         _has_any(artifact_text, ("简历", "resume")) and _has_any(artifact_text, ("jd", "岗位", "职位"))
     )
+
+
+def _mentions_direct_fit_work(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "生成匹配报告",
+            "保存匹配报告",
+            "创建匹配报告",
+            "岗位匹配分析",
+            "分析匹配度",
+            "分析我和岗位的匹配度",
+            "投递建议",
+            "面试准备",
+        ),
+    )
+
+
+def _mentions_negated_fit_work(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "不要重新生成匹配报告",
+            "无需重新生成匹配报告",
+            "不用重新生成匹配报告",
+            "不要创建新的 jobfitreport",
+            "不要保存新的匹配报告",
+        ),
+    )
+
+
+def _mentions_resume_version(text: str) -> bool:
+    return _has_any(text, ("定制简历", "简历版本", "改写简历", "生成简历版本", "定制版简历"))
 
 
 def _mentions_application_action(text: str) -> bool:
@@ -324,7 +434,6 @@ def _mentions_retrieval(text: str) -> bool:
             "投过",
             "我的计划",
             "历史",
-            "已有",
             "当前画像",
             "当前匹配",
             "复盘",

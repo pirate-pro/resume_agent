@@ -268,6 +268,8 @@ class ContextBundle:
     memory_summary: dict[str, Any] = field(default_factory=dict)
     memory_lanes: dict[str, list[MemoryItem]] = field(default_factory=dict)
     system_prompt_sections: list[dict[str, Any]] = field(default_factory=list)
+    initial_visible_tool_names: list[str] = field(default_factory=list)
+    runtime_tool_plan: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.system_prompt = _require_non_empty("system_prompt", self.system_prompt)
@@ -283,6 +285,10 @@ class ContextBundle:
             raise ValidationError("memory_lanes must be a dictionary.")
         if not isinstance(self.system_prompt_sections, list):
             raise ValidationError("system_prompt_sections must be a list.")
+        if not isinstance(self.initial_visible_tool_names, list):
+            raise ValidationError("initial_visible_tool_names must be a list.")
+        if not isinstance(self.runtime_tool_plan, dict):
+            raise ValidationError("runtime_tool_plan must be a dictionary.")
         normalized_lanes: dict[str, list[MemoryItem]] = {}
         for raw_key, raw_items in self.memory_lanes.items():
             key = _require_non_empty("memory_lane", str(raw_key))
@@ -290,6 +296,16 @@ class ContextBundle:
                 raise ValidationError("memory_lanes values must be lists.")
             normalized_lanes[key] = raw_items
         self.memory_lanes = normalized_lanes
+        normalized_initial_tools: list[str] = []
+        seen_initial_tools: set[str] = set()
+        for raw_name in self.initial_visible_tool_names:
+            name = _require_non_empty("initial_visible_tool_name", str(raw_name))
+            if name in seen_initial_tools:
+                continue
+            normalized_initial_tools.append(name)
+            seen_initial_tools.add(name)
+        self.initial_visible_tool_names = normalized_initial_tools
+        self.runtime_tool_plan = dict(self.runtime_tool_plan)
 
 
 @dataclass(slots=True)

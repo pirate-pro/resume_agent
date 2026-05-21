@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import cast
 
 from app.core.errors import StorageError
@@ -53,6 +54,8 @@ from app.runtime.context.workflow_rules import (
     select_sparse_workflow_rule_packs,
 )
 from app.runtime.context.workflow_state import extract_current_workflow_state
+from app.runtime.workflow.career_phase import build_career_phase_snapshot
+from app.runtime.workflow.tool_plan import RuntimeToolPlan, build_runtime_tool_plan
 from app.runtime.agent.tool_reveal import normalize_always_visible_tool_names, normalize_tool_schema_disclosure_mode
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
@@ -65,6 +68,15 @@ __all__ = [
     "ShortTermContextPlan",
 ]
 _logger = logging.getLogger(__name__)
+
+_ASSISTANT_HISTORY_COMPACT_THRESHOLD_CHARS = 1200
+_ASSISTANT_HISTORY_HEAD_CHARS = 520
+_ASSISTANT_HISTORY_TAIL_CHARS = 280
+_ASSISTANT_HISTORY_MAX_OUTLINE_LINES = 8
+_REFERENCE_ID_PATTERN = re.compile(
+    r"\b(?:artifact|resume_profile|career_profile|jd|fit|resume_version|application|note|learning_task|resource)"
+    r"_[A-Za-z0-9][A-Za-z0-9_.:-]*\b"
+)
 
 
 class ContextAssembler:
@@ -129,6 +141,7 @@ class ContextAssembler:
             role=assembly_role,
             limit=RECENT_EVENT_MAX_COUNT,
             user_message=normalized_message,
+            active_artifacts=active_artifacts,
         )
         memory_hits, memory_summary, memory_lanes = self._safe_memory_search(
             normalized_message,
@@ -142,17 +155,14 @@ class ContextAssembler:
 
         available_tool_definitions = self._list_tool_definitions(context.agent_id)
         tool_definitions = available_tool_definitions
-        if self._uses_search_disclosure(context=context, role=assembly_role):
-            prompt_tool_definitions = [
-                definition
-                for definition in available_tool_definitions
-                if definition.name in set(self._tool_schema_always_visible)
-            ]
-        else:
-            # Full mode is an explicit debugging and rollback path: expose all
-            # capability-allowed schemas instead of maintaining a second
-            # intent-based selection mechanism alongside tool_search.
-            prompt_tool_definitions = tool_definitions
+        initial_visible_tool_names = self._initial_visible_tool_names(
+            context=context,
+            role=assembly_role,
+            available_tool_definitions=tool_definitions,
+            short_term_plan=short_term_plan,
+        )
+        tool_catalog_mode = "compact_search" if self._uses_search_disclosure(context=context, role=assembly_role) else "full"
+        prompt_tool_definitions = tool_definitions
         assembly_plan = build_assembly_plan(
             role=assembly_role,
             skill_descriptions=skill_descriptions,
@@ -163,10 +173,15 @@ class ContextAssembler:
             short_term_plan=short_term_plan,
             memory_lanes=memory_lanes,
             active_artifacts=active_artifacts,
+            tool_catalog_mode=tool_catalog_mode,
+            visible_tool_names=[
+                *self._tool_schema_always_visible,
+                *initial_visible_tool_names,
+            ],
         )
         system_prompt = assembly_plan.render_prompt()
         _logger.debug(
-            "上下文组装: session_id=%s role=%s sections=%s skills=%s workflow_packs=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s workflow_state=%s career_flow_state=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
+            "上下文组装: session_id=%s role=%s sections=%s skills=%s workflow_packs=%s has_agent_md=%s has_soul_md=%s invokable_agents=%s agent_state=%s orchestration_state=%s workflow_state=%s career_flow_state=%s workflow_phase=%s assigned_tasks=%s child_results=%s memory_hits=%s active_artifacts=%s recent_events=%s output_messages=%s",
             normalized_session_id,
             assembly_plan.role.value,
             assembly_plan.section_names(),
@@ -179,6 +194,7 @@ class ContextAssembler:
             len(short_term_plan.orchestration_state),
             len(short_term_plan.workflow_state.refs),
             len(short_term_plan.career_flow_state.completed_steps),
+            short_term_plan.workflow_phase.phase_name,
             len(short_term_plan.assigned_tasks),
             len(short_term_plan.child_result_summaries),
             len(memory_hits),
@@ -197,6 +213,8 @@ class ContextAssembler:
                 assembly_plan,
                 workflow_rule_selection_mode=self._workflow_rule_selection_mode,
             ),
+            initial_visible_tool_names=initial_visible_tool_names,
+            runtime_tool_plan=_runtime_tool_plan_payload(short_term_plan.runtime_tool_plan),
         )
 
     def _load_skill_descriptions(self, *, loaded_skills: dict[str, str]) -> dict[str, str]:
@@ -228,6 +246,33 @@ class ContextAssembler:
             and context.agent_id == "agent_main"
             and role == ContextAssemblyRole.MAIN_AGENT
         )
+
+    def _initial_visible_tool_names(
+        self,
+        *,
+        context: RunContext,
+        role: ContextAssemblyRole,
+        available_tool_definitions: list[ToolDefinition],
+        short_term_plan: ShortTermContextPlan,
+    ) -> list[str]:
+        """Expose the deterministic next-step tool schema without a search round."""
+
+        if not self._uses_search_disclosure(context=context, role=role):
+            return []
+        if short_term_plan.runtime_tool_plan.final_answer_ready:
+            return []
+        allowed = short_term_plan.runtime_tool_plan.next_allowed_tools
+        if not allowed:
+            return []
+        available_names = {definition.name for definition in available_tool_definitions}
+        output: list[str] = []
+        seen: set[str] = set()
+        for name in allowed:
+            if name in seen or name not in available_names:
+                continue
+            output.append(name)
+            seen.add(name)
+        return output
 
     def _load_workflow_rule_packs(
         self,
@@ -311,6 +356,7 @@ class ContextAssembler:
         role: ContextAssemblyRole,
         limit: int,
         user_message: str,
+        active_artifacts: list[SessionArtifact],
     ) -> ShortTermContextPlan:
         if limit <= 0:
             raise ValidationError("limit must be positive.")
@@ -332,6 +378,18 @@ class ContextAssembler:
                 visible_events,
                 context,
                 user_message=user_message,
+                workflow_state=workflow_state,
+            )
+            workflow_phase = build_career_phase_snapshot(
+                context=context,
+                user_message=user_message,
+                workflow_state=workflow_state,
+                career_flow_state=career_flow_state,
+                active_artifacts=active_artifacts,
+            )
+            runtime_tool_plan = build_runtime_tool_plan(
+                workflow_phase=workflow_phase,
+                career_flow_state=career_flow_state,
                 workflow_state=workflow_state,
             )
             context_summaries = latest_context_summaries(visible_events, context)
@@ -358,6 +416,18 @@ class ContextAssembler:
                 user_message=user_message,
                 workflow_state=workflow_state,
             )
+            workflow_phase = build_career_phase_snapshot(
+                context=context,
+                user_message=user_message,
+                workflow_state=workflow_state,
+                career_flow_state=career_flow_state,
+                active_artifacts=active_artifacts,
+            )
+            runtime_tool_plan = build_runtime_tool_plan(
+                workflow_phase=workflow_phase,
+                career_flow_state=career_flow_state,
+                workflow_state=workflow_state,
+            )
 
         return ShortTermContextPlan(
             role=role,
@@ -369,6 +439,8 @@ class ContextAssembler:
             child_result_summaries=child_result_summaries,
             workflow_state=workflow_state,
             career_flow_state=career_flow_state,
+            workflow_phase=workflow_phase,
+            runtime_tool_plan=runtime_tool_plan,
         )
 
     def _safe_memory_search(
@@ -425,7 +497,7 @@ class ContextAssembler:
             elif event.type == "assistant_message":
                 content = str(event.payload.get("content", "")).strip()
                 if content:
-                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "assistant", "content": _compact_assistant_history(content)})
         return messages
 
     def _load_active_artifacts(self, session_id: str) -> list[SessionArtifact]:
@@ -452,6 +524,70 @@ def _merge_context_events(*event_groups: list[EventRecord]) -> list[EventRecord]
     return sorted(by_id.values(), key=lambda item: item.created_at)
 
 
+def _runtime_tool_plan_payload(plan: RuntimeToolPlan) -> dict[str, object]:
+    return {
+        "phase": plan.phase,
+        "known_refs": dict(plan.known_refs),
+        "missing_outputs": list(plan.missing_outputs),
+        "next_allowed_tools": list(plan.next_allowed_tools),
+        "discouraged_tools": list(plan.discouraged_tools),
+        "final_answer_ready": plan.final_answer_ready,
+        "next_action": plan.next_action,
+    }
+
+
+def _compact_assistant_history(content: str) -> str:
+    normalized = content.strip()
+    if len(normalized) <= _ASSISTANT_HISTORY_COMPACT_THRESHOLD_CHARS:
+        return normalized
+
+    references = _extract_reference_ids(normalized)
+    outline = _extract_outline_lines(normalized)
+    parts = [
+        "历史助手答复已压缩，用于降低上下文成本；如需完整内容，应读取对应 artifact 或产品记录。",
+        "",
+        "开头摘录:",
+        normalized[:_ASSISTANT_HISTORY_HEAD_CHARS].rstrip(),
+    ]
+    if outline:
+        parts.extend(["", "结构线索:", *[f"- {line}" for line in outline]])
+    if references:
+        parts.extend(["", "保留引用:", ", ".join(references)])
+    tail = normalized[-_ASSISTANT_HISTORY_TAIL_CHARS:].lstrip()
+    if tail:
+        parts.extend(["", "结尾摘录:", tail])
+    return "\n".join(parts).strip()
+
+
+def _extract_reference_ids(content: str) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for match in _REFERENCE_ID_PATTERN.finditer(content):
+        value = match.group(0)
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
+
+
+def _extract_outline_lines(content: str) -> list[str]:
+    output: list[str] = []
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            output.append(line[:120])
+        elif line.startswith(("一、", "二、", "三、", "四、", "五、", "六、")):
+            output.append(line[:120])
+        elif re.match(r"^\d+[.、]\s*\S", line):
+            output.append(line[:120])
+        if len(output) >= _ASSISTANT_HISTORY_MAX_OUTLINE_LINES:
+            break
+    return output
+
+
 def _system_prompt_section_usage(
     assembly_plan: ContextAssemblyPlan,
     *,
@@ -470,5 +606,9 @@ def _system_prompt_section_usage(
             if isinstance(pack_names, list):
                 item["pack_names"] = [str(name) for name in pack_names if str(name).strip()]
             item["selection_mode"] = workflow_rule_selection_mode
+        if section.name == "tool_catalog":
+            catalog_mode = section.metadata.get("catalog_mode")
+            if isinstance(catalog_mode, str) and catalog_mode.strip():
+                item["catalog_mode"] = catalog_mode.strip()
         output.append(item)
     return output

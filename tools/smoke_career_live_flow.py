@@ -51,6 +51,8 @@ from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
+from app.runtime.workflow import WorkflowRuntimeGuard
+from app.runtime.workflow.tool_plan_provider import build_runtime_tool_plan_provider
 from app.services.agent_invocation_service import AgentInvocationService
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.state.manager import StateManager
@@ -207,6 +209,10 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
         tool_schema_always_visible=settings.tool_schema_always_visible,
         tool_context_window_mode=settings.tool_context_window_mode,
+        workflow_guard=WorkflowRuntimeGuard(
+            career_store=career_store,
+            session_repository=session_repository,
+        ),
     )
     agent_registry = load_agent_registry(
         settings.agent_registry_path,
@@ -275,7 +281,12 @@ def register_live_tools(
     registry.register(StateSetTool(state_manager=state_manager))
     registry.register(StatePublishTool(state_manager=state_manager))
     registry.register(StateListTool(state_manager=state_manager))
-    registry.register(ToolSearchTool(tool_definitions_provider=registry.list_definitions_for_agent))
+    registry.register(
+        ToolSearchTool(
+            tool_definitions_provider=registry.list_definitions_for_agent,
+            runtime_plan_provider=build_runtime_tool_plan_provider(session_repository=session_repository),
+        )
+    )
     registry.register(PublishArtifactTool(session_repository=session_repository))
     registry.register(WorkspaceWriteFileTool(session_repository=session_repository))
     registry.register(WorkspaceReadFileTool(session_repository=session_repository))
@@ -400,34 +411,35 @@ def run_live_flow(
                 progress=progress,
             )
         )
-        current_stage = "定制简历版本"
-        report.turns.append(
-            run_turn(
-                stack=stack,
-                session_id=session_id,
-                name=current_stage,
-                message=(
-                    "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport，生成一版 markdown "
-                    "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
-                    "保存 ResumeVersion 后，请调用 career_application_merge 把 resume_version_id 合并进当前求职项目；"
-                    "如果尚未创建 CareerApplication，则先用 career_application_create 基于 job_fit_report_id 创建。"
-                    "career_resume_version_create.keyword_strategy 只写已放进简历或已有证据支撑的关键词，"
-                    "不要把风险项、证据不足、缺失、需补充、需用户提供写进 keyword_strategy。"
-                    "career_resume_version_create 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
-                    "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
-                    "这些禁用词本身也不能出现在否定说明里；只描述实际改动、已验证事实或缺失事实风险。"
-                    "如果公司、学校、时间、联系方式等事实缺失，不要在简历正文里写“待补充”，"
-                    "应省略对应字段或使用更保守的已知事实，并把缺失项写入 CareerApplication 的 risks/next_actions。"
-                    "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
-                    "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
-                    "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"
-                    "不要猜测或编造 id。"
-                ),
-                max_tool_rounds=max_tool_rounds,
-                run_index=run_index,
-                progress=progress,
+        if project_action != "custom_resume":
+            current_stage = "定制简历版本"
+            report.turns.append(
+                run_turn(
+                    stack=stack,
+                    session_id=session_id,
+                    name=current_stage,
+                    message=(
+                        "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport，生成一版 markdown "
+                        "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
+                        "保存 ResumeVersion 后，请调用 career_application_merge 把 resume_version_id 合并进当前求职项目；"
+                        "如果尚未创建 CareerApplication，则先用 career_application_create 基于 job_fit_report_id 创建。"
+                        "career_resume_version_create.keyword_strategy 只写已放进简历或已有证据支撑的关键词，"
+                        "不要把风险项、证据不足、缺失、需补充、需用户提供写进 keyword_strategy。"
+                        "career_resume_version_create 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
+                        "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
+                        "这些禁用词本身也不能出现在否定说明里；只描述实际改动、已验证事实或缺失事实风险。"
+                        "如果公司、学校、时间、联系方式等事实缺失，不要在简历正文里写“待补充”，"
+                        "应省略对应字段或使用更保守的已知事实，并把缺失项写入 CareerApplication 的 risks/next_actions。"
+                        "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
+                        "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
+                        "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"
+                        "不要猜测或编造 id。"
+                    ),
+                    max_tool_rounds=max_tool_rounds,
+                    run_index=run_index,
+                    progress=progress,
+                )
             )
-        )
         if project_action != "none":
             application = _latest_career_application_for_session(stack, session_id)
             if application is None:
@@ -1291,6 +1303,7 @@ def recovered_protective_tool_failure(
     protective_markers = (
         "forbidden placeholder or replacement wording",
         "unverified quantitative metrics",
+        "unsupported candidate tech facts",
     )
     if tool_name != "career_resume_version_create" or not any(marker in content for marker in protective_markers):
         return False

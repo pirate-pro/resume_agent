@@ -102,6 +102,9 @@ def agent_result_summary(event: EventRecord) -> dict[str, Any]:
         "target_agent_id": payload_text(event.payload, "target_agent_id"),
         "status": payload_text(event.payload, "status"),
         "summary": safe_text(event.payload.get("summary"), max_len=800),
+        "artifact_refs": event.payload.get("artifact_refs") or [],
+        "output_artifact_refs": event.payload.get("output_artifact_refs") or [],
+        "product_refs": event.payload.get("product_refs") or [],
     }
 
 

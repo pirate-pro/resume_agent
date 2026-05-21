@@ -66,10 +66,19 @@ class ToolRevealState:
             if name in available_names:
                 self.revealed_tool_names.add(name)
 
+    def reveal_tool_names(self, tool_names: list[str]) -> None:
+        if self.mode != "search":
+            return
+        available_names = {definition.name for definition in self.available_definitions}
+        for name in tool_names:
+            if name in available_names:
+                self.revealed_tool_names.add(name)
+
     def usage_payload(self, *, visible_definitions: list[ToolDefinition]) -> dict[str, Any]:
         visible_names = [definition.name for definition in visible_definitions]
         return {
             "tool_disclosure_mode": self.mode,
+            "tool_reveal_strategy": "cumulative_search" if self.mode == "search" else "full",
             "available_tool_count": len(self.available_definitions),
             "visible_tool_count": len(visible_definitions),
             "revealed_tool_count": len(self.revealed_tool_names),
@@ -107,13 +116,13 @@ def hidden_tool_result(tool_name: str) -> ToolExecutionResult:
     content = json.dumps(
         {
             "recoverable": True,
-            "error_type": "tool_schema_not_revealed",
+            "event_type": "tool_schema_not_revealed",
             "tool_name": tool_name,
             "message": "该工具本轮尚未揭示。请先调用 tool_search 搜索相关能力。",
         },
         ensure_ascii=False,
     )
-    return ToolExecutionResult(tool_name=tool_name, success=False, content=content)
+    return ToolExecutionResult(tool_name=tool_name, success=True, content=content)
 
 
 def _extract_revealed_tool_names(content: str) -> list[str]:

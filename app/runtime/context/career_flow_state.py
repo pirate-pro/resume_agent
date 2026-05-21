@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.domain.models import EventRecord, RunContext
+from app.domain.reference_ids import is_reserved_reference_value
 from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT
 from app.runtime.context.models import CareerFlowState, CurrentWorkflowState
 
@@ -138,6 +139,18 @@ def format_career_flow_state_lines(state: CareerFlowState) -> list[str]:
         lines.append(f"- completed={','.join(state.completed_steps)}")
     if state.missing_steps:
         lines.append(f"- missing={','.join(state.missing_steps)}")
+    if "resume_version" in state.completed_steps or "resume_version" in state.missing_steps:
+        lines.append(
+            "- resume_version_fact_policy=Use ResumeProfile and resume source artifact as candidate facts. "
+            "Use JDAnalysis/JobFitReport only to choose emphasis. Do not add candidate company, dates, "
+            "projects, skills, quantified metrics, scores, percentages, latency, QPS, counts, or outcomes "
+            "unless they are explicitly present in candidate facts."
+        )
+        lines.append(
+            "- resume_version_retry_policy=If career_resume_version_create fails validation, retry that "
+            "same tool with the invalid facts removed. Do not perform more get/list/read calls unless the "
+            "error says a required id or artifact is missing."
+        )
     lines.append(f"- final_answer_ready={str(state.final_answer_ready).lower()}")
     if state.next_action_hint:
         lines.append(f"- next_action={state.next_action_hint}")
@@ -183,10 +196,12 @@ def _merge_tool_result(accumulator: _CareerFlowAccumulator, *, event: EventRecor
     content = payload.get("content")
     if not tool_name or not isinstance(content, str) or not _is_career_tool(tool_name):
         return
+    decoded = _loads_json(content)
+    if _is_runtime_block_payload(decoded):
+        return
     accumulator.successful_tools.add(tool_name)
     if event.run_id == context.run_id:
         accumulator.current_run_successful_tools.add(tool_name)
-    decoded = _loads_json(content)
     _merge_value(accumulator, decoded if decoded is not None else content)
 
     if tool_name == "career_resume_version_create" and event.run_id == context.run_id:
@@ -420,14 +435,14 @@ def _valid_ref_value(key: str, value: str) -> bool:
         "resume_source_artifact_id": "artifact_",
     }
     prefix = prefix_by_key.get(key)
-    return prefix is not None and value.startswith(prefix)
+    return prefix is not None and value.startswith(prefix) and not is_reserved_reference_value(value)
 
 
 def _valid_multi_ref_value(key: str, value: str) -> bool:
     if key == "resume_version_ids":
-        return value.startswith("resume_version_")
+        return value.startswith("resume_version_") and not is_reserved_reference_value(value)
     if key == "resume_version_artifact_ids":
-        return value.startswith("artifact_")
+        return value.startswith("artifact_") and not is_reserved_reference_value(value)
     return False
 
 
@@ -440,6 +455,15 @@ def _loads_json(content: str) -> Any | None:
         return json.loads(content)
     except (TypeError, ValueError):
         return None
+
+
+def _is_runtime_block_payload(payload: Any) -> bool:
+    return (
+        isinstance(payload, dict)
+        and payload.get("workflow_runtime_result") is True
+        and payload.get("policy") == "block"
+        and payload.get("tool_executed") is False
+    )
 
 
 def _optional_text(value: Any) -> str | None:

@@ -7,6 +7,7 @@ from functools import lru_cache
 from app.api.dependencies.config import get_settings
 from app.api.dependencies.infrastructure import (
     get_agent_document_repository,
+    get_career_product_store,
     get_memory_store,
     get_session_repository,
     get_skill_repository,
@@ -25,6 +26,7 @@ from app.runtime.context_assembler import ContextAssembler
 from app.runtime.context_compactor import ContextCompactionConfig, ContextCompactor, RetentionStrategy
 from app.runtime.mid_term_flusher import MidTermFlusher
 from app.runtime.mid_term_flush_worker import MidTermFlushWorker
+from app.runtime.workflow import WorkflowRuntimeGuard
 
 __all__ = [
     "get_agent_runtime",
@@ -32,6 +34,7 @@ __all__ = [
     "get_context_compactor",
     "get_mid_term_flusher",
     "get_mid_term_flush_worker",
+    "get_workflow_runtime_guard",
 ]
 
 
@@ -103,6 +106,14 @@ def get_context_assembler() -> ContextAssembler:
 
 
 @lru_cache(maxsize=1)
+def get_workflow_runtime_guard() -> WorkflowRuntimeGuard:
+    return WorkflowRuntimeGuard(
+        career_store=get_career_product_store(),
+        session_repository=get_session_repository(),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_agent_runtime() -> AgentRuntime:
     settings = get_settings()
     return AgentRuntime(
@@ -116,4 +127,5 @@ def get_agent_runtime() -> AgentRuntime:
         tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
         tool_schema_always_visible=settings.tool_schema_always_visible,
         tool_context_window_mode=settings.tool_context_window_mode,
+        workflow_guard=get_workflow_runtime_guard(),
     )

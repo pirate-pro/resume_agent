@@ -13,6 +13,7 @@ from app.api.dependencies.infrastructure import (
 )
 from app.api.dependencies.managers import get_agent_capability_registry, get_memory_manager, get_state_manager
 from app.api.dependencies.retrieval import get_retrieval_service
+from app.runtime.workflow.tool_plan_provider import build_runtime_tool_plan_provider
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.tools.builtins import (
     AgentTaskStatusTool,
@@ -96,7 +97,14 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(StateSetTool(state_manager=get_state_manager()))
     registry.register(StatePublishTool(state_manager=get_state_manager()))
     registry.register(StateListTool(state_manager=get_state_manager()))
-    registry.register(ToolSearchTool(tool_definitions_provider=registry.list_definitions_for_agent))
+    registry.register(
+        ToolSearchTool(
+            tool_definitions_provider=registry.list_definitions_for_agent,
+            runtime_plan_provider=build_runtime_tool_plan_provider(
+                session_repository=get_session_repository(),
+            ),
+        )
+    )
     registry.register(PublishArtifactTool(session_repository=get_session_repository()))
     registry.register(WorkspaceWriteFileTool(session_repository=get_session_repository()))
     registry.register(WorkspaceReadFileTool(session_repository=get_session_repository()))

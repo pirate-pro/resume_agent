@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
+from app.core.errors import StorageError
 from app.core.errors import ToolExecutionError
+from app.core.errors import ValidationError
 from app.core.time import app_now
 from app.domain.models import RunContext, SessionArtifact, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
@@ -65,6 +68,31 @@ class SessionCreateTextArtifactTool:
         description = _optional_text(arguments.get("description"))
 
         session_id = run_context.session_id
+        existing_artifact = _find_same_run_generated_artifact(
+            self._session_repository,
+            context=run_context,
+            title=title,
+            kind=kind,
+        )
+        if existing_artifact is not None:
+            artifact = _update_text_artifact(
+                self._session_repository,
+                artifact=existing_artifact,
+                title=title,
+                content=content,
+                kind=kind,
+                media_type=media_type,
+                description=description,
+            )
+            payload = _text_artifact_payload(artifact)
+            payload["idempotent_update"] = True
+            payload["message"] = "已更新同一 run 内已存在的同类 generated_file artifact，避免重复创建。"
+            return ToolExecutionResult(
+                tool_name="session_create_text_artifact",
+                success=True,
+                content=json.dumps(payload, ensure_ascii=False),
+            )
+
         artifact_id = f"artifact_{uuid4().hex[:12]}"
         root = self._session_repository.get_session_root_path(session_id).resolve()
         artifact_dir = root / "artifacts" / artifact_id
@@ -101,15 +129,7 @@ class SessionCreateTextArtifactTool:
             parsed_at=now,
         )
         self._session_repository.add_or_update_session_artifact(artifact)
-        payload = {
-            "artifact_id": artifact.artifact_id,
-            "title": artifact.title,
-            "kind": artifact.kind,
-            "media_type": artifact.media_type,
-            "text_char_count": artifact.text_char_count,
-            "token_estimate": artifact.token_estimate,
-            "owner_agent_id": artifact.owner_agent_id,
-        }
+        payload = _text_artifact_payload(artifact)
         return ToolExecutionResult(
             tool_name="session_create_text_artifact",
             success=True,
@@ -336,6 +356,131 @@ def _normalize_artifact_title(raw: Any) -> str:
     if not title:
         raise ToolExecutionError("'title' must be a non-empty string.")
     return title
+
+
+def _find_same_run_generated_artifact(
+    session_repository: SessionRepository,
+    *,
+    context: RunContext,
+    title: str,
+    kind: str,
+) -> SessionArtifact | None:
+    if kind != "generated_file":
+        return None
+    purpose = _generated_report_purpose(title)
+    if purpose is None:
+        return None
+    try:
+        events = session_repository.list_run_events(context.session_id, context.agent_id, context.run_id)
+    except (StorageError, ValidationError):
+        return None
+    for event in reversed(events):
+        if event.type != "tool_result":
+            continue
+        payload = event.payload
+        if payload.get("tool_name") != "session_create_text_artifact" or payload.get("success") is not True:
+            continue
+        raw_content = payload.get("content")
+        if not isinstance(raw_content, str):
+            continue
+        try:
+            content_payload = json.loads(raw_content)
+        except ValueError:
+            continue
+        if not isinstance(content_payload, dict):
+            continue
+        artifact_id = content_payload.get("artifact_id")
+        prior_title = content_payload.get("title")
+        if not isinstance(artifact_id, str) or not isinstance(prior_title, str):
+            continue
+        if _generated_report_purpose(prior_title) != purpose:
+            continue
+        artifact = session_repository.get_session_artifact(context.session_id, artifact_id)
+        if artifact is None:
+            continue
+        if artifact.owner_agent_id != context.agent_id or artifact.kind != "generated_file":
+            continue
+        return artifact
+    return None
+
+
+def _update_text_artifact(
+    session_repository: SessionRepository,
+    *,
+    artifact: SessionArtifact,
+    title: str,
+    content: str,
+    kind: str,
+    media_type: str,
+    description: str | None,
+) -> SessionArtifact:
+    root = session_repository.get_session_root_path(artifact.session_id).resolve()
+    storage_path = (root / artifact.storage_relpath).resolve()
+    text_path = (root / artifact.text_relpath).resolve() if artifact.text_relpath else storage_path
+    if not storage_path.is_relative_to(root) or not text_path.is_relative_to(root):
+        raise ToolExecutionError("Existing artifact path escapes session root.")
+    try:
+        storage_path.write_text(content, encoding="utf-8")
+        text_path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        raise ToolExecutionError(f"Failed to update existing text artifact: {exc}") from exc
+
+    now = app_now()
+    updated = SessionArtifact(
+        artifact_id=artifact.artifact_id,
+        session_id=artifact.session_id,
+        kind=kind,
+        title=title,
+        description=description,
+        media_type=media_type,
+        size_bytes=storage_path.stat().st_size,
+        status="ready",
+        visibility=artifact.visibility,
+        owner_agent_id=artifact.owner_agent_id,
+        source_type=artifact.source_type,
+        source_event_id=artifact.source_event_id,
+        created_at=artifact.created_at,
+        updated_at=now,
+        storage_relpath=artifact.storage_relpath,
+        text_relpath=artifact.text_relpath,
+        error=None,
+        text_char_count=len(content),
+        token_estimate=_estimate_tokens_from_text(content),
+        parsed_at=now,
+    )
+    session_repository.add_or_update_session_artifact(updated)
+    return updated
+
+
+def _text_artifact_payload(artifact: SessionArtifact) -> dict[str, Any]:
+    return {
+        "artifact_id": artifact.artifact_id,
+        "title": artifact.title,
+        "kind": artifact.kind,
+        "media_type": artifact.media_type,
+        "text_char_count": artifact.text_char_count,
+        "token_estimate": artifact.token_estimate,
+        "owner_agent_id": artifact.owner_agent_id,
+    }
+
+
+def _generated_report_purpose(title: str) -> str | None:
+    normalized = _artifact_title_key(title)
+    if "简历" in normalized and ("诊断" in normalized or "画像" in normalized) and "报告" in normalized:
+        return "resume_diagnosis_report"
+    if ("岗位" in normalized or "职位" in normalized or "匹配" in normalized or "fit" in normalized) and "报告" in normalized:
+        return "job_fit_report"
+    if ("岗位" in normalized or "职位" in normalized or "jd" in normalized) and "分析" in normalized and "报告" in normalized:
+        return "jd_analysis_report"
+    if "定制" in normalized and "简历" in normalized:
+        return "resume_version"
+    return None
+
+
+def _artifact_title_key(title: str) -> str:
+    normalized = title.strip().casefold()
+    normalized = re.sub(r"\.(md|markdown|txt)$", "", normalized)
+    return re.sub(r"[\s_\-—:：|｜/\\（）()【】\[\].。]+", "", normalized)
 
 
 def _artifact_not_found_result(

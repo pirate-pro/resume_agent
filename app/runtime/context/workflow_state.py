@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from app.domain.models import EventRecord, RunContext
+from app.domain.reference_ids import is_reserved_reference_value
 from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT
 from app.runtime.context.models import CurrentWorkflowState
 
@@ -104,6 +105,8 @@ def _merge_tool_result_event(
     if not _is_workflow_state_tool(tool_name):
         return
     decoded = _loads_json(content)
+    if _is_runtime_block_payload(decoded):
+        return
     if decoded is None:
         _merge_refs_from_value(refs, source_tools, content, source_tool=tool_name)
         return
@@ -324,7 +327,7 @@ def _is_valid_state_value(key: str, value: str) -> bool:
         "resume_version_id": "resume_version_",
     }
     prefix = prefix_by_key.get(key)
-    return prefix is not None and value.startswith(prefix)
+    return prefix is not None and value.startswith(prefix) and not is_reserved_reference_value(value)
 
 
 def _loads_json(content: str) -> Any | None:
@@ -332,6 +335,15 @@ def _loads_json(content: str) -> Any | None:
         return json.loads(content)
     except (TypeError, ValueError):
         return None
+
+
+def _is_runtime_block_payload(payload: Any) -> bool:
+    return (
+        isinstance(payload, dict)
+        and payload.get("workflow_runtime_result") is True
+        and payload.get("policy") == "block"
+        and payload.get("tool_executed") is False
+    )
 
 
 def _optional_text(value: Any) -> str | None:

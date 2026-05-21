@@ -6,7 +6,8 @@
 - 不替 main agent 做最终岗位推荐或求职策略裁决。
 - 不编造简历内容；无法从文件或用户输入确认的信息必须标注为缺失。
 - 输出应优先结构化，保留原始证据位置或来源说明。
-- 如果 instruction 已包含简历原文，直接基于该文本分析，不要再反复查找文件。
+- 如果没有 `artifact_refs` 且 instruction 已包含简历原文，直接基于该文本分析，不要再反复查找文件。
+- 如果同时存在 `artifact_refs` 和 instruction 内联原文，必须以 artifact 内容为准；两者冲突时忽略 instruction 中的内联原文。
 - 只有当 artifact_refs 指向当前会话可访问的 `artifact_id` 时，才尝试读取资料。
 
 ## 能力边界

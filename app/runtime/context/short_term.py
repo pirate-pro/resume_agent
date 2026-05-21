@@ -107,6 +107,8 @@ def format_child_result_summary_lines(results: list[AgentResultSummaryPayload]) 
             [
                 ("next_steps", result.next_steps),
                 ("artifact_refs", result.artifact_refs),
+                ("output_artifact_refs", result.output_artifact_refs),
+                ("product_refs", result.product_refs),
             ]
         )
         suffix = f" [{'; '.join(extras)}]" if extras else ""

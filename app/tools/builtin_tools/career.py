@@ -23,6 +23,7 @@ from app.core.errors import StorageError, ToolExecutionError, ValidationError
 from app.core.time import app_now, to_app_iso
 from app.domain.models import RunContext, SessionArtifact, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
+from app.domain.reference_ids import is_reserved_reference_value
 from app.tools.builtin_tools.common import validate_context
 from app.tools.builtin_tools.session_artifact_helpers import require_session_artifact
 
@@ -103,6 +104,42 @@ _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS = {
     "stage",
     "summary",
 }
+_CAREER_APPLICATION_STAGES = {
+    "draft",
+    "analyzing",
+    "ready_to_apply",
+    "applied",
+    "interviewing",
+    "offer",
+    "rejected",
+    "paused",
+}
+_CAREER_APPLICATION_STAGE_ALIASES = {
+    "ready": "ready_to_apply",
+    "resume_ready": "ready_to_apply",
+    "resume_generated": "ready_to_apply",
+    "tailoring": "ready_to_apply",
+    "customizing": "ready_to_apply",
+    "tailored": "ready_to_apply",
+    "resume_tailoring": "ready_to_apply",
+    "resume_customizing": "ready_to_apply",
+    "tailored_resume": "ready_to_apply",
+    "custom_resume": "ready_to_apply",
+    "resume_version_ready": "ready_to_apply",
+    "resume_version_created": "ready_to_apply",
+    "resume_version_done": "ready_to_apply",
+    "resume_version_complete": "ready_to_apply",
+    "resume_customized": "ready_to_apply",
+    "customized_resume": "ready_to_apply",
+    "version_created": "ready_to_apply",
+    "version_ready": "ready_to_apply",
+    "final_resume_ready": "ready_to_apply",
+    "apply_ready": "ready_to_apply",
+    "analysis_complete": "draft",
+    "analysis_done": "draft",
+    "evaluation_complete": "draft",
+    "fit_ready": "draft",
+}
 _CAREER_APPLICATION_IGNORED_UPDATE_FIELDS = {
     "application_id",
     "company",
@@ -138,6 +175,32 @@ _EVIDENCE_REF_TYPE_ALIASES = {
     "resume_version_id": "resume_version",
     "session": "sess",
     "session_id": "sess",
+}
+_RESUME_SOURCE_TECH_TERMS: dict[str, tuple[str, ...]] = {
+    "agent": ("agent", "智能体"),
+    "celery": ("celery",),
+    "docker": ("docker",),
+    "elasticsearch": ("elasticsearch",),
+    "faiss": ("faiss",),
+    "fastapi": ("fastapi",),
+    "java": ("java",),
+    "kubernetes": ("kubernetes", "k8s"),
+    "langchain": ("langchain",),
+    "langgraph": ("langgraph",),
+    "milvus": ("milvus",),
+    "mysql": ("mysql",),
+    "llm_api": ("llm api", "openai api", "大模型 api", "模型 api"),
+    "postgresql": ("postgresql", "postgres"),
+    "python": ("python",),
+    "pytorch": ("pytorch",),
+    "rag": ("rag", "检索增强"),
+    "react": ("react",),
+    "redis": ("redis",),
+    "spring": ("spring", "spring boot", "springboot"),
+    "tensorflow": ("tensorflow",),
+    "vector_search": ("向量检索", "vector search", "embedding search", "语义检索"),
+    "vue": ("vue",),
+    "websocket": ("websocket", "web socket"),
 }
 
 
@@ -209,6 +272,12 @@ class CareerResumeProfileSaveTool:
                     existing,
                     extra={"idempotent_reused": True},
                 )
+            _validate_resume_profile_source_alignment(
+                self._session_repository,
+                run_context.session_id,
+                source_artifact_id,
+                args,
+            )
             record = ResumeProfile(
                 resume_profile_id=_optional_prefixed_id(args.get("resume_profile_id"), "resume_profile")
                 or _new_id("resume_profile"),
@@ -228,7 +297,11 @@ class CareerResumeProfileSaveTool:
                 self_evaluation=_optional_string(args.get("self_evaluation")) or "",
                 raw_text_artifact_id=raw_text_artifact_id,
                 diagnosis_artifact_id=diagnosis_artifact_id,
-                diagnosis=_optional_dict(args.get("diagnosis"), field_name="diagnosis"),
+                diagnosis=_optional_dict(
+                    args.get("diagnosis"),
+                    field_name="diagnosis",
+                    string_fallback_key="raw_text",
+                ),
             )
             saved = self._career_store.save_resume_profile(record)
         except (StorageError, ValidationError) as exc:
@@ -370,7 +443,7 @@ class CareerProfileMergeTool:
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         try:
-            args = _require_arguments(arguments)
+            args = _normalize_merge_arguments(_require_arguments(arguments), id_fields=("career_profile_id",))
             record_id = _optional_string(args.get("career_profile_id")) or _DEFAULT_CAREER_PROFILE_ID
             source_artifact_id = _optional_current_artifact(
                 self._session_repository,
@@ -571,7 +644,14 @@ class CareerJobFitReportSaveTool:
                         "type": "object",
                         "additionalProperties": {"type": "integer", "minimum": 0, "maximum": 100},
                     },
-                    "matched_evidence": {"type": "array"},
+                    "matched_evidence": {
+                        "type": "array",
+                        "description": (
+                            "Evidence-backed matches only. Do not claim the candidate has a JD skill unless it is "
+                            "present in the resume source artifact or saved ResumeProfile; put unsupported JD skills "
+                            "in gaps instead."
+                        ),
+                    },
                     "gaps": {"type": "array"},
                     "resume_optimization_direction": {"type": "array"},
                     "interview_preparation_focus": {"type": "array"},
@@ -608,9 +688,40 @@ class CareerJobFitReportSaveTool:
                 args,
                 "report_artifact_id",
             )
-            jd_analysis_id = _required_string(args.get("jd_analysis_id"), field_name="jd_analysis_id")
-            resume_profile_id = _required_string(args.get("resume_profile_id"), field_name="resume_profile_id")
-            career_profile_id = _required_string(args.get("career_profile_id"), field_name="career_profile_id")
+            jd_analysis_id = _optional_prefixed_id(
+                _required_string(args.get("jd_analysis_id"), field_name="jd_analysis_id"),
+                "jd",
+            )
+            if jd_analysis_id is None:
+                raise ToolExecutionError("'jd_analysis_id' must be a non-empty string.")
+            resume_profile_id = _optional_prefixed_id(
+                _required_string(args.get("resume_profile_id"), field_name="resume_profile_id"),
+                "resume_profile",
+            )
+            if resume_profile_id is None:
+                raise ToolExecutionError("'resume_profile_id' must be a non-empty string.")
+            career_profile_id = _optional_prefixed_id(
+                _required_string(args.get("career_profile_id"), field_name="career_profile_id"),
+                "career_profile",
+            )
+            if career_profile_id is None:
+                raise ToolExecutionError("'career_profile_id' must be a non-empty string.")
+            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
+            jd_analysis_id, evidence_refs = _ensure_jd_analysis_ref(
+                self._career_store,
+                self._session_repository,
+                session_id=run_context.session_id,
+                jd_analysis_id=jd_analysis_id,
+                source_artifact_id=source_artifact_id,
+                evidence_refs=evidence_refs,
+            )
+            _ensure_career_profile_ref(
+                self._career_store,
+                session_id=run_context.session_id,
+                career_profile_id=career_profile_id,
+                source_artifact_id=source_artifact_id,
+                evidence_refs=evidence_refs,
+            )
             existing = _find_current_session_record(
                 self._career_store.list_job_fit_reports(),
                 run_context.session_id,
@@ -631,12 +742,22 @@ class CareerJobFitReportSaveTool:
                     existing,
                     extra={"idempotent_reused": True},
                 )
+            matched_evidence = _optional_list(args.get("matched_evidence"), field_name="matched_evidence")
+            gaps = _optional_list(args.get("gaps"), field_name="gaps")
+            matched_evidence, gaps = _sanitize_job_fit_matched_evidence(
+                career_store=self._career_store,
+                session_repository=self._session_repository,
+                session_id=run_context.session_id,
+                resume_profile_id=resume_profile_id,
+                matched_evidence=matched_evidence,
+                gaps=gaps,
+            )
             record = JobFitReport(
                 job_fit_report_id=_optional_prefixed_id(args.get("job_fit_report_id"), "fit") or _new_id("fit"),
                 status=CareerRecordStatus.ACTIVE,
                 source_session_id=run_context.session_id,
                 source_artifact_id=source_artifact_id,
-                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
+                evidence_refs=evidence_refs,
                 created_at=_now(),
                 updated_at=_now(),
                 jd_analysis_id=jd_analysis_id,
@@ -644,8 +765,8 @@ class CareerJobFitReportSaveTool:
                 career_profile_id=career_profile_id,
                 overall_score=_optional_score(args.get("overall_score"), field_name="overall_score", default=0),
                 score_breakdown=_optional_score_breakdown(args.get("score_breakdown")),
-                matched_evidence=_optional_list(args.get("matched_evidence"), field_name="matched_evidence"),
-                gaps=_optional_list(args.get("gaps"), field_name="gaps"),
+                matched_evidence=matched_evidence,
+                gaps=gaps,
                 resume_optimization_direction=_optional_list(
                     args.get("resume_optimization_direction"),
                     field_name="resume_optimization_direction",
@@ -731,7 +852,11 @@ class CareerResumeVersionCreateTool:
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="career_resume_version_create",
-            description="Create a markdown resume version product record from a generated artifact.",
+            description=(
+                "Create an evidence-bound markdown resume version product record from generated content. "
+                "The resume body must not add candidate facts or quantified metrics that are absent from "
+                "the base resume source artifact or saved ResumeProfile."
+            ),
             parameters_schema={
                 "type": "object",
                 "properties": {
@@ -747,12 +872,35 @@ class CareerResumeVersionCreateTool:
                     "artifact_title": {"type": "string"},
                     "content": {
                         "type": "string",
-                        "description": "Markdown resume content. When artifact_id is omitted, the tool creates a generated_file artifact.",
+                        "description": (
+                            "Markdown resume content. When artifact_id is omitted, the tool creates a "
+                            "generated_file artifact. Use JDAnalysis/JobFitReport only for emphasis; do not "
+                            "invent company names, dates, projects, skills, percentages, latency, QPS, counts, "
+                            "scores, contact details, salary, school names, or outcomes unless they are explicitly "
+                            "present in candidate source facts. Omit missing fields; never fill demo values. "
+                            "This is the deliverable resume body only; do not include JD match tables, risk tables, "
+                            "gap analysis, or interview-prep notes in content."
+                        ),
                     },
                     "evidence_refs": {"type": "array", "items": {"type": "string"}},
-                    "change_summary": {"type": "array", "items": {"type": "string"}},
-                    "keyword_strategy": {"type": "array", "items": {"type": "string"}},
-                    "risk_notes": {"type": "array", "items": {"type": "string"}},
+                    "change_summary": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Actual evidence-backed changes only; do not claim unsupported additions.",
+                    },
+                    "keyword_strategy": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Keywords that are present in the resume content or directly supported by candidate "
+                            "evidence. Missing JD keywords belong in risk_notes, not keyword_strategy."
+                        ),
+                    },
+                    "risk_notes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Missing or weak facts belong here, not in the resume body.",
+                    },
                 },
                 "required": ["base_resume_profile_id", "title", "evidence_refs"],
             },
@@ -765,14 +913,113 @@ class CareerResumeVersionCreateTool:
             evidence_refs = _optional_evidence_refs(args.get("evidence_refs"))
             base_resume_profile_id = _resolve_resume_version_base_profile_id(args, evidence_refs)
             target_jd_analysis_id = _resolve_resume_version_target_jd_analysis_id(args, evidence_refs)
+            repaired_base_resume_profile_id = _repair_missing_current_session_record_id(
+                base_resume_profile_id,
+                session_id=run_context.session_id,
+                records=self._career_store.list_resume_profiles(),
+                getter=self._career_store.get_resume_profile,
+                id_attr="resume_profile_id",
+            )
+            if repaired_base_resume_profile_id != base_resume_profile_id:
+                base_resume_profile_id = repaired_base_resume_profile_id
+                evidence_refs = _remove_non_current_prefixed_refs(
+                    evidence_refs,
+                    prefix="resume_profile_",
+                    valid_ids={base_resume_profile_id},
+                )
+            if target_jd_analysis_id is not None:
+                repaired_target_jd_analysis_id = _repair_missing_current_session_record_id(
+                    target_jd_analysis_id,
+                    session_id=run_context.session_id,
+                    records=self._career_store.list_jd_analyses(),
+                    getter=self._career_store.get_jd_analysis,
+                    id_attr="jd_analysis_id",
+                )
+                if repaired_target_jd_analysis_id != target_jd_analysis_id:
+                    target_jd_analysis_id = repaired_target_jd_analysis_id
+                    evidence_refs = _remove_non_current_prefixed_refs(
+                        evidence_refs,
+                        prefix="jd_",
+                        valid_ids={target_jd_analysis_id},
+                    )
             evidence_refs = _append_evidence_refs(evidence_refs, base_resume_profile_id, target_jd_analysis_id)
             title = _required_string(args.get("title"), field_name="title")
             change_summary = _optional_string_list(args.get("change_summary"), field_name="change_summary")
             keyword_strategy = _optional_string_list(args.get("keyword_strategy"), field_name="keyword_strategy")
             risk_notes = _optional_string_list(args.get("risk_notes"), field_name="risk_notes")
             raw_artifact_id = args.get("artifact_id")
-            if raw_artifact_id is None:
-                content = _required_string(args.get("content"), field_name="content")
+            content_arg = _optional_string(args.get("content"))
+            safe_fallback_from_invalid_draft = False
+            artifact_id: str | None = None
+            content: str
+            if content_arg is not None:
+                if raw_artifact_id is not None:
+                    referenced_artifact_id = _require_current_artifact(
+                        self._session_repository,
+                        run_context.session_id,
+                        _required_string(raw_artifact_id, field_name="artifact_id"),
+                        field_name="artifact_id",
+                    )
+                    if referenced_artifact_id not in evidence_refs:
+                        evidence_refs.append(referenced_artifact_id)
+                content = content_arg
+                try:
+                    _reject_invalid_resume_version_text(
+                        career_store=self._career_store,
+                        session_repository=self._session_repository,
+                        session_id=run_context.session_id,
+                        base_resume_profile_id=base_resume_profile_id,
+                        title=title,
+                        content=content,
+                        change_summary=change_summary,
+                        keyword_strategy=keyword_strategy,
+                        risk_notes=risk_notes,
+                    )
+                except ToolExecutionError:
+                    fallback = _safe_resume_version_fallback_after_validation_failure(
+                        career_store=self._career_store,
+                        session_repository=self._session_repository,
+                        context=run_context,
+                        base_resume_profile_id=base_resume_profile_id,
+                        target_jd_analysis_id=target_jd_analysis_id,
+                        title=title,
+                        risk_notes=risk_notes,
+                    )
+                    if fallback is None:
+                        raise
+                    content = fallback["content"]
+                    change_summary = fallback["change_summary"]
+                    keyword_strategy = fallback["keyword_strategy"]
+                    risk_notes = fallback["risk_notes"]
+                    safe_fallback_from_invalid_draft = True
+                    _reject_invalid_resume_version_text(
+                        career_store=self._career_store,
+                        session_repository=self._session_repository,
+                        session_id=run_context.session_id,
+                        base_resume_profile_id=base_resume_profile_id,
+                        title=title,
+                        content=content,
+                        change_summary=change_summary,
+                        keyword_strategy=keyword_strategy,
+                        risk_notes=risk_notes,
+                    )
+            elif raw_artifact_id is None:
+                fallback = _safe_resume_version_fallback_after_validation_failure(
+                    career_store=self._career_store,
+                    session_repository=self._session_repository,
+                    context=run_context,
+                    base_resume_profile_id=base_resume_profile_id,
+                    target_jd_analysis_id=target_jd_analysis_id,
+                    title=title,
+                    risk_notes=risk_notes,
+                )
+                if fallback is None:
+                    raise ToolExecutionError("career_resume_version_create requires either content or artifact_id.")
+                content = fallback["content"]
+                change_summary = fallback["change_summary"]
+                keyword_strategy = fallback["keyword_strategy"]
+                risk_notes = fallback["risk_notes"]
+                safe_fallback_from_invalid_draft = True
                 _reject_invalid_resume_version_text(
                     career_store=self._career_store,
                     session_repository=self._session_repository,
@@ -784,6 +1031,31 @@ class CareerResumeVersionCreateTool:
                     keyword_strategy=keyword_strategy,
                     risk_notes=risk_notes,
                 )
+            else:
+                artifact_id = _require_current_generated_artifact(
+                    self._session_repository,
+                    run_context.session_id,
+                    _required_string(raw_artifact_id, field_name="artifact_id"),
+                    field_name="artifact_id",
+                )
+                content = _read_current_artifact_text_or_empty(
+                    self._session_repository,
+                    run_context.session_id,
+                    artifact_id,
+                )
+                _reject_invalid_resume_version_text(
+                    career_store=self._career_store,
+                    session_repository=self._session_repository,
+                    session_id=run_context.session_id,
+                    base_resume_profile_id=base_resume_profile_id,
+                    title=title,
+                    content=content,
+                    change_summary=change_summary,
+                    keyword_strategy=keyword_strategy,
+                    risk_notes=risk_notes,
+                )
+
+            if artifact_id is None:
                 existing = _find_current_session_record(
                     self._career_store.list_resume_versions(),
                     run_context.session_id,
@@ -808,28 +1080,6 @@ class CareerResumeVersionCreateTool:
                     content=content,
                 )
             else:
-                artifact_id = _require_current_artifact(
-                    self._session_repository,
-                    run_context.session_id,
-                    _required_string(raw_artifact_id, field_name="artifact_id"),
-                    field_name="artifact_id",
-                )
-                content = _read_current_artifact_text_or_empty(
-                    self._session_repository,
-                    run_context.session_id,
-                    artifact_id,
-                )
-                _reject_invalid_resume_version_text(
-                    career_store=self._career_store,
-                    session_repository=self._session_repository,
-                    session_id=run_context.session_id,
-                    base_resume_profile_id=base_resume_profile_id,
-                    title=title,
-                    content=content,
-                    change_summary=change_summary,
-                    keyword_strategy=keyword_strategy,
-                    risk_notes=risk_notes,
-                )
                 existing = _find_current_session_record(
                     self._career_store.list_resume_versions(),
                     run_context.session_id,
@@ -870,7 +1120,8 @@ class CareerResumeVersionCreateTool:
             saved = self._career_store.save_resume_version(record)
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        return _record_result("career_resume_version_create", "resume_version", saved.resume_version_id, saved)
+        extra = {"safe_fallback_from_invalid_draft": True} if safe_fallback_from_invalid_draft else None
+        return _record_result("career_resume_version_create", "resume_version", saved.resume_version_id, saved, extra=extra)
 
 
 class CareerResumeVersionGetTool:
@@ -989,8 +1240,8 @@ class CareerApplicationCreateTool:
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         try:
-            args = _require_arguments(arguments)
-            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
+            args = _require_arguments(_normalize_application_create_raw_arguments(arguments))
+            evidence_refs = _optional_evidence_refs(args.get("evidence_refs"))
             source_artifact_id = _optional_current_artifact(
                 self._session_repository,
                 run_context.session_id,
@@ -1006,13 +1257,67 @@ class CareerApplicationCreateTool:
                 prefix="resume_version",
                 field_name="resume_version_ids",
             )
+            inferred_fit_record = _infer_single_current_fit_report(
+                self._career_store,
+                session_id=run_context.session_id,
+                source_artifact_id=source_artifact_id,
+                jd_analysis_id=jd_analysis_id,
+                resume_profile_id=resume_profile_id,
+            )
+            if job_fit_report_id is None and inferred_fit_record is not None:
+                job_fit_report_id = inferred_fit_record.job_fit_report_id
+            if job_fit_report_id is not None:
+                repaired_job_fit_report_id = _repair_missing_current_session_record_id(
+                    job_fit_report_id,
+                    session_id=run_context.session_id,
+                    records=self._career_store.list_job_fit_reports(),
+                    getter=self._career_store.get_job_fit_report,
+                    id_attr="job_fit_report_id",
+                )
+                if repaired_job_fit_report_id != job_fit_report_id:
+                    job_fit_report_id = repaired_job_fit_report_id
+                    evidence_refs = _remove_non_current_prefixed_refs(
+                        evidence_refs,
+                        prefix="fit_",
+                        valid_ids={job_fit_report_id},
+                    )
 
             fit_record = self._career_store.get_job_fit_report(job_fit_report_id) if job_fit_report_id else None
             if fit_record is not None:
-                jd_analysis_id = jd_analysis_id or fit_record.jd_analysis_id
-                resume_profile_id = resume_profile_id or fit_record.resume_profile_id
-                career_profile_id = career_profile_id or fit_record.career_profile_id
+                if jd_analysis_id is None or _current_session_record_by_id(
+                    self._career_store.get_jd_analysis,
+                    jd_analysis_id,
+                    run_context.session_id,
+                ) is None:
+                    jd_analysis_id = fit_record.jd_analysis_id
+                if resume_profile_id is None or _current_session_record_by_id(
+                    self._career_store.get_resume_profile,
+                    resume_profile_id,
+                    run_context.session_id,
+                ) is None:
+                    resume_profile_id = fit_record.resume_profile_id
+                if career_profile_id is None or _current_session_record_by_id(
+                    self._career_store.get_career_profile,
+                    career_profile_id,
+                    run_context.session_id,
+                ) is None:
+                    career_profile_id = fit_record.career_profile_id
                 source_artifact_id = source_artifact_id or fit_record.source_artifact_id
+                evidence_refs = _remove_non_current_prefixed_refs(
+                    evidence_refs,
+                    prefix="jd_",
+                    valid_ids={fit_record.jd_analysis_id},
+                )
+                evidence_refs = _remove_non_current_prefixed_refs(
+                    evidence_refs,
+                    prefix="resume_profile_",
+                    valid_ids={fit_record.resume_profile_id},
+                )
+                evidence_refs = _remove_non_current_prefixed_refs(
+                    evidence_refs,
+                    prefix="career_profile_",
+                    valid_ids={fit_record.career_profile_id},
+                )
                 evidence_refs = _append_evidence_refs(
                     evidence_refs,
                     fit_record.job_fit_report_id,
@@ -1023,6 +1328,36 @@ class CareerApplicationCreateTool:
                     fit_record.report_artifact_id,
                 )
 
+            if jd_analysis_id is not None:
+                repaired_jd_analysis_id = _repair_missing_current_session_record_id(
+                    jd_analysis_id,
+                    session_id=run_context.session_id,
+                    records=self._career_store.list_jd_analyses(),
+                    getter=self._career_store.get_jd_analysis,
+                    id_attr="jd_analysis_id",
+                )
+                if repaired_jd_analysis_id != jd_analysis_id:
+                    jd_analysis_id = repaired_jd_analysis_id
+                    evidence_refs = _remove_non_current_prefixed_refs(
+                        evidence_refs,
+                        prefix="jd_",
+                        valid_ids={jd_analysis_id},
+                    )
+            if resume_profile_id is not None:
+                repaired_resume_profile_id = _repair_missing_current_session_record_id(
+                    resume_profile_id,
+                    session_id=run_context.session_id,
+                    records=self._career_store.list_resume_profiles(),
+                    getter=self._career_store.get_resume_profile,
+                    id_attr="resume_profile_id",
+                )
+                if repaired_resume_profile_id != resume_profile_id:
+                    resume_profile_id = repaired_resume_profile_id
+                    evidence_refs = _remove_non_current_prefixed_refs(
+                        evidence_refs,
+                        prefix="resume_profile_",
+                        valid_ids={resume_profile_id},
+                    )
             jd_record = self._career_store.get_jd_analysis(jd_analysis_id) if jd_analysis_id else None
             if jd_record is not None:
                 source_artifact_id = source_artifact_id or jd_record.source_artifact_id
@@ -1077,17 +1412,21 @@ class CareerApplicationCreateTool:
                 position=position,
                 location=_optional_string(args.get("location")) or "",
                 job_url=_optional_string(args.get("job_url")) or "",
-                stage=_optional_string(args.get("stage")) or "draft",
+                stage=_normalize_application_stage(_optional_string(args.get("stage"))) or "draft",
                 priority=_optional_string(args.get("priority")) or "medium",
                 resume_profile_id=resume_profile_id,
                 career_profile_id=career_profile_id,
                 jd_analysis_id=jd_analysis_id,
                 job_fit_report_id=job_fit_report_id,
                 resume_version_ids=resume_version_ids,
-                summary=_optional_string(args.get("summary")) or "",
-                next_actions=_optional_string_list(args.get("next_actions"), field_name="next_actions"),
-                risks=_optional_string_list(args.get("risks"), field_name="risks"),
-                notes=_optional_string(args.get("notes")) or "",
+                summary=_sanitize_career_application_text(_optional_string(args.get("summary")) or ""),
+                next_actions=_sanitize_career_application_text_list(
+                    _optional_string_list(args.get("next_actions"), field_name="next_actions")
+                ),
+                risks=_sanitize_career_application_text_list(
+                    _optional_string_list(args.get("risks"), field_name="risks")
+                ),
+                notes=_sanitize_career_application_text(_optional_string(args.get("notes")) or ""),
             )
             saved = self._career_store.save_career_application(record)
         except (StorageError, ValidationError) as exc:
@@ -1192,7 +1531,7 @@ class CareerApplicationMergeTool:
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         try:
-            args = _require_arguments(arguments)
+            args = _normalize_merge_arguments(_require_arguments(arguments), id_fields=("application_id",))
             record_id = _required_string(args.get("application_id"), field_name="application_id")
             source_artifact_id = _optional_current_artifact(
                 self._session_repository,
@@ -1227,17 +1566,371 @@ def _require_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     return arguments
 
 
+def _normalize_application_create_raw_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Map common LLM aliases before the global store-owned field check."""
+
+    if not isinstance(arguments, dict):
+        return arguments
+    normalized = dict(arguments)
+    raw_status = normalized.pop("status", None)
+    for key in ("created_at", "updated_at", "source_session_id"):
+        normalized.pop(key, None)
+    if "stage" not in normalized and isinstance(raw_status, str):
+        normalized_stage = _normalize_application_stage(raw_status)
+        if normalized_stage in _CAREER_APPLICATION_STAGES:
+            normalized["stage"] = normalized_stage
+    return normalized
+
+
+def _normalize_application_stage(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stage = value.strip()
+    if not stage:
+        return stage
+    alias = _CAREER_APPLICATION_STAGE_ALIASES.get(stage)
+    if alias is not None:
+        return alias
+    normalized = stage.casefold()
+    alias = _CAREER_APPLICATION_STAGE_ALIASES.get(normalized)
+    if alias is not None:
+        return alias
+    compact = re.sub(r"[\s_\-:：/|]+", "", normalized)
+    alias = _CAREER_APPLICATION_STAGE_ALIASES.get(compact)
+    if alias is not None:
+        return alias
+    if _looks_like_resume_ready_stage(compact):
+        return "ready_to_apply"
+    if _looks_like_analysis_done_stage(compact):
+        return "draft"
+    if "面试" in compact or "interview" in compact:
+        return "interviewing"
+    if "offer" in compact or "录用" in compact:
+        return "offer"
+    if "拒" in compact or "reject" in compact:
+        return "rejected"
+    if "暂停" in compact or "pause" in compact:
+        return "paused"
+    return stage
+
+
+def _looks_like_resume_ready_stage(value: str) -> bool:
+    if not value:
+        return False
+    if ("简历" in value or "resume" in value or "tailor" in value or "custom" in value) and (
+        "完成" in value
+        or "生成" in value
+        or "定制" in value
+        or "优化" in value
+        or "ready" in value
+        or "done" in value
+        or "complete" in value
+    ):
+        return True
+    return ("投递" in value or "apply" in value) and (
+        "准备" in value or "可" in value or "ready" in value
+    )
+
+
+def _looks_like_analysis_done_stage(value: str) -> bool:
+    if not value:
+        return False
+    return ("分析" in value or "匹配" in value or "analysis" in value or "fit" in value) and (
+        "完成" in value or "结束" in value or "done" in value or "complete" in value or "ready" in value
+    )
+
+
 def _career_application_merge_updates(raw: Any) -> dict[str, Any]:
     payload = _required_dict(raw, field_name="updates")
     output: dict[str, Any] = {}
     for key, value in payload.items():
         if key in _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS:
+            if key == "stage":
+                value = _normalize_application_stage(value)
+            elif key in {"summary", "notes"}:
+                value = _sanitize_career_application_text(_optional_string(value) or "")
+            elif key in {"next_actions", "risks"}:
+                value = _sanitize_career_application_text_list(_optional_string_list(value, field_name=key))
             output[key] = value
             continue
         if key in _CAREER_APPLICATION_IGNORED_UPDATE_FIELDS:
             continue
         raise ToolExecutionError(f"Unsupported CareerApplication merge field: {key}")
     return output
+
+
+def _sanitize_career_application_text(value: str) -> str:
+    sanitized = value.strip()
+    replacements = (
+        ("替换为真实数据", "需要补充真实数据"),
+        ("待补充", "需要补充"),
+        ("待补", "需要补充"),
+        ("待填写", "需要填写"),
+        ("待填", "需要填写"),
+        ("待完善", "需要完善"),
+        ("占位", "临时记录"),
+        ("TODO", "需要处理"),
+        ("TBD", "需要确认"),
+    )
+    for source, target in replacements:
+        sanitized = re.sub(re.escape(source), target, sanitized, flags=re.IGNORECASE)
+    return sanitized.strip()
+
+
+def _sanitize_career_application_text_list(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        sanitized = _sanitize_career_application_text(value)
+        if not sanitized or sanitized in seen:
+            continue
+        output.append(sanitized)
+        seen.add(sanitized)
+    return output
+
+
+def _ensure_career_profile_ref(
+    career_store: CareerProductStore,
+    *,
+    session_id: str,
+    career_profile_id: str,
+    source_artifact_id: str | None,
+    evidence_refs: list[str],
+) -> None:
+    if career_store.get_career_profile(career_profile_id) is not None:
+        return
+    if career_profile_id != _DEFAULT_CAREER_PROFILE_ID:
+        raise ToolExecutionError(f"CareerProfile not found: {career_profile_id}")
+    now = _now()
+    career_store.save_career_profile(
+        CareerProfile(
+            career_profile_id=career_profile_id,
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=source_artifact_id,
+            evidence_refs=evidence_refs,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+
+def _ensure_jd_analysis_ref(
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    *,
+    session_id: str,
+    jd_analysis_id: str,
+    source_artifact_id: str,
+    evidence_refs: list[str],
+) -> tuple[str, list[str]]:
+    current = _current_session_record_by_id(career_store.get_jd_analysis, jd_analysis_id, session_id)
+    if current is not None:
+        return jd_analysis_id, _append_evidence_refs(evidence_refs, jd_analysis_id, source_artifact_id)
+
+    existing = _find_current_session_record(
+        career_store.list_jd_analyses(),
+        session_id,
+        lambda item: item.source_artifact_id == source_artifact_id,
+    )
+    if isinstance(existing, JDAnalysis):
+        evidence_refs = _remove_non_current_prefixed_refs(
+            evidence_refs,
+            prefix="jd_",
+            valid_ids={existing.jd_analysis_id},
+        )
+        return existing.jd_analysis_id, _append_evidence_refs(
+            evidence_refs,
+            existing.jd_analysis_id,
+            existing.source_artifact_id,
+        )
+
+    jd_text = _read_current_artifact_text_or_empty(session_repository, session_id, source_artifact_id)
+    inferred_skills = _infer_jd_required_skills(jd_text)
+    now = _now()
+    saved = career_store.save_jd_analysis(
+        JDAnalysis(
+            jd_analysis_id=jd_analysis_id,
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=source_artifact_id,
+            evidence_refs=[source_artifact_id],
+            created_at=now,
+            updated_at=now,
+            company="",
+            position=_infer_jd_position(jd_text),
+            seniority="",
+            required_skills=inferred_skills,
+            preferred_skills=[],
+            responsibilities=[],
+            keywords=list(inferred_skills),
+            risk_signals=["JDAnalysis 由 JobFitReport 保存时兜底创建；建议后续补充更完整的 JD 结构化字段。"],
+            interview_focus=[],
+        )
+    )
+    evidence_refs = _remove_non_current_prefixed_refs(
+        evidence_refs,
+        prefix="jd_",
+        valid_ids={saved.jd_analysis_id},
+    )
+    return saved.jd_analysis_id, _append_evidence_refs(evidence_refs, saved.jd_analysis_id, source_artifact_id)
+
+
+def _infer_jd_position(text: str) -> str:
+    normalized = text.strip()
+    if not normalized:
+        return ""
+    for pattern in (
+        re.compile(r"招聘\s*([^，。；\n]{2,40}(?:工程师|经理|专家|实习生|开发))"),
+        re.compile(r"岗位[:：]\s*([^，。；\n]{2,40})"),
+        re.compile(r"职位[:：]\s*([^，。；\n]{2,40})"),
+    ):
+        match = pattern.search(normalized)
+        if match is not None:
+            return match.group(1).strip()
+    return ""
+
+
+def _infer_jd_required_skills(text: str) -> list[str]:
+    display_names = {
+        "agent": "Agent",
+        "docker": "Docker",
+        "fastapi": "FastAPI",
+        "langchain": "LangChain",
+        "langgraph": "LangGraph",
+        "milvus": "Milvus",
+        "mysql": "MySQL",
+        "postgresql": "PostgreSQL",
+        "python": "Python",
+        "rag": "RAG",
+        "redis": "Redis",
+        "vector_search": "向量检索",
+    }
+    lowered = text.casefold()
+    output: list[str] = []
+    for canonical, aliases in _RESUME_SOURCE_TECH_TERMS.items():
+        if canonical not in display_names:
+            continue
+        if not any(alias.casefold() in lowered for alias in aliases):
+            continue
+        output.append(display_names[canonical])
+    return output
+
+
+def _sanitize_job_fit_matched_evidence(
+    *,
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    session_id: str,
+    resume_profile_id: str,
+    matched_evidence: list[Any],
+    gaps: list[Any],
+) -> tuple[list[Any], list[Any]]:
+    """Move unsupported candidate-skill claims from matched evidence to gaps."""
+
+    try:
+        profile = career_store.get_resume_profile(resume_profile_id)
+    except (StorageError, ValidationError):
+        return matched_evidence, gaps
+    if profile is None or profile.source_session_id != session_id:
+        return matched_evidence, gaps
+
+    support_text = "\n".join(
+        (
+            _resume_profile_source_text(session_repository, session_id=session_id, profile=profile),
+            _resume_profile_supported_fact_text(profile),
+        )
+    )
+    if not support_text.strip():
+        return matched_evidence, gaps
+
+    sanitized_matches: list[Any] = []
+    sanitized_gaps = list(gaps)
+    for item in matched_evidence:
+        text = item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, sort_keys=True)
+        unsupported_terms = _unsupported_resume_version_tech_terms(text, support_text)
+        if unsupported_terms:
+            gap_text = (
+                "未证实匹配项已转为差距: "
+                + text
+                + "；未在候选人事实中找到支持: "
+                + ", ".join(unsupported_terms[:8])
+            )
+            if gap_text not in sanitized_gaps:
+                sanitized_gaps.append(gap_text)
+            continue
+        sanitized_matches.append(item)
+    return sanitized_matches, sanitized_gaps
+
+
+def _normalize_merge_arguments(arguments: dict[str, Any], *, id_fields: tuple[str, ...]) -> dict[str, Any]:
+    """Repair common LLM merge argument nesting without weakening field validation."""
+    raw_updates = arguments.get("updates")
+    if not isinstance(raw_updates, str) or not raw_updates.strip():
+        return arguments
+    payload = _decode_json_objectish_string(raw_updates, field_name="updates")
+    if not isinstance(payload, dict):
+        return arguments
+
+    normalized = dict(arguments)
+    meta_fields = {"evidence_refs", "source_artifact_id", *id_fields}
+    for field_name in meta_fields:
+        value = payload.get(field_name)
+        if value is not None and _is_missing_merge_argument(normalized.get(field_name)):
+            normalized[field_name] = value
+
+    nested_updates = payload.get("updates")
+    if nested_updates is not None:
+        normalized["updates"] = nested_updates
+        return normalized
+
+    update_payload = {key: value for key, value in payload.items() if key not in meta_fields}
+    normalized["updates"] = update_payload
+    return normalized
+
+
+def _is_missing_merge_argument(raw: Any) -> bool:
+    if raw is None:
+        return True
+    if isinstance(raw, str):
+        return not raw.strip()
+    if isinstance(raw, list | dict | tuple | set):
+        return len(raw) == 0
+    return False
+
+
+def _decode_json_objectish_string(raw: str, *, field_name: str) -> dict[str, Any]:
+    text = raw.strip()
+    try:
+        decoded = _decode_json_object_string(text, field_name=field_name)
+        if isinstance(decoded, dict):
+            return decoded
+    except ToolExecutionError:
+        pass
+
+    decoder = json.JSONDecoder()
+    try:
+        first, end_index = decoder.raw_decode(text)
+    except json.JSONDecodeError:
+        first = None
+        end_index = -1
+    if isinstance(first, dict):
+        tail = text[end_index:].strip()
+        if tail.startswith(","):
+            try:
+                extra = _decode_json_object_string("{" + tail[1:].strip() + "}", field_name=field_name)
+            except ToolExecutionError:
+                extra = None
+            if isinstance(extra, dict):
+                return {**first, **extra}
+
+    try:
+        wrapped = _decode_json_object_string("{" + text + "}", field_name=field_name)
+    except ToolExecutionError as exc:
+        raise ToolExecutionError(f"'{field_name}' must be an object.") from exc
+    if not isinstance(wrapped, dict):
+        raise ToolExecutionError(f"'{field_name}' must be an object.")
+    return wrapped
 
 
 def _required_current_artifact(
@@ -1282,6 +1975,26 @@ def _require_current_artifact(
         artifact = require_session_artifact(session_repository, session_id, artifact_id)
     except ToolExecutionError as exc:
         raise ToolExecutionError(f"{field_name} must reference a current session artifact: {artifact_id}") from exc
+    return artifact.artifact_id
+
+
+def _require_current_generated_artifact(
+    session_repository: SessionRepository,
+    session_id: str,
+    artifact_id: str,
+    *,
+    field_name: str,
+) -> str:
+    try:
+        artifact = require_session_artifact(session_repository, session_id, artifact_id)
+    except ToolExecutionError as exc:
+        raise ToolExecutionError(f"{field_name} must reference a current session artifact: {artifact_id}") from exc
+    if artifact.kind != "generated_file":
+        raise ToolExecutionError(
+            f"{field_name} must reference a generated_file artifact for ResumeVersion output; "
+            f"got {artifact.kind}: {artifact_id}. If you have markdown resume content, pass it as content "
+            "so career_resume_version_create can create a new generated_file artifact."
+        )
     return artifact.artifact_id
 
 
@@ -1379,21 +2092,136 @@ def _is_same_application_project(
     return bool(company and position and record.company == company and record.position == position)
 
 
+def _validate_resume_profile_source_alignment(
+    session_repository: SessionRepository,
+    session_id: str,
+    source_artifact_id: str,
+    args: dict[str, Any],
+) -> None:
+    try:
+        source_text = session_repository.read_session_artifact_text(session_id, source_artifact_id)
+    except Exception:
+        return
+    source_terms = _extract_resume_source_terms(source_text)
+    if len(source_terms) < 2:
+        return
+
+    profile_text = _resume_profile_fact_text(args)
+    profile_terms = _extract_resume_source_terms(profile_text)
+    if not profile_terms.intersection(source_terms):
+        expected = ", ".join(sorted(source_terms))
+        raise ToolExecutionError(
+            "ResumeProfile 与 source_artifact_id 的明确技术证据不一致："
+            f"源简历包含 {expected}，但画像事实字段没有保留这些证据。请重新读取源 artifact 后再保存。"
+        )
+
+    missing_terms = sorted(source_terms - profile_terms)
+    if len(source_terms) >= 3 and len(missing_terms) >= max(2, int(len(source_terms) * 0.6)):
+        expected = ", ".join(sorted(source_terms))
+        missing = ", ".join(missing_terms)
+        raise ToolExecutionError(
+            "ResumeProfile 丢失过多源简历中的明确技术证据："
+            f"源简历包含 {expected}，画像缺失 {missing}。请以源 artifact 为准重新保存。"
+        )
+
+
+def _resume_profile_fact_text(args: dict[str, Any]) -> str:
+    fact_payload = {
+        "basic_info": args.get("basic_info"),
+        "education": args.get("education"),
+        "work_experience": args.get("work_experience"),
+        "project_experience": args.get("project_experience"),
+        "skills": args.get("skills"),
+        "certificates": args.get("certificates"),
+        "awards": args.get("awards"),
+        "self_evaluation": args.get("self_evaluation"),
+    }
+    return json.dumps(fact_payload, ensure_ascii=False)
+
+
+def _extract_resume_source_terms(text: str) -> set[str]:
+    lowered = text.casefold()
+    terms: set[str] = set()
+    for canonical, aliases in _RESUME_SOURCE_TECH_TERMS.items():
+        if any(alias.casefold() in lowered for alias in aliases):
+            terms.add(canonical)
+    return terms
+
+
 def _required_dict(raw: Any, *, field_name: str) -> dict[str, Any]:
     if isinstance(raw, str):
-        try:
-            decoded = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ToolExecutionError(f"'{field_name}' must be an object.") from exc
+        decoded = _decode_json_object_string(raw, field_name=field_name)
         raw = decoded
     if not isinstance(raw, dict):
         raise ToolExecutionError(f"'{field_name}' must be an object.")
     return dict(raw)
 
 
-def _optional_dict(raw: Any, *, field_name: str) -> dict[str, Any]:
+def _decode_json_object_string(raw: str, *, field_name: str) -> Any:
+    text = raw.strip()
+    if not text:
+        raise ToolExecutionError(f"'{field_name}' must be an object.")
+    candidates = [text]
+    repaired = _repair_unclosed_json_containers(text)
+    if repaired != text:
+        candidates.append(repaired)
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    raise ToolExecutionError(f"'{field_name}' must be an object.")
+
+
+def _repair_unclosed_json_containers(text: str) -> str:
+    if not text.startswith("{"):
+        return text
+    output: list[str] = []
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        output.append(char)
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            stack.append("}")
+            continue
+        if char == "[":
+            stack.append("]")
+            continue
+        if char not in {"]", "}"}:
+            continue
+        if stack and stack[-1] == char:
+            stack.pop()
+            continue
+        while stack and stack[-1] != char:
+            output.insert(len(output) - 1, stack.pop())
+        if stack and stack[-1] == char:
+            stack.pop()
+    while stack:
+        output.append(stack.pop())
+    return "".join(output)
+
+
+def _optional_dict(raw: Any, *, field_name: str, string_fallback_key: str | None = None) -> dict[str, Any]:
     if raw is None:
         return {}
+    if isinstance(raw, str) and string_fallback_key is not None:
+        try:
+            return _required_dict(raw, field_name=field_name)
+        except ToolExecutionError:
+            text = raw.strip()
+            return {string_fallback_key: text} if text else {}
     return _required_dict(raw, field_name=field_name)
 
 
@@ -1458,6 +2286,8 @@ def _normalize_evidence_refs(refs: list[str]) -> list[str]:
     seen: set[str] = set()
     for ref in refs:
         normalized = _normalize_evidence_ref(ref)
+        if is_reserved_reference_value(normalized):
+            continue
         if normalized in seen:
             continue
         output.append(normalized)
@@ -1569,8 +2399,13 @@ _RESUME_VERSION_METRIC_PATTERNS = (
     re.compile(r"\d+(?:\.\d+)?\s*%"),
     re.compile(r"\d+(?:\.\d+)?\s*(?:ms|毫秒|秒|qps|tps|rps)", re.IGNORECASE),
     re.compile(r"\d+(?:\.\d+)?\s*(?:倍|x)", re.IGNORECASE),
+    re.compile(r"\d+(?:\.\d+)?\s*[kK]\b"),
+    re.compile(r"\d+(?:\.\d+)?\s*年"),
+    re.compile(r"\d+\+?\s*(?:个|项)?\s*[\u4e00-\u9fffA-Za-z]{0,8}(?:算法|维度|连接|用户|客户|项目|接口|模块|服务)"),
     re.compile(r"(?:千|万|百万|千万|亿)级"),
 )
+_RESUME_VERSION_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_RESUME_VERSION_PHONE_PATTERN = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 
 
 def _reject_invalid_resume_version_text(
@@ -1602,8 +2437,209 @@ def _reject_invalid_resume_version_text(
                 content=content,
             )
         )
+        issues.extend(
+            _resume_version_unsupported_candidate_fact_issues(
+                career_store=career_store,
+                session_repository=session_repository,
+                session_id=session_id,
+                base_resume_profile_id=base_resume_profile_id,
+                content=content,
+                change_summary=change_summary,
+                keyword_strategy=keyword_strategy,
+            )
+        )
     if issues:
         raise ToolExecutionError("ResumeVersion validation failed: " + " ".join(issues))
+
+
+def _safe_resume_version_fallback_after_validation_failure(
+    *,
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    context: RunContext,
+    base_resume_profile_id: str,
+    target_jd_analysis_id: str | None,
+    title: str,
+    risk_notes: list[str],
+) -> dict[str, Any] | None:
+    if _current_run_resume_version_validation_failure_count(session_repository, context) < 1:
+        return None
+    try:
+        profile = career_store.get_resume_profile(base_resume_profile_id)
+    except (StorageError, ValidationError):
+        return None
+    if profile is None or profile.source_session_id != context.session_id:
+        return None
+    source_text = _resume_profile_source_text(
+        session_repository,
+        session_id=context.session_id,
+        profile=profile,
+    )
+    content = _build_conservative_resume_version_content(profile=profile, source_text=source_text, title=title)
+    support_text = "\n".join((source_text, _resume_profile_supported_fact_text(profile)))
+    keyword_strategy = _supported_resume_version_keywords(support_text)
+    merged_risk_notes = list(risk_notes)
+    _append_unique(merged_risk_notes, "已启用保守事实版本：未在原始简历或 ResumeProfile 中证实的联系方式、量化指标和技术关键词均未写入正文。")
+    missing_jd_skills = _missing_jd_skills_for_resume_version(
+        career_store,
+        session_id=context.session_id,
+        target_jd_analysis_id=target_jd_analysis_id,
+        support_text=support_text,
+    )
+    if missing_jd_skills:
+        _append_unique(merged_risk_notes, "以下 JD 关键词未在候选人事实中证实，需确认后再写入简历正文：" + "、".join(missing_jd_skills[:8]))
+    return {
+        "content": content,
+        "change_summary": [
+            "基于原始简历和 ResumeProfile 生成保守定制版本。",
+            "移除未证实的联系方式、量化指标和 JD 技术关键词，避免候选人事实漂移。",
+        ],
+        "keyword_strategy": keyword_strategy,
+        "risk_notes": merged_risk_notes,
+    }
+
+
+def _current_run_resume_version_validation_failure_count(
+    session_repository: SessionRepository,
+    context: RunContext,
+) -> int:
+    try:
+        events = session_repository.list_run_events(context.session_id, context.agent_id, context.run_id)
+    except (StorageError, ValidationError):
+        return 0
+    count = 0
+    for event in events:
+        if event.type != "tool_result":
+            continue
+        payload = event.payload
+        if payload.get("tool_name") != "career_resume_version_create" or payload.get("success") is not False:
+            continue
+        content = payload.get("content")
+        if isinstance(content, str) and "ResumeVersion validation failed" in content:
+            count += 1
+    return count
+
+
+def _build_conservative_resume_version_content(*, profile: ResumeProfile, source_text: str, title: str) -> str:
+    name = _resume_profile_display_name(profile) or "候选人"
+    lines = [
+        f"# {name}",
+        "",
+        f"> {title}",
+        "",
+        "## 已证实简历事实",
+        "",
+    ]
+    fact_lines = [line.strip() for line in source_text.splitlines() if line.strip()]
+    if fact_lines:
+        lines.extend(f"- {line}" for line in fact_lines)
+    else:
+        lines.extend(_profile_fact_bullets(profile))
+    lines.extend(
+        [
+            "",
+            "## 定制说明",
+            "",
+            "- 本版本仅重组和突出已证实的简历事实。",
+            "- 未在候选人事实中出现的 JD 技术关键词不写入正文，可在后续确认后补充。",
+        ]
+    )
+    return "\n".join(lines).strip() + "\n"
+
+
+def _resume_profile_display_name(profile: ResumeProfile) -> str:
+    for key in ("name", "姓名", "candidate_name"):
+        value = profile.basic_info.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _profile_fact_bullets(profile: ResumeProfile) -> list[str]:
+    sections = {
+        "基本信息": profile.basic_info,
+        "教育背景": profile.education,
+        "工作经历": profile.work_experience,
+        "项目经历": profile.project_experience,
+        "技能": profile.skills,
+        "证书": profile.certificates,
+        "奖项": profile.awards,
+        "自我评价": profile.self_evaluation,
+    }
+    bullets: list[str] = []
+    for label, value in sections.items():
+        text = _compact_fact_value(value)
+        if text:
+            bullets.append(f"{label}：{text}")
+    return bullets or ["暂无可展开的结构化事实，请回到原始简历补充信息。"]
+
+
+def _compact_fact_value(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _supported_resume_version_keywords(support_text: str) -> list[str]:
+    display_names = {
+        "agent": "Agent",
+        "celery": "Celery",
+        "docker": "Docker",
+        "elasticsearch": "Elasticsearch",
+        "faiss": "FAISS",
+        "fastapi": "FastAPI",
+        "java": "Java",
+        "kubernetes": "Kubernetes",
+        "langchain": "LangChain",
+        "langgraph": "LangGraph",
+        "milvus": "Milvus",
+        "mysql": "MySQL",
+        "llm_api": "LLM API",
+        "postgresql": "PostgreSQL",
+        "python": "Python",
+        "pytorch": "PyTorch",
+        "rag": "RAG",
+        "react": "React",
+        "redis": "Redis",
+        "spring": "Spring",
+        "tensorflow": "TensorFlow",
+        "vector_search": "向量检索",
+        "vue": "Vue",
+        "websocket": "WebSocket",
+    }
+    normalized_support = _normalize_fact_text(support_text)
+    output: list[str] = []
+    for canonical, aliases in _RESUME_SOURCE_TECH_TERMS.items():
+        if canonical not in display_names:
+            continue
+        if _first_present_alias(normalized_support, aliases) is not None:
+            output.append(display_names[canonical])
+    return output[:12]
+
+
+def _missing_jd_skills_for_resume_version(
+    career_store: CareerProductStore,
+    *,
+    session_id: str,
+    target_jd_analysis_id: str | None,
+    support_text: str,
+) -> list[str]:
+    if target_jd_analysis_id is None:
+        return []
+    try:
+        jd_analysis = career_store.get_jd_analysis(target_jd_analysis_id)
+    except (StorageError, ValidationError):
+        return []
+    if jd_analysis is None or jd_analysis.source_session_id != session_id:
+        return []
+    normalized_support = _normalize_fact_text(support_text)
+    missing: list[str] = []
+    for skill in jd_analysis.required_skills:
+        if _normalize_fact_text(skill) not in normalized_support:
+            _append_unique(missing, skill)
+    return missing
 
 
 def _resume_version_placeholder_issues(
@@ -1623,12 +2659,26 @@ def _resume_version_placeholder_issues(
     }
     issues: list[str] = []
     for field_name, text in fields.items():
-        if any(pattern.search(text) for pattern in _RESUME_VERSION_PLACEHOLDER_PATTERNS):
+        matched_terms = _matched_placeholder_terms(text)
+        if matched_terms:
             issues.append(
                 f"ResumeVersion {field_name} contains forbidden placeholder or replacement wording. "
-                "Remove that wording; describe only verified changes or missing-fact risks."
+                f"Matched: {', '.join(matched_terms[:4])}. "
+                "Remove that wording from the resume body; describe missing facts only in risk_notes."
             )
     return issues
+
+
+def _matched_placeholder_terms(text: str) -> list[str]:
+    output: list[str] = []
+    for pattern in _RESUME_VERSION_PLACEHOLDER_PATTERNS:
+        match = pattern.search(text)
+        if match is None:
+            continue
+        term = match.group(0)
+        if term not in output:
+            output.append(term)
+    return output
 
 
 def _resume_version_unverified_metric_issues(
@@ -1662,8 +2712,110 @@ def _resume_version_unverified_metric_issues(
     return [
         "ResumeVersion content contains unverified quantitative metrics not present in the base resume artifact: "
         + ", ".join(unverified[:8])
-        + ". Remove unsupported metrics or first add verified source evidence."
+        + ". Retry career_resume_version_create immediately with those metrics removed; do not add unsupported "
+        "evidence_refs and do not call more get/list/read tools unless a required id is missing."
     ]
+
+
+def _resume_version_unsupported_candidate_fact_issues(
+    *,
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    session_id: str,
+    base_resume_profile_id: str,
+    content: str,
+    change_summary: list[str],
+    keyword_strategy: list[str],
+) -> list[str]:
+    try:
+        profile = career_store.get_resume_profile(base_resume_profile_id)
+    except (StorageError, ValidationError):
+        return []
+    if profile is None or profile.source_session_id != session_id:
+        return []
+    source_text = _resume_profile_source_text(
+        session_repository,
+        session_id=session_id,
+        profile=profile,
+    )
+    support_text = "\n".join((source_text, _resume_profile_supported_fact_text(profile)))
+    if not support_text.strip():
+        return []
+
+    unsupported_contacts = _unsupported_resume_version_contacts(content, support_text)
+    candidate_claim_text = "\n".join((content, "\n".join(change_summary), "\n".join(keyword_strategy)))
+    unsupported_terms = _unsupported_resume_version_tech_terms(candidate_claim_text, support_text)
+    issues: list[str] = []
+    if unsupported_contacts:
+        issues.append(
+            "ResumeVersion content contains contact or salary-like candidate facts absent from the base resume: "
+            + ", ".join(unsupported_contacts[:8])
+            + ". Remove fabricated contact/salary fields instead of filling demo values."
+        )
+    if unsupported_terms:
+        issues.append(
+            "ResumeVersion content/change_summary/keyword_strategy contains unsupported candidate tech facts: "
+            + ", ".join(unsupported_terms[:10])
+            + ". Only write technologies present in the base resume or saved ResumeProfile; move missing JD keywords "
+            "to risk_notes or next_actions."
+        )
+    return issues
+
+
+def _resume_profile_supported_fact_text(profile: ResumeProfile) -> str:
+    payload = {
+        "basic_info": profile.basic_info,
+        "education": profile.education,
+        "work_experience": profile.work_experience,
+        "project_experience": profile.project_experience,
+        "skills": profile.skills,
+        "certificates": profile.certificates,
+        "awards": profile.awards,
+        "self_evaluation": profile.self_evaluation,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _unsupported_resume_version_contacts(content: str, support_text: str) -> list[str]:
+    normalized_support = _normalize_fact_text(support_text)
+    unsupported: list[str] = []
+    for email in _RESUME_VERSION_EMAIL_PATTERN.findall(content):
+        if _normalize_fact_text(email) not in normalized_support:
+            _append_unique(unsupported, email)
+    for phone in _RESUME_VERSION_PHONE_PATTERN.findall(content):
+        if _normalize_fact_text(phone) not in normalized_support:
+            _append_unique(unsupported, phone)
+    return unsupported
+
+
+def _unsupported_resume_version_tech_terms(candidate_claim_text: str, support_text: str) -> list[str]:
+    normalized_claim = _normalize_fact_text(candidate_claim_text)
+    normalized_support = _normalize_fact_text(support_text)
+    unsupported: list[str] = []
+    for canonical, aliases in _RESUME_SOURCE_TECH_TERMS.items():
+        claim_alias = _first_present_alias(normalized_claim, aliases)
+        if claim_alias is None:
+            continue
+        if _first_present_alias(normalized_support, aliases) is None:
+            _append_unique(unsupported, canonical)
+    return unsupported
+
+
+def _first_present_alias(normalized_text: str, aliases: tuple[str, ...]) -> str | None:
+    for alias in aliases:
+        normalized_alias = _normalize_fact_text(alias)
+        if normalized_alias and normalized_alias in normalized_text:
+            return alias
+    return None
+
+
+def _normalize_fact_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
+def _append_unique(output: list[str], value: str) -> None:
+    if value not in output:
+        output.append(value)
 
 
 def _resume_profile_source_text(
@@ -1767,6 +2919,68 @@ def _get_record_or_current_session_single(
     else:
         extra["resolved_from_missing_id"] = True
     return fallback, extra
+
+
+def _current_session_record_by_id(
+    getter: Callable[[str], Any | None],
+    record_id: str,
+    session_id: str,
+) -> Any | None:
+    try:
+        record = getter(record_id)
+    except (StorageError, ValidationError):
+        return None
+    if record is None or getattr(record, "source_session_id", None) != session_id:
+        return None
+    return record
+
+
+def _repair_missing_current_session_record_id(
+    record_id: str,
+    *,
+    session_id: str,
+    records: list[Any],
+    getter: Callable[[str], Any | None],
+    id_attr: str,
+) -> str:
+    if _current_session_record_by_id(getter, record_id, session_id) is not None:
+        return record_id
+    fallback = _single_current_session_record(records, session_id)
+    if fallback is None:
+        return record_id
+    repaired = getattr(fallback, id_attr, None)
+    return repaired if isinstance(repaired, str) and repaired.strip() else record_id
+
+
+def _infer_single_current_fit_report(
+    career_store: CareerProductStore,
+    *,
+    session_id: str,
+    source_artifact_id: str | None,
+    jd_analysis_id: str | None,
+    resume_profile_id: str | None,
+) -> JobFitReport | None:
+    fit_report = _single_current_session_record(career_store.list_job_fit_reports(), session_id)
+    if fit_report is None:
+        return None
+    if not isinstance(fit_report, JobFitReport):
+        return None
+    if source_artifact_id is not None and fit_report.source_artifact_id != source_artifact_id:
+        return None
+    if jd_analysis_id is not None and fit_report.jd_analysis_id != jd_analysis_id:
+        return None
+    if resume_profile_id is not None and fit_report.resume_profile_id != resume_profile_id:
+        return None
+    return fit_report
+
+
+def _remove_non_current_prefixed_refs(
+    refs: list[str],
+    *,
+    prefix: str,
+    valid_ids: set[str],
+) -> list[str]:
+    return [ref for ref in refs if not ref.startswith(prefix) or ref in valid_ids]
 
 
 def _find_current_session_record(records: list[Any], session_id: str, predicate: Callable[[Any], bool]) -> Any | None:

@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("TOOL_SCHEMA_ALWAYS_VISIBLE"),
     )
     tool_context_window_mode: str = Field(
-        default="off",
+        default="compact",
         validation_alias=AliasChoices("TOOL_CONTEXT_WINDOW_MODE"),
     )
     workflow_rule_selection_mode: str = Field(
