@@ -616,28 +616,29 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
     assert duplicate_fit_payload["record_id"] == "fit_alpha"
     assert duplicate_fit_payload["idempotent_reused"] is True
 
-    with pytest.raises(ToolExecutionError, match="CareerProfile not found"):
-        registry.execute(
-            ToolCall(
-                name="career_job_fit_report_save",
-                arguments={
-                    "job_fit_report_id": "fit_missing_profile",
-                    "source_artifact_id": jd_artifact_id,
-                    "evidence_refs": [
-                        "resume_profile_alpha",
-                        "career_profile_missing",
-                        "jd_alpha",
-                        jd_artifact_id,
-                        report_artifact_id,
-                    ],
-                    "jd_analysis_id": "jd_alpha",
-                    "resume_profile_id": "resume_profile_alpha",
-                    "career_profile_id": "career_profile_missing",
-                    "report_artifact_id": report_artifact_id,
-                },
-            ),
-            context=_context(agent_id="job_agent"),
-        )
+    repaired_missing_profile_payload = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_missing_profile",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [
+                "resume_profile_alpha",
+                "career_profile_missing",
+                "jd_alpha",
+                jd_artifact_id,
+                report_artifact_id,
+            ],
+            "jd_analysis_id": "jd_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_missing",
+            "report_artifact_id": report_artifact_id,
+        },
+        _context(agent_id="job_agent"),
+    )
+    assert repaired_missing_profile_payload["record_id"] == "fit_alpha"
+    assert repaired_missing_profile_payload["idempotent_reused"] is True
+    assert repaired_missing_profile_payload["record"]["career_profile_id"] == "career_profile_default"
 
     repaired_missing_jd_payload = _execute(
         registry,
@@ -2119,6 +2120,19 @@ def test_career_application_merge_accepts_resume_stage_aliases(tmp_path: Path) -
     )
 
     assert merged_from_applied_phrase["record"]["stage"] == "applied"
+
+    merged_from_resume_tailored_stage = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "resume_tailored", "notes": "英文阶段别名已归一化。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_resume_tailored_stage["record"]["stage"] == "ready_to_apply"
 
 
 def test_career_application_tools_sanitize_placeholder_wording(tmp_path: Path) -> None:

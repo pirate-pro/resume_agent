@@ -1176,6 +1176,45 @@ def test_delegate_agents_jd_fit_replaces_stale_profile_ids_in_instruction(tmp_pa
     )
 
 
+def test_delegate_agents_replaces_stale_profile_ids_even_when_user_message_is_broad(tmp_path: Path) -> None:
+    guard, store, repo = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+    store.save_career_profile(_career_profile())
+    context = _context()
+    _append_user_message(repo, context, "继续推进这个求职任务。")
+
+    decision = guard.inspect(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "tasks": [
+                    {
+                        "target_agent_id": "job_agent",
+                        "instruction": (
+                            "基于 resume_profile_id=resume_profile_real 和 "
+                            "career_profile_id=career_profile_update 生成 JobFitReport。"
+                        ),
+                        "artifact_refs": ["artifact_jd_live_001"],
+                    }
+                ],
+                "wait": True,
+            },
+            tool_call_id="call_delegate_broad_stale_refs",
+        ),
+        context,
+    )
+
+    assert decision.result is None
+    instruction = decision.tool_call.arguments["tasks"][0]["instruction"]
+    assert "career_profile_update" not in instruction
+    assert "career_profile_id=career_profile_default" in instruction
+    assert decision.event_payload is not None
+    assert any(
+        item["reason"] == "delegate_instruction_product_refs_repaired"
+        for item in decision.event_payload["repair_actions"]
+    )
+
+
 def test_delegate_agents_jd_fit_task_gets_single_report_artifact_boundary_without_profiles(tmp_path: Path) -> None:
     guard, _, repo = _guard(tmp_path)
     context = _context()

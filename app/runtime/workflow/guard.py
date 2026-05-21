@@ -1760,8 +1760,6 @@ class WorkflowRuntimeGuard:
                 }
             )
 
-        if not jd_fit_intent:
-            return args, repair_actions
         if _single_current_session_record(self._career_store.list_job_fit_reports(), context.session_id) is not None:
             return args, repair_actions
         resume_profile = _single_current_session_record(self._career_store.list_resume_profiles(), context.session_id)
@@ -1804,6 +1802,9 @@ class WorkflowRuntimeGuard:
                 replaced_instruction_refs.extend(resume_refs_changed)
                 replaced_instruction_refs.extend(career_refs_changed)
                 changed = True
+            if not jd_fit_intent:
+                tasks.append(task)
+                continue
             lowered_instruction = instruction.casefold()
             if _has_all(
                 lowered_instruction,

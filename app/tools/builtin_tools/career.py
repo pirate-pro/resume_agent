@@ -715,7 +715,7 @@ class CareerJobFitReportSaveTool:
                 source_artifact_id=source_artifact_id,
                 evidence_refs=evidence_refs,
             )
-            _ensure_career_profile_ref(
+            career_profile_id, evidence_refs = _ensure_career_profile_ref(
                 self._career_store,
                 session_id=run_context.session_id,
                 career_profile_id=career_profile_id,
@@ -1619,6 +1619,8 @@ def _normalize_application_stage(value: Any) -> Any:
 def _looks_like_resume_ready_stage(value: str) -> bool:
     if not value:
         return False
+    if ("简历" in value or "resume" in value) and ("定制" in value or "tailor" in value or "custom" in value):
+        return True
     if ("简历" in value or "resume" in value or "tailor" in value or "custom" in value) and (
         "完成" in value
         or "生成" in value
@@ -1719,13 +1721,25 @@ def _ensure_career_profile_ref(
     career_profile_id: str,
     source_artifact_id: str | None,
     evidence_refs: list[str],
-) -> None:
+) -> tuple[str, list[str]]:
     if career_store.get_career_profile(career_profile_id) is not None:
-        return
+        return career_profile_id, _append_evidence_refs(evidence_refs, career_profile_id, source_artifact_id)
+    fallback = _single_current_session_record(career_store.list_career_profiles(), session_id)
+    if isinstance(fallback, CareerProfile):
+        evidence_refs = _remove_non_current_prefixed_refs(
+            evidence_refs,
+            prefix="career_profile_",
+            valid_ids={fallback.career_profile_id},
+        )
+        return fallback.career_profile_id, _append_evidence_refs(
+            evidence_refs,
+            fallback.career_profile_id,
+            source_artifact_id,
+        )
     if career_profile_id != _DEFAULT_CAREER_PROFILE_ID:
         raise ToolExecutionError(f"CareerProfile not found: {career_profile_id}")
     now = _now()
-    career_store.save_career_profile(
+    saved = career_store.save_career_profile(
         CareerProfile(
             career_profile_id=career_profile_id,
             status=CareerRecordStatus.ACTIVE,
@@ -1736,6 +1750,7 @@ def _ensure_career_profile_ref(
             updated_at=now,
         )
     )
+    return saved.career_profile_id, _append_evidence_refs(evidence_refs, saved.career_profile_id, source_artifact_id)
 
 
 def _ensure_jd_analysis_ref(

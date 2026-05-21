@@ -11,6 +11,7 @@ _RESERVED_REFERENCE_VALUES = {
     "career_profile_get",
     "career_profile_id",
     "career_profile_merge",
+    "career_profile_update",
     "diagnosis_artifact_id",
     "evidence_refs",
     "fit_score",

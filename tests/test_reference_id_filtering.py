@@ -87,6 +87,29 @@ def test_career_flow_state_ignores_reserved_refs_from_summary_text() -> None:
     assert state.refs["career_profile_id"] == "career_profile_default"
 
 
+def test_career_flow_state_ignores_action_like_career_profile_update_ref() -> None:
+    state = extract_career_flow_state(
+        [
+            _tool_result(
+                {
+                    "summary": (
+                        "resume_profile_id: resume_profile_real; "
+                        "career_profile_update: 未执行；有效记录是 career_profile_default。"
+                    ),
+                    "product_refs": ["resume_profile_real", "career_profile_update"],
+                },
+                tool_name="delegate_agents",
+            )
+        ],
+        _context(),
+        user_message="继续求职任务",
+        workflow_state=CurrentWorkflowState(),
+    )
+
+    assert state.refs["resume_profile_id"] == "resume_profile_real"
+    assert state.refs.get("career_profile_id") != "career_profile_update"
+
+
 def test_evidence_ref_validation_rejects_reserved_tool_like_refs() -> None:
     with pytest.raises(ValidationError, match="invalid reference format"):
         validate_evidence_refs(["career_profile_merge"])
