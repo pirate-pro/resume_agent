@@ -1599,6 +1599,8 @@ def _normalize_application_stage(value: Any) -> Any:
     alias = _CAREER_APPLICATION_STAGE_ALIASES.get(compact)
     if alias is not None:
         return alias
+    if _looks_like_applied_stage(compact):
+        return "applied"
     if _looks_like_resume_ready_stage(compact):
         return "ready_to_apply"
     if _looks_like_analysis_done_stage(compact):
@@ -1627,9 +1629,30 @@ def _looks_like_resume_ready_stage(value: str) -> bool:
         or "complete" in value
     ):
         return True
-    return ("投递" in value or "apply" in value) and (
-        "准备" in value or "可" in value or "ready" in value
+    return ("投递" in value or "申请" in value or "apply" in value) and (
+        "待" in value
+        or "准备" in value
+        or "前" in value
+        or "可" in value
+        or "ready" in value
+        or "toapply" in value
     )
+
+
+def _looks_like_applied_stage(value: str) -> bool:
+    if not value:
+        return False
+    has_apply_signal = "投递" in value or "申请" in value or "apply" in value or "applied" in value
+    has_done_signal = (
+        "已" in value
+        or "完成" in value
+        or "成功" in value
+        or "提交" in value
+        or "submitted" in value
+        or "applied" in value
+    )
+    has_ready_signal = "待" in value or "准备" in value or "前" in value or "可" in value or "ready" in value
+    return has_apply_signal and has_done_signal and not has_ready_signal
 
 
 def _looks_like_analysis_done_stage(value: str) -> bool:

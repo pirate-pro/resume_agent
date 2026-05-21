@@ -1819,6 +1819,7 @@ def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path
                 "next_action": "下一步只调用 career_application_create 创建求职项目。",
                 "next_allowed_tools": ["career_application_create"],
                 "missing_outputs": ["career_application"],
+                "blocked_tools": ["delegate_agents"],
                 "completed_refs": {
                     "resume_profile_id": "resume_profile_alpha",
                     "jd_analysis_id": "jd_alpha",
@@ -1866,9 +1867,11 @@ def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path
                 )
             if self.calls == 2:
                 assert "career_application_create" in tool_names
+                assert "delegate_agents" not in tool_names
                 return ModelResponse(content="匹配报告已经完成。", tool_calls=[])
             if self.calls == 3:
                 assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                assert "delegate_agents" not in tool_names
                 return ModelResponse(
                     content="",
                     tool_calls=[

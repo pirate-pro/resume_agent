@@ -24,6 +24,7 @@ __all__ = [
     "pending_runtime_plan_from_tool_search_result",
     "pending_runtime_plan_from_workflow_result",
     "runtime_plan_completion_tools",
+    "runtime_plan_discouraged_tools",
     "runtime_plan_next_allowed_tools",
     "workflow_incomplete_answer",
     "runtime_plan_notice",
@@ -177,6 +178,7 @@ def pending_runtime_plan_from_tool_search_result(content: str) -> dict[str, Any]
         "missing_outputs": payload.get("runtime_missing_outputs")
         if isinstance(payload.get("runtime_missing_outputs"), list)
         else [],
+        "discouraged_tools": runtime_plan_discouraged_tools(payload),
     }
 
 
@@ -200,6 +202,12 @@ def merge_pending_runtime_plan(
             [
                 *[str(item) for item in current.get("missing_outputs", []) if str(item).strip()],
                 *[str(item) for item in incoming.get("missing_outputs", []) if str(item).strip()],
+            ]
+        )
+        merged["discouraged_tools"] = _dedupe_strings(
+            [
+                *runtime_plan_discouraged_tools(current),
+                *runtime_plan_discouraged_tools(incoming),
             ]
         )
         known_refs: dict[str, Any] = {}
@@ -230,6 +238,7 @@ def pending_runtime_plan_from_context_bundle(payload: dict[str, Any]) -> dict[st
         "required_tools": required_tools,
         "known_refs": payload.get("known_refs") if isinstance(payload.get("known_refs"), dict) else {},
         "missing_outputs": payload.get("missing_outputs") if isinstance(payload.get("missing_outputs"), list) else [],
+        "discouraged_tools": runtime_plan_discouraged_tools(payload),
     }
 
 
@@ -257,6 +266,7 @@ def pending_runtime_plan_from_workflow_result(content: str) -> dict[str, Any] | 
         "required_tools": _runtime_plan_required_tools(payload),
         "known_refs": raw_known_refs,
         "missing_outputs": payload.get("missing_outputs") if isinstance(payload.get("missing_outputs"), list) else [],
+        "discouraged_tools": runtime_plan_discouraged_tools(payload),
     }
 
 
@@ -284,6 +294,13 @@ def pending_runtime_plan_from_successful_tool_result(tool_name: str, content: st
         "required_tools": ["career_application_merge"],
         "known_refs": known_refs,
         "missing_outputs": ["career_application_resume_version_link"],
+        "discouraged_tools": [
+            "tool_search",
+            "delegate_agents",
+            "session_read_artifact",
+            "career_resume_version_create",
+            "career_application_list",
+        ],
     }
 
 
@@ -297,6 +314,18 @@ def runtime_plan_next_allowed_tools(payload: dict[str, Any]) -> list[str]:
 def runtime_plan_completion_tools(payload: dict[str, Any]) -> list[str]:
     required_tools = _runtime_plan_required_tools(payload)
     return required_tools or runtime_plan_next_allowed_tools(payload)
+
+
+def runtime_plan_discouraged_tools(payload: dict[str, Any]) -> list[str]:
+    raw_tools = (
+        payload.get("runtime_discouraged_tools")
+        or payload.get("discouraged_tools")
+        or payload.get("blocked_tools")
+        or payload.get("blocked_actions")
+    )
+    if not isinstance(raw_tools, list):
+        return []
+    return _dedupe_strings([item for item in raw_tools if isinstance(item, str)])
 
 
 def is_premature_runtime_plan_answer(
@@ -314,6 +343,7 @@ def runtime_plan_notice(pending_runtime_plan: dict[str, Any] | None) -> str:
         return "运行时守卫：当前流程还未完成，请先调用已揭示的下一步工具，不要直接最终答复。"
     next_allowed_tools = ", ".join(runtime_plan_next_allowed_tools(pending_runtime_plan))
     required_tools = ", ".join(runtime_plan_completion_tools(pending_runtime_plan))
+    discouraged_tools = ", ".join(runtime_plan_discouraged_tools(pending_runtime_plan))
     missing_outputs = ", ".join(str(item) for item in pending_runtime_plan.get("missing_outputs") or [])
     raw_known_refs = pending_runtime_plan.get("known_refs")
     known_refs: dict[Any, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
@@ -324,6 +354,8 @@ def runtime_plan_notice(pending_runtime_plan: dict[str, Any] | None) -> str:
     ]
     if required_tools and required_tools != next_allowed_tools:
         lines.append(f"必须完成的产物工具：{required_tools}。")
+    if discouraged_tools:
+        lines.append(f"不要再调用这些工具：{discouraged_tools}。")
     if missing_outputs:
         lines.append(f"仍缺少产物：{missing_outputs}。")
     if known_ref_text:
@@ -424,6 +456,28 @@ def _resume_version_plan(*, known_refs: dict[str, str], missing_outputs: list[st
     required_refs = {"resume_profile_id", "jd_analysis_id", "job_fit_report_id", "application_id"}
     missing_refs = sorted(required_refs - set(known_refs))
     if missing_refs:
+        can_create_application = (
+            missing_refs == ["application_id"]
+            and {"resume_profile_id", "jd_analysis_id", "job_fit_report_id"} <= set(known_refs)
+        )
+        if can_create_application:
+            return RuntimeToolPlan(
+                phase="resume_version",
+                known_refs=known_refs,
+                missing_outputs=_dedupe_strings([*missing_outputs, "career_application"]),
+                next_allowed_tools=["career_application_create"],
+                discouraged_tools=[
+                    "delegate_agents",
+                    "session_read_artifact",
+                    "session_list_artifacts",
+                    "career_application_list",
+                    "career_resume_version_create",
+                    "retrieval_search",
+                    "retrieval_context_pack",
+                ],
+                schema_groups=["career_application"],
+                next_action="当前缺少 CareerApplication，但简历画像、JDAnalysis 和匹配报告已齐；直接调用 career_application_create 创建求职项目，不要重新委派或列举旧项目。",
+            )
         lookup_tool = "career_application_get" if "application_id" in known_refs else "career_application_list"
         return RuntimeToolPlan(
             phase="resume_version",

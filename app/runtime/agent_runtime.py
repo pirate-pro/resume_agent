@@ -46,6 +46,7 @@ from app.runtime.workflow.tool_plan import (
     pending_runtime_plan_from_tool_search_result,
     pending_runtime_plan_from_workflow_result,
     runtime_plan_completion_tools,
+    runtime_plan_discouraged_tools,
     runtime_plan_next_allowed_tools,
     runtime_plan_notice,
     workflow_incomplete_answer,
@@ -1122,7 +1123,10 @@ def _visible_tool_definitions_for_runtime_plan(
     )
     if not required_tool_is_visible:
         return visible_definitions
-    return [definition for definition in visible_definitions if definition.name != _SCHEMA_SEARCH_TOOL_NAME]
+    completion_tools = set(runtime_plan_completion_tools(pending_runtime_plan))
+    hidden_tools = set(runtime_plan_discouraged_tools(pending_runtime_plan)) - completion_tools
+    hidden_tools.add(_SCHEMA_SEARCH_TOOL_NAME)
+    return [definition for definition in visible_definitions if definition.name not in hidden_tools]
 
 
 def _is_premature_workflow_answer(

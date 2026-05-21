@@ -2094,6 +2094,32 @@ def test_career_application_merge_accepts_resume_stage_aliases(tmp_path: Path) -
     assert merged_from_chinese_stage["record"]["stage"] == "ready_to_apply"
     assert merged_from_chinese_stage["record"]["notes"] == "自然语言阶段已归一化。"
 
+    merged_from_ready_to_apply_phrase = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "待投递", "notes": "定制简历已就绪，等待投递。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_ready_to_apply_phrase["record"]["stage"] == "ready_to_apply"
+
+    merged_from_applied_phrase = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "已投递", "notes": "已提交官网申请。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_applied_phrase["record"]["stage"] == "applied"
+
 
 def test_career_application_tools_sanitize_placeholder_wording(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
