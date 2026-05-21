@@ -26,12 +26,26 @@ from tools.smoke_career_live_flow import (
     FlowReport,
     LiveStack,
     TurnReport,
+    _prepare_clean_run_data_dir,
     infer_failure_stage,
     inspect_flow_outputs,
     print_report,
     retrieval_quality_summary,
     run_all,
 )
+
+
+def test_live_smoke_prepares_clean_run_data_dir(tmp_path: Path) -> None:
+    stale_file = tmp_path / "run_001" / "sessions" / "sess_old" / "metadata.json"
+    stale_file.parent.mkdir(parents=True)
+    stale_file.write_text("{}", encoding="utf-8")
+
+    run_dir = _prepare_clean_run_data_dir(tmp_path, 1)
+
+    assert run_dir == tmp_path / "run_001"
+    assert run_dir.exists()
+    assert not stale_file.exists()
+    assert list(run_dir.iterdir()) == []
 
 
 def test_live_smoke_report_prints_concise_failure_summary(

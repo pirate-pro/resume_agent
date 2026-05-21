@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import logging
+import shutil
 import statistics
 import time
 from collections.abc import Callable
@@ -345,6 +346,16 @@ def register_live_tools(
     registry.register(LearningWeaknessUpdateTool(learning_store=learning_store, session_repository=session_repository))
 
 
+def _prepare_clean_run_data_dir(root_data_dir: Path, run_index: int) -> Path:
+    run_data_dir = root_data_dir / f"run_{run_index:03d}"
+    if run_data_dir.is_symlink() or run_data_dir.is_file():
+        run_data_dir.unlink()
+    elif run_data_dir.exists():
+        shutil.rmtree(run_data_dir)
+    run_data_dir.mkdir(parents=True, exist_ok=False)
+    return run_data_dir
+
+
 def run_live_flow(
     *,
     run_index: int,
@@ -355,8 +366,7 @@ def run_live_flow(
     retrieval_action: str = "none",
     progress: Callable[[str], None] | None = None,
 ) -> FlowReport:
-    run_data_dir = root_data_dir / f"run_{run_index:03d}"
-    run_data_dir.mkdir(parents=True, exist_ok=True)
+    run_data_dir = _prepare_clean_run_data_dir(root_data_dir, run_index)
     _progress(progress, run_index, f"开始，data_dir={run_data_dir}")
     stack = build_live_stack(data_dir=run_data_dir, settings=settings)
     session_id = f"sess_live_career_{run_index:03d}_{uuid4().hex[:8]}"
