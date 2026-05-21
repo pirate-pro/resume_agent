@@ -33,4 +33,8 @@ def is_reserved_reference_value(value: str) -> bool:
     """Return true when a ref-like string is really a schema or tool token."""
 
     text = value.strip()
-    return text in _RESERVED_REFERENCE_VALUES or text.endswith("_stop_low_level_actions")
+    return (
+        text in _RESERVED_REFERENCE_VALUES
+        or text.endswith("_stop_low_level_actions")
+        or text.startswith("resume_version_artifact_")
+    )

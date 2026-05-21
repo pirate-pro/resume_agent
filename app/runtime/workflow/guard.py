@@ -1389,6 +1389,16 @@ class WorkflowRuntimeGuard:
             ),
             missing_outputs=["resume_version"],
             lock_key=f"resume_version_merge_without_record:{context.run_id}",
+            extra_payload={
+                "next_allowed_tools": ["career_resume_version_create"],
+                "required_tools": ["career_resume_version_create"],
+                "blocked_tools": ["career_application_merge"],
+            },
+            extra_event_payload={
+                "next_allowed_tools": ["career_resume_version_create"],
+                "required_tools": ["career_resume_version_create"],
+                "blocked_tools": ["career_application_merge"],
+            },
         )
 
     def _repair_resume_version_application_merge(

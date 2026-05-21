@@ -1653,6 +1653,8 @@ def test_application_merge_blocks_resume_version_link_without_real_version(tmp_p
     assert payload["policy"] == "block"
     assert payload["reason"] == "resume_version_merge_without_record"
     assert payload["missing_outputs"] == ["resume_version"]
+    assert payload["next_allowed_tools"] == ["career_resume_version_create"]
+    assert payload["required_tools"] == ["career_resume_version_create"]
     assert "不要合并或编造" in payload["next_action"]
 
 

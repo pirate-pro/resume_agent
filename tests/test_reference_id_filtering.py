@@ -110,11 +110,40 @@ def test_career_flow_state_ignores_action_like_career_profile_update_ref() -> No
     assert state.refs.get("career_profile_id") != "career_profile_update"
 
 
+def test_resume_version_artifact_like_text_is_not_product_ref() -> None:
+    events = [
+        _tool_result(
+            {
+                "summary": (
+                    "错误示例：resume_version_artifact_5afb45ee8291 只是伪造字符串，"
+                    "不是真实 ResumeVersion；有效项目是 application_alpha。"
+                ),
+                "product_refs": ["application_alpha", "resume_version_artifact_5afb45ee8291"],
+            },
+            tool_name="delegate_agents",
+        )
+    ]
+
+    workflow_state = extract_current_workflow_state(events, _context())
+    career_state = extract_career_flow_state(
+        events,
+        _context(),
+        user_message="请生成定制简历版本",
+        workflow_state=CurrentWorkflowState(refs={"application_id": "application_alpha"}),
+    )
+
+    assert "resume_version_id" not in workflow_state.refs
+    assert "resume_version_ids" not in career_state.multi_refs
+    assert career_state.missing_steps == ["resume_version"]
+
+
 def test_evidence_ref_validation_rejects_reserved_tool_like_refs() -> None:
     with pytest.raises(ValidationError, match="invalid reference format"):
         validate_evidence_refs(["career_profile_merge"])
     with pytest.raises(ValidationError, match="invalid reference format"):
         validate_evidence_refs(["resume_profile_and_diagnosis_ready_stop_low_level_actions"])
+    with pytest.raises(ValidationError, match="invalid reference format"):
+        validate_evidence_refs(["resume_version_artifact_5afb45ee8291"])
 
     assert validate_evidence_refs(["career_profile_default", "jd_alpha"]) == [
         "career_profile_default",
