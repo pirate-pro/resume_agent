@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
-from app.domain.models import EventRecord, RunContext, SessionArtifact
+from app.domain.models import EventRecord, RunContext, SessionArtifact, ToolDefinition, ToolExecutionResult
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -28,6 +28,22 @@ from app.tools.builtins import DelegateAgentsTool, MemorySearchTool
 from app.tools.registry import ToolRegistry
 
 __all__ = []
+
+
+class _StaticTool:
+    def __init__(self, name: str, description: str) -> None:
+        self._definition = ToolDefinition(
+            name=name,
+            description=description,
+            parameters_schema={"type": "object", "properties": {}},
+        )
+
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+        _ = (arguments, context)
+        return ToolExecutionResult(tool_name=self._definition.name, success=True, content="{}")
 
 
 def _capability_registry() -> AgentCapabilityRegistry:
@@ -183,6 +199,53 @@ def test_context_assembler_sparse_selects_workflow_rules(tmp_path: Path) -> None
     ]
 
 
+def test_context_assembler_search_mode_uses_compact_tool_catalog_without_full_schema(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_tool_catalog_search")
+    capability_registry = _capability_registry()
+    tool_registry = ToolRegistry(capability_registry=capability_registry)
+    tool_registry.register(_StaticTool("memory_write", "Write long term memory."))
+    tool_registry.register(_StaticTool("tool_search", "Search available tools."))
+    tool_registry.register(_StaticTool("career_application_get", "Read a career application project."))
+    tool_registry.register(_StaticTool("career_resume_version_create", "Create a tailored resume version."))
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path, capability_registry),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=tool_registry,
+        workflow_rule_selection_mode="sparse",
+        tool_schema_disclosure_mode="search",
+    )
+
+    bundle = assembler.assemble(
+        context=_context("sess_tool_catalog_search", agent_id="agent_main", entry_agent_id="agent_main"),
+        user_message="请基于当前求职项目生成定制简历",
+        skill_names=["base"],
+    )
+
+    assert "Search disclosure mode is active" in bundle.system_prompt
+    assert "Visible tool schemas now:" in bundle.system_prompt
+    assert "- memory_write: Write long term memory." in bundle.system_prompt
+    assert "- tool_search: Search available tools." in bundle.system_prompt
+    assert "Available capability groups through tool_search:" in bundle.system_prompt
+    assert "- career (2): 求职产品资产" in bundle.system_prompt
+    assert "- career_application_get: Read a career application project." not in bundle.system_prompt
+    assert "- career_resume_version_create: Create a tailored resume version." not in bundle.system_prompt
+    assert {tool.name for tool in bundle.tool_definitions} == {
+        "memory_write",
+        "tool_search",
+        "career_application_get",
+        "career_resume_version_create",
+    }
+    tool_catalog_sections = [
+        section for section in bundle.system_prompt_sections if section["name"] == "tool_catalog"
+    ]
+    assert tool_catalog_sections
+    assert tool_catalog_sections[0]["catalog_mode"] == "compact_search"
+
+
 def test_context_assembler_full_workflow_mode_preserves_skill_prompts(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_full_workflow")
@@ -312,6 +375,85 @@ def test_context_assembler_loads_skills_events_and_memory(tmp_path: Path) -> Non
     assert "Long-term summaries - Agent overlay:" in bundle.system_prompt
     assert "Long-term facts - Agent overlay" in bundle.system_prompt
     assert len(bundle.tool_definitions) == 1
+
+
+def test_context_assembler_compacts_long_assistant_history_but_keeps_refs(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_id = "sess_long_assistant_history"
+    session_repo.create_session(session_id)
+    now = datetime.now(UTC)
+    long_answer = "\n".join(
+        [
+            "# 岗位匹配报告",
+            "已创建的产品记录: resume_profile_zhangming_003, jd_b8e6607b59a6, "
+            "fit_zhangming_staragent_001, artifact_1ecfb53b11c7",
+            "一、候选人概况",
+            "候选人拥有 Python / FastAPI / PostgreSQL / Redis 经验。",
+            "二、核心匹配点",
+            *[f"{idx}. 这里是很长的历史报告正文，用于模拟 Markdown 表格、风险、建议和证据展开。" for idx in range(80)],
+            "三、后续建议",
+            "结尾需要保留，用于确认压缩后仍有末尾上下文。",
+        ]
+    )
+    session_repo.append_event(
+        session_id,
+        EventRecord(
+            event_id="evt_user_previous",
+            session_id=session_id,
+            type="user_message",
+            payload={"content": "帮我生成岗位匹配报告"},
+            created_at=now,
+            agent_id="agent_main",
+            run_id="run_previous",
+        ),
+    )
+    session_repo.append_event(
+        session_id,
+        EventRecord(
+            event_id="evt_assistant_previous",
+            session_id=session_id,
+            type="assistant_message",
+            payload={"content": long_answer},
+            created_at=now,
+            agent_id="agent_main",
+            run_id="run_previous",
+        ),
+    )
+
+    tool_registry = ToolRegistry(capability_registry=_capability_registry())
+    tool_registry.register(_StaticTool("career_application_get", "Read a career application project."))
+    tool_registry.register(_StaticTool("career_resume_profile_get", "Read a resume profile."))
+    tool_registry.register(_StaticTool("career_jd_analysis_get", "Read a JD analysis."))
+    tool_registry.register(_StaticTool("career_job_fit_report_get", "Read a job fit report."))
+    tool_registry.register(_StaticTool("career_resume_version_create", "Create a tailored resume version."))
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=tool_registry,
+        tool_schema_disclosure_mode="search",
+    )
+
+    bundle = assembler.assemble(
+        context=_context(session_id),
+        user_message="继续生成定制简历",
+        skill_names=["base"],
+    )
+
+    assistant_messages = [item["content"] for item in bundle.messages if item["role"] == "assistant"]
+    assert len(assistant_messages) == 1
+    compacted = assistant_messages[0]
+    assert "历史助手答复已压缩" in compacted
+    assert "如需完整内容，应读取对应 artifact 或产品记录" in compacted
+    assert "resume_profile_zhangming_003" in compacted
+    assert "jd_b8e6607b59a6" in compacted
+    assert "fit_zhangming_staragent_001" in compacted
+    assert "artifact_1ecfb53b11c7" in compacted
+    assert "结构线索" in compacted
+    assert len(compacted) < len(long_answer) // 2
+    assert bundle.messages[-1] == {"role": "user", "content": "继续生成定制简历"}
 
 
 def test_context_assembler_includes_active_artifact_metadata_prompt(tmp_path: Path) -> None:
@@ -548,6 +690,18 @@ def test_context_assembler_injects_current_workflow_state_from_tool_results(tmp_
             {"record_type": "resume_version", "record_id": "resume_version_failed"},
             False,
         ),
+        (
+            "evt_runtime_block",
+            "career_resume_version_create",
+            {
+                "workflow_runtime_result": True,
+                "policy": "block",
+                "tool_executed": False,
+                "reason": "resume_version_missing_career_application",
+                "next_action": "先创建 CareerApplication。",
+            },
+            True,
+        ),
     ]
     for event_id, tool_name, content, success in tool_results:
         session_repo.append_event(
@@ -568,13 +722,20 @@ def test_context_assembler_injects_current_workflow_state_from_tool_results(tmp_
             ),
         )
 
+    tool_registry = ToolRegistry(capability_registry=_capability_registry())
+    tool_registry.register(_StaticTool("career_application_get", "Read a career application project."))
+    tool_registry.register(_StaticTool("career_resume_profile_get", "Read a resume profile."))
+    tool_registry.register(_StaticTool("career_jd_analysis_get", "Read a JD analysis."))
+    tool_registry.register(_StaticTool("career_job_fit_report_get", "Read a job fit report."))
+    tool_registry.register(_StaticTool("career_resume_version_create", "Create a tailored resume version."))
     assembler = ContextAssembler(
         session_repository=session_repo,
         skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
         agent_document_repository=_agent_document_repository(),
         memory_manager=_memory_manager(tmp_path),
         state_manager=_state_manager(tmp_path),
-        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
+        tool_executor=tool_registry,
+        tool_schema_disclosure_mode="search",
     )
 
     bundle = assembler.assemble(
@@ -601,7 +762,22 @@ def test_context_assembler_injects_current_workflow_state_from_tool_results(tmp_
     assert "- missing=resume_version" in bundle.system_prompt
     assert "career_resume_profile_get,career_jd_analysis_get,career_job_fit_report_get" in bundle.system_prompt
     assert "current_career_flow_state" in {section["name"] for section in bundle.system_prompt_sections}
+    assert "Current workflow phase guard snapshot:" in bundle.system_prompt
+    assert "- phase=resume_version" in bundle.system_prompt
+    assert "- missing_outputs=resume_version,career_application_resume_version_link" in bundle.system_prompt
+    assert "current_workflow_phase" in {section["name"] for section in bundle.system_prompt_sections}
+    assert "Runtime tool plan for this model round:" in bundle.system_prompt
+    assert "career_resume_version_create" in bundle.system_prompt
+    assert bundle.initial_visible_tool_names == [
+        "career_application_get",
+        "career_resume_profile_get",
+        "career_jd_analysis_get",
+        "career_job_fit_report_get",
+        "career_resume_version_create",
+    ]
+    assert "current_runtime_tool_plan" in {section["name"] for section in bundle.system_prompt_sections}
     assert "resume_version_failed" not in bundle.system_prompt
+    assert "resume_version_missing_career_application" not in bundle.system_prompt
     workflow_sections = [
         section for section in bundle.system_prompt_sections if section["name"] == "current_workflow_state"
     ]

@@ -835,6 +835,42 @@ def test_live_smoke_report_warns_when_unverified_metric_failure_recovers(tmp_pat
     ]
 
 
+def test_live_smoke_report_warns_when_unsupported_fact_failure_recovers(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_recovered_unsupported_fact")
+    _append_tool_result(
+        stack.session_repository,
+        session_id=report.session_id,
+        event_id="evt_failed_resume_version_fact",
+        tool_name="career_resume_version_create",
+        success=False,
+        content=(
+            "ResumeVersion validation failed: ResumeVersion content/change_summary/keyword_strategy "
+            "contains unsupported candidate tech facts: mysql, vector_search."
+        ),
+        tool_call_id="call_failed_resume_version_fact",
+    )
+    _append_tool_result(
+        stack.session_repository,
+        session_id=report.session_id,
+        event_id="evt_recovered_resume_version_fact",
+        tool_name="career_resume_version_create",
+        success=True,
+        content='{"record_type":"resume_version","record_id":"resume_version_quality"}',
+        tool_call_id="call_recovered_resume_version_fact",
+    )
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert report.success
+    assert report.failed_tools == []
+    assert not report.errors
+    assert report.warnings == [
+        "已恢复的工具保护性拒绝: career_resume_version_create -> "
+        "ResumeVersion validation failed: ResumeVersion content/change_summary/keyword_strategy "
+        "contains unsupported candidate tech facts: mysql, vector_search."
+    ]
+
+
 def _base_report_and_stack(tmp_path: Path, *, session_id: str) -> tuple[FlowReport, LiveStack]:
     repository = JsonlSessionRepository(data_dir=tmp_path)
     repository.create_session(session_id)

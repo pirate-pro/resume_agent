@@ -10,7 +10,8 @@ import pytest
 
 from app.career.store import CareerProductStore
 from app.core.errors import ToolExecutionError
-from app.domain.models import RunContext, ToolCall
+from app.core.time import app_now
+from app.domain.models import EventRecord, RunContext, ToolCall
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.memory.models import MemoryScope
 from app.runtime.agent_capability import AgentCapability, AgentCapabilityRegistry
@@ -184,6 +185,35 @@ def _create_text_artifact(
     return str(payload["artifact_id"])
 
 
+def _append_tool_result_event(
+    session_repository: JsonlSessionRepository,
+    *,
+    context: RunContext,
+    tool_name: str,
+    payload: dict[str, Any],
+    event_id: str = "evt_tool_result",
+) -> None:
+    session_repository.append_agent_event(
+        context.session_id,
+        context.agent_id,
+        EventRecord(
+            event_id=event_id,
+            session_id=context.session_id,
+            type="tool_result",
+            payload={
+                "tool_name": tool_name,
+                "success": True,
+                "content": json.dumps(payload, ensure_ascii=False),
+                "tool_call_id": f"call_{event_id}",
+            },
+            created_at=app_now(),
+            agent_id=context.agent_id,
+            run_id=context.run_id,
+            parent_run_id=context.parent_run_id,
+        ),
+    )
+
+
 def _save_resume_profile(registry: ToolRegistry, resume_artifact_id: str, diagnosis_artifact_id: str) -> dict[str, Any]:
     return _execute(
         registry,
@@ -248,6 +278,128 @@ def test_session_create_text_artifact_is_pathless_and_readable(tmp_path: Path) -
             ),
             context=_context(),
         )
+
+
+def test_session_create_text_artifact_updates_same_run_generated_report(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    context = _context(agent_id="resume_agent")
+
+    first_payload = _execute(
+        registry,
+        "session_create_text_artifact",
+        {
+            "title": "简历诊断报告_张三",
+            "content": "第一版诊断",
+            "kind": "generated_file",
+            "media_type": "text/markdown",
+        },
+        context,
+    )
+    _append_tool_result_event(
+        session_repository,
+        context=context,
+        tool_name="session_create_text_artifact",
+        payload=first_payload,
+    )
+
+    second_payload = _execute(
+        registry,
+        "session_create_text_artifact",
+        {
+            "title": "张三简历诊断报告.md",
+            "content": "第二版诊断，更完整",
+            "kind": "generated_file",
+            "media_type": "text/markdown",
+        },
+        context,
+    )
+    artifacts = session_repository.list_session_artifacts("sess_career")
+
+    assert second_payload["artifact_id"] == first_payload["artifact_id"]
+    assert second_payload["idempotent_update"] is True
+    assert second_payload["title"] == "张三简历诊断报告.md"
+    assert session_repository.read_session_artifact_text("sess_career", str(first_payload["artifact_id"])) == "第二版诊断，更完整"
+    assert [item.kind for item in artifacts if item.owner_agent_id == "resume_agent"] == ["generated_file"]
+
+
+def test_session_create_text_artifact_treats_job_fit_analysis_report_as_fit_report(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    context = _context(agent_id="job_agent")
+
+    first_payload = _execute(
+        registry,
+        "session_create_text_artifact",
+        {
+            "title": "岗位匹配分析报告.md",
+            "content": "第一版匹配分析",
+            "kind": "generated_file",
+            "media_type": "text/markdown",
+        },
+        context,
+    )
+    _append_tool_result_event(
+        session_repository,
+        context=context,
+        tool_name="session_create_text_artifact",
+        payload=first_payload,
+    )
+
+    second_payload = _execute(
+        registry,
+        "session_create_text_artifact",
+        {
+            "title": "AI应用开发工程师-候选人匹配分析报告",
+            "content": "第二版匹配分析",
+            "kind": "generated_file",
+            "media_type": "text/markdown",
+        },
+        context,
+    )
+
+    assert second_payload["artifact_id"] == first_payload["artifact_id"]
+    assert second_payload["idempotent_update"] is True
+    assert len(session_repository.list_session_artifacts("sess_career")) == 1
+
+
+def test_session_create_text_artifact_does_not_dedupe_pasted_text(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    context = _context(agent_id="agent_main")
+
+    first_payload = _execute(
+        registry,
+        "session_create_text_artifact",
+        {
+            "title": "岗位 JD.txt",
+            "content": "第一份 JD",
+            "kind": "pasted_text",
+            "media_type": "text/plain",
+        },
+        context,
+    )
+    _append_tool_result_event(
+        session_repository,
+        context=context,
+        tool_name="session_create_text_artifact",
+        payload=first_payload,
+    )
+    second_payload = _execute(
+        registry,
+        "session_create_text_artifact",
+        {
+            "title": "岗位 JD.txt",
+            "content": "第二份 JD",
+            "kind": "pasted_text",
+            "media_type": "text/plain",
+        },
+        context,
+    )
+
+    assert second_payload["artifact_id"] != first_payload["artifact_id"]
+    assert "idempotent_update" not in second_payload
+    assert len(session_repository.list_session_artifacts("sess_career")) == 2
 
 
 def test_resume_profile_tool_uses_context_source_and_rejects_store_owned_fields(tmp_path: Path) -> None:
@@ -377,7 +529,7 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
         {
             "jd_analysis_id": "jd_alpha",
             "source_artifact_id": jd_artifact_id,
-            "evidence_refs": [jd_artifact_id],
+            "evidence_refs": [jd_artifact_id, "jd_analysis", "career_profile_merge"],
             "company": "Example Co",
             "position": "AI 应用开发工程师",
             "required_skills": ["Python", "RAG"],
@@ -405,6 +557,8 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
             "evidence_refs": [
                 "resume_profile_alpha",
                 "career_profile_default",
+                "career_profile_merge",
+                "jd_analysis",
                 "jd_alpha",
                 jd_artifact_id,
                 report_artifact_id,
@@ -443,29 +597,65 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
     assert jd_payload["record"]["source_artifact_id"] == jd_artifact_id
     assert duplicate_jd_payload["record_id"] == "jd_alpha"
     assert duplicate_jd_payload["idempotent_reused"] is True
+    assert "career_profile_merge" not in jd_payload["record"]["evidence_refs"]
+    assert "jd_analysis" not in jd_payload["record"]["evidence_refs"]
     assert fit_payload["record"]["source_artifact_id"] == jd_artifact_id
     assert fit_payload["record"]["report_artifact_id"] == report_artifact_id
+    assert "career_profile_merge" not in fit_payload["record"]["evidence_refs"]
+    assert "jd_analysis" not in fit_payload["record"]["evidence_refs"]
     assert fit_payload["record"]["overall_score"] == 82
     assert fit_payload["record"]["score_breakdown"] == {"skills": 80, "projects": 85, "growth": 90}
+    created_default_profile = _execute(
+        registry,
+        "career_profile_get",
+        {"career_profile_id": "career_profile_default"},
+        _context(agent_id="agent_main"),
+    )
+    assert created_default_profile["found"] is True
+    assert created_default_profile["record"]["source_artifact_id"] == jd_artifact_id
     assert duplicate_fit_payload["record_id"] == "fit_alpha"
     assert duplicate_fit_payload["idempotent_reused"] is True
 
-    with pytest.raises(ToolExecutionError):
+    with pytest.raises(ToolExecutionError, match="CareerProfile not found"):
         registry.execute(
             ToolCall(
                 name="career_job_fit_report_save",
                 arguments={
-                    "job_fit_report_id": "fit_alpha",
+                    "job_fit_report_id": "fit_missing_profile",
                     "source_artifact_id": jd_artifact_id,
-                    "evidence_refs": ["resume_profile_alpha", "career_profile_default", "jd_beta", jd_artifact_id],
-                    "jd_analysis_id": "jd_beta",
+                    "evidence_refs": [
+                        "resume_profile_alpha",
+                        "career_profile_missing",
+                        "jd_alpha",
+                        jd_artifact_id,
+                        report_artifact_id,
+                    ],
+                    "jd_analysis_id": "jd_alpha",
                     "resume_profile_id": "resume_profile_alpha",
-                    "career_profile_id": "career_profile_default",
+                    "career_profile_id": "career_profile_missing",
                     "report_artifact_id": report_artifact_id,
                 },
             ),
             context=_context(agent_id="job_agent"),
         )
+
+    repaired_missing_jd_payload = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_alpha",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "career_profile_default", "jd_beta", jd_artifact_id],
+            "jd_analysis_id": "jd_beta",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+        },
+        _context(agent_id="job_agent"),
+    )
+    assert repaired_missing_jd_payload["record_id"] == "fit_alpha"
+    assert repaired_missing_jd_payload["record"]["jd_analysis_id"] == "jd_alpha"
+    assert "jd_beta" not in repaired_missing_jd_payload["record"]["evidence_refs"]
     with pytest.raises(ToolExecutionError, match="not allowed"):
         registry.execute(
             ToolCall(
@@ -474,6 +664,225 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
             ),
             context=_context(agent_id="job_agent"),
         )
+
+
+def test_resume_version_create_repairs_missing_jd_id_when_single_current_jd_exists(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+    diagnosis_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历诊断.md")
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(registry, agent_id="job_agent", title="JD.txt", content="需要 RAG")
+
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_real",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "position": "AI 应用开发工程师",
+        },
+        _context(agent_id="job_agent"),
+    )
+    payload = _execute(
+        registry,
+        "career_resume_version_create",
+            {
+                "base_resume_profile_id": "resume_profile_alpha",
+                "target_jd_analysis_id": "jd_fake",
+                "title": "定制简历",
+                "content": "# 张三\n\n技能：Python、FastAPI。",
+                "evidence_refs": ["resume_profile_alpha", "jd_fake"],
+            },
+            _context(agent_id="agent_main"),
+        )
+
+    assert payload["record"]["target_jd_analysis_id"] == "jd_real"
+    assert "jd_real" in payload["record"]["evidence_refs"]
+    assert "jd_fake" not in payload["record"]["evidence_refs"]
+
+
+def test_application_create_repairs_ids_from_current_fit_report(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+    diagnosis_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历诊断.md")
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(registry, agent_id="job_agent", title="JD.txt", content="需要 RAG")
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_real",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "position": "AI 应用开发工程师",
+        },
+        _context(agent_id="job_agent"),
+    )
+    _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_real",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "career_profile_default", "jd_real", report_artifact_id],
+            "jd_analysis_id": "jd_real",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+        },
+        _context(agent_id="job_agent"),
+    )
+    payload = _execute(
+        registry,
+        "career_application_create",
+        {
+            "job_fit_report_id": "fit_real",
+            "jd_analysis_id": "jd_fake",
+            "resume_profile_id": "resume_profile_fake",
+            "evidence_refs": ["fit_real", "jd_fake", "resume_profile_fake"],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    assert payload["record"]["jd_analysis_id"] == "jd_real"
+    assert payload["record"]["resume_profile_id"] == "resume_profile_alpha"
+    assert "jd_real" in payload["record"]["evidence_refs"]
+    assert "jd_fake" not in payload["record"]["evidence_refs"]
+    assert "resume_profile_fake" not in payload["record"]["evidence_refs"]
+
+
+def test_application_create_infers_single_current_fit_report_when_ids_are_missing(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+    diagnosis_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历诊断.md")
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(registry, agent_id="job_agent", title="JD.txt", content="需要 RAG")
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_real",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "position": "AI 应用开发工程师",
+        },
+        _context(agent_id="job_agent"),
+    )
+    _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_real",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "career_profile_default", "jd_real", report_artifact_id],
+            "jd_analysis_id": "jd_real",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+        },
+        _context(agent_id="job_agent"),
+    )
+    payload = _execute(
+        registry,
+        "career_application_create",
+        {
+            "source_artifact_id": jd_artifact_id,
+            "status": "ready_to_apply",
+            "created_at": "1999-01-01T00:00:00Z",
+            "summary": "已完成岗位匹配，创建求职项目。",
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    assert payload["record"]["jd_analysis_id"] == "jd_real"
+    assert payload["record"]["job_fit_report_id"] == "fit_real"
+    assert payload["record"]["resume_profile_id"] == "resume_profile_alpha"
+    assert payload["record"]["career_profile_id"] == "career_profile_default"
+    assert payload["record"]["stage"] == "ready_to_apply"
+    assert {"fit_real", "jd_real", "resume_profile_alpha", report_artifact_id}.issubset(
+        set(payload["record"]["evidence_refs"])
+    )
+
+
+def test_job_fit_report_save_creates_missing_jd_analysis_ref_from_source_artifact(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人具备 Python、FastAPI 后端开发经验。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历诊断.md")
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="JD.txt",
+        content="公司招聘 AI 应用开发工程师，要求 Python、FastAPI、RAG、Agent 工程经验和向量检索。",
+    )
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+
+    payload = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_missing_jd",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "career_profile_default", "jd_missing", report_artifact_id],
+            "jd_analysis_id": "jd_missing",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+            "matched_evidence": ["Python 与 FastAPI 匹配"],
+            "gaps": ["向量检索未体现"],
+        },
+        _context(agent_id="job_agent"),
+    )
+    jd_payload = _execute(
+        registry,
+        "career_jd_analysis_get",
+        {"jd_analysis_id": "jd_missing"},
+        _context(agent_id="agent_main"),
+    )
+
+    assert payload["record"]["jd_analysis_id"] == "jd_missing"
+    assert "jd_missing" in payload["record"]["evidence_refs"]
+    assert jd_payload["found"] is True
+    assert jd_payload["record"]["source_artifact_id"] == jd_artifact_id
+    assert jd_payload["record"]["position"] == "AI 应用开发工程师"
+    assert {"Python", "FastAPI", "RAG", "Agent", "向量检索"}.issubset(
+        set(jd_payload["record"]["required_skills"])
+    )
 
 
 def test_get_tools_recover_from_invalid_id_format_when_session_record_is_unambiguous(tmp_path: Path) -> None:
@@ -544,6 +953,75 @@ def test_get_tools_recover_from_invalid_id_format_when_session_record_is_unambig
     assert "list tool" in missing["hint"]
 
 
+def test_job_fit_report_save_moves_unsupported_candidate_claims_to_gaps(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="JD.txt",
+        content="需要 Python、FastAPI、向量检索经验。",
+    )
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_alpha",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "required_skills": ["Python", "FastAPI", "向量检索"],
+        },
+        _context(agent_id="job_agent"),
+    )
+
+    payload = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_alpha",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "career_profile_default", "jd_alpha", report_artifact_id],
+            "jd_analysis_id": "jd_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+            "matched_evidence": [
+                "Python：简历明确列出",
+                "向量检索：简历 RAG 项目隐含具备向量检索能力",
+            ],
+            "gaps": [],
+        },
+        _context(agent_id="job_agent"),
+    )
+
+    record = payload["record"]
+    assert record["matched_evidence"] == ["Python：简历明确列出"]
+    assert any("向量检索" in item and "未证实匹配项已转为差距" in item for item in record["gaps"])
+
+
 def test_resume_profile_save_accepts_single_string_for_list_fields(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")
@@ -564,6 +1042,55 @@ def test_resume_profile_save_accepts_single_string_for_list_fields(tmp_path: Pat
 
     assert payload["record"]["skills"] == ["Python / FastAPI"]
     assert payload["record"]["project_experience"] == ["简历诊断 Agent"]
+
+
+def test_resume_profile_save_preserves_unparseable_diagnosis_text(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+
+    payload = _execute(
+        registry,
+        "career_resume_profile_save",
+        {
+            "resume_profile_id": "resume_profile_diagnosis_text",
+            "source_artifact_id": resume_artifact_id,
+            "evidence_refs": [resume_artifact_id],
+            "diagnosis": '{"summary": "补充量化成果，如"响应降低 30%""}',
+        },
+        _context(agent_id="resume_agent"),
+    )
+
+    assert payload["record"]["diagnosis"] == {
+        "raw_text": '{"summary": "补充量化成果，如"响应降低 30%""}'
+    }
+
+
+def test_resume_profile_save_rejects_profile_that_drops_source_tech_evidence(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="技能：Python、FastAPI、PostgreSQL、Redis、RAG、Agent 工具调用。",
+    )
+
+    with pytest.raises(ToolExecutionError, match="明确技术证据不一致"):
+        registry.execute(
+            ToolCall(
+                name="career_resume_profile_save",
+                arguments={
+                    "resume_profile_id": "resume_profile_bad_alignment",
+                    "source_artifact_id": resume_artifact_id,
+                    "evidence_refs": [resume_artifact_id],
+                    "skills": [{"category": "编程语言", "items": ["Java"]}],
+                    "work_experience": [{"position": "Java 后端开发"}],
+                    "diagnosis": {"missing": ["Python/FastAPI/RAG/Agent 均未提及"]},
+                },
+            ),
+            context=_context(agent_id="resume_agent"),
+        )
 
 
 def test_resume_version_create_rejects_unverified_quantified_metrics(tmp_path: Path) -> None:
@@ -600,7 +1127,7 @@ def test_resume_version_create_rejects_unverified_quantified_metrics(tmp_path: P
 
     assert allowed_payload["record"]["artifact_id"].startswith("artifact_")
 
-    with pytest.raises(ToolExecutionError, match="unverified quantitative metrics"):
+    with pytest.raises(ToolExecutionError, match="Retry career_resume_version_create immediately"):
         registry.execute(
             ToolCall(
                 name="career_resume_version_create",
@@ -610,6 +1137,360 @@ def test_resume_version_create_rejects_unverified_quantified_metrics(tmp_path: P
                     "title": "未证实量化指标版本",
                     "content": "# 张三\n\n上线后客服效率提升 60%，问题解决率达 85%，服务可用性达 99.99%。",
                     "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+                },
+            ),
+            context=_context(agent_id="agent_main"),
+        )
+
+
+def test_resume_version_create_rejects_unverified_counts_and_years(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n经历：3 年后端开发经验。\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+
+    with pytest.raises(ToolExecutionError, match="unverified quantitative metrics"):
+        registry.execute(
+            ToolCall(
+                name="career_resume_version_create",
+                arguments={
+                    "base_resume_profile_id": "resume_profile_alpha",
+                    "target_jd_analysis_id": "jd_alpha",
+                    "title": "伪造数量指标版本",
+                    "content": "# 张三\n\n具备 1 年经验，设计 12 个维度评估模型和 50+ 诊断算法。",
+                    "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+                },
+            ),
+            context=_context(agent_id="agent_main"),
+        )
+
+
+def test_resume_version_create_rejects_unsupported_candidate_facts(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+
+    with pytest.raises(ToolExecutionError, match="unsupported candidate tech facts"):
+        registry.execute(
+            ToolCall(
+                name="career_resume_version_create",
+                arguments={
+                    "base_resume_profile_id": "resume_profile_alpha",
+                    "target_jd_analysis_id": "jd_alpha",
+                    "title": "伪造技术栈版本",
+                    "content": "# 张三\n\n技能：Python、FastAPI、Docker、React、LLM API、向量检索。",
+                    "change_summary": ["将技能列表扩展为 Docker/React/LLM API"],
+                    "keyword_strategy": ["Python", "FastAPI", "向量检索"],
+                    "risk_notes": ["向量检索经验缺失，应后续补充。"],
+                    "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+                },
+            ),
+            context=_context(agent_id="agent_main"),
+        )
+
+
+def test_resume_version_create_rejects_unverified_contact_values(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+
+    with pytest.raises(ToolExecutionError, match="contact or salary-like candidate facts"):
+        registry.execute(
+            ToolCall(
+                name="career_resume_version_create",
+                arguments={
+                    "base_resume_profile_id": "resume_profile_alpha",
+                    "target_jd_analysis_id": "jd_alpha",
+                    "title": "伪造联系方式版本",
+                    "content": "# 张三\n\nphone: 13800138000\nemail: zhangsan@email.com\n\n技能：Python、FastAPI。",
+                    "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+                },
+            ),
+            context=_context(agent_id="agent_main"),
+        )
+
+
+def test_resume_version_create_uses_safe_fallback_after_previous_validation_failure(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n目标方向：AI 应用开发 / 后端工程师\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    context = _context(agent_id="agent_main")
+    session_repository.append_agent_event(
+        context.session_id,
+        context.agent_id,
+        EventRecord(
+            event_id="evt_previous_resume_version_failure",
+            session_id=context.session_id,
+            type="tool_result",
+            payload={
+                "tool_name": "career_resume_version_create",
+                "success": False,
+                "content": "ResumeVersion validation failed: previous invalid draft.",
+                "tool_call_id": "call_previous_resume_version_failure",
+            },
+            created_at=app_now(),
+            agent_id=context.agent_id,
+            run_id=context.run_id,
+            parent_run_id=context.parent_run_id,
+        ),
+    )
+
+    payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "保守定制简历",
+            "content": "# 张三\n\nphone: 13800138000\nemail: zhangsan@email.com\n\n技能：Python、FastAPI、LangChain、向量检索。",
+            "change_summary": ["加入 LangChain 和向量检索关键词"],
+            "keyword_strategy": ["Python", "FastAPI", "LangChain", "向量检索"],
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+        },
+        context,
+    )
+
+    artifact_text = session_repository.read_session_artifact_text(
+        context.session_id,
+        payload["record"]["artifact_id"],
+    )
+    assert payload["safe_fallback_from_invalid_draft"] is True
+    assert "zhangsan@email.com" not in artifact_text
+    assert "13800138000" not in artifact_text
+    assert "LangChain" not in artifact_text
+    assert "向量检索" not in artifact_text
+    assert "Python" in artifact_text
+    assert payload["record"]["keyword_strategy"] == ["FastAPI", "Python"]
+
+
+def test_resume_version_create_uses_safe_fallback_when_retry_has_no_full_content(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n目标方向：AI 应用开发 / 后端工程师\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    context = _context(agent_id="agent_main")
+    session_repository.append_agent_event(
+        context.session_id,
+        context.agent_id,
+        EventRecord(
+            event_id="evt_previous_resume_version_failure_no_content",
+            session_id=context.session_id,
+            type="tool_result",
+            payload={
+                "tool_name": "career_resume_version_create",
+                "success": False,
+                "content": "ResumeVersion validation failed: previous invalid draft.",
+                "tool_call_id": "call_previous_resume_version_failure_no_content",
+            },
+            created_at=app_now(),
+            agent_id=context.agent_id,
+            run_id=context.run_id,
+            parent_run_id=context.parent_run_id,
+        ),
+    )
+
+    payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "保守定制简历",
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+            "content_omitted": {"chars": 983},
+            "content_preview": "# 张三 ...",
+        },
+        context,
+    )
+
+    artifact_text = session_repository.read_session_artifact_text(
+        context.session_id,
+        payload["record"]["artifact_id"],
+    )
+    assert payload["safe_fallback_from_invalid_draft"] is True
+    assert payload["record_type"] == "resume_version"
+    assert "Python" in artifact_text
+    assert "FastAPI" in artifact_text
+
+
+def test_resume_version_create_allows_missing_jd_keywords_in_risk_notes(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历.txt",
+        content="候选人：张三\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="诊断.md",
+        content="# 诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+
+    payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "风险说明版本",
+            "content": "# 张三\n\n技能：Python、FastAPI。",
+            "keyword_strategy": ["Python", "FastAPI"],
+            "risk_notes": ["向量检索经验缺失，应后续补充。"],
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    assert payload["record_type"] == "resume_version"
+
+
+def test_resume_version_create_uses_content_as_output_artifact_when_source_artifact_is_supplied(
+    tmp_path: Path,
+) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="原始简历.txt",
+        content="候选人：张三\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历诊断.md",
+        content="# 简历诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+
+    resume_content = "# 张三\n\n技能：Python、FastAPI。\n"
+    payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "title": "定制简历",
+            "artifact_id": resume_artifact_id,
+            "content": resume_content,
+            "evidence_refs": ["resume_profile_alpha", resume_artifact_id],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    version_artifact_id = payload["record"]["artifact_id"]
+    assert version_artifact_id != resume_artifact_id
+    assert payload["record"]["source_artifact_id"] == version_artifact_id
+    assert resume_artifact_id in payload["record"]["evidence_refs"]
+    artifact = session_repository.get_session_artifact("sess_career", version_artifact_id)
+    assert artifact is not None
+    assert artifact.kind == "generated_file"
+    assert session_repository.read_session_artifact_text("sess_career", version_artifact_id) == resume_content.strip()
+
+
+def test_resume_version_create_rejects_input_artifact_as_version_output(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="原始简历.txt",
+        content="候选人：张三\n技能：Python、FastAPI。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="resume_agent",
+        title="简历诊断.md",
+        content="# 简历诊断",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+
+    with pytest.raises(ToolExecutionError, match="generated_file artifact"):
+        registry.execute(
+            ToolCall(
+                name="career_resume_version_create",
+                arguments={
+                    "base_resume_profile_id": "resume_profile_alpha",
+                    "title": "错误复用原始简历",
+                    "artifact_id": resume_artifact_id,
+                    "evidence_refs": ["resume_profile_alpha", resume_artifact_id],
                 },
             ),
             context=_context(agent_id="agent_main"),
@@ -675,6 +1556,18 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
         {
             "updates": json.dumps({"weaknesses": ["缺少量化成果"]}, ensure_ascii=False),
             "evidence_refs": [evidence_artifact_id],
+        },
+        _context(agent_id="agent_main"),
+    )
+    nested_string_payload = _execute(
+        registry,
+        "career_profile_merge",
+        {
+            "updates": (
+                '{"target_roles": ["AI Agent 后端工程师"], '
+                '"skills": ["工具入参归一化"]}, '
+                f'"evidence_refs": ["{evidence_artifact_id}", "resume_profile_alpha"]'
+            ),
         },
         _context(agent_id="agent_main"),
     )
@@ -799,6 +1692,8 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
     assert merged_payload["record"]["career_goal"] == "AI 应用开发"
     assert merged_payload["record"]["target_roles"] == ["后端开发", "AI 应用开发工程师", "AI 应用开发"]
     assert "缺少量化成果" in string_payload["record"]["weaknesses"]
+    assert "工具入参归一化" in nested_string_payload["record"]["skills"]
+    assert "resume_profile_alpha" in nested_string_payload["record"]["evidence_refs"]
     assert "jd_alpha" in typed_evidence_payload["record"]["evidence_refs"]
     assert "fit_alpha" in typed_evidence_payload["record"]["evidence_refs"]
     assert version_payload["record"]["format"] == "markdown"
@@ -1065,3 +1960,170 @@ def test_main_agent_creates_gets_lists_and_merges_career_application(tmp_path: P
             ),
             context=_context(agent_id="job_agent"),
         )
+
+
+def test_career_application_merge_repairs_unclosed_json_string_updates(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_app_repair")
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        session_id="sess_app_repair",
+        title="JD.txt",
+        content="AI 应用工程师 JD",
+    )
+    application = _execute(
+        registry,
+        "career_application_create",
+        {
+            "company": "星河智能",
+            "position": "AI 应用工程师",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_repair", agent_id="agent_main"),
+    )
+
+    repaired = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": (
+                '{"summary": "已生成定制简历", '
+                '"next_actions": ["补充教育背景", "补充项目量化成果"}'
+            ),
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_repair", agent_id="agent_main"),
+    )
+
+    assert repaired["record"]["summary"] == "已生成定制简历"
+    assert repaired["record"]["next_actions"] == ["补充教育背景", "补充项目量化成果"]
+
+    nested_repaired = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "updates": (
+                f'"application_id": "{application["record_id"]}", '
+                '"updates": {"stage": "interviewing", "notes": "已进入面试准备"}, '
+                f'"evidence_refs": ["{jd_artifact_id}"]'
+            ),
+        },
+        _context(session_id="sess_app_repair", agent_id="agent_main"),
+    )
+
+    assert nested_repaired["record"]["stage"] == "interviewing"
+    assert nested_repaired["record"]["notes"] == "已进入面试准备"
+
+
+def test_career_application_merge_accepts_resume_stage_aliases(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_app_stage_alias")
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        session_id="sess_app_stage_alias",
+        title="JD.txt",
+        content="AI 应用工程师 JD",
+    )
+    application = _execute(
+        registry,
+        "career_application_create",
+        {
+            "company": "星河智能",
+            "position": "AI 应用工程师",
+            "source_artifact_id": jd_artifact_id,
+            "stage": "analysis_complete",
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+    assert application["record"]["stage"] == "draft"
+
+    merged = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "tailoring", "summary": "定制简历已生成，可进入投递准备。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged["record"]["stage"] == "ready_to_apply"
+    assert merged["record"]["summary"] == "定制简历已生成，可进入投递准备。"
+
+    merged_from_resume_version_stage = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "resume_version_created", "notes": "ResumeVersion 已创建。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_resume_version_stage["record"]["stage"] == "ready_to_apply"
+
+    merged_from_customized_stage = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "resume_customized", "notes": "定制简历已关联。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_customized_stage["record"]["stage"] == "ready_to_apply"
+
+    merged_from_chinese_stage = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "定制简历完成", "notes": "自然语言阶段已归一化。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_chinese_stage["record"]["stage"] == "ready_to_apply"
+    assert merged_from_chinese_stage["record"]["notes"] == "自然语言阶段已归一化。"
+
+
+def test_career_application_tools_sanitize_placeholder_wording(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_app_placeholder_sanitize")
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        session_id="sess_app_placeholder_sanitize",
+        title="JD.txt",
+        content="AI 应用工程师 JD",
+    )
+
+    application = _execute(
+        registry,
+        "career_application_create",
+        {
+            "company": "未知公司",
+            "position": "未知职位",
+            "source_artifact_id": jd_artifact_id,
+            "summary": "基于 JD 创建的求职项目，待补充公司和职位信息。",
+            "next_actions": ["待补充公司信息", "TODO 准备面试话术"],
+            "risks": ["TBD 风险"],
+            "notes": "占位说明",
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_placeholder_sanitize", agent_id="agent_main"),
+    )
+
+    record = application["record"]
+    joined = "\n".join([record["summary"], record["notes"], *record["next_actions"], *record["risks"]])
+    assert "待补" not in joined
+    assert "TODO" not in joined
+    assert "TBD" not in joined
+    assert "占位" not in joined

@@ -44,7 +44,42 @@ def test_sparse_rules_select_job_fit_and_delegation() -> None:
     ]
     content = "\n".join(pack.content for pack in packs)
     assert "career_profile_default" in content
-    assert "never invent profile ids" in content
+    assert "report_artifact_id" in content
+
+
+def test_sparse_rules_select_resume_version_without_delegation() -> None:
+    packs = select_sparse_workflow_rule_packs(
+        role=ContextAssemblyRole.MAIN_AGENT,
+        user_message="继续生成定制简历版本。",
+        active_artifacts=[],
+    )
+
+    assert [pack.name for pack in packs] == [
+        "always_on",
+        "career_resume_version",
+    ]
+    content = "\n".join(pack.content for pack in packs)
+    assert "must not add candidate facts or metrics" in content
+    assert "career_resume_version_create" in content
+
+
+def test_sparse_rules_do_not_select_negated_analysis_for_resume_version() -> None:
+    packs = select_sparse_workflow_rule_packs(
+        role=ContextAssemblyRole.MAIN_AGENT,
+        user_message=(
+            "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport 生成一版定制简历。"
+            "不要重新诊断简历，不要重新分析 JD，不要重新生成匹配报告。"
+        ),
+        active_artifacts=[
+            _artifact("artifact_resume", "张明简历.pdf", "application/pdf"),
+            _artifact("artifact_jd", "后端工程师 JD.txt", "text/plain"),
+        ],
+    )
+
+    assert [pack.name for pack in packs] == [
+        "always_on",
+        "career_resume_version",
+    ]
 
 
 def test_sparse_rules_select_retrieval_and_learning_for_previous_job() -> None:

@@ -7,12 +7,14 @@ import json
 import threading
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.domain.models import (
     AgentRunInput,
     AgentRunOutput,
+    EventRecord,
     RunContext,
     ToolCall,
     ToolDefinition,
@@ -30,6 +32,7 @@ from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.mid_term_flusher import MidTermFlusher, MidTermFlushResult
 from app.runtime.memory_manager import MemoryManager
+from app.runtime.workflow import WorkflowGuardDecision
 from app.runtime.session_manager import SessionManager
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
@@ -68,6 +71,7 @@ def _build_runtime(
     tool_schema_disclosure_mode: str = "full",
     tool_schema_always_visible: str | list[str] | None = None,
     tool_context_window_mode: str = "off",
+    workflow_guard: Any | None = None,
 ) -> tuple[AgentRuntime, JsonlSessionRepository, MemoryManager]:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     state_store = JsonlFileStateStore(root_dir=tmp_path / "state")
@@ -114,6 +118,7 @@ def _build_runtime(
         tool_schema_disclosure_mode=tool_schema_disclosure_mode,
         tool_schema_always_visible=tool_schema_always_visible,
         tool_context_window_mode=tool_context_window_mode,
+        workflow_guard=workflow_guard,
     )
     return runtime, session_repo, memory_manager
 
@@ -189,6 +194,168 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
     assert any(event.type == "tool_result" for event in events)
     assert any(event.type == "memory_write" for event in events)
     assert any(item.content == "User prefers JSONL" for item in memories)
+
+
+def test_runtime_uses_workflow_guard_result_without_executing_tool(tmp_path: Path) -> None:
+    class GuardedTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="guarded_tool",
+                description="tool protected by workflow guard",
+                parameters_schema={"type": "object", "properties": {"value": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            raise AssertionError("guarded_tool should not execute when guard returns a result")
+
+    class SyntheticGuard:
+        def inspect(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+            _ = context
+            return WorkflowGuardDecision(
+                tool_call=tool_call,
+                result=ToolExecutionResult(
+                    tool_name=tool_call.name,
+                    success=True,
+                    content=json.dumps({"workflow_runtime_result": True, "policy": "reuse"}, ensure_ascii=False),
+                ),
+                event_payload={"workflow_runtime_result": True, "policy": "reuse", "tool_name": tool_call.name},
+            )
+
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(
+                content="",
+                tool_calls=[ToolCall(name="guarded_tool", arguments={"value": "x"}, tool_call_id="call_guarded")],
+            ),
+            ModelResponse(content="guarded done", tool_calls=[]),
+        ]
+    )
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[GuardedTool()],
+        workflow_guard=SyntheticGuard(),
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_runtime_guard",
+            user_message="run guarded tool",
+            skill_names=["base", "tools"],
+            max_tool_rounds=2,
+            context=_context("sess_runtime_guard"),
+        )
+    )
+
+    events = session_repo.list_events("sess_runtime_guard")
+
+    assert output.answer == "guarded done"
+    assert any(event.type == "workflow_runtime_decision" for event in events)
+    tool_result = next(event for event in events if event.type == "tool_result")
+    assert json.loads(tool_result.payload["content"])["workflow_runtime_result"] is True
+
+
+def test_runtime_terminal_workflow_block_goes_directly_to_final_answer(tmp_path: Path) -> None:
+    class GuardedTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="guarded_tool",
+                description="tool protected by terminal workflow guard",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            raise AssertionError("guarded_tool should not execute when terminal guard returns a result")
+
+    class TerminalGuard:
+        def inspect(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+            _ = context
+            return WorkflowGuardDecision(
+                tool_call=tool_call,
+                result=ToolExecutionResult(
+                    tool_name=tool_call.name,
+                    success=True,
+                    content=json.dumps(
+                        {
+                            "workflow_runtime_result": True,
+                            "policy": "block",
+                            "terminal": True,
+                            "reason": "main_jd_fit_stage_complete_final_answer",
+                            "next_action": "直接最终答复。",
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+                event_payload={
+                    "workflow_runtime_result": True,
+                    "policy": "block",
+                    "terminal": True,
+                    "tool_name": tool_call.name,
+                },
+            )
+
+    class TerminalModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            self.tool_names_by_call.append({item["function"]["name"] for item in tools})
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="guarded_tool", arguments={}, tool_call_id="call_terminal")],
+                )
+            assert tools == []
+            return ModelResponse(content="阶段已完成，这是最终答复。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = TerminalModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[GuardedTool()],
+        workflow_guard=TerminalGuard(),
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_terminal_workflow_block",
+            user_message="继续读取已经完成的报告",
+            skill_names=["base", "tools"],
+            max_tool_rounds=4,
+            context=_context("sess_terminal_workflow_block"),
+        )
+    )
+    usage_phases = [
+        event.payload["phase"]
+        for event in session_repo.list_events("sess_terminal_workflow_block")
+        if event.type == "llm_usage"
+    ]
+
+    assert output.answer == "阶段已完成，这是最终答复。"
+    assert model.calls == 2
+    assert model.tool_names_by_call[1] == set()
+    assert usage_phases == ["tool_loop", "final_answer_recovery"]
 
 
 def test_runtime_recovers_when_final_round_returns_empty_answer(tmp_path: Path) -> None:
@@ -600,6 +767,342 @@ def test_runtime_search_disclosure_reveals_tool_schema_after_tool_search(tmp_pat
     assert "retrieval_context_pack" in usage_events[1].payload["revealed_tool_names"]
 
 
+def test_runtime_search_disclosure_uses_runtime_plan_initial_visible_tools(tmp_path: Path) -> None:
+    class StaticTool:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name=self._name,
+                description=f"{self._name} description",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(tool_name=self._name, success=True, content="{}")
+
+    class InitialVisibleModelClient:
+        def __init__(self) -> None:
+            self.tool_names: set[str] = set()
+            self.tool_names_by_call: list[set[str]] = []
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            self.tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(self.tool_names)
+            if self.calls == 1:
+                return ModelResponse(content="done", tool_calls=[])
+            if self.calls == 2:
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_resume_version_create",
+                            arguments={"base_resume_profile_id": "resume_profile_alpha", "title": "定制简历"},
+                        )
+                    ],
+                )
+            return ModelResponse(content="done", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = InitialVisibleModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[
+            StaticTool("career_application_get"),
+            StaticTool("career_resume_profile_get"),
+            StaticTool("career_jd_analysis_get"),
+            StaticTool("career_job_fit_report_get"),
+            StaticTool("career_resume_version_create"),
+        ],
+        register_tool_search=True,
+        tool_schema_disclosure_mode="search",
+    )
+    session_id = "sess_runtime_plan_initial_visible"
+    session_repo.create_session(session_id)
+    now = datetime.now(UTC)
+    for event_id, tool_name, content in [
+        (
+            "evt_resume_profile",
+            "career_resume_profile_save",
+            {
+                "record_type": "resume_profile",
+                "record_id": "resume_profile_alpha",
+                "status": "active",
+                "record": {
+                    "resume_profile_id": "resume_profile_alpha",
+                    "source_artifact_id": "artifact_resume_source",
+                },
+            },
+        ),
+        (
+            "evt_fit_report",
+            "career_job_fit_report_save",
+            {
+                "record_type": "job_fit_report",
+                "record_id": "fit_ai_backend_001",
+                "status": "active",
+                "record": {
+                    "job_fit_report_id": "fit_ai_backend_001",
+                    "jd_analysis_id": "jd_ai_backend_001",
+                    "resume_profile_id": "resume_profile_alpha",
+                    "source_artifact_id": "artifact_jd_source",
+                    "report_artifact_id": "artifact_fit_report",
+                },
+            },
+        ),
+        (
+            "evt_application",
+            "career_application_create",
+            {
+                "record_type": "career_application",
+                "record_id": "application_ai_backend",
+                "status": "active",
+                "record": {
+                    "application_id": "application_ai_backend",
+                    "resume_profile_id": "resume_profile_alpha",
+                    "jd_analysis_id": "jd_ai_backend_001",
+                    "job_fit_report_id": "fit_ai_backend_001",
+                },
+            },
+        ),
+    ]:
+        session_repo.append_event(
+            session_id,
+            EventRecord(
+                event_id=event_id,
+                session_id=session_id,
+                type="tool_result",
+                payload={
+                    "tool_name": tool_name,
+                    "success": True,
+                    "content": json.dumps(content, ensure_ascii=False),
+                    "tool_call_id": f"call_{event_id}",
+                },
+                created_at=now,
+                agent_id="agent_main",
+                run_id=f"run_{session_id}",
+            ),
+        )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id=session_id,
+            user_message="继续生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context(session_id),
+        )
+    )
+    usage_event = next(event for event in session_repo.list_events(session_id) if event.type == "llm_usage")
+
+    assert output.answer == "done"
+    assert model.calls == 3
+    assert "career_resume_version_create" in model.tool_names_by_call[0]
+    assert "career_application_get" in model.tool_names_by_call[0]
+    assert "tool_search" not in model.tool_names_by_call[0]
+    assert usage_event.payload["tool_disclosure_mode"] == "search"
+    assert usage_event.payload["visible_tool_count"] > 1
+    assert "career_resume_version_create" in usage_event.payload["visible_tool_names"]
+    assert "tool_search" not in usage_event.payload["visible_tool_names"]
+
+
+def test_runtime_tool_search_without_runtime_plan_keeps_pending_required_tool(tmp_path: Path) -> None:
+    class StaticTool:
+        def __init__(self, name: str, content: str = "{}") -> None:
+            self._name = name
+            self._content = content
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name=self._name,
+                description=f"{self._name} description",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(tool_name=self._name, success=True, content=self._content)
+
+    class RuntimePlanPreservationModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            self.tool_names_by_call.append({item["function"]["name"] for item in tools})
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="tool_search",
+                            arguments={"query": "读取 artifact 辅助生成简历"},
+                        )
+                    ],
+                )
+            if self.calls == 2:
+                return ModelResponse(content="我已经可以直接回答了。", tool_calls=[])
+            if self.calls == 3:
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_resume_version_create",
+                            arguments={"base_resume_profile_id": "resume_profile_alpha", "title": "定制简历"},
+                        )
+                    ],
+                )
+            return ModelResponse(content="done", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = RuntimePlanPreservationModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[
+            StaticTool("tool_search"),
+            StaticTool("career_application_get"),
+            StaticTool("career_resume_profile_get"),
+            StaticTool("career_jd_analysis_get"),
+            StaticTool("career_job_fit_report_get"),
+            StaticTool(
+                "career_resume_version_create",
+                content='{"record_type":"resume_version","record_id":"resume_version_alpha"}',
+            ),
+        ],
+        tool_schema_disclosure_mode="search",
+    )
+    session_id = "sess_runtime_plan_preserve"
+    session_repo.create_session(session_id)
+    now = datetime.now(UTC)
+    for event_id, tool_name, content in [
+        (
+            "evt_resume_profile",
+            "career_resume_profile_save",
+            {
+                "record_type": "resume_profile",
+                "record_id": "resume_profile_alpha",
+                "status": "active",
+                "record": {
+                    "resume_profile_id": "resume_profile_alpha",
+                    "source_artifact_id": "artifact_resume_source",
+                },
+            },
+        ),
+        (
+            "evt_fit_report",
+            "career_job_fit_report_save",
+            {
+                "record_type": "job_fit_report",
+                "record_id": "fit_ai_backend_001",
+                "status": "active",
+                "record": {
+                    "job_fit_report_id": "fit_ai_backend_001",
+                    "jd_analysis_id": "jd_ai_backend_001",
+                    "resume_profile_id": "resume_profile_alpha",
+                    "source_artifact_id": "artifact_jd_source",
+                    "report_artifact_id": "artifact_fit_report",
+                },
+            },
+        ),
+        (
+            "evt_application",
+            "career_application_create",
+            {
+                "record_type": "career_application",
+                "record_id": "application_ai_backend",
+                "status": "active",
+                "record": {
+                    "application_id": "application_ai_backend",
+                    "resume_profile_id": "resume_profile_alpha",
+                    "jd_analysis_id": "jd_ai_backend_001",
+                    "job_fit_report_id": "fit_ai_backend_001",
+                },
+            },
+        ),
+    ]:
+        session_repo.append_event(
+            session_id,
+            EventRecord(
+                event_id=event_id,
+                session_id=session_id,
+                type="tool_result",
+                payload={
+                    "tool_name": tool_name,
+                    "success": True,
+                    "content": json.dumps(content, ensure_ascii=False),
+                    "tool_call_id": f"call_{event_id}",
+                },
+                created_at=now,
+                agent_id="agent_main",
+                run_id=f"run_{session_id}",
+            ),
+        )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id=session_id,
+            user_message="继续生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context(session_id),
+        )
+    )
+
+    assert output.answer == "done"
+    assert model.calls == 4
+    assert "career_resume_version_create" in model.tool_names_by_call[0]
+    decisions = [
+        event
+        for event in session_repo.list_events(session_id)
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert any(
+        event.payload.get("reason") == "premature_final_answer_with_pending_runtime_tools"
+        for event in decisions
+    )
+
+
 def test_runtime_search_disclosure_does_not_charge_schema_search_against_tool_round_limit(tmp_path: Path) -> None:
     class RetrievalTool:
         def definition(self) -> ToolDefinition:
@@ -694,6 +1197,95 @@ def test_runtime_search_disclosure_does_not_charge_schema_search_against_tool_ro
     assert model.calls == 3
 
 
+def test_runtime_search_disclosure_resets_schema_budget_after_business_tool(tmp_path: Path) -> None:
+    class RetrievalTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="retrieval_context_pack",
+                description="Build context from saved records.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="retrieval_context_pack",
+                success=True,
+                content=json.dumps({"context_pack": {"hits": []}}, ensure_ascii=False),
+            )
+
+    class InterleavedSearchModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls in {1, 3, 5, 7}:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="tool_search",
+                            arguments={"query": f"检索能力 {self.calls}"},
+                            tool_call_id=f"call_search_{self.calls}",
+                        )
+                    ],
+                )
+            if self.calls in {2, 4, 6, 8}:
+                assert "retrieval_context_pack" in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="retrieval_context_pack",
+                            arguments={"query": f"查询 {self.calls}"},
+                            tool_call_id=f"call_retrieval_{self.calls}",
+                        )
+                    ],
+                )
+            return ModelResponse(content="done", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = InterleavedSearchModelClient()
+    runtime, _, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[RetrievalTool()],
+        register_tool_search=True,
+        tool_schema_disclosure_mode="search",
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_interleaved_tool_search",
+            user_message="分阶段检索并读取上下文。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=4,
+            context=_context("sess_interleaved_tool_search"),
+        )
+    )
+
+    assert output.answer == "done"
+    assert model.calls == 9
+
+
 def test_runtime_search_disclosure_rejects_unrevealed_tool_call(tmp_path: Path) -> None:
     class RetrievalTool:
         def definition(self) -> ToolDefinition:
@@ -766,8 +1358,713 @@ def test_runtime_search_disclosure_rejects_unrevealed_tool_call(tmp_path: Path) 
     tool_results = [event for event in session_repo.list_events("sess_hidden_tool_call") if event.type == "tool_result"]
 
     assert output.answer == "需要先搜索可用工具。"
-    assert tool_results[0].payload["success"] is False
+    assert tool_results[0].payload["success"] is True
     assert "tool_schema_not_revealed" in tool_results[0].payload["content"]
+
+
+def test_runtime_recovers_when_final_answer_is_text_tool_invocation(tmp_path: Path) -> None:
+    class TextToolInvocationModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(
+                    content='<tool_invocation name="career_resume_profile_get" arguments={"resume_profile_id":"x"} />',
+                    tool_calls=[],
+                )
+            assert tools == []
+            return ModelResponse(content="已完成并汇总结果。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = TextToolInvocationModelClient()
+    runtime, session_repo, _ = _build_runtime(tmp_path, model)
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_text_tool_invocation",
+            user_message="诊断简历。",
+            skill_names=["base"],
+            max_tool_rounds=1,
+            context=_context("sess_text_tool_invocation"),
+        )
+    )
+
+    assert output.answer == "已完成并汇总结果。"
+    assert model.calls == 2
+    usage_events = [event for event in session_repo.list_events("sess_text_tool_invocation") if event.type == "llm_usage"]
+    assert usage_events[-1].payload["phase"] == "final_answer_recovery"
+
+
+def test_runtime_does_not_accept_final_answer_when_runtime_plan_has_pending_tool(tmp_path: Path) -> None:
+    class RuntimePlanSearchTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "runtime_plan_applied": True,
+                        "runtime_plan_phase": "jd_fit",
+                        "runtime_final_answer_ready": False,
+                        "runtime_next_action": "只创建 CareerApplication 串联本次求职项目。",
+                        "runtime_next_allowed_tools": ["career_application_create"],
+                        "runtime_missing_outputs": ["career_application"],
+                        "runtime_known_refs": {
+                            "resume_profile_id": "resume_profile_alpha",
+                            "jd_analysis_id": "jd_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                        },
+                        "revealed_tool_names": ["career_application_create"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationCreateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_create",
+                description="Create career application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_create",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class PrematureFinalModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "创建求职项目"})],
+                )
+            if self.calls == 2:
+                assert "career_application_create" in tool_names
+                return ModelResponse(content="匹配报告已完成。", tool_calls=[])
+            if self.calls == 3:
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_create",
+                            arguments={"application_id": "application_alpha"},
+                        )
+                    ],
+                )
+            return ModelResponse(content="已创建求职项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = PrematureFinalModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[RuntimePlanSearchTool(), ApplicationCreateTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_premature_runtime_plan",
+            user_message="创建求职项目",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_premature_runtime_plan"),
+        )
+    )
+
+    assert output.answer == "已创建求职项目。"
+    assert model.calls == 4
+    tool_calls = [event.payload["name"] for event in session_repo.list_events("sess_premature_runtime_plan") if event.type == "tool_call"]
+    assert tool_calls == ["tool_search", "career_application_create"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_premature_runtime_plan")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert decisions[0]["reason"] == "premature_final_answer_with_pending_runtime_tools"
+
+
+def test_runtime_does_not_execute_extra_tool_search_when_required_tool_is_visible(tmp_path: Path) -> None:
+    class RuntimePlanSearchTool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            self.calls += 1
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "runtime_plan_applied": True,
+                        "runtime_plan_phase": "resume_version",
+                        "runtime_final_answer_ready": False,
+                        "runtime_next_action": "只调用 career_resume_version_create 生成定制简历。",
+                        "runtime_next_allowed_tools": ["career_resume_version_create"],
+                        "runtime_missing_outputs": ["resume_version"],
+                        "revealed_tool_names": ["career_resume_version_create"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps({"ok": True}, ensure_ascii=False),
+            )
+
+    class RepeatedSearchModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "定制简历"})])
+            if self.calls == 2:
+                assert "career_resume_version_create" in tool_names
+                assert "tool_search" not in tool_names
+                return ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "再搜一次"})])
+            if self.calls == 3:
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
+                )
+            return ModelResponse(content="已生成定制简历。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    search_tool = RuntimePlanSearchTool()
+    model = RepeatedSearchModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[search_tool, ResumeVersionTool()],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=["tool_search"],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_schema_search_pending_runtime",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_schema_search_pending_runtime"),
+        )
+    )
+
+    assert output.answer == "已生成定制简历。"
+    assert search_tool.calls == 1
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_schema_search_pending_runtime")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == ["tool_search", "career_resume_version_create"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_schema_search_pending_runtime")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert decisions[0]["reason"] == "schema_search_with_pending_runtime_tools"
+
+
+def test_runtime_requires_application_merge_after_resume_version_success(tmp_path: Path) -> None:
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class ResumeVersionThenPrematureModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
+                )
+            if self.calls == 2:
+                assert "career_application_merge" in tool_names
+                assert "tool_search" not in tool_names
+                return ModelResponse(content="定制简历已生成。", tool_calls=[])
+            if self.calls == 3:
+                assert any("career_application_merge" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_application_merge", arguments={"application_id": "application_alpha"})],
+                )
+            return ModelResponse(content="定制简历已生成并关联项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = ResumeVersionThenPrematureModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ResumeVersionTool(), ApplicationMergeTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_resume_version_then_merge",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_resume_version_then_merge"),
+        )
+    )
+
+    assert output.answer == "定制简历已生成并关联项目。"
+    assert model.calls == 4
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_resume_version_then_merge")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == ["career_resume_version_create", "career_application_merge"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_resume_version_then_merge")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert decisions[0]["reason"] == "premature_final_answer_with_pending_runtime_tools"
+
+
+def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path: Path) -> None:
+    class DelegateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="delegate_agents",
+                description="Delegate agents.",
+                parameters_schema={"type": "object", "properties": {"tasks": {"type": "array"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            raise AssertionError("delegate_agents should be blocked by workflow guard")
+
+    class ApplicationCreateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_create",
+                description="Create career application.",
+                parameters_schema={"type": "object", "properties": {"job_fit_report_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_create",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class ApplicationFlowGuard:
+        def inspect(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+            _ = context
+            if tool_call.name != "delegate_agents":
+                return WorkflowGuardDecision(tool_call=tool_call)
+            payload = {
+                "workflow_runtime_result": True,
+                "policy": "block",
+                "recoverable": True,
+                "terminal": False,
+                "tool": "delegate_agents",
+                "reason": "main_jd_fit_records_ready_create_application",
+                "next_action": "下一步只调用 career_application_create 创建求职项目。",
+                "next_allowed_tools": ["career_application_create"],
+                "missing_outputs": ["career_application"],
+                "completed_refs": {
+                    "resume_profile_id": "resume_profile_alpha",
+                    "jd_analysis_id": "jd_alpha",
+                    "job_fit_report_id": "fit_alpha",
+                },
+            }
+            return WorkflowGuardDecision(
+                tool_call=tool_call,
+                result=ToolExecutionResult(
+                    tool_name="delegate_agents",
+                    success=True,
+                    content=json.dumps(payload, ensure_ascii=False),
+                ),
+                event_payload={
+                    "workflow_runtime_result": True,
+                    "policy": "block",
+                    "tool_name": "delegate_agents",
+                    "reason": "main_jd_fit_records_ready_create_application",
+                    "next_allowed_tools": ["career_application_create"],
+                    "missing_outputs": ["career_application"],
+                },
+            )
+
+    class GuardPlanModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if self.calls == 1:
+                assert "delegate_agents" in tool_names
+                assert "career_application_create" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="delegate_agents", arguments={"tasks": []})],
+                )
+            if self.calls == 2:
+                assert "career_application_create" in tool_names
+                return ModelResponse(content="匹配报告已经完成。", tool_calls=[])
+            if self.calls == 3:
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(name="career_application_create", arguments={"job_fit_report_id": "fit_alpha"})
+                    ],
+                )
+            return ModelResponse(content="已创建求职项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = GuardPlanModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[DelegateTool(), ApplicationCreateTool()],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=["delegate_agents", "memory_write"],
+        workflow_guard=ApplicationFlowGuard(),
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_guard_plan",
+            user_message="创建求职项目",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_guard_plan"),
+        )
+    )
+
+    assert output.answer == "已创建求职项目。"
+    assert model.calls == 4
+    assert model.tool_names_by_call[1] >= {"career_application_create"}
+    tool_calls = [event.payload["name"] for event in session_repo.list_events("sess_guard_plan") if event.type == "tool_call"]
+    assert tool_calls == ["delegate_agents", "career_application_create"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_guard_plan")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert [decision["reason"] for decision in decisions] == [
+        "main_jd_fit_records_ready_create_application",
+        "premature_final_answer_with_pending_runtime_tools",
+    ]
+
+
+def test_runtime_uses_workflow_guard_tool_search_block_to_reveal_next_allowed_schema(tmp_path: Path) -> None:
+    class ApplicationCreateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_create",
+                description="Create career application.",
+                parameters_schema={"type": "object", "properties": {"job_fit_report_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_create",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class ToolSearchStageGuard:
+        def inspect(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+            _ = context
+            if tool_call.name != "tool_search":
+                return WorkflowGuardDecision(tool_call=tool_call)
+            payload = {
+                "workflow_runtime_result": True,
+                "policy": "block",
+                "recoverable": True,
+                "terminal": False,
+                "tool": "tool_search",
+                "reason": "main_jd_fit_records_ready_create_application",
+                "stage": "jd_fit",
+                "next_action": "下一步只调用 career_application_create 创建求职项目。",
+                "next_allowed_tools": ["career_application_create"],
+                "missing_outputs": ["career_application"],
+                "completed_refs": {
+                    "resume_profile_id": "resume_profile_alpha",
+                    "jd_analysis_id": "jd_alpha",
+                    "job_fit_report_id": "fit_alpha",
+                },
+            }
+            return WorkflowGuardDecision(
+                tool_call=tool_call,
+                result=ToolExecutionResult(
+                    tool_name="tool_search",
+                    success=True,
+                    content=json.dumps(payload, ensure_ascii=False),
+                ),
+                event_payload={
+                    "workflow_runtime_result": True,
+                    "policy": "block",
+                    "tool_name": "tool_search",
+                    "reason": "main_jd_fit_records_ready_create_application",
+                    "next_allowed_tools": ["career_application_create"],
+                    "missing_outputs": ["career_application"],
+                },
+            )
+
+    class GuardedToolSearchModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if self.calls == 1:
+                assert "tool_search" in tool_names
+                assert "career_application_create" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "创建求职项目"})],
+                )
+            if self.calls == 2:
+                assert "career_application_create" in tool_names
+                return ModelResponse(content="匹配报告已经完成。", tool_calls=[])
+            if self.calls == 3:
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                assert "career_application_create" in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(name="career_application_create", arguments={"job_fit_report_id": "fit_alpha"})
+                    ],
+                )
+            return ModelResponse(content="已创建求职项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = GuardedToolSearchModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ApplicationCreateTool()],
+        register_tool_search=True,
+        tool_schema_disclosure_mode="search",
+        workflow_guard=ToolSearchStageGuard(),
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_guarded_tool_search_plan",
+            user_message="创建求职项目",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_guarded_tool_search_plan"),
+        )
+    )
+
+    assert output.answer == "已创建求职项目。"
+    assert model.calls == 4
+    assert "career_application_create" in model.tool_names_by_call[1]
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_guarded_tool_search_plan")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == ["tool_search", "career_application_create"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_guarded_tool_search_plan")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert [decision["reason"] for decision in decisions] == [
+        "main_jd_fit_records_ready_create_application",
+        "premature_final_answer_with_pending_runtime_tools",
+    ]
 
 
 def test_runtime_search_disclosure_keeps_child_agent_on_full_schema(tmp_path: Path) -> None:
