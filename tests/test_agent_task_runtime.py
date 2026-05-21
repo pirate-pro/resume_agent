@@ -406,7 +406,13 @@ def test_child_agent_tool_events_are_projected_as_safe_task_progress(tmp_path: P
     )
 
     assert result.status == "completed"
+    assert result.results[0].output_artifact_refs == []
+    assert result.results[0].artifact_refs == []
+    assert result.results[0].product_refs == ["resume_profile_progress_001"]
     visible_events = bundle.session_repository.list_events("sess_delegate")
+    result_summary_events = [event for event in visible_events if event.type == "agent_result_summary"]
+    assert result_summary_events[0].payload["output_artifact_refs"] == []
+    assert result_summary_events[0].payload["product_refs"] == ["resume_profile_progress_001"]
     progress_events = [event for event in visible_events if event.type == "agent_task_progress"]
     source_types = {event.payload["source_event_type"] for event in progress_events}
     assert {"tool_call", "tool_result", "assistant_message"} <= source_types
@@ -649,6 +655,10 @@ def test_delegate_agents_tool_accepts_session_artifact_refs(tmp_path: Path) -> N
     payload = json.loads(result.content)
     assert result.success is True
     assert payload["results"][0]["artifact_refs"] == ["artifact_resume_001"]
+    child_message = bundle.model_client.calls[-1]["user_message"]
+    assert "artifact 事实源规则" in child_message
+    assert "artifact 内容预览" in child_message
+    assert "resume content" in child_message
 
 
 def test_delegate_agents_tool_rejects_workspace_path_artifact_refs(tmp_path: Path) -> None:

@@ -92,6 +92,8 @@ class AgentResultSummaryPayload:
     summary: str
     next_steps: list[str] = field(default_factory=list)
     artifact_refs: list[str] = field(default_factory=list)
+    output_artifact_refs: list[str] = field(default_factory=list)
+    product_refs: list[str] = field(default_factory=list)
     parent_run_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -102,6 +104,8 @@ class AgentResultSummaryPayload:
         self.summary = _require_non_empty("summary", self.summary)
         self.next_steps = _normalize_string_list("next_steps", self.next_steps)
         self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
+        self.output_artifact_refs = _normalize_string_list("output_artifact_refs", self.output_artifact_refs)
+        self.product_refs = _normalize_string_list("product_refs", self.product_refs)
         self.parent_run_id = _normalize_optional("parent_run_id", self.parent_run_id)
 
     def to_payload(self) -> dict[str, Any]:
@@ -113,6 +117,8 @@ class AgentResultSummaryPayload:
             "summary": self.summary,
             "next_steps": self.next_steps,
             "artifact_refs": self.artifact_refs,
+            "output_artifact_refs": self.output_artifact_refs,
+            "product_refs": self.product_refs,
             "parent_run_id": self.parent_run_id,
         }
 
@@ -128,6 +134,8 @@ class AgentResultSummaryPayload:
             summary=str(payload.get("summary", "")),
             next_steps=_payload_string_list(payload.get("next_steps")),
             artifact_refs=_payload_string_list(payload.get("artifact_refs")),
+            output_artifact_refs=_payload_string_list(payload.get("output_artifact_refs")),
+            product_refs=_payload_string_list(payload.get("product_refs")),
             parent_run_id=_payload_optional_string(payload.get("parent_run_id")),
         )
 

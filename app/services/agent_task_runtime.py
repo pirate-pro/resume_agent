@@ -72,6 +72,8 @@ class AgentTaskResult:
     answer: str
     child_run_id: str | None = None
     artifact_refs: list[str] = field(default_factory=list)
+    output_artifact_refs: list[str] = field(default_factory=list)
+    product_refs: list[str] = field(default_factory=list)
     error: str | None = None
 
     def __post_init__(self) -> None:
@@ -82,6 +84,8 @@ class AgentTaskResult:
         self.answer = _require_non_empty("answer", self.answer)
         self.child_run_id = _normalize_optional_string("child_run_id", self.child_run_id)
         self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
+        self.output_artifact_refs = _normalize_string_list("output_artifact_refs", self.output_artifact_refs)
+        self.product_refs = _normalize_string_list("product_refs", self.product_refs)
         self.error = _normalize_optional_string("error", self.error)
 
     def to_payload(self) -> dict[str, object]:
@@ -93,6 +97,8 @@ class AgentTaskResult:
             "answer": self.answer,
             "child_run_id": self.child_run_id,
             "artifact_refs": self.artifact_refs,
+            "output_artifact_refs": self.output_artifact_refs,
+            "product_refs": self.product_refs,
             "error": self.error,
         }
 
@@ -226,6 +232,8 @@ class AgentTaskRuntime:
                         answer=error,
                         child_run_id=child_run_id,
                         artifact_refs=spec.artifact_refs,
+                        output_artifact_refs=[],
+                        product_refs=[],
                         error=error,
                     )
                 completed = self._task_store.mark_completed(
@@ -241,6 +249,9 @@ class AgentTaskRuntime:
                     {
                         **_task_progress_payload(completed),
                         "detail": _shorten(result.summary, 160),
+                        "artifact_refs": result.artifact_refs,
+                        "output_artifact_refs": result.output_artifact_refs,
+                        "product_refs": result.product_refs,
                     },
                 )
                 return AgentTaskResult(
@@ -251,6 +262,8 @@ class AgentTaskRuntime:
                     answer=result.answer,
                     child_run_id=result.child_run_id,
                     artifact_refs=result.artifact_refs,
+                    output_artifact_refs=result.output_artifact_refs,
+                    product_refs=result.product_refs,
                 )
 
         results = await asyncio.gather(

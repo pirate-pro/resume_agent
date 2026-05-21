@@ -18,6 +18,9 @@ from app.runtime.agent_registry import AgentRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.event_recorder import EventRecorder
 from app.services.agent_artifact_refs import normalize_agent_artifact_refs
+from app.services.agent_result_refs import AgentOutputRefs, collect_agent_output_refs
+
+_ARTIFACT_PREVIEW_CHARS = 1600
 
 __all__ = [
     "AgentInvocationRequest",
@@ -66,6 +69,8 @@ class AgentInvocationResult:
     status: str
     summary: str
     artifact_refs: list[str]
+    output_artifact_refs: list[str]
+    product_refs: list[str]
     answer: str
 
     def __post_init__(self) -> None:
@@ -76,6 +81,8 @@ class AgentInvocationResult:
         self.status = _require_non_empty("status", self.status)
         self.summary = _require_non_empty("summary", self.summary)
         self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
+        self.output_artifact_refs = normalize_agent_artifact_refs("output_artifact_refs", self.output_artifact_refs)
+        self.product_refs = _normalize_string_list("product_refs", self.product_refs)
         self.answer = _require_non_empty("answer", self.answer)
 
 
@@ -120,7 +127,14 @@ class AgentInvocationService:
             output = self._runtime.run(
                 AgentRunInput(
                     session_id=request.source_context.session_id,
-                    user_message=_build_child_instruction_message(task_id=task_id, request=request),
+                    user_message=_build_child_instruction_message(
+                        task_id=task_id,
+                        request=request,
+                        artifact_previews=self._build_artifact_previews(
+                            session_id=request.source_context.session_id,
+                            artifact_refs=request.artifact_refs,
+                        ),
+                    ),
                     skill_names=self._resolve_child_skill_names(request),
                     max_tool_rounds=request.max_tool_rounds,
                     context=child_context,
@@ -128,6 +142,7 @@ class AgentInvocationService:
             )
         except Exception as exc:
             summary = _failure_summary(exc)
+            failed_refs = AgentOutputRefs(input_artifact_refs=list(request.artifact_refs))
             self._record_result_summary(
                 context=child_context,
                 task_id=task_id,
@@ -135,11 +150,18 @@ class AgentInvocationService:
                 target_agent_id=source_agent_id,
                 status="failed",
                 summary=summary,
-                artifact_refs=request.artifact_refs,
+                refs=failed_refs,
             )
             raise
 
         summary = output.answer.strip() or "(no answer)"
+        output_refs = collect_agent_output_refs(
+            session_repository=self._session_repository,
+            session_id=request.source_context.session_id,
+            agent_id=target_agent_id,
+            run_id=child_context.run_id,
+            input_artifact_refs=request.artifact_refs,
+        )
         self._record_result_summary(
             context=child_context,
             task_id=task_id,
@@ -147,7 +169,7 @@ class AgentInvocationService:
             target_agent_id=source_agent_id,
             status="completed",
             summary=summary,
-            artifact_refs=request.artifact_refs,
+            refs=output_refs,
         )
         return AgentInvocationResult(
             task_id=task_id,
@@ -156,7 +178,9 @@ class AgentInvocationService:
             child_run_id=child_context.run_id,
             status="completed",
             summary=summary,
-            artifact_refs=list(request.artifact_refs),
+            artifact_refs=output_refs.artifact_refs,
+            output_artifact_refs=output_refs.output_artifact_refs,
+            product_refs=output_refs.product_refs,
             answer=output.answer,
         )
 
@@ -229,7 +253,7 @@ class AgentInvocationService:
         target_agent_id: str,
         status: str,
         summary: str,
-        artifact_refs: list[str],
+        refs: AgentOutputRefs,
     ) -> None:
         payload = AgentResultSummaryPayload(
             task_id=task_id,
@@ -237,7 +261,9 @@ class AgentInvocationService:
             target_agent_id=target_agent_id,
             status=status,
             summary=summary,
-            artifact_refs=artifact_refs,
+            artifact_refs=refs.artifact_refs,
+            output_artifact_refs=refs.output_artifact_refs,
+            product_refs=refs.product_refs,
             parent_run_id=context.parent_run_id,
         )
         self._event_recorder.record(
@@ -246,8 +272,32 @@ class AgentInvocationService:
             payload=payload.to_payload(),
         )
 
+    def _build_artifact_previews(self, *, session_id: str, artifact_refs: list[str]) -> list[dict[str, str]]:
+        previews: list[dict[str, str]] = []
+        for artifact_id in artifact_refs:
+            artifact = self._session_repository.get_session_artifact(session_id, artifact_id)
+            if artifact is None:
+                continue
+            try:
+                text = self._session_repository.read_session_artifact_text(session_id, artifact_id)
+            except Exception:  # noqa: BLE001
+                text = ""
+            previews.append(
+                {
+                    "artifact_id": artifact.artifact_id,
+                    "title": artifact.title,
+                    "text": _truncate_text(text, _ARTIFACT_PREVIEW_CHARS),
+                }
+            )
+        return previews
 
-def _build_child_instruction_message(*, task_id: str, request: AgentInvocationRequest) -> str:
+
+def _build_child_instruction_message(
+    *,
+    task_id: str,
+    request: AgentInvocationRequest,
+    artifact_previews: list[dict[str, str]] | None = None,
+) -> str:
     lines = [
         f"你收到一个来自 {request.source_context.agent_id} 的子任务。",
         f"task_id: {task_id}",
@@ -260,8 +310,39 @@ def _build_child_instruction_message(*, task_id: str, request: AgentInvocationRe
         lines.extend(["", "constraints:", *[f"- {item}" for item in request.constraints]])
     if request.artifact_refs:
         lines.extend(["", "artifact_refs:", *[f"- {item}" for item in request.artifact_refs]])
+        lines.extend(
+            [
+                "",
+                "artifact 事实源规则:",
+                "- artifact_refs 指向的会话资料是本子任务的事实源。",
+                "- 如果 instruction 内联文本、示例或历史内容与 artifact 内容冲突，必须以 artifact 为准。",
+                "- 保存产品记录时，不要写入 artifact 中未出现的人名、公司、学校、项目、时间、指标或技能。",
+            ]
+        )
+    if artifact_previews:
+        lines.extend(["", "artifact 内容预览:"])
+        for item in artifact_previews:
+            lines.extend(
+                [
+                    f"- artifact_id: {item['artifact_id']}",
+                    f"  title: {item['title']}",
+                    "  text:",
+                    _indent_block(item["text"] or "(无可用文本预览)", prefix="    "),
+                ]
+            )
     lines.extend(["", "请只完成该子任务，并输出可供主 agent 汇总的结果。"])
     return "\n".join(lines)
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    normalized = text.strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip() + f"\n...（已截断，完整内容请读取 artifact）"
+
+
+def _indent_block(text: str, *, prefix: str) -> str:
+    return "\n".join(prefix + line for line in text.splitlines())
 
 
 def _failure_summary(exc: Exception) -> str:
