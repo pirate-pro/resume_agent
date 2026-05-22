@@ -975,6 +975,62 @@ def test_child_job_agent_blocks_report_read_after_fit_save(tmp_path: Path) -> No
     assert "直接总结" in payload["next_action"]
 
 
+def test_child_resume_agent_guides_profile_save_after_diagnosis_artifact_ready(tmp_path: Path) -> None:
+    guard, _, repo = _guard(tmp_path)
+    context = RunContext(
+        session_id="sess_guard",
+        run_id="run_child_resume",
+        agent_id="resume_agent",
+        turn_id="turn_guard",
+        entry_agent_id="agent_main",
+    )
+    repo.append_event(
+        "sess_guard",
+        EventRecord(
+            event_id="evt_existing_diagnosis",
+            session_id="sess_guard",
+            type="tool_result",
+            payload={
+                "tool_name": "session_create_text_artifact",
+                "success": True,
+                "tool_call_id": "call_existing_diagnosis",
+                "content": json.dumps(
+                    {
+                        "artifact_id": "artifact_diagnosis",
+                        "title": "简历诊断报告-张三",
+                        "kind": "generated_file",
+                        "media_type": "text/markdown",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            created_at=_now(),
+            agent_id="resume_agent",
+            run_id="run_child_resume",
+            parent_run_id="run_parent",
+        ),
+    )
+
+    decision = guard.inspect(
+        ToolCall(
+            name="session_read_artifact",
+            arguments={"artifact_id": "artifact_resume"},
+            tool_call_id="call_read_resume_again",
+        ),
+        context,
+    )
+
+    assert decision.result is not None
+    payload = json.loads(decision.result.content)
+    assert payload["policy"] == "block"
+    assert payload["reason"] == "resume_diagnosis_artifact_ready_save_profile"
+    assert payload["missing_outputs"] == ["resume_profile"]
+    assert payload["next_allowed_tools"] == ["career_resume_profile_save"]
+    assert payload["required_tools"] == ["career_resume_profile_save"]
+    assert payload["known_refs"]["diagnosis_artifact_id"] == "artifact_diagnosis"
+    assert "career_resume_profile_save" in payload["next_action"]
+
+
 def test_child_resume_agent_blocks_low_level_read_after_profile_and_diagnosis_ready(tmp_path: Path) -> None:
     guard, _, repo = _guard(tmp_path)
     context = RunContext(
@@ -1044,6 +1100,7 @@ def test_child_resume_agent_blocks_low_level_read_after_profile_and_diagnosis_re
     assert payload["reason"] == "resume_profile_and_diagnosis_ready_stop_low_level_actions"
     assert payload["missing_outputs"] == []
     assert payload["diagnosis_artifact_id"] == "artifact_diagnosis"
+    assert payload["final_answer_ready"] is True
     assert "直接总结" in payload["next_action"]
 
 

@@ -199,6 +199,76 @@ def test_successful_jd_analysis_save_advances_pending_plan_to_job_fit_report_sav
     assert "career_jd_analysis_save" in runtime_plan_discouraged_tools(plan)
 
 
+def test_successful_resume_profile_save_does_not_guess_missing_diagnosis_without_runtime_state() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_resume_profile_save",
+        """
+        {
+          "record_type": "resume_profile",
+          "record_id": "resume_profile_alpha",
+          "record": {"resume_profile_id": "resume_profile_alpha"}
+        }
+        """,
+        previous_pending_plan=None,
+    )
+
+    assert plan is None
+
+
+def test_successful_resume_profile_save_finishes_when_diagnosis_artifact_exists() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_resume_profile_save",
+        """
+        {
+          "record_type": "resume_profile",
+          "record_id": "resume_profile_alpha",
+          "record": {"resume_profile_id": "resume_profile_alpha"}
+        }
+        """,
+        previous_pending_plan={
+            "phase": "resume_diagnosis",
+            "next_allowed_tools": ["career_resume_profile_save"],
+            "required_tools": ["career_resume_profile_save"],
+            "known_refs": {"diagnosis_artifact_id": "artifact_diagnosis"},
+            "missing_outputs": ["resume_profile"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["final_answer_ready"] is True
+    assert plan["next_allowed_tools"] == []
+    assert plan["missing_outputs"] == []
+    assert plan["known_refs"]["resume_profile_id"] == "resume_profile_alpha"
+    assert plan["known_refs"]["diagnosis_artifact_id"] == "artifact_diagnosis"
+
+
+def test_successful_resume_diagnosis_artifact_finishes_resume_stage() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "session_create_text_artifact",
+        """
+        {
+          "artifact_id": "artifact_diagnosis",
+          "title": "张明-简历诊断报告.md",
+          "kind": "generated_file"
+        }
+        """,
+        previous_pending_plan={
+            "phase": "resume_diagnosis",
+            "next_allowed_tools": ["session_create_text_artifact"],
+            "required_tools": ["session_create_text_artifact"],
+            "known_refs": {"resume_profile_id": "resume_profile_alpha"},
+            "missing_outputs": ["diagnosis_artifact"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["final_answer_ready"] is True
+    assert plan["next_allowed_tools"] == []
+    assert plan["known_refs"]["resume_profile_id"] == "resume_profile_alpha"
+    assert plan["known_refs"]["diagnosis_artifact_id"] == "artifact_diagnosis"
+    assert "session_create_text_artifact" in runtime_plan_discouraged_tools(plan)
+
+
 def test_pending_runtime_plan_from_tool_search_result_preserves_runtime_discouraged_tools() -> None:
     plan = pending_runtime_plan_from_tool_search_result(
         """

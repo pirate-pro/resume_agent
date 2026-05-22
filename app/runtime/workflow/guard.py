@@ -137,6 +137,13 @@ _CHILD_JOB_FIT_LOW_LEVEL_TOOLS = [
     "career_jd_analysis_get",
     "career_job_fit_report_get",
 ]
+_CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS = [
+    "session_read_artifact",
+    "session_list_artifacts",
+    "session_plan_artifact_access",
+    "session_search_artifact",
+    "career_resume_profile_get",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -616,7 +623,11 @@ class WorkflowRuntimeGuard:
                 report_artifact_id=existing["artifact_id"],
             )
             if output_kind == "job_fit_report"
-            else {}
+            else self._child_resume_diagnosis_runtime_plan(
+                context,
+                missing_outputs=missing_outputs,
+                diagnosis_artifact_id=existing["artifact_id"],
+            )
         )
         payload = {
             "workflow_runtime_result": True,
@@ -635,6 +646,8 @@ class WorkflowRuntimeGuard:
             "blocked_actions": ["session_create_text_artifact"],
         }
         if output_kind == "job_fit_report":
+            payload.update(runtime_plan)
+        if output_kind == "resume_diagnosis":
             payload.update(runtime_plan)
         return WorkflowGuardDecision(
             tool_call=tool_call,
@@ -826,8 +839,38 @@ class WorkflowRuntimeGuard:
         if context.agent_id != "resume_agent" or context.agent_id == context.entry_agent_id:
             return WorkflowGuardDecision(tool_call=tool_call)
         existing = self._latest_current_run_output_artifact(context, output_kind="resume_diagnosis")
-        if existing is None or not self._current_run_has_successful_tool(context, "career_resume_profile_save"):
+        if existing is None:
             return WorkflowGuardDecision(tool_call=tool_call)
+        missing_outputs = self._child_output_missing_outputs(context, output_kind="resume_diagnosis")
+        runtime_plan = self._child_resume_diagnosis_runtime_plan(
+            context,
+            missing_outputs=missing_outputs,
+            diagnosis_artifact_id=existing["artifact_id"],
+        )
+        if missing_outputs:
+            return _block_decision(
+                tool_call,
+                tool_name=tool_call.name,
+                reason="resume_diagnosis_artifact_ready_save_profile",
+                next_action=(
+                    "简历诊断 artifact 已完成；不要继续读取或重写资料，"
+                    "下一步只调用 career_resume_profile_save 保存 ResumeProfile，"
+                    f"并把 diagnosis_artifact_id 设置为已有 artifact_id：{existing['artifact_id']}。"
+                ),
+                missing_outputs=missing_outputs,
+                lock_key=f"child_resume_diagnosis_profile_missing:{context.run_id}:{existing['artifact_id']}",
+                extra_payload={
+                    **runtime_plan,
+                    "output_kind": "resume_diagnosis",
+                    "diagnosis_artifact_id": existing["artifact_id"],
+                    "blocked_actions": _CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS + ["session_create_text_artifact"],
+                },
+                extra_event_payload={
+                    **runtime_plan,
+                    "output_kind": "resume_diagnosis",
+                    "diagnosis_artifact_id": existing["artifact_id"],
+                },
+            )
         return _block_decision(
             tool_call,
             tool_name=tool_call.name,
@@ -836,11 +879,13 @@ class WorkflowRuntimeGuard:
             missing_outputs=[],
             lock_key=f"child_resume_diagnosis_stage:{context.run_id}:{existing['artifact_id']}",
             extra_payload={
+                **runtime_plan,
                 "output_kind": "resume_diagnosis",
                 "diagnosis_artifact_id": existing["artifact_id"],
-                "blocked_actions": ["session_read_artifact", "session_create_text_artifact"],
+                "blocked_actions": _CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS + ["session_create_text_artifact"],
             },
             extra_event_payload={
+                **runtime_plan,
                 "output_kind": "resume_diagnosis",
                 "diagnosis_artifact_id": existing["artifact_id"],
             },
@@ -923,6 +968,42 @@ class WorkflowRuntimeGuard:
                 "career_job_fit_report_save",
             ],
             "completed_refs": {"report_artifact_id": report_artifact_id} if report_artifact_id is not None else {},
+        }
+
+    def _child_resume_diagnosis_runtime_plan(
+        self,
+        context: RunContext,
+        *,
+        missing_outputs: list[str],
+        diagnosis_artifact_id: str,
+    ) -> dict[str, Any]:
+        if not missing_outputs:
+            return {
+                "stage": "resume_diagnosis",
+                "phase": "resume_diagnosis",
+                "next_allowed_tools": [],
+                "required_tools": [],
+                "missing_outputs": [],
+                "completed_refs": {"diagnosis_artifact_id": diagnosis_artifact_id},
+                "known_refs": {"diagnosis_artifact_id": diagnosis_artifact_id},
+                "final_answer_ready": True,
+                "discouraged_tools": _CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS
+                + ["tool_search", "session_create_text_artifact", "career_resume_profile_save"],
+            }
+        return {
+            "stage": "resume_diagnosis",
+            "phase": "resume_diagnosis",
+            "next_allowed_tools": ["career_resume_profile_save"],
+            "required_tools": ["career_resume_profile_save"],
+            "missing_outputs": missing_outputs,
+            "completed_refs": {"diagnosis_artifact_id": diagnosis_artifact_id},
+            "known_refs": {"diagnosis_artifact_id": diagnosis_artifact_id},
+            "discouraged_tools": _CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS
+            + ["tool_search", "session_create_text_artifact"],
+            "next_action": (
+                "简历诊断 artifact 已完成；下一步只调用 career_resume_profile_save，"
+                f"并把 diagnosis_artifact_id 设置为 {diagnosis_artifact_id}。"
+            ),
         }
 
     def _latest_current_run_output_artifact(self, context: RunContext, *, output_kind: str) -> dict[str, Any] | None:

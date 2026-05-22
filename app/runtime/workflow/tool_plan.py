@@ -285,6 +285,10 @@ def pending_runtime_plan_from_successful_tool_result(
     if not isinstance(payload, dict):
         return None
 
+    if tool_name == "career_resume_profile_save":
+        return _pending_plan_after_resume_profile_save(payload, previous_pending_plan=previous_pending_plan)
+    if tool_name == "session_create_text_artifact":
+        return _pending_plan_after_text_artifact(payload, previous_pending_plan=previous_pending_plan)
     if tool_name == "career_jd_analysis_save":
         return _pending_plan_after_jd_analysis_save(payload, previous_pending_plan=previous_pending_plan)
     if tool_name != "career_resume_version_create":
@@ -310,6 +314,50 @@ def pending_runtime_plan_from_successful_tool_result(
             "career_application_list",
         ],
     }
+
+
+def _pending_plan_after_resume_profile_save(
+    payload: dict[str, Any],
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if payload.get("record_type") != "resume_profile":
+        return None
+    known_refs = _runtime_known_refs_from_payload(payload)
+    resume_profile_id = known_refs.get("resume_profile_id") or payload.get("record_id")
+    if isinstance(resume_profile_id, str) and resume_profile_id.strip():
+        known_refs["resume_profile_id"] = resume_profile_id.strip()
+
+    previous_refs = _pending_known_refs(previous_pending_plan)
+    known_refs.update(previous_refs)
+    if previous_refs.get("diagnosis_artifact_id"):
+        return _resume_diagnosis_final_plan(known_refs=known_refs)
+    return None
+
+
+def _pending_plan_after_text_artifact(
+    payload: dict[str, Any],
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if previous_pending_plan is None:
+        return None
+    if previous_pending_plan.get("phase") != "resume_diagnosis":
+        return None
+    raw_missing_outputs = previous_pending_plan.get("missing_outputs")
+    if not isinstance(raw_missing_outputs, list) or "diagnosis_artifact" not in raw_missing_outputs:
+        return None
+    title = payload.get("title")
+    if not isinstance(title, str) or not _looks_like_resume_diagnosis_artifact(title):
+        plan = dict(previous_pending_plan)
+        plan["next_action"] = "刚创建的 artifact 不是简历诊断报告；仍需调用 session_create_text_artifact 生成简历诊断报告。"
+        return plan
+
+    known_refs = _pending_known_refs(previous_pending_plan)
+    artifact_id = payload.get("artifact_id")
+    if isinstance(artifact_id, str) and artifact_id.strip():
+        known_refs["diagnosis_artifact_id"] = artifact_id.strip()
+    return _resume_diagnosis_final_plan(known_refs=known_refs)
 
 
 def _pending_plan_after_jd_analysis_save(
@@ -351,6 +399,35 @@ def _pending_plan_after_jd_analysis_save(
             "career_profile_get",
         ],
     }
+
+
+def _resume_diagnosis_final_plan(*, known_refs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "phase": "resume_diagnosis",
+        "next_action": "ResumeProfile 和简历诊断 artifact 已完成；停止工具调用，直接总结已保存的产品记录。",
+        "next_allowed_tools": [],
+        "required_tools": [],
+        "known_refs": known_refs,
+        "missing_outputs": [],
+        "final_answer_ready": True,
+        "discouraged_tools": [
+            "tool_search",
+            "session_read_artifact",
+            "session_list_artifacts",
+            "session_plan_artifact_access",
+            "session_search_artifact",
+            "session_create_text_artifact",
+            "career_resume_profile_get",
+            "career_resume_profile_save",
+        ],
+    }
+
+
+def _pending_known_refs(plan: dict[str, Any] | None) -> dict[str, Any]:
+    if plan is None:
+        return {}
+    raw_refs = plan.get("known_refs")
+    return dict(raw_refs) if isinstance(raw_refs, dict) else {}
 
 
 def runtime_plan_next_allowed_tools(payload: dict[str, Any]) -> list[str]:
@@ -649,6 +726,12 @@ def _runtime_plan_required_tools(payload: dict[str, Any]) -> list[str]:
     if next_allowed:
         required = [tool for tool in required if tool in next_allowed]
     return required
+
+
+def _looks_like_resume_diagnosis_artifact(title: str) -> bool:
+    normalized = title.strip().casefold()
+    compact = "".join(ch for ch in normalized if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+    return "简历" in compact and ("诊断" in compact or "画像" in compact) and "报告" in compact
 
 
 def _dedupe_strings(items: list[str]) -> list[str]:

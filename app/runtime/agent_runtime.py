@@ -1120,6 +1120,10 @@ def _visible_tool_definitions_for_runtime_plan(
     visible_definitions = tool_reveal_state.visible_definitions()
     if pending_runtime_plan is None:
         return visible_definitions
+    if pending_runtime_plan.get("final_answer_ready") is True:
+        hidden_tools = set(runtime_plan_discouraged_tools(pending_runtime_plan))
+        hidden_tools.add(_SCHEMA_SEARCH_TOOL_NAME)
+        return [definition for definition in visible_definitions if definition.name not in hidden_tools]
     required_tool_is_visible = any(
         tool_reveal_state.is_visible(tool_name) for tool_name in runtime_plan_completion_tools(pending_runtime_plan)
     )
