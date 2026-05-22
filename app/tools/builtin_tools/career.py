@@ -1460,7 +1460,7 @@ class CareerApplicationCreateTool:
                 position=position,
                 location=application_fields["location"],
                 job_url=_optional_string(args.get("job_url")) or "",
-                stage=_normalize_application_stage(_optional_string(args.get("stage"))) or "draft",
+                stage=_normalize_application_stage_or_default(_optional_string(args.get("stage")), default="draft"),
                 priority=_optional_string(args.get("priority")) or "medium",
                 resume_profile_id=resume_profile_id,
                 career_profile_id=career_profile_id,
@@ -1664,6 +1664,11 @@ def _normalize_application_stage(value: Any) -> Any:
     return stage
 
 
+def _normalize_application_stage_or_default(value: Any, *, default: str) -> str:
+    normalized = _normalize_application_stage(value)
+    return normalized if normalized in _CAREER_APPLICATION_STAGES else default
+
+
 def _looks_like_resume_ready_stage(value: str) -> bool:
     if not value:
         return False
@@ -1719,7 +1724,10 @@ def _career_application_merge_updates(raw: Any) -> dict[str, Any]:
     for key, value in payload.items():
         if key in _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS:
             if key == "stage":
-                value = _normalize_application_stage(value)
+                normalized_stage = _normalize_application_stage(value)
+                if normalized_stage in _CAREER_APPLICATION_STAGES:
+                    output[key] = normalized_stage
+                continue
             elif key in {"summary", "notes"}:
                 value = _sanitize_career_application_text(_optional_string(value) or "")
             elif key in {"next_actions", "risks"}:
@@ -1729,6 +1737,8 @@ def _career_application_merge_updates(raw: Any) -> dict[str, Any]:
         if key in _CAREER_APPLICATION_IGNORED_UPDATE_FIELDS:
             continue
         raise ToolExecutionError(f"Unsupported CareerApplication merge field: {key}")
+    if output.get("resume_version_ids") and "stage" not in output:
+        output["stage"] = "ready_to_apply"
     return output
 
 

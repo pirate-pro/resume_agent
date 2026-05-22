@@ -268,6 +268,76 @@ def test_successful_job_fit_artifact_without_jd_guides_jd_save_first() -> None:
     assert "session_create_text_artifact" in runtime_plan_discouraged_tools(plan)
 
 
+def test_successful_delegate_agents_jd_fit_guides_application_create() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "delegate_agents",
+        """
+        {
+          "status": "completed",
+          "results": [
+            {
+              "target_agent_id": "job_agent",
+              "status": "completed",
+              "summary": "已完成 JDAnalysis jd_alpha 和 JobFitReport fit_alpha。",
+              "output_artifact_refs": ["artifact_fit_report"],
+              "product_refs": ["jd_alpha", "fit_alpha"]
+            }
+          ]
+        }
+        """,
+        previous_pending_plan={
+            "phase": "jd_fit",
+            "next_allowed_tools": ["delegate_agents"],
+            "required_tools": ["delegate_agents"],
+            "known_refs": {"resume_profile_id": "resume_profile_alpha"},
+            "missing_outputs": ["jd_analysis", "job_fit_report", "career_application"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["phase"] == "jd_fit"
+    assert plan["next_allowed_tools"] == ["career_application_create"]
+    assert plan["required_tools"] == ["career_application_create"]
+    assert plan["missing_outputs"] == ["career_application"]
+    assert plan["known_refs"]["resume_profile_id"] == "resume_profile_alpha"
+    assert plan["known_refs"]["jd_analysis_id"] == "jd_alpha"
+    assert plan["known_refs"]["job_fit_report_id"] == "fit_alpha"
+    assert plan["known_refs"]["report_artifact_id"] == "artifact_fit_report"
+    assert "delegate_agents" in runtime_plan_discouraged_tools(plan)
+    assert "tool_search" in runtime_plan_discouraged_tools(plan)
+
+
+def test_successful_delegate_agents_extracts_refs_from_text_when_structured_refs_are_sparse() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "delegate_agents",
+        """
+        {
+          "status": "completed",
+          "results": [
+            {
+              "target_agent_id": "job_agent",
+              "status": "completed",
+              "summary": "产出：jd_analysis_id=jd_b8e6607b59a6，job_fit_report_id=fit_b7c9ff559172，报告 artifact_5eba62c32cd4。"
+            }
+          ]
+        }
+        """,
+        previous_pending_plan={
+            "phase": "jd_fit",
+            "next_allowed_tools": ["delegate_agents"],
+            "required_tools": ["delegate_agents"],
+            "known_refs": {"resume_profile_id": "resume_profile_2c9a9af42398"},
+            "missing_outputs": ["jd_analysis", "job_fit_report", "career_application"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["next_allowed_tools"] == ["career_application_create"]
+    assert plan["known_refs"]["jd_analysis_id"] == "jd_b8e6607b59a6"
+    assert plan["known_refs"]["job_fit_report_id"] == "fit_b7c9ff559172"
+    assert plan["known_refs"]["report_artifact_id"] == "artifact_5eba62c32cd4"
+
+
 def test_successful_resume_profile_save_does_not_guess_missing_diagnosis_without_runtime_state() -> None:
     plan = pending_runtime_plan_from_successful_tool_result(
         "career_resume_profile_save",

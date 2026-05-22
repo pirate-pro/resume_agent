@@ -2354,6 +2354,23 @@ def test_career_application_merge_accepts_resume_stage_aliases(tmp_path: Path) -
 
     assert merged_from_resume_version_stage_alias["record"]["stage"] == "ready_to_apply"
 
+    merged_from_optimizing_stage = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {
+                "resume_version_ids": ["resume_version_alpha"],
+                "stage": "optimizing",
+                "notes": "模型使用了非枚举阶段，但已关联定制简历。",
+            },
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_optimizing_stage["record"]["stage"] == "ready_to_apply"
+
 
 def test_career_application_tools_sanitize_placeholder_wording(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)

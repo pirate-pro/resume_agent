@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from typing import Any
@@ -296,6 +297,8 @@ def pending_runtime_plan_from_successful_tool_result(
     if not isinstance(payload, dict):
         return None
 
+    if tool_name == "delegate_agents":
+        return _pending_plan_after_delegate_agents(payload, previous_pending_plan=previous_pending_plan)
     if tool_name == "career_resume_profile_save":
         return _pending_plan_after_resume_profile_save(payload, previous_pending_plan=previous_pending_plan)
     if tool_name == "session_create_text_artifact":
@@ -483,6 +486,28 @@ def _job_fit_report_save_plan(*, known_refs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _job_fit_application_create_plan(*, known_refs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "phase": "jd_fit",
+        "next_action": "JDAnalysis 和 JobFitReport 已由子 agent 完成；下一步只调用 career_application_create 创建求职项目。",
+        "next_allowed_tools": ["career_application_create"],
+        "required_tools": ["career_application_create"],
+        "known_refs": known_refs,
+        "missing_outputs": ["career_application"],
+        "discouraged_tools": [
+            "tool_search",
+            "delegate_agents",
+            "session_read_artifact",
+            "session_list_artifacts",
+            "session_plan_artifact_access",
+            "session_search_artifact",
+            "career_jd_analysis_get",
+            "career_job_fit_report_get",
+            "career_resume_version_create",
+        ],
+    }
+
+
 def _resume_diagnosis_final_plan(*, known_refs: dict[str, Any]) -> dict[str, Any]:
     return {
         "phase": "resume_diagnosis",
@@ -510,6 +535,35 @@ def _pending_known_refs(plan: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     raw_refs = plan.get("known_refs")
     return dict(raw_refs) if isinstance(raw_refs, dict) else {}
+
+
+def _pending_plan_after_delegate_agents(
+    payload: dict[str, Any],
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    known_refs = _pending_known_refs(previous_pending_plan)
+    known_refs.update(_delegate_result_known_refs(payload))
+    phase = previous_pending_plan.get("phase") if previous_pending_plan is not None else None
+
+    if (
+        phase in {None, "jd_fit"}
+        and "jd_analysis_id" in known_refs
+        and "job_fit_report_id" in known_refs
+        and "application_id" not in known_refs
+    ):
+        return _job_fit_application_create_plan(known_refs=known_refs)
+
+    if (
+        phase == "resume_diagnosis"
+        and "resume_profile_id" in known_refs
+        and ("diagnosis_artifact_id" in known_refs or "report_artifact_id" in known_refs)
+    ):
+        if "diagnosis_artifact_id" not in known_refs and "report_artifact_id" in known_refs:
+            known_refs["diagnosis_artifact_id"] = known_refs["report_artifact_id"]
+        return _resume_diagnosis_final_plan(known_refs=known_refs)
+
+    return None
 
 
 def runtime_plan_next_allowed_tools(payload: dict[str, Any]) -> list[str]:
@@ -785,6 +839,70 @@ def _runtime_known_refs_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
+def _delegate_result_known_refs(payload: dict[str, Any]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for ref in _string_items(payload.get("product_refs")):
+        _apply_product_ref(output, ref)
+    for ref in _string_items(payload.get("output_artifact_refs")) or _string_items(payload.get("artifact_refs")):
+        _apply_artifact_ref(output, ref)
+    results = payload.get("results")
+    if isinstance(results, list):
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            for ref in _string_items(result.get("product_refs")):
+                _apply_product_ref(output, ref)
+            artifact_refs = _string_items(result.get("output_artifact_refs")) or _string_items(result.get("artifact_refs"))
+            for ref in artifact_refs:
+                _apply_artifact_ref(output, ref)
+            for key in ("summary", "answer", "answer_preview"):
+                text = result.get(key)
+                if isinstance(text, str):
+                    _apply_text_refs(output, text)
+    for key in ("summary", "answer", "message"):
+        text = payload.get(key)
+        if isinstance(text, str):
+            _apply_text_refs(output, text)
+    return output
+
+
+def _apply_product_ref(output: dict[str, Any], ref: str) -> None:
+    if ref.startswith("resume_profile_"):
+        output.setdefault("resume_profile_id", ref)
+    elif ref == "career_profile_default" or ref.startswith("career_profile_"):
+        output.setdefault("career_profile_id", ref)
+    elif ref.startswith("jd_analysis_") or ref.startswith("jd_"):
+        output.setdefault("jd_analysis_id", ref)
+    elif ref.startswith("job_fit_report_") or ref.startswith("fit_"):
+        output.setdefault("job_fit_report_id", ref)
+    elif ref.startswith("application_"):
+        output.setdefault("application_id", ref)
+    elif ref.startswith("resume_version_"):
+        output.setdefault("resume_version_id", ref)
+
+
+def _apply_artifact_ref(output: dict[str, Any], ref: str) -> None:
+    if ref.startswith("artifact_"):
+        output.setdefault("report_artifact_id", ref)
+
+
+def _apply_text_refs(output: dict[str, Any], text: str) -> None:
+    for match in _CONTROLLED_REF_RE.finditer(text):
+        ref = match.group(0)
+        if ref in _CONTROLLED_REF_FIELD_NAMES:
+            continue
+        if ref.startswith("artifact_"):
+            _apply_artifact_ref(output, ref)
+        else:
+            _apply_product_ref(output, ref)
+
+
+def _string_items(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+
+
 def _runtime_plan_required_tools(payload: dict[str, Any]) -> list[str]:
     raw_tools = payload.get("required_tools")
     if isinstance(raw_tools, list):
@@ -849,6 +967,28 @@ _REF_KEY_ORDER = [
     "resume_version_id",
     "resume_version_artifact_id",
 ]
+
+_CONTROLLED_REF_RE = re.compile(
+    r"resume_profile_[A-Za-z0-9_-]+"
+    r"|career_profile_default"
+    r"|career_profile_[A-Za-z0-9_-]+"
+    r"|jd_analysis_[A-Za-z0-9_-]+"
+    r"|jd_[A-Za-z0-9_-]+"
+    r"|job_fit_report_[A-Za-z0-9_-]+"
+    r"|fit_[A-Za-z0-9_-]+"
+    r"|application_[A-Za-z0-9_-]+"
+    r"|resume_version_[A-Za-z0-9_-]+"
+    r"|artifact_[A-Za-z0-9_-]+"
+)
+
+_CONTROLLED_REF_FIELD_NAMES = {
+    "application_id",
+    "career_profile_id",
+    "jd_analysis_id",
+    "job_fit_report_id",
+    "resume_profile_id",
+    "resume_version_id",
+}
 
 
 def _normalize_non_empty(name: str, value: str) -> str:

@@ -1603,3 +1603,104 @@ uv run pytest tests/test_career_tools.py tests/test_career_product_store_checker
 uv run mypy --explicit-package-bases app/runtime/agent/tool_reveal.py app/runtime/workflow/tool_plan.py app/runtime/agent_runtime.py app/tools/builtin_tools/career.py tools/check_career_product_store.py tests/test_tool_reveal.py tests/test_runtime_tool_plan.py tests/test_agent_runtime.py tests/test_career_tools.py tests/test_career_product_store_checker.py
 通过
 ```
+
+#### 高并发验证：delegate result plan r1
+
+背景：
+
+上一轮高并发暴露出两类问题：
+
+```text
+1. CareerApplication merge 接收到模型生成的非标准 stage=optimizing 时失败。
+2. job_agent 已产出 JDAnalysis + JobFitReport 后，main-agent 没有创建 CareerApplication 就直接最终答复。
+```
+
+这不是旧修复被回退，而是两个未覆盖的机制缺口：
+
+```text
+stage 缺口：
+  CareerApplication 工具只接受受控阶段，但模型会用“optimizing / resume_version_created / 定制简历完成”等自然语言阶段。
+  工具层应该归一化已知别名；未知阶段不应让收尾失败。
+
+delegate 结果缺口：
+  RuntimeToolPlan 已能处理 workflow_guard / tool_search / 单个 career 工具结果。
+  但正常 delegate_agents 成功返回后，如果子 agent 结果里已有 product_refs/output_artifact_refs，
+  runtime 没有把这些事实转换成下一步 pending plan。
+  所以 main-agent 可能把“子 agent 完成”误当成“整个阶段完成”。
+```
+
+修复：
+
+```text
+app/tools/builtin_tools/career.py
+  CareerApplication create/merge 对 stage 做归一化。
+  未知 stage 不再写入；当 merge resume_version_ids 且没有合法 stage 时，默认推进到 ready_to_apply。
+
+app/runtime/workflow/tool_plan.py
+  delegate_agents 成功后提取 product_refs/output_artifact_refs。
+  结构化引用优先，summary/answer 中的受控 id 作为兜底。
+  如果已得到 jd_analysis_id + job_fit_report_id，但缺 application_id，
+  生成只允许 career_application_create 的 pending plan。
+```
+
+本地验证：
+
+```text
+uv run pytest tests/test_runtime_tool_plan.py tests/test_agent_runtime.py::test_runtime_uses_delegate_result_refs_as_application_create_plan tests/test_career_tools.py::test_career_application_merge_accepts_resume_stage_aliases -q
+通过
+
+uv run pytest tests/test_career_tools.py tests/test_runtime_tool_plan.py tests/test_agent_runtime.py tests/test_tool_reveal.py tests/test_workflow_runtime_guard.py -q
+通过
+
+uv run mypy --explicit-package-bases app/runtime/agent/tool_reveal.py app/runtime/workflow/tool_plan.py app/runtime/agent_runtime.py app/tools/builtin_tools/career.py tests/test_tool_reveal.py tests/test_runtime_tool_plan.py tests/test_agent_runtime.py tests/test_career_tools.py tests/test_workflow_runtime_guard.py
+通过
+```
+
+live smoke 命令：
+
+```text
+uv run python tools/smoke_career_live_flow.py --runs 3 --concurrency 3 --max-tool-rounds 10 --project-action custom_resume --data-dir data/live_career_smoke_m24_delegate_result_plan_r1 --quiet
+```
+
+结果：
+
+```text
+success=3
+failed=0
+avg_elapsed=188.17s
+max_elapsed=197.59s
+
+run_001 total_tokens=136,714 llm_calls=26
+run_002 total_tokens=171,237 llm_calls=31
+run_003 total_tokens=155,748 llm_calls=30
+```
+
+三轮产品记录 checker 均通过：
+
+```text
+artifacts=5
+resume_profiles=1
+career_profiles=1
+jd_analyses=1
+job_fit_reports=1
+career_applications=1
+resume_versions=1
+findings=[]
+```
+
+观察：
+
+```text
+1. 上一轮 run_002 的“JDAnalysis + JobFitReport 已完成但缺 CareerApplication / ResumeVersion”问题消失。
+2. stage=optimizing 导致 career_application_merge 失败的问题消失。
+3. token 区间回到约 13.7w - 17.1w，和此前低成本稳定区间接近。
+4. run_003 简历诊断阶段出现一次 Tool schema search limit reached，但最终产物完整、质量门禁通过。
+```
+
+后续需要单独处理的不是产品资产完整性，而是 schema search 轮次策略：
+
+```text
+如果当前 pending plan 已经只允许 delegate_agents，
+模型继续搜索工具时应更早收到“直接执行 delegate_agents”的运行时提醒，
+避免把简历诊断阶段的最终文字答复耗在 schema search limit 上。
+```

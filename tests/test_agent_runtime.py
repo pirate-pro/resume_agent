@@ -1927,6 +1927,137 @@ def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path
     ]
 
 
+def test_runtime_uses_delegate_result_refs_as_application_create_plan(tmp_path: Path) -> None:
+    class DelegateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="delegate_agents",
+                description="Delegate agents.",
+                parameters_schema={"type": "object", "properties": {"tasks": {"type": "array"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="delegate_agents",
+                success=True,
+                content=json.dumps(
+                    {
+                        "status": "completed",
+                        "results": [
+                            {
+                                "target_agent_id": "job_agent",
+                                "status": "completed",
+                                "summary": "JDAnalysis 和 JobFitReport 已完成。",
+                                "output_artifact_refs": ["artifact_fit_report"],
+                                "product_refs": ["jd_alpha", "fit_alpha"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationCreateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_create",
+                description="Create career application.",
+                parameters_schema={"type": "object", "properties": {"job_fit_report_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            assert arguments["job_fit_report_id"] == "fit_alpha"
+            _ = context
+            return ToolExecutionResult(
+                tool_name="career_application_create",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class DelegatePlanModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if self.calls == 1:
+                assert "delegate_agents" in tool_names
+                assert "career_application_create" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="delegate_agents", arguments={"tasks": []})],
+                )
+            if self.calls == 2:
+                assert "career_application_create" in tool_names
+                assert "delegate_agents" not in tool_names
+                return ModelResponse(content="匹配报告已经完成。", tool_calls=[])
+            if self.calls == 3:
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(name="career_application_create", arguments={"job_fit_report_id": "fit_alpha"})
+                    ],
+                )
+            return ModelResponse(content="已创建求职项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = DelegatePlanModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[DelegateTool(), ApplicationCreateTool()],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=["delegate_agents", "memory_write"],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_delegate_result_plan",
+            user_message="完成 JD 匹配并创建求职项目",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_delegate_result_plan"),
+        )
+    )
+
+    assert output.answer == "已创建求职项目。"
+    assert model.calls == 4
+    assert model.tool_names_by_call[1] >= {"career_application_create"}
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_delegate_result_plan")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == ["delegate_agents", "career_application_create"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_delegate_result_plan")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert decisions[0]["reason"] == "premature_final_answer_with_pending_runtime_tools"
+
+
 def test_child_job_fit_success_results_narrow_next_round_tools(tmp_path: Path) -> None:
     class JsonTool:
         def __init__(self, name: str, payload: dict[str, Any]) -> None:
