@@ -845,6 +845,86 @@ def test_application_create_repairs_ids_from_current_fit_report(tmp_path: Path) 
     assert "resume_profile_fake" not in payload["record"]["evidence_refs"]
 
 
+def test_application_create_derives_job_fields_from_product_records(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+    diagnosis_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历诊断.md")
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="JD.txt",
+        content="公司招聘 AI 应用开发工程师，要求 Python、FastAPI、RAG、Agent 工程经验。",
+    )
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_real",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "company": "未知（JD未明确）",
+            "position": "AI 应用开发工程师",
+            "risk_signals": ["公司信息缺失"],
+        },
+        _context(agent_id="job_agent"),
+    )
+    _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_real",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": ["resume_profile_alpha", "career_profile_default", "jd_real", report_artifact_id],
+            "jd_analysis_id": "jd_real",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+            "overall_score": 75,
+            "recommendation": "recommended",
+            "gaps": ["向量检索证据不足"],
+            "resume_optimization_direction": ["补充 RAG 端到端案例"],
+            "interview_preparation_focus": ["准备 Agent 工程实现说明"],
+        },
+        _context(agent_id="job_agent"),
+    )
+
+    payload = _execute(
+        registry,
+        "career_application_create",
+        {
+            "company": "XX科技有限公司",
+            "position": "新媒体运营专员",
+            "location": "杭州",
+            "summary": "用户简历与新媒体运营岗位匹配度75/100。",
+            "next_actions": ["准备短视频作品"],
+            "risks": ["缺少新媒体运营经验"],
+            "job_fit_report_id": "fit_real",
+            "evidence_refs": ["fit_real", "jd_real", jd_artifact_id],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    record = payload["record"]
+    assert record["company"] == "未知（JD未明确）"
+    assert record["position"] == "AI 应用开发工程师"
+    assert record["location"] == ""
+    assert record["summary"] == "未知（JD未明确） · AI 应用开发工程师，匹配度 75/100，推荐策略 recommended。"
+    assert record["next_actions"] == ["补充 RAG 端到端案例", "准备 Agent 工程实现说明"]
+    assert record["risks"] == ["向量检索证据不足", "公司信息缺失"]
+    assert record["notes"] == "基于 JobFitReport fit_real 创建。"
+
+
 def test_application_create_infers_single_current_fit_report_when_ids_are_missing(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")

@@ -145,6 +145,7 @@ def check_career_product_store(
 
     _check_record_sources(scoped_records, artifact_index, findings)
     _check_direct_references(scoped_records, artifact_index, findings)
+    _check_career_application_source_alignment(scoped_records, findings)
     _check_evidence_references(scoped_records, artifact_index, findings)
     _check_duplicate_products(scoped_records, findings)
     _check_resume_version_quality(scoped_records.resume_versions, artifact_index, findings)
@@ -438,99 +439,207 @@ def _check_direct_references(
 ) -> None:
     product_ids = _product_id_index(records)
 
-    for record in records.resume_profiles:
+    for resume_record in records.resume_profiles:
         _check_artifact_ref(
             "resume_profile",
-            record.resume_profile_id,
+            resume_record.resume_profile_id,
             "raw_text_artifact_id",
-            record.raw_text_artifact_id,
+            resume_record.raw_text_artifact_id,
             artifact_index,
             findings,
-            expected_session_id=record.source_session_id,
+            expected_session_id=resume_record.source_session_id,
         )
         _check_artifact_ref(
             "resume_profile",
-            record.resume_profile_id,
+            resume_record.resume_profile_id,
             "diagnosis_artifact_id",
-            record.diagnosis_artifact_id,
+            resume_record.diagnosis_artifact_id,
             artifact_index,
             findings,
-            expected_session_id=record.source_session_id,
+            expected_session_id=resume_record.source_session_id,
         )
 
-    for record in records.job_fit_reports:
+    for fit_record in records.job_fit_reports:
         _check_product_ref(
             "job_fit_report",
-            record.job_fit_report_id,
+            fit_record.job_fit_report_id,
             "jd_analysis_id",
-            record.jd_analysis_id,
+            fit_record.jd_analysis_id,
             product_ids["jd_analysis"],
             findings,
         )
         _check_product_ref(
             "job_fit_report",
-            record.job_fit_report_id,
+            fit_record.job_fit_report_id,
             "resume_profile_id",
-            record.resume_profile_id,
+            fit_record.resume_profile_id,
             product_ids["resume_profile"],
             findings,
         )
         _check_product_ref(
             "job_fit_report",
-            record.job_fit_report_id,
+            fit_record.job_fit_report_id,
             "career_profile_id",
-            record.career_profile_id,
+            fit_record.career_profile_id,
             product_ids["career_profile"],
             findings,
         )
         _check_artifact_ref(
             "job_fit_report",
-            record.job_fit_report_id,
+            fit_record.job_fit_report_id,
             "report_artifact_id",
-            record.report_artifact_id,
+            fit_record.report_artifact_id,
             artifact_index,
             findings,
-            expected_session_id=record.source_session_id,
+            expected_session_id=fit_record.source_session_id,
         )
 
-    for record in records.resume_versions:
+    for version_record in records.resume_versions:
         _check_product_ref(
             "resume_version",
-            record.resume_version_id,
+            version_record.resume_version_id,
             "base_resume_profile_id",
-            record.base_resume_profile_id,
+            version_record.base_resume_profile_id,
             product_ids["resume_profile"],
             findings,
         )
-        if record.target_jd_analysis_id is not None:
+        if version_record.target_jd_analysis_id is not None:
             _check_product_ref(
                 "resume_version",
-                record.resume_version_id,
+                version_record.resume_version_id,
                 "target_jd_analysis_id",
-                record.target_jd_analysis_id,
+                version_record.target_jd_analysis_id,
                 product_ids["jd_analysis"],
                 findings,
             )
         _check_artifact_ref(
             "resume_version",
-            record.resume_version_id,
+            version_record.resume_version_id,
             "artifact_id",
-            record.artifact_id,
+            version_record.artifact_id,
             artifact_index,
             findings,
-            expected_session_id=record.source_session_id,
+            expected_session_id=version_record.source_session_id,
         )
-        if record.source_artifact_id is not None and record.source_artifact_id != record.artifact_id:
+        if (
+            version_record.source_artifact_id is not None
+            and version_record.source_artifact_id != version_record.artifact_id
+        ):
             findings.append(
                 CareerStoreCheckFinding(
                     severity="error",
                     code="resume_version_source_artifact_mismatch",
                     message="ResumeVersion.source_artifact_id 应与 artifact_id 保持一致。",
                     record_type="resume_version",
-                    record_id=record.resume_version_id,
+                    record_id=version_record.resume_version_id,
+                    reference=version_record.source_artifact_id,
+                )
+            )
+
+
+def _check_career_application_source_alignment(
+    records: _CareerRecords,
+    findings: list[CareerStoreCheckFinding],
+) -> None:
+    jd_by_id = {item.jd_analysis_id: item for item in records.jd_analyses}
+    fit_by_id = {item.job_fit_report_id: item for item in records.job_fit_reports}
+
+    for record in records.career_applications:
+        jd_record = jd_by_id.get(record.jd_analysis_id or "")
+        if jd_record is not None:
+            _check_application_text_alignment(
+                record,
+                field_name="company",
+                expected=jd_record.company,
+                actual=record.company,
+                findings=findings,
+            )
+            _check_application_text_alignment(
+                record,
+                field_name="position",
+                expected=jd_record.position,
+                actual=record.position,
+                findings=findings,
+            )
+            if (
+                jd_record.source_artifact_id is not None
+                and record.source_artifact_id is not None
+                and jd_record.source_artifact_id != record.source_artifact_id
+            ):
+                findings.append(
+                    CareerStoreCheckFinding(
+                        severity="error",
+                        code="career_application_source_artifact_mismatch",
+                        message="CareerApplication.source_artifact_id 应与关联 JDAnalysis.source_artifact_id 保持一致。",
+                        record_type="career_application",
+                        record_id=record.application_id,
+                        reference=record.source_artifact_id,
+                    )
+                )
+
+        fit_record = fit_by_id.get(record.job_fit_report_id or "")
+        if fit_record is None:
+            continue
+        expected_refs = {
+            "jd_analysis_id": fit_record.jd_analysis_id,
+            "resume_profile_id": fit_record.resume_profile_id,
+            "career_profile_id": fit_record.career_profile_id,
+        }
+        for field_name, expected in expected_refs.items():
+            actual = getattr(record, field_name)
+            if actual is None or actual == expected:
+                continue
+            findings.append(
+                CareerStoreCheckFinding(
+                    severity="error",
+                    code="career_application_fit_ref_mismatch",
+                    message=f"CareerApplication.{field_name} 应与关联 JobFitReport 保持一致。",
+                    record_type="career_application",
+                    record_id=record.application_id,
+                    reference=actual,
+                )
+            )
+        if (
+            fit_record.source_artifact_id is not None
+            and record.source_artifact_id is not None
+            and fit_record.source_artifact_id != record.source_artifact_id
+        ):
+            findings.append(
+                CareerStoreCheckFinding(
+                    severity="error",
+                    code="career_application_source_artifact_mismatch",
+                    message="CareerApplication.source_artifact_id 应与关联 JobFitReport.source_artifact_id 保持一致。",
+                    record_type="career_application",
+                    record_id=record.application_id,
                     reference=record.source_artifact_id,
                 )
             )
+
+
+def _check_application_text_alignment(
+    record: CareerApplication,
+    *,
+    field_name: str,
+    expected: str,
+    actual: str,
+    findings: list[CareerStoreCheckFinding],
+) -> None:
+    normalized_expected = expected.strip()
+    normalized_actual = actual.strip()
+    if not normalized_expected:
+        return
+    if normalized_actual == normalized_expected:
+        return
+    findings.append(
+        CareerStoreCheckFinding(
+            severity="error",
+            code="career_application_jd_field_mismatch",
+            message=f"CareerApplication.{field_name} 应与关联 JDAnalysis 保持一致。",
+            record_type="career_application",
+            record_id=record.application_id,
+            reference=normalized_actual or "<empty>",
+        )
+    )
 
 
 def _check_evidence_references(

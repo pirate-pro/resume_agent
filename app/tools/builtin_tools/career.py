@@ -1338,7 +1338,8 @@ class CareerApplicationCreateTool:
                     run_context.session_id,
                 ) is None:
                     career_profile_id = fit_record.career_profile_id
-                source_artifact_id = source_artifact_id or fit_record.source_artifact_id
+                if fit_record.source_artifact_id is not None:
+                    source_artifact_id = fit_record.source_artifact_id
                 evidence_refs = _remove_non_current_prefixed_refs(
                     evidence_refs,
                     prefix="jd_",
@@ -1396,15 +1397,21 @@ class CareerApplicationCreateTool:
                     )
             jd_record = self._career_store.get_jd_analysis(jd_analysis_id) if jd_analysis_id else None
             if jd_record is not None:
-                source_artifact_id = source_artifact_id or jd_record.source_artifact_id
+                if jd_record.source_artifact_id is not None:
+                    source_artifact_id = jd_record.source_artifact_id
                 evidence_refs = _append_evidence_refs(
                     evidence_refs,
                     jd_record.jd_analysis_id,
                     jd_record.source_artifact_id,
                 )
 
-            company = _optional_string(args.get("company")) or (jd_record.company if jd_record is not None else "")
-            position = _optional_string(args.get("position")) or (jd_record.position if jd_record is not None else "")
+            application_fields = _application_create_fields_from_sources(
+                args=args,
+                jd_record=jd_record,
+                fit_record=fit_record,
+            )
+            company = application_fields["company"]
+            position = application_fields["position"]
             evidence_refs = _append_evidence_refs(
                 evidence_refs,
                 source_artifact_id,
@@ -1451,7 +1458,7 @@ class CareerApplicationCreateTool:
                 updated_at=_now(),
                 company=company,
                 position=position,
-                location=_optional_string(args.get("location")) or "",
+                location=application_fields["location"],
                 job_url=_optional_string(args.get("job_url")) or "",
                 stage=_normalize_application_stage(_optional_string(args.get("stage"))) or "draft",
                 priority=_optional_string(args.get("priority")) or "medium",
@@ -1460,14 +1467,10 @@ class CareerApplicationCreateTool:
                 jd_analysis_id=jd_analysis_id,
                 job_fit_report_id=job_fit_report_id,
                 resume_version_ids=resume_version_ids,
-                summary=_sanitize_career_application_text(_optional_string(args.get("summary")) or ""),
-                next_actions=_sanitize_career_application_text_list(
-                    _optional_string_list(args.get("next_actions"), field_name="next_actions")
-                ),
-                risks=_sanitize_career_application_text_list(
-                    _optional_string_list(args.get("risks"), field_name="risks")
-                ),
-                notes=_sanitize_career_application_text(_optional_string(args.get("notes")) or ""),
+                summary=application_fields["summary"],
+                next_actions=application_fields["next_actions"],
+                risks=application_fields["risks"],
+                notes=application_fields["notes"],
             )
             saved = self._career_store.save_career_application(record)
         except (StorageError, ValidationError) as exc:
@@ -1756,6 +1759,133 @@ def _sanitize_career_application_text_list(values: list[str]) -> list[str]:
             continue
         output.append(sanitized)
         seen.add(sanitized)
+    return output
+
+
+def _application_create_fields_from_sources(
+    *,
+    args: dict[str, Any],
+    jd_record: JDAnalysis | None,
+    fit_record: JobFitReport | None,
+) -> dict[str, Any]:
+    """Build CareerApplication display fields from product records when available."""
+
+    if jd_record is None and fit_record is None:
+        return {
+            "company": _optional_string(args.get("company")) or "",
+            "position": _optional_string(args.get("position")) or "",
+            "location": _optional_string(args.get("location")) or "",
+            "summary": _sanitize_career_application_text(_optional_string(args.get("summary")) or ""),
+            "next_actions": _sanitize_career_application_text_list(
+                _optional_string_list(args.get("next_actions"), field_name="next_actions")
+            ),
+            "risks": _sanitize_career_application_text_list(
+                _optional_string_list(args.get("risks"), field_name="risks")
+            ),
+            "notes": _sanitize_career_application_text(_optional_string(args.get("notes")) or ""),
+        }
+
+    company = jd_record.company if jd_record is not None else ""
+    position = jd_record.position if jd_record is not None else ""
+    next_actions = _application_next_actions_from_fit(fit_record)
+    risks = _application_risks_from_records(jd_record=jd_record, fit_record=fit_record)
+    summary = _application_summary_from_records(
+        company=company,
+        position=position,
+        fit_record=fit_record,
+    )
+    notes = ""
+    if fit_record is not None:
+        notes = f"基于 JobFitReport {fit_record.job_fit_report_id} 创建。"
+    elif jd_record is not None:
+        notes = f"基于 JDAnalysis {jd_record.jd_analysis_id} 创建。"
+    return {
+        "company": company,
+        "position": position,
+        "location": "",
+        "summary": _sanitize_career_application_text(summary),
+        "next_actions": _sanitize_career_application_text_list(next_actions),
+        "risks": _sanitize_career_application_text_list(risks),
+        "notes": _sanitize_career_application_text(notes),
+    }
+
+
+def _application_summary_from_records(
+    *,
+    company: str,
+    position: str,
+    fit_record: JobFitReport | None,
+) -> str:
+    role_text = position or "目标岗位"
+    company_text = company or "未明确公司"
+    parts = [f"{company_text} · {role_text}"]
+    if fit_record is not None:
+        parts.append(f"匹配度 {fit_record.overall_score}/100")
+        if fit_record.recommendation:
+            parts.append(f"推荐策略 {fit_record.recommendation}")
+    return "，".join(parts) + "。"
+
+
+def _application_next_actions_from_fit(fit_record: JobFitReport | None) -> list[str]:
+    if fit_record is None:
+        return []
+    return _dedupe_application_text_items(
+        [
+            *_application_text_items(fit_record.resume_optimization_direction),
+            *_application_text_items(fit_record.interview_preparation_focus),
+        ],
+        limit=6,
+    )
+
+
+def _application_risks_from_records(
+    *,
+    jd_record: JDAnalysis | None,
+    fit_record: JobFitReport | None,
+) -> list[str]:
+    values: list[str] = []
+    if fit_record is not None:
+        values.extend(_application_text_items(fit_record.gaps))
+    if jd_record is not None:
+        values.extend(jd_record.risk_signals)
+    return _dedupe_application_text_items(values, limit=6)
+
+
+def _application_text_items(values: list[Any]) -> list[str]:
+    output: list[str] = []
+    for item in values:
+        text = _application_text_item(item)
+        if text:
+            output.append(text)
+    return output
+
+
+def _application_text_item(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("title", "summary", "description", "gap", "risk", "action", "evidence", "text", "name"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        parts = [value.strip() for value in item.values() if isinstance(value, str) and value.strip()]
+        return "；".join(parts[:3])
+    if isinstance(item, (int, float)):
+        return str(item)
+    return ""
+
+
+def _dedupe_application_text_items(values: list[str], *, limit: int) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = raw.strip()
+        if not value or value in seen:
+            continue
+        output.append(value)
+        seen.add(value)
+        if len(output) >= limit:
+            break
     return output
 
 

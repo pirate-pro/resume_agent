@@ -299,6 +299,51 @@ def test_career_product_store_checker_reports_application_quality_and_duplicates
     assert "missing_product_ref" not in codes
 
 
+def test_career_product_store_checker_reports_application_jd_field_mismatch(tmp_path: Path) -> None:
+    _create_session_with_artifacts(
+        tmp_path,
+        [
+            "artifact_resume",
+            "artifact_diagnosis",
+            "artifact_jd",
+            "artifact_report",
+            "artifact_resume_version",
+        ],
+    )
+    store = _store(tmp_path)
+    _save_clean_product_records(store)
+    store.save_career_application(
+        CareerApplication(
+            application_id="application_wrong_jd",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id="sess_alpha",
+            source_artifact_id="artifact_jd",
+            evidence_refs=[
+                "artifact_jd",
+                "resume_profile_alpha",
+                "career_profile_default",
+                "jd_alpha",
+                "fit_alpha",
+            ],
+            created_at=_now(),
+            updated_at=_now(),
+            company="XX科技有限公司",
+            position="新媒体运营专员",
+            stage="ready_to_apply",
+            resume_profile_id="resume_profile_alpha",
+            career_profile_id="career_profile_default",
+            jd_analysis_id="jd_alpha",
+            job_fit_report_id="fit_alpha",
+        )
+    )
+
+    report = check_career_product_store(tmp_path, session_id="sess_alpha")
+    codes = {item.code for item in report.findings}
+
+    assert not report.success
+    assert "career_application_jd_field_mismatch" in codes
+
+
 def test_career_product_store_checker_reports_corrupt_json(tmp_path: Path) -> None:
     _create_session_with_artifacts(tmp_path, ["artifact_resume"])
     store = _store(tmp_path)
