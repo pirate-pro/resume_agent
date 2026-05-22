@@ -296,7 +296,7 @@ class AgentRuntime:
                 )
                 execution_tool_call = tool_call
                 if tool_call.name not in visible_tool_names_for_round:
-                    result = hidden_tool_result(tool_call.name)
+                    result = hidden_tool_result(tool_call.name, runtime_plan=pending_runtime_plan)
                 else:
                     guard_decision = self._inspect_workflow_guard(tool_call, run_context)
                     execution_tool_call = guard_decision.tool_call
@@ -688,7 +688,7 @@ class AgentRuntime:
                 )
                 execution_tool_call = tool_call
                 if tool_call.name not in visible_tool_names_for_round:
-                    result = hidden_tool_result(tool_call.name)
+                    result = hidden_tool_result(tool_call.name, runtime_plan=pending_runtime_plan)
                 else:
                     guard_decision = self._inspect_workflow_guard(tool_call, run_context)
                     execution_tool_call = guard_decision.tool_call

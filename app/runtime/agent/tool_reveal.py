@@ -112,16 +112,31 @@ def normalize_always_visible_tool_names(value: str | list[str] | None) -> list[s
     return output or list(_DEFAULT_ALWAYS_VISIBLE)
 
 
-def hidden_tool_result(tool_name: str) -> ToolExecutionResult:
-    content = json.dumps(
-        {
-            "recoverable": True,
-            "event_type": "tool_schema_not_revealed",
-            "tool_name": tool_name,
-            "message": "该工具本轮尚未揭示。请先调用 tool_search 搜索相关能力。",
-        },
-        ensure_ascii=False,
-    )
+def hidden_tool_result(tool_name: str, *, runtime_plan: dict[str, Any] | None = None) -> ToolExecutionResult:
+    payload: dict[str, Any] = {
+        "recoverable": True,
+        "event_type": "tool_schema_not_revealed",
+        "tool_name": tool_name,
+        "message": "该工具本轮尚未揭示。请先调用 tool_search 搜索相关能力。",
+    }
+    if runtime_plan is not None:
+        next_allowed_tools = _string_list(runtime_plan.get("next_allowed_tools"))
+        required_tools = _string_list(runtime_plan.get("required_tools")) or next_allowed_tools
+        payload.update(
+            {
+                "workflow_runtime_result": True,
+                "policy": "block",
+                "reason": "tool_hidden_by_runtime_plan",
+                "message": "该工具本轮未揭示，因为当前 workflow 已收敛到确定下一步；不要继续调用隐藏工具。",
+                "next_action": runtime_plan.get("next_action"),
+                "next_allowed_tools": next_allowed_tools,
+                "required_tools": required_tools,
+                "known_refs": runtime_plan.get("known_refs") if isinstance(runtime_plan.get("known_refs"), dict) else {},
+                "missing_outputs": _string_list(runtime_plan.get("missing_outputs")),
+                "blocked_tools": [tool_name],
+            }
+        )
+    content = json.dumps(payload, ensure_ascii=False)
     return ToolExecutionResult(tool_name=tool_name, success=True, content=content)
 
 
@@ -157,3 +172,9 @@ def _dedupe(items: list[str]) -> list[str]:
         output.append(item)
         seen.add(item)
     return output
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]

@@ -1927,6 +1927,176 @@ def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path
     ]
 
 
+def test_child_job_fit_success_results_narrow_next_round_tools(tmp_path: Path) -> None:
+    class JsonTool:
+        def __init__(self, name: str, payload: dict[str, Any]) -> None:
+            self._name = name
+            self._payload = payload
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name=self._name,
+                description=f"{self._name} test tool.",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name=self._name,
+                success=True,
+                content=json.dumps(self._payload, ensure_ascii=False),
+            )
+
+    class JobFitPlanModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if self.calls == 1:
+                assert {
+                    "career_jd_analysis_save",
+                    "session_create_text_artifact",
+                    "session_read_artifact",
+                } <= tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_jd_analysis_save",
+                            arguments={"source_artifact_id": "artifact_jd"},
+                        )
+                    ],
+                )
+            if self.calls == 2:
+                assert "session_create_text_artifact" in tool_names
+                assert "session_read_artifact" not in tool_names
+                assert "career_resume_profile_get" not in tool_names
+                assert "career_job_fit_report_save" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="session_create_text_artifact",
+                            arguments={"title": "岗位匹配报告 - AI 应用开发工程师"},
+                        )
+                    ],
+                )
+            if self.calls == 3:
+                assert "career_job_fit_report_save" in tool_names
+                assert "session_read_artifact" not in tool_names
+                assert "session_create_text_artifact" not in tool_names
+                assert "career_jd_analysis_save" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_job_fit_report_save",
+                            arguments={
+                                "jd_analysis_id": "jd_alpha",
+                                "report_artifact_id": "artifact_fit_report",
+                            },
+                        )
+                    ],
+                )
+            return ModelResponse(content="匹配报告已保存。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = JobFitPlanModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[
+            JsonTool(
+                "career_jd_analysis_save",
+                {
+                    "record_type": "jd_analysis",
+                    "record_id": "jd_alpha",
+                    "record": {"jd_analysis_id": "jd_alpha"},
+                },
+            ),
+            JsonTool(
+                "session_create_text_artifact",
+                {
+                    "artifact_id": "artifact_fit_report",
+                    "title": "岗位匹配报告 - AI 应用开发工程师",
+                    "kind": "generated_file",
+                },
+            ),
+            JsonTool(
+                "career_job_fit_report_save",
+                {
+                    "record_type": "job_fit_report",
+                    "record_id": "fit_alpha",
+                    "record": {"job_fit_report_id": "fit_alpha"},
+                },
+            ),
+            JsonTool("session_read_artifact", {"artifact_id": "artifact_jd"}),
+            JsonTool(
+                "career_resume_profile_get",
+                {"record_type": "resume_profile", "record_id": "resume_profile_alpha"},
+            ),
+            JsonTool("career_profile_get", {"record_type": "career_profile", "record_id": "career_profile_default"}),
+            JsonTool("career_jd_analysis_get", {"record_type": "jd_analysis", "record_id": "jd_alpha"}),
+            JsonTool("career_job_fit_report_get", {"record_type": "job_fit_report", "record_id": "fit_alpha"}),
+        ],
+        tool_schema_disclosure_mode="search",
+    )
+
+    context = RunContext(
+        session_id="sess_child_job_fit_plan",
+        run_id="run_child_job_fit_plan",
+        agent_id="job_agent",
+        turn_id="turn_child_job_fit_plan",
+        entry_agent_id="agent_main",
+        parent_run_id="run_parent",
+    )
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_child_job_fit_plan",
+            user_message="完成 JD 匹配子任务",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=context,
+        )
+    )
+
+    assert output.answer == "匹配报告已保存。"
+    assert model.calls == 4
+    assert model.tool_names_by_call[1] >= {"session_create_text_artifact"}
+    assert model.tool_names_by_call[2] >= {"career_job_fit_report_save"}
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_agent_events("sess_child_job_fit_plan", "job_agent")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == [
+        "career_jd_analysis_save",
+        "session_create_text_artifact",
+        "career_job_fit_report_save",
+    ]
+
+
 def test_runtime_uses_workflow_guard_tool_search_block_to_reveal_next_allowed_schema(tmp_path: Path) -> None:
     class ApplicationCreateTool:
         def definition(self) -> ToolDefinition:

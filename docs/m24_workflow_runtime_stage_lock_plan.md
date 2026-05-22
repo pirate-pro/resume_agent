@@ -1423,3 +1423,183 @@ resume_diagnosis / jd_fit / resume_version 三个阶段由 runtime 判断完成�
 模型负责产出内容和必要决策
 runtime 负责 required action 的推进、失败恢复和最终闭环确认
 ```
+
+#### 后续排查：JD 子任务重复低层动作
+
+对比 `m24_mimo_rerun_r1` 和 `m24_application_source_guard_r1` 后，先纠正统计口径：
+
+```text
+不要同时累加 session events 和 agents/*/events.jsonl。
+同一个 llm_usage 会出现在两个视图里，必须按 event_id 去重。
+```
+
+去重后口径：
+
+```text
+m24_mimo_rerun_r1:              total_tokens=134,357, llm_calls=23
+m24_application_source_guard_r1: total_tokens=175,941, llm_calls=30
+```
+
+真实增长约 4.2 万 token，不是 40 万。主要增长来自额外轮次：
+
+```text
+agent_main: +5 次 LLM 调用
+job_agent:  +2 次 LLM 调用
+resume_agent: 基本持平
+```
+
+其中 `job_agent` 的根因是：
+
+```text
+career_jd_analysis_save 成功后没有生成 pending runtime plan
+session_create_text_artifact 创建匹配报告 artifact 成功后也没有生成 pending runtime plan
+因此下一轮仍暴露 11 个工具 schema
+模型又尝试 session_read_artifact / career_resume_profile_get / career_profile_get
+guard 能拦住，但拦截本身已经多消耗一轮模型调用和 tool message
+```
+
+修复方向：
+
+```text
+career_jd_analysis_save 成功后：
+  下一轮只允许 session_create_text_artifact 生成唯一匹配报告 artifact
+
+匹配报告 artifact 创建成功后：
+  下一轮只允许 career_job_fit_report_save
+
+如果 artifact 先于 JDAnalysis 出现：
+  下一轮只允许 career_jd_analysis_save，再进入 JobFitReport 保存
+```
+
+这不是针对某次 smoke 的标题或 run id 打补丁，而是把“成功产物 -> 下一步 required action”前移到 RuntimeToolPlan，避免靠 guard 事后拦截。
+
+#### 低并发验证：jobfit runtime plan r1
+
+命令：
+
+```text
+uv run python tools/smoke_career_live_flow.py --runs 1 --concurrency 1 --max-tool-rounds 10 --project-action custom_resume --data-dir data/live_career_smoke_m24_jobfit_runtime_plan_r1
+```
+
+结果：
+
+```text
+success=1
+failed=0
+elapsed=210.82s
+quality_gate=passed
+artifact_count=5
+product_counts:
+  resume_profiles=1
+  career_profiles=1
+  jd_analyses=1
+  job_fit_reports=1
+  career_applications=1
+  resume_versions=1
+```
+
+去重后的 token：
+
+```text
+llm_calls=28
+total_tokens=149,097
+prompt_tokens=133,425
+completion_tokens=15,672
+
+agent_main:   77,149 / 15 calls
+job_agent:    47,776 / 8 calls
+resume_agent: 24,172 / 5 calls
+```
+
+对比上一把 `m24_application_source_guard_r1`：
+
+```text
+total_tokens: 175,941 -> 149,097
+llm_calls:    30      -> 28
+```
+
+说明 RuntimeToolPlan 前移是有效的，但还暴露出另一个问题：
+
+```text
+round 3 后 job_agent 的 visible tools 已经收窄到 1 个：session_create_text_artifact
+round 4 后 visible tools 已经收窄到 1 个：career_job_fit_report_save
+但模型仍凭历史上下文调用了未揭示的 session_read_artifact / career_resume_profile_get / career_profile_get
+```
+
+这不是 schema 没收窄，而是隐藏工具调用的恢复提示不够准确。原 `hidden_tool_result` 仍提示“请先 tool_search”，在 runtime plan 已存在时是错误引导。
+
+已修复：
+
+```text
+hidden_tool_result 支持携带 runtime_plan
+当模型调用未揭示工具且当前已有 pending runtime plan 时，返回 workflow_runtime_result=block
+返回 next_allowed_tools / required_tools / known_refs / missing_outputs
+不再提示 tool_search，而是明确要求回到当前 required action
+```
+
+#### 低并发验证：hidden runtime plan r1
+
+命令：
+
+```text
+uv run python tools/smoke_career_live_flow.py --runs 1 --concurrency 1 --max-tool-rounds 10 --project-action custom_resume --data-dir data/live_career_smoke_m24_hidden_runtime_plan_r1
+```
+
+结果：
+
+```text
+success=1
+failed=0
+elapsed=181.64s
+quality_gate=passed
+artifact_count=5
+```
+
+去重后的 token：
+
+```text
+llm_calls=26
+total_tokens=141,129
+prompt_tokens=126,975
+completion_tokens=14,154
+
+agent_main:   79,424 / 15 calls
+job_agent:    41,324 / 7 calls
+resume_agent: 20,381 / 4 calls
+```
+
+关键调用变化：
+
+```text
+source_guard_r1:
+  job_agent tool_calls=10
+  session_read_artifact, career_resume_profile_get, career_profile_get,
+  career_jd_analysis_save, session_create_text_artifact,
+  session_read_artifact, session_read_artifact,
+  career_resume_profile_get, career_profile_get,
+  career_job_fit_report_save
+
+hidden_runtime_plan_r1:
+  job_agent tool_calls=6
+  session_read_artifact, career_resume_profile_get, career_profile_get,
+  career_jd_analysis_save, session_create_text_artifact,
+  career_job_fit_report_save
+```
+
+结论：
+
+```text
+hidden_tool_result 携带 runtime_plan 后，报告 artifact 创建后的重复读取和二次创建消失。
+总 token 从 175,941 降到 141,129，LLM calls 从 30 降到 26。
+产品记录 checker 通过，没有用质量换性能。
+```
+
+本地验证：
+
+```text
+uv run pytest tests/test_career_tools.py tests/test_career_product_store_checker.py tests/test_runtime_tool_plan.py tests/test_agent_runtime.py tests/test_tool_context_window.py tests/test_tool_result_view.py tests/test_tool_reveal.py tests/test_workflow_runtime_guard.py -q
+通过
+
+uv run mypy --explicit-package-bases app/runtime/agent/tool_reveal.py app/runtime/workflow/tool_plan.py app/runtime/agent_runtime.py app/tools/builtin_tools/career.py tools/check_career_product_store.py tests/test_tool_reveal.py tests/test_runtime_tool_plan.py tests/test_agent_runtime.py tests/test_career_tools.py tests/test_career_product_store_checker.py
+通过
+```

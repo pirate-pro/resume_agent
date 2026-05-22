@@ -200,6 +200,74 @@ def test_successful_jd_analysis_save_advances_pending_plan_to_job_fit_report_sav
     assert "career_jd_analysis_save" in runtime_plan_discouraged_tools(plan)
 
 
+def test_successful_jd_analysis_save_without_pending_plan_guides_report_artifact_creation() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_jd_analysis_save",
+        """
+        {
+          "record_type": "jd_analysis",
+          "record_id": "jd_alpha",
+          "record": {"jd_analysis_id": "jd_alpha"}
+        }
+        """,
+        previous_pending_plan=None,
+    )
+
+    assert plan is not None
+    assert plan["next_allowed_tools"] == ["session_create_text_artifact"]
+    assert plan["required_tools"] == ["session_create_text_artifact"]
+    assert plan["known_refs"]["jd_analysis_id"] == "jd_alpha"
+    assert plan["missing_outputs"] == ["job_fit_report_artifact", "job_fit_report"]
+    assert "career_job_fit_report_save" in runtime_plan_discouraged_tools(plan)
+
+
+def test_successful_job_fit_artifact_guides_fit_save_when_jd_is_known() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "session_create_text_artifact",
+        """
+        {
+          "artifact_id": "artifact_fit_report",
+          "title": "岗位匹配报告 - AI 应用开发工程师",
+          "kind": "generated_file"
+        }
+        """,
+        previous_pending_plan={
+            "phase": "jd_fit",
+            "next_allowed_tools": ["session_create_text_artifact"],
+            "required_tools": ["session_create_text_artifact"],
+            "known_refs": {"jd_analysis_id": "jd_alpha"},
+            "missing_outputs": ["job_fit_report_artifact", "job_fit_report"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["next_allowed_tools"] == ["career_job_fit_report_save"]
+    assert plan["required_tools"] == ["career_job_fit_report_save"]
+    assert plan["known_refs"]["jd_analysis_id"] == "jd_alpha"
+    assert plan["known_refs"]["report_artifact_id"] == "artifact_fit_report"
+    assert "session_read_artifact" in runtime_plan_discouraged_tools(plan)
+
+
+def test_successful_job_fit_artifact_without_jd_guides_jd_save_first() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "session_create_text_artifact",
+        """
+        {
+          "artifact_id": "artifact_fit_report",
+          "title": "岗位匹配报告 - AI 应用开发工程师",
+          "kind": "generated_file"
+        }
+        """,
+        previous_pending_plan=None,
+    )
+
+    assert plan is not None
+    assert plan["next_allowed_tools"] == ["career_jd_analysis_save"]
+    assert plan["required_tools"] == ["career_jd_analysis_save"]
+    assert plan["known_refs"]["report_artifact_id"] == "artifact_fit_report"
+    assert "session_create_text_artifact" in runtime_plan_discouraged_tools(plan)
+
+
 def test_successful_resume_profile_save_does_not_guess_missing_diagnosis_without_runtime_state() -> None:
     plan = pending_runtime_plan_from_successful_tool_result(
         "career_resume_profile_save",
