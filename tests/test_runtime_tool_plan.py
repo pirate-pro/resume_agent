@@ -269,6 +269,40 @@ def test_successful_resume_diagnosis_artifact_finishes_resume_stage() -> None:
     assert "session_create_text_artifact" in runtime_plan_discouraged_tools(plan)
 
 
+def test_successful_resume_version_create_preserves_application_ref_for_merge() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_resume_version_create",
+        """
+        {
+          "record_type": "resume_version",
+          "record_id": "resume_version_alpha",
+          "record": {
+            "resume_version_id": "resume_version_alpha",
+            "artifact_id": "artifact_resume_version"
+          }
+        }
+        """,
+        previous_pending_plan={
+            "phase": "resume_version",
+            "next_allowed_tools": ["career_resume_version_create"],
+            "required_tools": ["career_resume_version_create"],
+            "known_refs": {
+                "application_id": "application_alpha",
+                "resume_profile_id": "resume_profile_alpha",
+                "jd_analysis_id": "jd_alpha"
+            },
+            "missing_outputs": ["resume_version", "career_application_resume_version_link"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["next_allowed_tools"] == ["career_application_merge"]
+    assert plan["required_tools"] == ["career_application_merge"]
+    assert plan["known_refs"]["application_id"] == "application_alpha"
+    assert plan["known_refs"]["resume_version_id"] == "resume_version_alpha"
+    assert plan["known_refs"]["artifact_id"] == "artifact_resume_version"
+
+
 def test_pending_runtime_plan_from_tool_search_result_preserves_runtime_discouraged_tools() -> None:
     plan = pending_runtime_plan_from_tool_search_result(
         """

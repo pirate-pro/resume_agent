@@ -295,7 +295,8 @@ def pending_runtime_plan_from_successful_tool_result(
         return None
     if payload.get("record_type") != "resume_version":
         return None
-    known_refs = _runtime_known_refs_from_payload(payload)
+    known_refs = _pending_known_refs(previous_pending_plan)
+    known_refs.update(_runtime_known_refs_from_payload(payload))
     resume_version_id = known_refs.get("resume_version_id") or payload.get("record_id")
     if isinstance(resume_version_id, str) and resume_version_id.strip():
         known_refs["resume_version_id"] = resume_version_id.strip()
