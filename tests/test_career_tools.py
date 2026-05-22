@@ -1732,6 +1732,34 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
     assert version_fallback_payload["record_id"] == "resume_version_zhangsan_ai_app_dev"
     assert version_fallback_payload["requested_record_id"] == "resume_version_001"
 
+    metadata_sanitized_payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "含禁用词元数据的简历版本",
+            "content": "# 定制简历\n\n突出 RAG 项目。",
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+            "change_summary": ["省略缺失事实，避免占位表达"],
+            "risk_notes": ["TODO：请用户确认缺失事实"],
+            "keyword_strategy": ["Python", "占位关键词"],
+        },
+        _context(agent_id="agent_main"),
+    )
+    metadata_record = metadata_sanitized_payload["record"]
+    metadata_text = "\n".join(
+        [
+            *metadata_record["change_summary"],
+            *metadata_record["risk_notes"],
+            *metadata_record["keyword_strategy"],
+        ]
+    )
+    assert "占位" not in metadata_text
+    assert "TODO" not in metadata_text
+    assert "占位关键词" not in metadata_record["keyword_strategy"]
+    assert "Python" in metadata_record["keyword_strategy"]
+
     with pytest.raises(ToolExecutionError, match="forbidden placeholder"):
         registry.execute(
             ToolCall(
@@ -1739,10 +1767,10 @@ def test_main_agent_merges_profile_and_creates_markdown_resume_version(tmp_path:
                 arguments={
                     "base_resume_profile_id": "resume_profile_alpha",
                     "target_jd_analysis_id": "jd_alpha",
-                    "title": "含禁用词的简历版本",
-                    "content": "# 定制简历\n\n突出 RAG 项目。",
+                    "title": "正文含禁用词的简历版本",
+                    "content": "# 定制简历\n\n这里是占位正文。",
                     "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
-                    "change_summary": ["省略缺失事实，避免占位表达"],
+                    "change_summary": ["调整简历结构"],
                 },
             ),
             context=_context(agent_id="agent_main"),
@@ -2152,6 +2180,19 @@ def test_career_application_merge_accepts_resume_stage_aliases(tmp_path: Path) -
 
     assert merged_from_resume_tailored_stage["record"]["stage"] == "ready_to_apply"
 
+    merged_from_resume_version_stage_alias = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"stage": "resume_version", "notes": "简历版本阶段已归一化。"},
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(session_id="sess_app_stage_alias", agent_id="agent_main"),
+    )
+
+    assert merged_from_resume_version_stage_alias["record"]["stage"] == "ready_to_apply"
+
 
 def test_career_application_tools_sanitize_placeholder_wording(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
@@ -2174,7 +2215,7 @@ def test_career_application_tools_sanitize_placeholder_wording(tmp_path: Path) -
             "next_actions": ["待补充公司信息", "TODO 准备面试话术"],
             "risks": ["TBD 风险"],
             "notes": "占位说明",
-            "evidence_refs": [jd_artifact_id],
+            "evidence_refs": [jd_artifact_id, "artifact_missing_fake"],
         },
         _context(session_id="sess_app_placeholder_sanitize", agent_id="agent_main"),
     )
@@ -2185,3 +2226,17 @@ def test_career_application_tools_sanitize_placeholder_wording(tmp_path: Path) -
     assert "TODO" not in joined
     assert "TBD" not in joined
     assert "占位" not in joined
+    assert "artifact_missing_fake" not in record["evidence_refs"]
+
+    merged = _execute(
+        registry,
+        "career_application_merge",
+        {
+            "application_id": application["record_id"],
+            "updates": {"notes": "补充一次备注"},
+            "evidence_refs": [jd_artifact_id, "artifact_missing_fake"],
+        },
+        _context(session_id="sess_app_placeholder_sanitize", agent_id="agent_main"),
+    )
+
+    assert "artifact_missing_fake" not in merged["record"]["evidence_refs"]

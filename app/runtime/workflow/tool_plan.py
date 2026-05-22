@@ -225,8 +225,19 @@ def merge_pending_runtime_plan(
 def pending_runtime_plan_from_context_bundle(payload: dict[str, Any]) -> dict[str, Any] | None:
     """Extract a pending runtime plan from the assembled context bundle."""
 
-    if not isinstance(payload, dict) or payload.get("final_answer_ready") is True:
+    if not isinstance(payload, dict):
         return None
+    if payload.get("final_answer_ready") is True:
+        return {
+            "phase": payload.get("phase"),
+            "next_action": payload.get("next_action"),
+            "next_allowed_tools": [],
+            "required_tools": [],
+            "known_refs": payload.get("known_refs") if isinstance(payload.get("known_refs"), dict) else {},
+            "missing_outputs": [],
+            "discouraged_tools": runtime_plan_discouraged_tools(payload),
+            "final_answer_ready": True,
+        }
     next_allowed_tools = runtime_plan_next_allowed_tools(payload)
     required_tools = _runtime_plan_required_tools(payload)
     if not next_allowed_tools or not required_tools:

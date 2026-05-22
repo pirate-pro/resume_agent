@@ -270,3 +270,37 @@ guard 发现错误动作
 ```
 
 这能同时解决质量、耗时和 token 膨胀问题，也给后续 LangGraph / workflow harness 留出清晰迁移路径。
+
+## 10. 2026-05-22 高并发回归后的收口
+
+高并发 live smoke `data/live_career_smoke_m24_high_concurrency_r1/run_001..run_004` 去重统计后：
+
+```text
+通过率：4/4
+平均单 run token：约 15.4 万
+主要残留：career_resume_version_create 的 change_summary 出现禁用词后重试
+次要残留：产物完成后仍偶发 tool_search / delegate_agents / application_merge 冗余调用
+```
+
+这两个问题的根因不是同一类：
+
+- `change_summary` 问题来自工具契约过粗：正文、标题必须强拒绝占位词，但 `change_summary`、`risk_notes` 是产品元数据，模型说“避免占位表达”不应导致整次简历版本创建失败。
+- 冗余调用来自完成态工具面没有彻底收口：`RuntimeToolPlan.final_answer_ready=true` 时，计划此前不会进入 pending runtime plan，导致 `tool_search`、`delegate_agents` 仍可能短暂可见。
+
+本轮修正原则：
+
+```text
+ResumeVersion 正文/标题：继续强校验，出现占位词直接拒绝。
+ResumeVersion 元数据：先做中性化归一，keyword_strategy 中的占位项直接丢弃。
+final_answer_ready 计划：继续进入 runtime plan，只用于隐藏不该继续调用的工具，不强迫模型调用任何工具。
+CareerApplication evidence_refs：只过滤当前 session 不存在的 artifact_*，不做跨产品记录存在性校验。
+CareerApplication stage：把 resume_version 这类阶段别名归一到 ready_to_apply。
+```
+
+这不是针对某个 smoke 文本做特判，而是把两类边界放回正确层级：
+
+```text
+工具契约层负责入参归一化和正文事实边界
+Runtime plan 负责完成态下的工具可见性收口
+模型只负责总结和必要的下一步判断
+```

@@ -7,6 +7,7 @@ from app.runtime.workflow.phase import WorkflowPhaseSnapshot, WorkflowRequiredOu
 from app.runtime.workflow.tool_plan import (
     build_runtime_tool_plan,
     format_runtime_tool_plan_lines,
+    pending_runtime_plan_from_context_bundle,
     pending_runtime_plan_from_successful_tool_result,
     pending_runtime_plan_from_tool_search_result,
     pending_runtime_plan_from_workflow_result,
@@ -320,6 +321,27 @@ def test_pending_runtime_plan_from_tool_search_result_preserves_runtime_discoura
     assert plan is not None
     assert plan["next_allowed_tools"] == ["career_resume_version_create"]
     assert runtime_plan_discouraged_tools(plan) == ["delegate_agents", "session_read_artifact"]
+
+
+def test_final_context_runtime_plan_still_hides_discouraged_tools() -> None:
+    plan = pending_runtime_plan_from_context_bundle(
+        {
+            "phase": "resume_diagnosis",
+            "known_refs": {"resume_profile_id": "resume_profile_alpha"},
+            "missing_outputs": [],
+            "next_allowed_tools": [],
+            "discouraged_tools": ["tool_search", "delegate_agents", "session_read_artifact"],
+            "final_answer_ready": True,
+            "next_action": "关键产物已完成；直接总结结果。",
+        }
+    )
+
+    assert plan is not None
+    assert plan["final_answer_ready"] is True
+    assert plan["next_allowed_tools"] == []
+    assert plan["required_tools"] == []
+    assert plan["known_refs"]["resume_profile_id"] == "resume_profile_alpha"
+    assert runtime_plan_discouraged_tools(plan) == ["tool_search", "delegate_agents", "session_read_artifact"]
 
 
 def test_runtime_tool_plan_stops_when_final_answer_ready() -> None:

@@ -118,6 +118,7 @@ _CAREER_APPLICATION_STAGE_ALIASES = {
     "ready": "ready_to_apply",
     "resume_ready": "ready_to_apply",
     "resume_generated": "ready_to_apply",
+    "resume_version": "ready_to_apply",
     "tailoring": "ready_to_apply",
     "customizing": "ready_to_apply",
     "tailored": "ready_to_apply",
@@ -947,6 +948,11 @@ class CareerResumeVersionCreateTool:
             change_summary = _optional_string_list(args.get("change_summary"), field_name="change_summary")
             keyword_strategy = _optional_string_list(args.get("keyword_strategy"), field_name="keyword_strategy")
             risk_notes = _optional_string_list(args.get("risk_notes"), field_name="risk_notes")
+            change_summary, keyword_strategy, risk_notes = _sanitize_resume_version_metadata_placeholders(
+                change_summary=change_summary,
+                keyword_strategy=keyword_strategy,
+                risk_notes=risk_notes,
+            )
             raw_artifact_id = args.get("artifact_id")
             content_arg = _optional_string(args.get("content"))
             safe_fallback_from_invalid_draft = False
@@ -1392,6 +1398,11 @@ class CareerApplicationCreateTool:
                 job_fit_report_id,
                 *resume_version_ids,
             )
+            evidence_refs = _sanitize_current_session_artifact_evidence_refs(
+                self._session_repository,
+                run_context.session_id,
+                evidence_refs,
+            )
 
             existing = _find_current_session_record(
                 self._career_store.list_career_applications(),
@@ -1556,7 +1567,11 @@ class CareerApplicationMergeTool:
             record = self._career_store.merge_career_application(
                 record_id,
                 updates=_career_application_merge_updates(args.get("updates")),
-                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
+                evidence_refs=_sanitize_current_session_artifact_evidence_refs(
+                    self._session_repository,
+                    run_context.session_id,
+                    _required_evidence_refs(args.get("evidence_refs")),
+                ),
                 source_artifact_id=source_artifact_id,
             )
         except (StorageError, ValidationError) as exc:
@@ -2126,6 +2141,26 @@ def _append_evidence_refs(evidence_refs: list[str], *refs: str | None) -> list[s
             continue
         output.append(normalized)
         seen.add(normalized)
+    return output
+
+
+def _sanitize_current_session_artifact_evidence_refs(
+    session_repository: SessionRepository,
+    session_id: str,
+    evidence_refs: list[str],
+) -> list[str]:
+    current_artifact_ids = {
+        artifact.artifact_id for artifact in session_repository.list_session_artifacts(session_id)
+    }
+    output: list[str] = []
+    seen: set[str] = set()
+    for ref in evidence_refs:
+        if ref.startswith("artifact_") and ref not in current_artifact_ids:
+            continue
+        if ref in seen:
+            continue
+        output.append(ref)
+        seen.add(ref)
     return output
 
 
@@ -2790,6 +2825,71 @@ def _matched_placeholder_terms(text: str) -> list[str]:
         if term not in output:
             output.append(term)
     return output
+
+
+def _sanitize_resume_version_metadata_placeholders(
+    *,
+    change_summary: list[str],
+    keyword_strategy: list[str],
+    risk_notes: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Normalize non-body metadata so wording advice does not fail resume creation.
+
+    Placeholder terms inside the resume title/body are still hard failures. Metadata
+    fields are product annotations, so the tool should store neutral wording instead
+    of forcing the model into a retry when it says things like "avoid placeholder text".
+    """
+
+    return (
+        _sanitize_resume_version_metadata_list(change_summary),
+        _sanitize_resume_version_keyword_strategy(keyword_strategy),
+        _sanitize_resume_version_metadata_list(risk_notes),
+    )
+
+
+def _sanitize_resume_version_metadata_list(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        sanitized = _sanitize_resume_version_metadata_text(value)
+        if not sanitized or sanitized in seen:
+            continue
+        output.append(sanitized)
+        seen.add(sanitized)
+    return output
+
+
+def _sanitize_resume_version_keyword_strategy(values: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if _matched_placeholder_terms(value):
+            continue
+        sanitized = _sanitize_resume_version_metadata_text(value)
+        if not sanitized or sanitized in seen:
+            continue
+        output.append(sanitized)
+        seen.add(sanitized)
+    return output
+
+
+def _sanitize_resume_version_metadata_text(value: str) -> str:
+    sanitized = value.strip()
+    replacements = (
+        ("替换为真实数据", "补充真实数据"),
+        ("待补充", "需要补充"),
+        ("待补", "需要补充"),
+        ("待填写", "需要填写"),
+        ("待填", "需要填写"),
+        ("待完善", "需要完善"),
+        ("占位表达", "未确认内容"),
+        ("占位", "未确认内容"),
+        ("TODO", "需要处理"),
+        ("TBD", "需要确认"),
+    )
+    for source, target in replacements:
+        sanitized = re.sub(re.escape(source), target, sanitized, flags=re.IGNORECASE)
+    return sanitized.strip()
 
 
 def _resume_version_unverified_metric_issues(
