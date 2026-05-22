@@ -1179,7 +1179,7 @@ def test_resume_version_create_rejects_unverified_counts_and_years(tmp_path: Pat
         )
 
 
-def test_resume_version_create_rejects_unsupported_candidate_facts(tmp_path: Path) -> None:
+def test_resume_version_create_uses_safe_fallback_for_unsupported_candidate_facts(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")
     resume_artifact_id = _create_text_artifact(
@@ -1198,23 +1198,33 @@ def test_resume_version_create_rejects_unsupported_candidate_facts(tmp_path: Pat
     )
     _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
 
-    with pytest.raises(ToolExecutionError, match="unsupported candidate tech facts"):
-        registry.execute(
-            ToolCall(
-                name="career_resume_version_create",
-                arguments={
-                    "base_resume_profile_id": "resume_profile_alpha",
-                    "target_jd_analysis_id": "jd_alpha",
-                    "title": "伪造技术栈版本",
-                    "content": "# 张三\n\n技能：Python、FastAPI、Docker、React、LLM API、向量检索。",
-                    "change_summary": ["将技能列表扩展为 Docker/React/LLM API"],
-                    "keyword_strategy": ["Python", "FastAPI", "向量检索"],
-                    "risk_notes": ["向量检索经验缺失，应后续补充。"],
-                    "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
-                },
-            ),
-            context=_context(agent_id="agent_main"),
-        )
+    payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "保守技术栈版本",
+            "content": "# 张三\n\n技能：Python、FastAPI、Docker、React、LLM API、向量检索。",
+            "change_summary": ["将技能列表扩展为 Docker/React/LLM API"],
+            "keyword_strategy": ["Python", "FastAPI", "向量检索"],
+            "risk_notes": ["向量检索经验缺失，应后续补充。"],
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    artifact_text = session_repository.read_session_artifact_text(
+        "sess_career",
+        payload["record"]["artifact_id"],
+    )
+    assert payload["safe_fallback_from_invalid_draft"] is True
+    assert "Docker" not in artifact_text
+    assert "React" not in artifact_text
+    assert "LLM API" not in artifact_text
+    assert "向量检索" not in artifact_text
+    assert payload["record"]["keyword_strategy"] == ["FastAPI", "Python"]
+    assert any("保守事实版本" in item for item in payload["record"]["risk_notes"])
 
 
 def test_resume_version_create_sanitizes_unverified_contact_values(tmp_path: Path) -> None:

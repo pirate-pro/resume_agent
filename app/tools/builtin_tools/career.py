@@ -984,7 +984,7 @@ class CareerResumeVersionCreateTool:
                         keyword_strategy=keyword_strategy,
                         risk_notes=risk_notes,
                     )
-                except ToolExecutionError:
+                except ToolExecutionError as exc:
                     fallback = _safe_resume_version_fallback_after_validation_failure(
                         career_store=self._career_store,
                         session_repository=self._session_repository,
@@ -993,6 +993,7 @@ class CareerResumeVersionCreateTool:
                         target_jd_analysis_id=target_jd_analysis_id,
                         title=title,
                         risk_notes=risk_notes,
+                        allow_without_prior_failure=_can_auto_fallback_resume_version_validation_error(str(exc)),
                     )
                     if fallback is None:
                         raise
@@ -2563,8 +2564,12 @@ def _safe_resume_version_fallback_after_validation_failure(
     target_jd_analysis_id: str | None,
     title: str,
     risk_notes: list[str],
+    allow_without_prior_failure: bool = False,
 ) -> dict[str, Any] | None:
-    if _current_run_resume_version_validation_failure_count(session_repository, context) < 1:
+    if (
+        not allow_without_prior_failure
+        and _current_run_resume_version_validation_failure_count(session_repository, context) < 1
+    ):
         return None
     try:
         profile = career_store.get_resume_profile(base_resume_profile_id)
@@ -2599,6 +2604,10 @@ def _safe_resume_version_fallback_after_validation_failure(
         "keyword_strategy": keyword_strategy,
         "risk_notes": merged_risk_notes,
     }
+
+
+def _can_auto_fallback_resume_version_validation_error(message: str) -> bool:
+    return "unsupported candidate tech facts" in message
 
 
 def _current_run_resume_version_validation_failure_count(
