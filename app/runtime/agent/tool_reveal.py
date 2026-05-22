@@ -122,12 +122,21 @@ def hidden_tool_result(tool_name: str, *, runtime_plan: dict[str, Any] | None = 
     if runtime_plan is not None:
         next_allowed_tools = _string_list(runtime_plan.get("next_allowed_tools"))
         required_tools = _string_list(runtime_plan.get("required_tools")) or next_allowed_tools
+        final_answer_ready = runtime_plan.get("final_answer_ready") is True
         payload.update(
             {
                 "workflow_runtime_result": True,
                 "policy": "block",
-                "reason": "tool_hidden_by_runtime_plan",
-                "message": "该工具本轮未揭示，因为当前 workflow 已收敛到确定下一步；不要继续调用隐藏工具。",
+                "reason": "final_answer_ready_no_more_tools"
+                if final_answer_ready
+                else "tool_hidden_by_runtime_plan",
+                "message": (
+                    "当前 workflow 关键产物已完成；不要继续搜索或调用工具，直接最终答复。"
+                    if final_answer_ready
+                    else "该工具本轮未揭示，因为当前 workflow 已收敛到确定下一步；不要继续调用隐藏工具。"
+                ),
+                "terminal": final_answer_ready,
+                "final_answer_ready": final_answer_ready,
                 "next_action": runtime_plan.get("next_action"),
                 "next_allowed_tools": next_allowed_tools,
                 "required_tools": required_tools,

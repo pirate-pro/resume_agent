@@ -1704,3 +1704,95 @@ findings=[]
 模型继续搜索工具时应更早收到“直接执行 delegate_agents”的运行时提醒，
 避免把简历诊断阶段的最终文字答复耗在 schema search limit 上。
 ```
+
+#### 修复：final-answer-ready 后隐藏工具终止
+
+根因：
+
+```text
+run_003 的简历诊断阶段里，resume_agent 已完成 ResumeProfile + 诊断 artifact。
+RuntimeToolPlan 已进入 final_answer_ready=true。
+但 main-agent 后续仍调用 tool_search 搜索 career_profile_merge。
+由于 tool_search 已被 final-answer-ready 计划隐藏，runtime 返回了可恢复 block，
+但该 block 没有 terminal 语义，模型于是继续搜索，最终触发 Tool schema search limit。
+```
+
+这不是产物不完整，而是“可答复态之后的错误工具调用”没有被终止。
+
+修复：
+
+```text
+app/runtime/agent/tool_reveal.py
+  hidden_tool_result 在 runtime_plan.final_answer_ready=true 时返回 terminal block。
+  reason=final_answer_ready_no_more_tools。
+  message 明确要求停止搜索和工具调用，直接最终答复。
+
+app/runtime/agent_runtime.py
+  当 pending runtime plan 已 final_answer_ready，schema_search_only 不再计入 schema search limit。
+  让隐藏工具结果执行并触发 terminal workflow recovery。
+
+app/runtime/workflow/tool_plan.py
+  resume_diagnosis final plan 把 delegate_agents 也加入 discouraged_tools。
+  避免 final-answer-ready 后 delegate_agents 仍保留在可见工具里。
+```
+
+本地验证：
+
+```text
+uv run pytest tests/test_tool_reveal.py tests/test_runtime_tool_plan.py::test_successful_resume_diagnosis_artifact_finishes_resume_stage tests/test_agent_runtime.py::test_runtime_terminal_blocks_hidden_tool_search_after_delegate_final_ready -q
+通过
+
+uv run pytest tests/test_agent_runtime.py tests/test_tool_reveal.py tests/test_runtime_tool_plan.py tests/test_workflow_runtime_guard.py -q
+通过
+
+uv run mypy --explicit-package-bases app/runtime/agent/tool_reveal.py app/runtime/agent_runtime.py app/runtime/workflow/tool_plan.py tests/test_tool_reveal.py tests/test_runtime_tool_plan.py tests/test_agent_runtime.py tests/test_workflow_runtime_guard.py
+通过
+```
+
+live smoke 命令：
+
+```text
+uv run python tools/smoke_career_live_flow.py --runs 1 --concurrency 1 --max-tool-rounds 10 --project-action custom_resume --data-dir data/live_career_smoke_m24_final_ready_terminal_r1 --quiet
+```
+
+结果：
+
+```text
+success=1
+failed=0
+elapsed=219.85s
+quality_gate=passed
+schema_limit_hits=0
+
+去重后：
+llm_calls=27
+total_tokens=153,107
+prompt_tokens=138,737
+completion_tokens=14,370
+
+agent_main=86,571 / 15 calls
+resume_agent=23,446 / 5 calls
+job_agent=43,090 / 7 calls
+```
+
+产品记录 checker：
+
+```text
+artifacts=5
+resume_profiles=1
+career_profiles=1
+jd_analyses=1
+job_fit_reports=1
+career_applications=1
+resume_versions=1
+findings=[]
+```
+
+观察：
+
+```text
+1. 简历诊断阶段没有再出现 Tool schema search limit。
+2. token 仍处于 14w - 17w 稳定区间。
+3. 定制简历阶段出现一次 ResumeVersion 质量保护性拒绝，原因是模型写入未证实量化指标“2 年”，随后重试成功。
+   这是 ResumeVersion 校验在发挥作用，不属于 schema search 问题。
+```

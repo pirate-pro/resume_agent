@@ -89,3 +89,27 @@ def test_hidden_tool_result_uses_runtime_plan_when_available() -> None:
     assert payload["required_tools"] == ["career_job_fit_report_save"]
     assert payload["known_refs"] == {"report_artifact_id": "artifact_fit_report"}
     assert payload["blocked_tools"] == ["session_read_artifact"]
+
+
+def test_hidden_tool_result_terminal_when_runtime_plan_is_final_ready() -> None:
+    result = hidden_tool_result(
+        "tool_search",
+        runtime_plan={
+            "phase": "resume_diagnosis",
+            "next_action": "关键产物已完成；直接总结结果。",
+            "next_allowed_tools": [],
+            "required_tools": [],
+            "known_refs": {"resume_profile_id": "resume_profile_alpha"},
+            "missing_outputs": [],
+            "final_answer_ready": True,
+        },
+    )
+
+    payload = json.loads(result.content)
+    assert payload["workflow_runtime_result"] is True
+    assert payload["policy"] == "block"
+    assert payload["terminal"] is True
+    assert payload["final_answer_ready"] is True
+    assert payload["reason"] == "final_answer_ready_no_more_tools"
+    assert payload["next_allowed_tools"] == []
+    assert payload["blocked_tools"] == ["tool_search"]

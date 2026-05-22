@@ -424,6 +424,7 @@ def _job_fit_report_artifact_plan(*, known_refs: dict[str, Any]) -> dict[str, An
         "missing_outputs": ["job_fit_report_artifact", "job_fit_report"],
         "discouraged_tools": [
             "tool_search",
+            "delegate_agents",
             "session_read_artifact",
             "session_list_artifacts",
             "session_plan_artifact_access",
@@ -519,6 +520,7 @@ def _resume_diagnosis_final_plan(*, known_refs: dict[str, Any]) -> dict[str, Any
         "final_answer_ready": True,
         "discouraged_tools": [
             "tool_search",
+            "delegate_agents",
             "session_read_artifact",
             "session_list_artifacts",
             "session_plan_artifact_access",

@@ -249,7 +249,9 @@ class AgentRuntime:
                 tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
                 round_index += 1
                 continue
-            if schema_search_only:
+            if schema_search_only and _is_final_answer_ready_runtime_plan(pending_runtime_plan):
+                schema_search_rounds = 0
+            elif schema_search_only:
                 if schema_search_rounds >= _MAX_SCHEMA_SEARCH_ROUNDS:
                     _logger.warning("达到工具 schema 搜索轮次上限: session_id=%s round=%s", session_id, round_index)
                     answer = "Tool schema search limit reached before generating final answer."
@@ -642,7 +644,9 @@ class AgentRuntime:
                 tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
                 round_index += 1
                 continue
-            if schema_search_only:
+            if schema_search_only and _is_final_answer_ready_runtime_plan(pending_runtime_plan):
+                schema_search_rounds = 0
+            elif schema_search_only:
                 if schema_search_rounds >= _MAX_SCHEMA_SEARCH_ROUNDS:
                     _logger.warning("达到工具 schema 搜索轮次上限(流式): session_id=%s round=%s", session_id, round_index)
                     answer = "Tool schema search limit reached before generating final answer."
@@ -1145,6 +1149,10 @@ def _is_premature_workflow_answer(
         pending_runtime_plan=pending_runtime_plan,
         visible_tool_names=visible_tool_names,
     )
+
+
+def _is_final_answer_ready_runtime_plan(pending_runtime_plan: dict[str, Any] | None) -> bool:
+    return pending_runtime_plan is not None and pending_runtime_plan.get("final_answer_ready") is True
 
 
 def _is_terminal_workflow_result(result: ToolExecutionResult) -> bool:

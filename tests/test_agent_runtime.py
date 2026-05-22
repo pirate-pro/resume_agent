@@ -2058,6 +2058,148 @@ def test_runtime_uses_delegate_result_refs_as_application_create_plan(tmp_path: 
     assert decisions[0]["reason"] == "premature_final_answer_with_pending_runtime_tools"
 
 
+def test_runtime_terminal_blocks_hidden_tool_search_after_delegate_final_ready(tmp_path: Path) -> None:
+    class RuntimePlanSearchTool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            self.calls += 1
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "runtime_plan_applied": True,
+                        "runtime_plan_phase": "resume_diagnosis",
+                        "runtime_final_answer_ready": False,
+                        "runtime_next_action": "委派 resume_agent 完成简历诊断。",
+                        "runtime_next_allowed_tools": ["delegate_agents"],
+                        "runtime_missing_outputs": ["resume_profile"],
+                        "revealed_tool_names": ["delegate_agents"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class DelegateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="delegate_agents",
+                description="Delegate agents.",
+                parameters_schema={"type": "object", "properties": {"tasks": {"type": "array"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="delegate_agents",
+                success=True,
+                content=json.dumps(
+                    {
+                        "status": "completed",
+                        "results": [
+                            {
+                                "target_agent_id": "resume_agent",
+                                "status": "completed",
+                                "summary": "已生成 resume_profile_alpha 和 artifact_diagnosis。",
+                                "output_artifact_refs": ["artifact_diagnosis"],
+                                "product_refs": ["resume_profile_alpha"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class FinalReadySearchModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+            self.searched = False
+            self.delegated = False
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if not self.searched:
+                assert "tool_search" in tool_names
+                self.searched = True
+                return ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "简历诊断"})])
+            if not self.delegated:
+                assert "delegate_agents" in tool_names
+                self.delegated = True
+                return ModelResponse(content="", tool_calls=[ToolCall(name="delegate_agents", arguments={"tasks": []})])
+            if self.delegated and tool_names and self.calls < 4:
+                assert "tool_search" not in tool_names
+                assert "delegate_agents" not in tool_names
+                return ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "career_profile_merge"})])
+            return ModelResponse(content="简历诊断已完成。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    search_tool = RuntimePlanSearchTool()
+    model = FinalReadySearchModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[search_tool, DelegateTool()],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=["tool_search", "memory_write"],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_final_ready_hidden_search",
+            user_message="诊断简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_final_ready_hidden_search"),
+        )
+    )
+
+    assert output.answer == "简历诊断已完成。"
+    assert search_tool.calls <= 1
+    assert model.calls in {3, 4}
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_final_ready_hidden_search")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls[-2:] == ["delegate_agents", "tool_search"]
+    terminal_result = [
+        json.loads(event.payload["content"])
+        for event in session_repo.list_events("sess_final_ready_hidden_search")
+        if event.type == "tool_result" and event.payload["tool_name"] == "tool_search"
+    ][-1]
+    assert terminal_result["terminal"] is True
+    assert terminal_result["reason"] == "final_answer_ready_no_more_tools"
+
+
 def test_child_job_fit_success_results_narrow_next_round_tools(tmp_path: Path) -> None:
     class JsonTool:
         def __init__(self, name: str, payload: dict[str, Any]) -> None:

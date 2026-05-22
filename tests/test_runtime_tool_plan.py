@@ -406,6 +406,7 @@ def test_successful_resume_diagnosis_artifact_finishes_resume_stage() -> None:
     assert plan["known_refs"]["resume_profile_id"] == "resume_profile_alpha"
     assert plan["known_refs"]["diagnosis_artifact_id"] == "artifact_diagnosis"
     assert "session_create_text_artifact" in runtime_plan_discouraged_tools(plan)
+    assert "delegate_agents" in runtime_plan_discouraged_tools(plan)
 
 
 def test_successful_resume_version_create_preserves_application_ref_for_merge() -> None:
