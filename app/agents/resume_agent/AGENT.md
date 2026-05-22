@@ -32,7 +32,9 @@
 
 ## 输出引用格式
 
-创建记录：
-- `resume_profile_id: resume_profile_xxx`
-- `source_artifact_id: artifact_xxx`
-- `diagnosis_artifact_id: artifact_xxx`
+创建记录后，只能输出工具成功返回的真实 id：
+- `resume_profile_id: <career_resume_profile_save 返回的真实 resume_profile_id>`
+- `source_artifact_id: <简历原文 artifact_id>`
+- `diagnosis_artifact_id: <诊断报告 artifact_id>`
+
+如果没有成功调用 `career_resume_profile_save`，不得编写 `resume_profile_xxx`、`resume_profile_todo`、`resume_profile_placeholder` 等占位 id，必须继续调用工具或明确说明任务未完成。

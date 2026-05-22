@@ -517,6 +517,35 @@ def test_job_fit_child_task_requires_report_product_and_artifact(tmp_path: Path)
     assert "缺少 job_fit_report, report_artifact" in result.results[0].error
 
 
+def test_resume_child_task_requires_real_resume_profile_product(tmp_path: Path) -> None:
+    bundle = _build_bundle(
+        tmp_path,
+        model_client=FixedAnswerModelClient(
+            "已创建诊断报告 artifact_abc123，ResumeProfile 保存后为 resume_profile_xxx。"
+        ),
+    )
+    bundle.session_repository.create_session("sess_delegate")
+
+    result = bundle.task_runtime.run_group(
+        AgentTaskGroupRequest(
+            source_context=_source_context(),
+            max_concurrency=1,
+            tasks=[
+                AgentTaskSpec(
+                    target_agent_id="resume_agent",
+                    instruction="解析简历，生成结构化简历画像 ResumeProfile，并创建诊断报告 artifact。",
+                    max_tool_rounds=0,
+                )
+            ],
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.results[0].status == "failed"
+    assert result.results[0].error is not None
+    assert "缺少 resume_profile" in result.results[0].error
+
+
 def test_same_target_child_prompt_only_receives_its_own_assigned_task(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_delegate")

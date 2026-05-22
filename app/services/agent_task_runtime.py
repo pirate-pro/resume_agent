@@ -427,7 +427,52 @@ def _child_completion_error(*, spec: AgentTaskSpec, result: object) -> str | Non
             missing.append("report_artifact")
         if missing:
             return f"job_agent JD 匹配子任务未完成：缺少 {', '.join(missing)}。"
+    if spec.target_agent_id == "resume_agent" and _task_requires_resume_profile(spec.instruction):
+        product_refs = _result_refs(result, "product_refs")
+        output_artifact_refs = _result_refs(result, "output_artifact_refs")
+        missing = []
+        if not any(_is_real_resume_profile_ref(ref) for ref in product_refs):
+            missing.append("resume_profile")
+        if _task_requires_resume_diagnosis_artifact(spec.instruction) and not output_artifact_refs:
+            missing.append("diagnosis_artifact")
+        if missing:
+            return f"resume_agent 简历解析子任务未完成：缺少 {', '.join(missing)}。"
     return None
+
+
+def _task_requires_resume_profile(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "resumeprofile",
+            "resume_profile",
+            "简历画像",
+            "保存简历",
+            "保存 resumeprofile",
+            "保存 resume_profile",
+        )
+    )
+
+
+def _task_requires_resume_diagnosis_artifact(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "诊断报告",
+            "diagnosis",
+            "markdown",
+            "artifact",
+        )
+    )
+
+
+def _is_real_resume_profile_ref(ref: str) -> bool:
+    if not ref.startswith("resume_profile_"):
+        return False
+    lowered = ref.lower()
+    return not any(marker in lowered for marker in ("xxx", "todo", "placeholder", "example", "示例", "占位"))
 
 
 def _task_requires_job_fit_report(text: str) -> bool:
