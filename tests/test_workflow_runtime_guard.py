@@ -449,6 +449,77 @@ def test_child_job_agent_allows_missing_jd_keyword_as_gap_in_match_report(tmp_pa
     assert decision.tool_call.name == "session_create_text_artifact"
 
 
+def test_child_job_agent_allows_interview_probe_for_missing_vector_search(tmp_path: Path) -> None:
+    guard, store, _ = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+    context = RunContext(
+        session_id="sess_guard",
+        run_id="run_child_job",
+        agent_id="job_agent",
+        turn_id="turn_guard",
+        entry_agent_id="agent_main",
+    )
+
+    decision = guard.inspect(
+        ToolCall(
+            name="session_create_text_artifact",
+            arguments={
+                "title": "岗位匹配报告 - AI应用开发工程师",
+                "kind": "generated_file",
+                "media_type": "text/markdown",
+                "content": (
+                    "# 岗位匹配报告\n\n"
+                    "- 候选人具备 Python / FastAPI 后端经验。\n"
+                    "## 面试追问\n"
+                    "1. 询问候选人在 RAG 项目中处理文档检索的具体技术选型，以评估向量检索能力。\n"
+                    "2. 可考察候选人是否了解 LangGraph 在多 Agent 编排中的适用边界。\n"
+                ),
+            },
+            tool_call_id="call_probe_report",
+        ),
+        context,
+    )
+
+    assert decision.result is None
+    assert decision.tool_call.name == "session_create_text_artifact"
+
+
+def test_child_job_agent_blocks_assertive_candidate_claim_even_in_interview_text(tmp_path: Path) -> None:
+    guard, store, _ = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+    context = RunContext(
+        session_id="sess_guard",
+        run_id="run_child_job",
+        agent_id="job_agent",
+        turn_id="turn_guard",
+        entry_agent_id="agent_main",
+    )
+
+    decision = guard.inspect(
+        ToolCall(
+            name="session_create_text_artifact",
+            arguments={
+                "title": "岗位匹配报告 - AI应用开发工程师",
+                "kind": "generated_file",
+                "media_type": "text/markdown",
+                "content": (
+                    "# 岗位匹配报告\n\n"
+                    "- 候选人具备 Python / FastAPI 后端经验。\n"
+                    "- 面试中可以强调候选人使用 Qdrant 向量数据库实现语义匹配。\n"
+                ),
+            },
+            tool_call_id="call_bad_probe_report",
+        ),
+        context,
+    )
+
+    assert decision.result is not None
+    payload = json.loads(decision.result.content)
+    assert payload["policy"] == "block"
+    assert payload["reason"] == "job_fit_report_artifact_candidate_facts_conflict"
+    assert any("qdrant" in item for item in payload["unsupported_candidate_facts"])
+
+
 def test_child_job_agent_blocks_separate_jd_analysis_artifact_when_fit_report_required(tmp_path: Path) -> None:
     guard, _, repo = _guard(tmp_path)
     context = RunContext(

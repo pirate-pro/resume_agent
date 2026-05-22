@@ -667,6 +667,87 @@ def test_job_agent_saves_jd_and_fit_report_but_cannot_merge_profile(tmp_path: Pa
         )
 
 
+def test_job_fit_report_save_derives_and_normalizes_evidence_refs(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+    diagnosis_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历诊断.md")
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    jd_artifact_id = _create_text_artifact(registry, agent_id="job_agent", title="JD.txt", content="需要 Python 和 RAG")
+    report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+
+    payload_without_refs = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_derived_refs",
+            "source_artifact_id": jd_artifact_id,
+            "jd_analysis_id": "jd_derived_refs",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+            "overall_score": 80,
+        },
+        _context(agent_id="job_agent"),
+    )
+    assert set(payload_without_refs["record"]["evidence_refs"]) >= {
+        "resume_profile_alpha",
+        "career_profile_default",
+        "jd_derived_refs",
+        jd_artifact_id,
+        report_artifact_id,
+    }
+
+    another_report_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="匹配报告-2.md",
+        content="# 匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    another_jd_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="job_agent",
+        title="JD-2.txt",
+        content="需要 FastAPI 和 Agent 经验",
+    )
+    payload_with_key_value_refs = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "job_fit_report_id": "fit_key_value_refs",
+            "source_artifact_id": another_jd_artifact_id,
+            "jd_analysis_id": "jd_key_value_refs",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": another_report_artifact_id,
+            "evidence_refs": [
+                "resume_profile_id=resume_profile_alpha",
+                "career_profile_id=career_profile_default",
+                "jd_analysis_id=jd_key_value_refs",
+                f"source_artifact_id={another_jd_artifact_id}",
+                f"report_artifact_id={another_report_artifact_id}",
+            ],
+        },
+        _context(agent_id="job_agent"),
+    )
+    assert set(payload_with_key_value_refs["record"]["evidence_refs"]) >= {
+        "resume_profile_alpha",
+        "career_profile_default",
+        "jd_key_value_refs",
+        another_jd_artifact_id,
+        another_report_artifact_id,
+    }
+
+
 def test_resume_version_create_repairs_missing_jd_id_when_single_current_jd_exists(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")

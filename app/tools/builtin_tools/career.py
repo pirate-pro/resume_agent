@@ -157,6 +157,10 @@ _CAREER_APPLICATION_IGNORED_UPDATE_FIELDS = {
 _EVIDENCE_REF_TYPE_ALIASES = {
     "artifact": "artifact",
     "artifact_id": "artifact",
+    "source_artifact": "artifact",
+    "source_artifact_id": "artifact",
+    "report_artifact": "artifact",
+    "report_artifact_id": "artifact",
     "application": "application",
     "application_id": "application",
     "career_application": "application",
@@ -664,7 +668,6 @@ class CareerJobFitReportSaveTool:
                 },
                 "required": [
                     "source_artifact_id",
-                    "evidence_refs",
                     "jd_analysis_id",
                     "resume_profile_id",
                     "career_profile_id",
@@ -707,7 +710,14 @@ class CareerJobFitReportSaveTool:
             )
             if career_profile_id is None:
                 raise ToolExecutionError("'career_profile_id' must be a non-empty string.")
-            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
+            evidence_refs = _optional_evidence_refs(args.get("evidence_refs"))
+            evidence_refs = _append_evidence_refs(
+                evidence_refs,
+                source_artifact_id,
+                report_artifact_id,
+                resume_profile_id,
+                career_profile_id,
+            )
             jd_analysis_id, evidence_refs = _ensure_jd_analysis_ref(
                 self._career_store,
                 self._session_repository,
@@ -722,6 +732,12 @@ class CareerJobFitReportSaveTool:
                 career_profile_id=career_profile_id,
                 source_artifact_id=source_artifact_id,
                 evidence_refs=evidence_refs,
+            )
+            evidence_refs = _append_evidence_refs(
+                evidence_refs,
+                report_artifact_id,
+                resume_profile_id,
+                career_profile_id,
             )
             existing = _find_current_session_record(
                 self._career_store.list_job_fit_reports(),
@@ -2386,9 +2402,10 @@ def _normalize_evidence_ref(raw: str) -> str:
     value = raw.strip().strip("`")
     if value.startswith("job_fit_report_") or value.startswith("fit_report_"):
         return _normalize_prefixed_alias(value, "fit")
-    if ":" not in value:
+    separator = ":" if ":" in value else "=" if "=" in value else None
+    if separator is None:
         return value
-    raw_kind, raw_id = value.split(":", 1)
+    raw_kind, raw_id = value.split(separator, 1)
     kind = _EVIDENCE_REF_TYPE_ALIASES.get(raw_kind.strip().lower())
     record_id = raw_id.strip().strip("`")
     if kind is None or not record_id:

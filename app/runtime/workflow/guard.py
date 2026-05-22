@@ -710,6 +710,8 @@ class WorkflowRuntimeGuard:
             next_action=(
                 "重新生成匹配报告正文：候选人事实必须以 ResumeProfile 和简历 artifact 为准；"
                 "不要把 JD 要求或外部模板中的技术栈写成候选人已有经验。"
+                "未覆盖的 JD 要求可以写入差距、风险、建议、待确认或面试追问，"
+                "但不能写成已匹配或候选人已有能力。"
                 "不要继续读取资料；直接基于 supported_candidate_facts 重写一个合法的匹配报告 artifact，"
                 "并把完整 Markdown 放在 content 字段里，不要传 content_chars、content_omitted 或占位正文。"
             ),
@@ -1206,7 +1208,7 @@ class WorkflowRuntimeGuard:
             normalized_line = _normalize_fact_text(line)
             if not normalized_line:
                 continue
-            if _line_is_jd_only(normalized_line) or _line_is_gap_or_negative(normalized_line):
+            if _line_is_non_candidate_evidence_context(normalized_line):
                 continue
             if not _line_looks_like_candidate_claim(normalized_line):
                 continue
@@ -2523,6 +2525,15 @@ def _line_is_jd_only(normalized_line: str) -> bool:
     return _has_any(normalized_line, ("jd", "岗位", "职位", "要求", "目标岗位", "技术栈"))
 
 
+def _line_is_non_candidate_evidence_context(normalized_line: str) -> bool:
+    if _line_is_jd_only(normalized_line) or _line_is_gap_or_negative(normalized_line):
+        return True
+    return (
+        _line_is_interview_probe_or_action_item(normalized_line)
+        and not _line_has_assertive_candidate_experience(normalized_line)
+    )
+
+
 def _line_is_report_topic_or_heading(line: str) -> bool:
     if not line:
         return True
@@ -2579,6 +2590,60 @@ def _line_is_gap_or_negative(normalized_line: str) -> bool:
             "准备",
             "说明",
             "呈现",
+        ),
+    )
+
+
+def _line_is_interview_probe_or_action_item(normalized_line: str) -> bool:
+    return _has_any(
+        normalized_line,
+        (
+            "询问",
+            "追问",
+            "提问",
+            "考察",
+            "待考察",
+            "核实",
+            "验证",
+            "访谈",
+            "面试",
+            "探讨",
+            "评估",
+        ),
+    )
+
+
+def _line_has_assertive_candidate_experience(normalized_line: str) -> bool:
+    return _has_any(
+        normalized_line,
+        (
+            "候选人使用",
+            "候选人采用",
+            "候选人掌握",
+            "候选人熟悉",
+            "候选人具备",
+            "候选人负责",
+            "候选人开发",
+            "候选人实现",
+            "候选人有",
+            "候选人已",
+            "本人使用",
+            "本人采用",
+            "本人掌握",
+            "本人熟悉",
+            "本人具备",
+            "本人负责",
+            "本人开发",
+            "本人实现",
+            "本人有",
+            "简历体现",
+            "简历中体现",
+            "项目中使用",
+            "项目中采用",
+            "项目中实现",
+            "项目使用",
+            "项目采用",
+            "项目实现",
         ),
     )
 

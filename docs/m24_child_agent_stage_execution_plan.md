@@ -304,3 +304,51 @@ CareerApplication stage：把 resume_version 这类阶段别名归一到 ready_t
 Runtime plan 负责完成态下的工具可见性收口
 模型只负责总结和必要的下一步判断
 ```
+
+## 11. 2026-05-22 JobFitReport 证据边界与断连恢复观察
+
+单并发验证 `data/live_career_smoke_m24_job_fit_guard_semantics_r1` 暴露出两个不同问题，不能混在一起处理：
+
+```text
+问题 A：job_agent 早期报告被候选人事实冲突 guard 拦截
+问题 B：career_job_fit_report_save 前两次 evidence_refs 格式错误，第三次才成功
+问题 C：后续模型请求断连，导致 smoke 最终失败
+```
+
+其中 A 的根因不是“报告 artifact 已创建后继续重写”，而是候选人事实冲突检测把“面试追问 / 待确认 / 风险建议”里的 JD 技术词误判成候选人已有能力。修正边界：
+
+```text
+已匹配 / 候选人已有能力：必须来自 ResumeProfile 或简历 artifact
+差距 / 风险 / 建议 / 待确认 / 面试追问：允许出现 JD 未覆盖技术词
+如果在面试建议里写成“候选人使用 Qdrant / Docker / 向量检索”，仍然拦截
+```
+
+B 的根因是工具契约不该强迫模型手写所有 `evidence_refs`。`career_job_fit_report_save` 已经拿到了：
+
+```text
+resume_profile_id
+career_profile_id
+jd_analysis_id
+source_artifact_id
+report_artifact_id
+```
+
+这些足够推导最小证据集合。因此工具层改为：
+
+```text
+evidence_refs 可选
+缺省时由工具从已传 id 自动补齐
+支持 resume_profile_id=xxx / jd_analysis_id=xxx / report_artifact_id=xxx 这类键值形式归一化
+产品记录模型仍保持 evidence_refs 非空
+```
+
+`data/live_career_smoke_m24_job_fit_guard_semantics_r2` 没有进入 JD 阶段，失败发生在 resume_agent 第二次模型请求断连后，main-agent fallback 再次请求也断连：
+
+```text
+失败阶段：简历诊断与画像沉淀
+失败原因：Model request failed: Server disconnected without sending a response
+工具失败：无
+产品记录：未创建
+```
+
+这次 r2 不能用来评价 JobFitReport 修复效果，只能说明 provider 断连恢复链路仍需要单独设计。下一步如果继续优化稳定性，应处理“子 agent 已生成部分产物但断连失败”时的 deterministic recovery，而不是继续给 JobFitReport 增加局部规则。
