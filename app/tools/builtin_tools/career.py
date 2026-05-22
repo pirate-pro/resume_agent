@@ -950,6 +950,7 @@ class CareerResumeVersionCreateTool:
             raw_artifact_id = args.get("artifact_id")
             content_arg = _optional_string(args.get("content"))
             safe_fallback_from_invalid_draft = False
+            sanitized_unverified_contacts: list[str] = []
             artifact_id: str | None = None
             content: str
             if content_arg is not None:
@@ -963,6 +964,14 @@ class CareerResumeVersionCreateTool:
                     if referenced_artifact_id not in evidence_refs:
                         evidence_refs.append(referenced_artifact_id)
                 content = content_arg
+                content, risk_notes, sanitized_unverified_contacts = _sanitize_resume_version_unverified_contacts(
+                    career_store=self._career_store,
+                    session_repository=self._session_repository,
+                    session_id=run_context.session_id,
+                    base_resume_profile_id=base_resume_profile_id,
+                    content=content,
+                    risk_notes=risk_notes,
+                )
                 try:
                     _reject_invalid_resume_version_text(
                         career_store=self._career_store,
@@ -1120,7 +1129,11 @@ class CareerResumeVersionCreateTool:
             saved = self._career_store.save_resume_version(record)
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        extra = {"safe_fallback_from_invalid_draft": True} if safe_fallback_from_invalid_draft else None
+        extra: dict[str, Any] = {}
+        if safe_fallback_from_invalid_draft:
+            extra["safe_fallback_from_invalid_draft"] = True
+        if sanitized_unverified_contacts:
+            extra["sanitized_unverified_contacts"] = sanitized_unverified_contacts
         return _record_result("career_resume_version_create", "resume_version", saved.resume_version_id, saved, extra=extra)
 
 
@@ -2444,6 +2457,57 @@ _RESUME_VERSION_METRIC_PATTERNS = (
 )
 _RESUME_VERSION_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
 _RESUME_VERSION_PHONE_PATTERN = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+
+
+def _sanitize_resume_version_unverified_contacts(
+    *,
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    session_id: str,
+    base_resume_profile_id: str,
+    content: str,
+    risk_notes: list[str],
+) -> tuple[str, list[str], list[str]]:
+    try:
+        profile = career_store.get_resume_profile(base_resume_profile_id)
+    except (StorageError, ValidationError):
+        return content, risk_notes, []
+    if profile is None or profile.source_session_id != session_id:
+        return content, risk_notes, []
+    source_text = _resume_profile_source_text(
+        session_repository,
+        session_id=session_id,
+        profile=profile,
+    )
+    support_text = "\n".join((source_text, _resume_profile_supported_fact_text(profile)))
+    unsupported_contacts = _unsupported_resume_version_contacts(content, support_text)
+    if not unsupported_contacts:
+        return content, risk_notes, []
+
+    sanitized_content = _remove_unverified_contact_lines(content, unsupported_contacts)
+    sanitized_risk_notes = list(risk_notes)
+    _append_unique(
+        sanitized_risk_notes,
+        "已自动移除原始简历未证实的联系方式；如需展示手机号或邮箱，请先由用户补充确认。",
+    )
+    return sanitized_content, sanitized_risk_notes, unsupported_contacts
+
+
+def _remove_unverified_contact_lines(content: str, unsupported_contacts: list[str]) -> str:
+    output: list[str] = []
+    for line in content.splitlines():
+        if not any(contact in line for contact in unsupported_contacts):
+            output.append(line)
+            continue
+        cleaned = line
+        for contact in unsupported_contacts:
+            cleaned = cleaned.replace(contact, "")
+        cleaned = re.sub(r"(?i)\b(?:phone|mobile|tel|email|e-mail)\b\s*[:：]?", "", cleaned)
+        cleaned = re.sub(r"(?:电话|手机|邮箱|邮件|联系方式)\s*[:：]?", "", cleaned)
+        cleaned = re.sub(r"[\s|｜/、,，;；-]+", " ", cleaned).strip()
+        if cleaned:
+            output.append(cleaned)
+    return "\n".join(output).strip() + "\n"
 
 
 def _reject_invalid_resume_version_text(

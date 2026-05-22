@@ -1217,7 +1217,7 @@ def test_resume_version_create_rejects_unsupported_candidate_facts(tmp_path: Pat
         )
 
 
-def test_resume_version_create_rejects_unverified_contact_values(tmp_path: Path) -> None:
+def test_resume_version_create_sanitizes_unverified_contact_values(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")
     resume_artifact_id = _create_text_artifact(
@@ -1236,20 +1236,28 @@ def test_resume_version_create_rejects_unverified_contact_values(tmp_path: Path)
     )
     _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
 
-    with pytest.raises(ToolExecutionError, match="contact or salary-like candidate facts"):
-        registry.execute(
-            ToolCall(
-                name="career_resume_version_create",
-                arguments={
-                    "base_resume_profile_id": "resume_profile_alpha",
-                    "target_jd_analysis_id": "jd_alpha",
-                    "title": "伪造联系方式版本",
-                    "content": "# 张三\n\nphone: 13800138000\nemail: zhangsan@email.com\n\n技能：Python、FastAPI。",
-                    "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
-                },
-            ),
-            context=_context(agent_id="agent_main"),
-        )
+    payload = _execute(
+        registry,
+        "career_resume_version_create",
+        {
+            "base_resume_profile_id": "resume_profile_alpha",
+            "target_jd_analysis_id": "jd_alpha",
+            "title": "净化联系方式版本",
+            "content": "# 张三\n\nphone: 13800138000\nemail: zhangsan@email.com\n\n技能：Python、FastAPI。",
+            "evidence_refs": ["resume_profile_alpha", "jd_alpha"],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    artifact_text = session_repository.read_session_artifact_text(
+        "sess_career",
+        payload["record"]["artifact_id"],
+    )
+    assert payload["sanitized_unverified_contacts"] == ["zhangsan@email.com", "13800138000"]
+    assert "zhangsan@email.com" not in artifact_text
+    assert "13800138000" not in artifact_text
+    assert "技能：Python、FastAPI" in artifact_text
+    assert any("未证实的联系方式" in item for item in payload["record"]["risk_notes"])
 
 
 def test_resume_version_create_uses_safe_fallback_after_previous_validation_failure(tmp_path: Path) -> None:
