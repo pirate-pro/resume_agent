@@ -1459,6 +1459,35 @@ def test_application_create_repairs_ids_from_current_fit_report(tmp_path: Path) 
     assert "resume_profile_fake" not in payload["record"]["evidence_refs"]
 
 
+def test_application_create_generates_valid_id_from_placeholder_company(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        agent_id="agent_main",
+        title="JD.txt",
+        content="AI 应用开发工程师，20-40K。",
+    )
+
+    payload = _execute(
+        registry,
+        "career_application_create",
+        {
+            "company": "缺失-未明确说明",
+            "position": "AI 应用开发工程师",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+        },
+        _context(agent_id="agent_main"),
+    )
+
+    application_id = str(payload["record_id"])
+
+    assert application_id.startswith("application_")
+    assert not application_id.startswith("application_-")
+    assert application_id.removeprefix("application_")[0].isalnum()
+
+
 def test_application_create_drops_nonexistent_resume_version_ids(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")

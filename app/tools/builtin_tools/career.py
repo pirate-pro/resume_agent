@@ -2662,13 +2662,23 @@ def _optional_prefixed_id(raw: Any, prefix: str) -> str | None:
         return None
     marker = f"{prefix}_"
     stem = value[len(marker):] if value.startswith(marker) else value
-    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_")
+    slug = _normalize_prefixed_id_stem(stem, max_len=100)
     if not slug:
         return None
-    normalized = f"{marker}{slug[:100]}"
+    normalized = f"{marker}{slug}"
     if is_reserved_reference_value(normalized):
         return None
     return normalized
+
+
+def _normalize_prefixed_id_stem(raw: str, *, max_len: int, lowercase: bool = False) -> str | None:
+    value = raw.lower() if lowercase else raw
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_-")
+    if not slug:
+        return None
+    if not slug[0].isalnum():
+        return None
+    return slug[:max_len]
 
 
 def _resolve_resume_version_base_profile_id(arguments: dict[str, Any], evidence_refs: list[str]) -> str:
@@ -4131,9 +4141,9 @@ def _new_id(prefix: str) -> str:
 
 
 def _new_application_id(*, company: str, position: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{company}_{position}").strip("_").lower()
+    slug = _normalize_prefixed_id_stem(f"{company}_{position}", max_len=80, lowercase=True)
     if slug:
-        return f"application_{slug[:80]}_{uuid4().hex[:8]}"
+        return f"application_{slug}_{uuid4().hex[:8]}"
     return _new_id("application")
 
 
