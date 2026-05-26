@@ -92,6 +92,14 @@ class Settings(BaseSettings):
         default="sparse",
         validation_alias=AliasChoices("WORKFLOW_RULE_SELECTION_MODE"),
     )
+    enable_tool_gateway_ledger: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ENABLE_TOOL_GATEWAY_LEDGER"),
+    )
+    enable_unified_workflow_state: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ENABLE_UNIFIED_WORKFLOW_STATE"),
+    )
     mid_term_flush_worker_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("MID_TERM_FLUSH_WORKER_ENABLED"),
@@ -252,6 +260,11 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_context_compaction_enabled(cls, value: bool | str) -> bool:
         return _parse_bool(value, field_name="CONTEXT_COMPACTION_ENABLED")
+
+    @field_validator("enable_tool_gateway_ledger", "enable_unified_workflow_state", mode="before")
+    @classmethod
+    def _validate_m27_feature_flags(cls, value: bool | str) -> bool:
+        return _parse_bool(value, field_name="M27 feature flag")
 
     @field_validator("context_compaction_retention_strategy")
     @classmethod

@@ -59,7 +59,7 @@ def test_collect_agent_output_refs_ignores_schema_field_names(tmp_path: Path) ->
     assert refs.product_refs == ["jd_alpha_001", "fit_alpha_001"]
 
 
-def test_collect_agent_output_refs_ignores_tool_names_that_look_like_product_refs(tmp_path: Path) -> None:
+def test_collect_agent_output_refs_ignores_assistant_messages_and_failed_tool_results(tmp_path: Path) -> None:
     repository = JsonlSessionRepository(data_dir=tmp_path)
     repository.create_session("sess_refs")
     repository.append_event(
@@ -82,6 +82,26 @@ def test_collect_agent_output_refs_ignores_tool_names_that_look_like_product_ref
             parent_run_id="run_main",
         ),
     )
+    repository.append_event(
+        "sess_refs",
+        EventRecord(
+            event_id="evt_failed_tool_result",
+            session_id="sess_refs",
+            type="tool_result",
+            payload={
+                "tool_name": "career_job_fit_report_save",
+                "success": False,
+                "content": (
+                    "CareerProfile not found: career_profile_agent. "
+                    "Partial refs: jd_alpha_001, fit_alpha_001, resume_profile_alpha_001."
+                ),
+            },
+            created_at=datetime.now(UTC),
+            agent_id="job_agent",
+            run_id="run_child",
+            parent_run_id="run_main",
+        ),
+    )
 
     refs = collect_agent_output_refs(
         session_repository=repository,
@@ -91,7 +111,7 @@ def test_collect_agent_output_refs_ignores_tool_names_that_look_like_product_ref
         input_artifact_refs=[],
     )
 
-    assert refs.product_refs == ["career_profile_default", "jd_alpha_001", "fit_alpha_001"]
+    assert refs.product_refs == []
 
 
 def test_collect_agent_output_refs_only_treats_write_tools_as_output_artifacts(tmp_path: Path) -> None:

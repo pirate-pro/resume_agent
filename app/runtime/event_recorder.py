@@ -36,6 +36,7 @@ _ALLOWED_EVENT_TYPES = {
     "tool_call",
     "tool_result",
     "assistant_thinking",
+    "assistant_answer_rejected",
     "workflow_runtime_decision",
     "assistant_message",
     "workflow_runtime_decision",

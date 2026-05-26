@@ -13,6 +13,7 @@ from app.core.errors import ValidationError
 from app.core.time import app_now
 from app.domain.models import RunContext, SessionArtifact, ToolDefinition, ToolExecutionResult
 from app.domain.protocols import SessionRepository
+from app.runtime.workflow.tool_hints import build_required_tool_call_hint
 from app.tools.builtin_tools.common import (
     parse_non_negative_int,
     parse_positive_int,
@@ -87,6 +88,13 @@ class SessionCreateTextArtifactTool:
             payload = _text_artifact_payload(artifact)
             payload["idempotent_update"] = True
             payload["message"] = "已更新同一 run 内已存在的同类 generated_file artifact，避免重复创建。"
+            payload.update(
+                _text_artifact_follow_up_payload(
+                    artifact=artifact,
+                    context=run_context,
+                    session_repository=self._session_repository,
+                )
+            )
             return ToolExecutionResult(
                 tool_name="session_create_text_artifact",
                 success=True,
@@ -130,6 +138,13 @@ class SessionCreateTextArtifactTool:
         )
         self._session_repository.add_or_update_session_artifact(artifact)
         payload = _text_artifact_payload(artifact)
+        payload.update(
+            _text_artifact_follow_up_payload(
+                artifact=artifact,
+                context=run_context,
+                session_repository=self._session_repository,
+            )
+        )
         return ToolExecutionResult(
             tool_name="session_create_text_artifact",
             success=True,
@@ -233,8 +248,9 @@ class SessionReadArtifactTool:
             "offset": offset,
             "returned_chars": len(snippet),
             "truncated": offset + max_chars < len(text),
-            "content": snippet,
         }
+        payload.update(_resume_agent_read_follow_up_payload(context=run_context, artifact=updated_artifact))
+        payload["content"] = snippet
         return ToolExecutionResult(
             tool_name="session_read_artifact",
             success=True,
@@ -462,6 +478,168 @@ def _text_artifact_payload(artifact: SessionArtifact) -> dict[str, Any]:
         "token_estimate": artifact.token_estimate,
         "owner_agent_id": artifact.owner_agent_id,
     }
+
+
+def _text_artifact_follow_up_payload(
+    *,
+    artifact: SessionArtifact,
+    context: RunContext,
+    session_repository: SessionRepository,
+) -> dict[str, Any]:
+    if context.agent_id != "job_agent" or artifact.kind != "generated_file":
+        return {}
+    if _generated_report_purpose(artifact.title) != "job_fit_report":
+        return {}
+    known_refs = _job_fit_report_follow_up_refs(
+        session_repository,
+        context=context,
+        report_artifact_id=artifact.artifact_id,
+    )
+    required_tool_call_hint = build_required_tool_call_hint("career_job_fit_report_save", known_refs)
+    return {
+        "output_kind": "job_fit_report",
+        "phase": "jd_fit",
+        "next_action": (
+            "岗位匹配报告 artifact 已创建；不要再次创建岗位匹配报告 artifact。"
+            "下一步只调用 career_job_fit_report_save，并把 report_artifact_id 设置为本次返回的 artifact_id。"
+        ),
+        "next_allowed_tools": ["career_job_fit_report_save"],
+        "required_tools": ["career_job_fit_report_save"],
+        "missing_outputs": ["job_fit_report"],
+        "blocked_tools": ["session_create_text_artifact"],
+        "known_refs": known_refs,
+        "completed_refs": known_refs,
+        "required_tool_call_hint": required_tool_call_hint,
+    }
+
+
+def _resume_agent_read_follow_up_payload(*, context: RunContext, artifact: SessionArtifact) -> dict[str, Any]:
+    if context.agent_id != "resume_agent" or context.agent_id == context.entry_agent_id:
+        return {}
+    if artifact.kind not in {"uploaded_file", "pasted_text"}:
+        return {}
+    title_key = _artifact_title_key(artifact.title)
+    artifact_key = artifact.artifact_id.casefold()
+    if "resume" not in artifact_key and "简历" not in title_key:
+        return {}
+    known_refs = {
+        "source_artifact_id": artifact.artifact_id,
+        "resume_source_artifact_id": artifact.artifact_id,
+    }
+    return {
+        "runtime_plan_applied": True,
+        "runtime_plan_phase": "resume_diagnosis",
+        "runtime_next_action": (
+            "简历 artifact 已读取；下一步只调用 session_create_text_artifact 创建简历诊断报告 artifact，"
+            "不要先调用 career_resume_profile_save。诊断 artifact 创建成功后再保存 ResumeProfile，"
+            "并把 diagnosis_artifact_id 设为该 artifact_id。"
+        ),
+        "runtime_next_allowed_tools": ["session_create_text_artifact"],
+        "required_tools": ["session_create_text_artifact"],
+        "runtime_missing_outputs": ["diagnosis_artifact", "resume_profile"],
+        "runtime_known_refs": known_refs,
+        "runtime_discouraged_tools": [
+            "tool_search",
+            "session_read_artifact",
+            "session_list_artifacts",
+            "session_plan_artifact_access",
+            "session_search_artifact",
+            "career_resume_profile_save",
+            "career_resume_profile_get",
+        ],
+    }
+
+
+def _job_fit_report_follow_up_refs(
+    session_repository: SessionRepository,
+    *,
+    context: RunContext,
+    report_artifact_id: str,
+) -> dict[str, Any]:
+    refs: dict[str, Any] = {"report_artifact_id": report_artifact_id}
+    for event in session_repository.list_run_events(context.session_id, context.agent_id, context.run_id):
+        if event.type != "tool_result" or event.payload.get("success") is not True:
+            continue
+        content = event.payload.get("content")
+        payload = _loads_json_object(content)
+        if payload is None or _is_runtime_block_payload(payload):
+            continue
+        tool_name = event.payload.get("tool_name")
+        if tool_name == "session_read_artifact":
+            artifact_id = _string_or_none(payload.get("artifact_id"))
+            if artifact_id is not None and artifact_id.startswith("artifact_jd"):
+                refs.setdefault("source_artifact_id", artifact_id)
+                refs.setdefault("jd_source_artifact_id", artifact_id)
+            continue
+        if tool_name == "career_resume_profile_get":
+            resume_profile_id = _payload_record_id(payload, "resume_profile_id")
+            if resume_profile_id is not None:
+                refs["resume_profile_id"] = resume_profile_id
+            source_artifact_id = _payload_nested_string(payload, "source_artifact_id")
+            if source_artifact_id is not None:
+                refs.setdefault("resume_source_artifact_id", source_artifact_id)
+            continue
+        if tool_name == "career_profile_get":
+            career_profile_id = _payload_record_id(payload, "career_profile_id")
+            if career_profile_id is not None:
+                refs["career_profile_id"] = career_profile_id
+            continue
+        if tool_name in {"career_jd_analysis_get", "career_jd_analysis_save"}:
+            jd_analysis_id = _payload_record_id(payload, "jd_analysis_id")
+            if jd_analysis_id is not None:
+                refs["jd_analysis_id"] = jd_analysis_id
+            source_artifact_id = _payload_nested_string(payload, "source_artifact_id")
+            if source_artifact_id is not None:
+                refs["source_artifact_id"] = source_artifact_id
+                refs["jd_source_artifact_id"] = source_artifact_id
+            continue
+    refs.setdefault("career_profile_id", "career_profile_default")
+    return refs
+
+
+def _string_or_none(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _payload_record_id(payload: dict[str, Any], id_field: str) -> str | None:
+    for source in (payload, payload.get("record"), payload.get("ids")):
+        if not isinstance(source, dict):
+            continue
+        value = _string_or_none(source.get(id_field))
+        if value is not None:
+            return value
+    return _string_or_none(payload.get("record_id"))
+
+
+def _payload_nested_string(payload: dict[str, Any], key: str) -> str | None:
+    for source in (payload, payload.get("record"), payload.get("ids")):
+        if not isinstance(source, dict):
+            continue
+        value = _string_or_none(source.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _is_runtime_block_payload(payload: dict[str, Any]) -> bool:
+    return (
+        payload.get("event_type") == "tool_schema_not_revealed"
+        or (
+            payload.get("workflow_runtime_result") is True
+            and payload.get("policy") == "block"
+            and payload.get("tool_executed") is False
+        )
+    )
+
+
+def _loads_json_object(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _generated_report_purpose(title: str) -> str | None:

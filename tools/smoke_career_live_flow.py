@@ -19,9 +19,11 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import shutil
 import statistics
 import time
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -37,6 +39,7 @@ from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, Session
 from app.infra.llm.openai_compatible_client import OpenAICompatibleClient
 from app.infra.storage.jsonl_agent_task_store import JsonlAgentTaskStore
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.jsonl_tool_call_ledger import JsonlToolCallLedger
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.knowledge.store import KnowledgeStore
@@ -56,6 +59,7 @@ from app.runtime.workflow import WorkflowRuntimeGuard
 from app.runtime.workflow.tool_plan_provider import build_runtime_tool_plan_provider
 from app.services.agent_invocation_service import AgentInvocationService
 from app.services.agent_task_runtime import AgentTaskRuntime
+from app.services.task_context_builder import TaskContextBuilder
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
 from app.tools.builtins import (
@@ -124,6 +128,35 @@ from app.tools.builtins import (
 from app.tools.registry import ToolRegistry
 from tools.check_career_product_store import check_career_product_store
 
+_INTERNAL_RUNTIME_ANSWER_MARKERS = (
+    "Tool call limit reached",
+    "Tool schema search limit reached",
+    "max_tool_rounds",
+    "schema search limit",
+    "runtime_tool_state",
+    "运行时工具状态摘要",
+    "完整工具结果见事件日志",
+    "workflow_runtime_result",
+    "hidden_tool_by_runtime_plan",
+    "tool_hidden_by_runtime_plan",
+)
+_TOOL_CALL_MARKUP_RE = re.compile(
+    r"<\s*/?\s*tool_call\b|<\s*function\s*=|<\s*/\s*function\s*>|<\s*parameter\s*=",
+    re.IGNORECASE,
+)
+_UNUSABLE_FINAL_ANSWER_EXACT = {
+    "我无法处理你的请求",
+    "我无法处理你的请求。",
+    "无法处理你的请求",
+    "无法处理你的请求。",
+    "(no answer)",
+}
+_UNUSABLE_FINAL_ANSWER_MARKERS = (
+    "当前没有生成可用的最终答复",
+    "当前 workflow 守卫限制",
+    "我需要委派子任务",
+)
+
 
 @dataclass(slots=True)
 class LiveStack:
@@ -166,6 +199,7 @@ class FlowReport:
     quality_gate_passed: bool | None = None
     quality_error_codes: list[str] = field(default_factory=list)
     retrieval_quality: dict[str, Any] = field(default_factory=dict)
+    efficiency: dict[str, Any] = field(default_factory=dict)
 
 
 def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
@@ -201,6 +235,10 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         workflow_rule_selection_mode=settings.workflow_rule_selection_mode,
     )
     event_recorder = EventRecorder(session_repository=session_repository)
+    workflow_guard = WorkflowRuntimeGuard(
+        career_store=career_store,
+        session_repository=session_repository,
+    )
     runtime = AgentRuntime(
         session_manager=SessionManager(session_repository=session_repository),
         event_recorder=event_recorder,
@@ -210,10 +248,8 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         tool_schema_disclosure_mode=settings.tool_schema_disclosure_mode,
         tool_schema_always_visible=settings.tool_schema_always_visible,
         tool_context_window_mode=settings.tool_context_window_mode,
-        workflow_guard=WorkflowRuntimeGuard(
-            career_store=career_store,
-            session_repository=session_repository,
-        ),
+        workflow_guard=workflow_guard,
+        tool_call_ledger=JsonlToolCallLedger(data_dir=data_dir) if settings.enable_tool_gateway_ledger else None,
     )
     agent_registry = load_agent_registry(
         settings.agent_registry_path,
@@ -231,6 +267,10 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         invocation_service=invocation_service,
         task_store=task_store,
         default_max_concurrency=settings.agent_task_max_concurrency,
+        task_context_builder=TaskContextBuilder(
+            session_repository=session_repository,
+            career_store=career_store,
+        ),
     )
     register_live_tools(
         registry=tool_registry,
@@ -578,6 +618,7 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
     report.artifact_ids = [item.artifact_id for item in artifacts]
     report.tool_call_counts = tool_call_counts(stack.session_repository, report.session_id)
     report.retrieval_quality = retrieval_quality_summary(stack.session_repository, report.session_id)
+    report.efficiency = efficiency_summary(stack.session_repository, report.session_id)
     if report.retrieval_quality.get("budget_violations"):
         report.errors.append("RAG 召回上下文超过 max_chars 预算。")
     if hasattr(stack, "note_store"):
@@ -622,11 +663,21 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
             report.failed_tools.append(tool_name)
         report.errors.append(f"工具失败: {tool_name} -> {payload.get('content')}")
 
-    if any("Tool call limit reached" in turn.answer for turn in report.turns):
-        report.errors.append("达到工具调用轮次上限，未得到完整最终回答。")
+    if any(_contains_internal_runtime_answer(turn.answer) for turn in report.turns):
+        report.errors.append("最终回答泄露内部 runtime 文案。")
+    if any(_contains_unusable_final_answer(turn.answer) for turn in report.turns):
+        report.errors.append("最终回答包含伪工具调用或不可交付弱答复。")
 
-    if tool_limit_detected(stack.session_repository, report.session_id):
-        report.errors.append("检测到子任务或中间步骤触发工具调用轮次上限。")
+    if internal_runtime_answer_detected(stack.session_repository, report.session_id):
+        report.errors.append("检测到 assistant_message 泄露内部 runtime 文案。")
+    if unusable_final_answer_detected(stack.session_repository, report.session_id):
+        report.errors.append("检测到 assistant_message/agent_result_summary 包含伪工具调用或不可交付弱答复。")
+
+    if hard_safety_limit_detected(stack.session_repository, report.session_id):
+        report.errors.append("检测到 hard safety 上限收束；本轮未稳定完成。")
+
+    if tool_loop_stagnation_detected(stack.session_repository, report.session_id):
+        report.warnings.append("检测到无推进工具循环收束；最终回答已由 recovery/fallback 生成。")
 
     if path_argument_leaked(stack.session_repository, report.session_id):
         report.errors.append("检测到工具调用参数中出现 path/file_path/workspace_path。")
@@ -1173,8 +1224,8 @@ def infer_failure_stage(report: FlowReport) -> str:
         return infer_stage_from_tool(report.failed_tools[0])
     if report.consistency_errors:
         return "产品数据一致性检查"
-    if any("工具调用轮次上限" in error or "Tool call limit reached" in error for error in report.errors):
-        return "工具轮次控制"
+    if any("最终回答" in error or "assistant_message" in error or "hard safety" in error for error in report.errors):
+        return "最终回答收束"
     if any("path/file_path/workspace_path" in error for error in report.errors):
         return "工具参数边界检查"
     return "结果检查"
@@ -1285,6 +1336,226 @@ def tool_call_counts(repository: JsonlSessionRepository, session_id: str) -> dic
     return counts
 
 
+_STABLE_TOOL_ARG_KEYS = (
+    "artifact_id",
+    "application_id",
+    "resume_profile_id",
+    "career_profile_id",
+    "jd_analysis_id",
+    "job_fit_report_id",
+    "resume_version_id",
+    "record_id",
+    "target_agent_id",
+    "query",
+    "intent",
+    "title",
+)
+
+
+def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> dict[str, Any]:
+    llm_calls_by_agent: Counter[str] = Counter()
+    llm_tokens_by_agent: Counter[str] = Counter()
+    tool_calls_by_agent: Counter[str] = Counter()
+    tool_fingerprints: Counter[str] = Counter()
+    tool_fingerprint_call_ids: dict[str, list[str]] = defaultdict(list)
+    tool_fingerprint_tool_names: dict[str, str] = {}
+    tool_result_call_ids: set[str] = set()
+    executed_tool_result_call_ids: set[tuple[str, str]] = set()
+    hidden_tool_results: Counter[str] = Counter()
+    failed_tool_results: Counter[str] = Counter()
+    recovered_or_prevented_call_ids: set[str] = set()
+    workflow_decisions: Counter[str] = Counter()
+
+    for event in _all_relevant_events(repository, session_id):
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        agent_id = str(event.agent_id or "unknown")
+        if event.type == "llm_usage":
+            llm_calls_by_agent[agent_id] += 1
+            llm_tokens_by_agent[agent_id] += _int_value(payload.get("total_tokens")) or 0
+            continue
+        if event.type == "tool_call":
+            tool_name = payload.get("name")
+            if not isinstance(tool_name, str) or not tool_name:
+                continue
+            tool_key = f"{agent_id}:{tool_name}"
+            tool_calls_by_agent[tool_key] += 1
+            arguments = payload.get("arguments")
+            fingerprint = _stable_tool_call_fingerprint(tool_name, arguments if isinstance(arguments, dict) else {})
+            fingerprint_key = f"{tool_key}:{fingerprint}"
+            tool_fingerprints[fingerprint_key] += 1
+            tool_fingerprint_tool_names[fingerprint_key] = tool_name
+            tool_call_id = payload.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                tool_fingerprint_call_ids[fingerprint_key].append(tool_call_id)
+            continue
+        if event.type == "tool_result":
+            tool_name = payload.get("tool_name")
+            if not isinstance(tool_name, str) or not tool_name:
+                continue
+            tool_key = f"{agent_id}:{tool_name}"
+            tool_call_id = payload.get("tool_call_id")
+            content = str(payload.get("content") or "")
+            if isinstance(tool_call_id, str):
+                tool_result_call_ids.add(tool_call_id)
+                executed_tool_result_call_ids.add((tool_name, tool_call_id))
+                if _is_prevented_or_reused_tool_result(content) or _is_recoverable_write_failure(tool_name, content):
+                    recovered_or_prevented_call_ids.add(tool_call_id)
+            if payload.get("success") is False:
+                failed_tool_results[tool_key] += 1
+            hidden_reason = _hidden_tool_result_reason(payload)
+            if hidden_reason:
+                hidden_tool_results[f"{tool_key}:{hidden_reason}"] += 1
+            continue
+        if event.type == "workflow_runtime_decision":
+            reason = payload.get("reason")
+            if isinstance(reason, str) and reason:
+                workflow_decisions[reason] += 1
+
+    duplicate_tool_calls = {
+        key: count for key, count in sorted(tool_fingerprints.items()) if count > 1
+    }
+    recovery_duplicate_tool_calls = {
+        key: count
+        for key, count in duplicate_tool_calls.items()
+        if _duplicate_is_recovered_or_prevented(
+            tool_fingerprint_tool_names.get(key),
+            tool_fingerprint_call_ids.get(key, []),
+            recovered_or_prevented_call_ids=recovered_or_prevented_call_ids,
+            tool_result_call_ids=tool_result_call_ids,
+            executed_tool_result_call_ids=executed_tool_result_call_ids,
+        )
+    }
+    harmful_duplicate_tool_calls = {
+        key: count for key, count in duplicate_tool_calls.items() if key not in recovery_duplicate_tool_calls
+    }
+    return {
+        "llm_calls_by_agent": dict(sorted(llm_calls_by_agent.items())),
+        "llm_tokens_by_agent": dict(sorted(llm_tokens_by_agent.items())),
+        "tool_calls_by_agent": dict(sorted(tool_calls_by_agent.items())),
+        "duplicate_tool_calls": duplicate_tool_calls,
+        "harmful_duplicate_tool_calls": harmful_duplicate_tool_calls,
+        "recovery_duplicate_tool_calls": recovery_duplicate_tool_calls,
+        "hidden_tool_results": dict(sorted(hidden_tool_results.items())),
+        "failed_tool_results": dict(sorted(failed_tool_results.items())),
+        "workflow_decisions": dict(sorted(workflow_decisions.items())),
+        "total_llm_calls": sum(llm_calls_by_agent.values()),
+        "total_llm_tokens": sum(llm_tokens_by_agent.values()),
+        "duplicate_tool_call_count": sum(count - 1 for count in duplicate_tool_calls.values()),
+        "harmful_duplicate_tool_call_count": sum(count - 1 for count in harmful_duplicate_tool_calls.values()),
+        "recovery_duplicate_tool_call_count": sum(count - 1 for count in recovery_duplicate_tool_calls.values()),
+        "hidden_tool_result_count": sum(hidden_tool_results.values()),
+        "failed_tool_result_count": sum(failed_tool_results.values()),
+    }
+
+
+def _is_recoverable_write_failure(tool_name: str, content: str) -> bool:
+    if tool_name == "career_resume_version_create" and "ResumeVersion validation failed" in content:
+        return True
+    if tool_name == "career_job_fit_report_save" and (
+        "validation failed" in content.casefold()
+        or "report_fact_boundary" in content
+        or "unsupported_candidate_facts" in content
+    ):
+        return True
+    if tool_name == "session_create_text_artifact" and (
+        "invalid" in content.casefold()
+        or "validation" in content.casefold()
+        or "blocked_actions" in content
+    ):
+        return True
+    return False
+
+
+def _is_prevented_or_reused_tool_result(content: str) -> bool:
+    payload = _json_object(content)
+    if payload is None:
+        return False
+    policy = payload.get("policy")
+    if policy in {"block", "reuse", "repair"}:
+        return True
+    if payload.get("idempotent_reused") is True:
+        return True
+    if payload.get("result_created") is False or payload.get("tool_executed") is False:
+        return True
+    reason = payload.get("reason")
+    if isinstance(reason, str) and reason in {
+        "tool_call_ledger_reuse",
+        "read_ledger_reuse",
+        "tool_hidden_by_runtime_plan",
+        "final_answer_ready_no_more_tools",
+        "tool_blocked_by_runtime_state",
+    }:
+        return True
+    return False
+
+
+def _duplicate_is_recovered_or_prevented(
+    tool_name: str | None,
+    call_ids: list[str],
+    *,
+    recovered_or_prevented_call_ids: set[str],
+    tool_result_call_ids: set[str],
+    executed_tool_result_call_ids: set[tuple[str, str]],
+) -> bool:
+    if tool_name is None or len(call_ids) <= 1:
+        return False
+    duplicate_call_ids = call_ids[1:]
+    if any(call_id in recovered_or_prevented_call_ids for call_id in call_ids):
+        return True
+    return any(
+        call_id in tool_result_call_ids and (tool_name, call_id) not in executed_tool_result_call_ids
+        for call_id in duplicate_call_ids
+    )
+
+
+def _stable_tool_call_fingerprint(tool_name: str, arguments: dict[str, Any]) -> str:
+    stable = {key: arguments[key] for key in _STABLE_TOOL_ARG_KEYS if key in arguments}
+    if tool_name == "delegate_agents":
+        tasks = _delegate_task_fingerprint(arguments.get("tasks"))
+        if tasks:
+            stable["tasks"] = tasks
+    if not stable:
+        stable = {"_keys": sorted(str(key) for key in arguments.keys())}
+    return _compact_json(stable)
+
+
+def _delegate_task_fingerprint(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        value = parsed
+    if not isinstance(value, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        compact = {
+            key: item[key]
+            for key in ("target_agent_id", "artifact_refs", "max_tool_rounds")
+            if key in item
+        }
+        if compact:
+            output.append(compact)
+    return output
+
+
+def _hidden_tool_result_reason(payload: dict[str, Any]) -> str | None:
+    content = str(payload.get("content") or "")
+    parsed = _json_object(content)
+    if isinstance(parsed, dict):
+        reason = parsed.get("reason")
+        if reason in {"tool_hidden_by_runtime_plan", "tool_schema_not_revealed"}:
+            return str(reason)
+    if "tool_hidden_by_runtime_plan" in content:
+        return "tool_hidden_by_runtime_plan"
+    if "tool_schema_not_revealed" in content:
+        return "tool_schema_not_revealed"
+    return None
+
+
 def diff_tool_calls(before: dict[str, int], after: dict[str, int]) -> list[str]:
     output: list[str] = []
     for name in sorted(after):
@@ -1335,13 +1606,60 @@ def recovered_protective_tool_failure(
     return False
 
 
-def tool_limit_detected(repository: JsonlSessionRepository, session_id: str) -> bool:
+def internal_runtime_answer_detected(repository: JsonlSessionRepository, session_id: str) -> bool:
     for event in _all_relevant_events(repository, session_id):
+        if event.type != "assistant_message":
+            continue
         payload = event.payload if isinstance(event.payload, dict) else {}
-        text = json.dumps(payload, ensure_ascii=False)
-        if "Tool call limit reached" in text:
+        if _contains_internal_runtime_answer(str(payload.get("content") or "")):
             return True
     return False
+
+
+def unusable_final_answer_detected(repository: JsonlSessionRepository, session_id: str) -> bool:
+    for event in _all_relevant_events(repository, session_id):
+        if event.type not in {"assistant_message", "agent_result_summary"}:
+            continue
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        candidates = [payload.get("content"), payload.get("summary"), payload.get("answer")]
+        if any(_contains_unusable_final_answer(str(item or "")) for item in candidates):
+            return True
+    return False
+
+
+def hard_safety_limit_detected(repository: JsonlSessionRepository, session_id: str) -> bool:
+    for event in _all_relevant_events(repository, session_id):
+        if event.type != "workflow_runtime_decision":
+            continue
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if payload.get("reason") == "hard_model_round_limit_reached":
+            return True
+    return False
+
+
+def tool_loop_stagnation_detected(repository: JsonlSessionRepository, session_id: str) -> bool:
+    for event in _all_relevant_events(repository, session_id):
+        if event.type != "workflow_runtime_decision":
+            continue
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if payload.get("reason") == "tool_loop_stagnation":
+            return True
+    return False
+
+
+def _contains_internal_runtime_answer(content: str) -> bool:
+    return any(marker in content for marker in _INTERNAL_RUNTIME_ANSWER_MARKERS)
+
+
+def _contains_unusable_final_answer(content: str) -> bool:
+    normalized = " ".join(content.strip().split())
+    if not normalized:
+        return False
+    if normalized in _UNUSABLE_FINAL_ANSWER_EXACT:
+        return True
+    if any(marker in normalized for marker in _UNUSABLE_FINAL_ANSWER_MARKERS):
+        return True
+    return bool(_TOOL_CALL_MARKUP_RE.search(content))
 
 
 def path_argument_leaked(repository: JsonlSessionRepository, session_id: str) -> bool:
@@ -1530,6 +1848,69 @@ def _retrieval_quality_text(value: dict[str, Any]) -> str:
     )
 
 
+def _efficiency_text(value: dict[str, Any]) -> str:
+    decisions = value.get("workflow_decisions")
+    decision_counts = decisions if isinstance(decisions, dict) else {}
+    return (
+        f"llm_calls={_compact_json(value.get('llm_calls_by_agent', {}))} "
+        f"llm_tokens={_compact_json(value.get('llm_tokens_by_agent', {}))} "
+        f"duplicates={value.get('duplicate_tool_call_count', 0)} "
+        f"harmful_duplicates={value.get('harmful_duplicate_tool_call_count', 0)} "
+        f"recovery_duplicates={value.get('recovery_duplicate_tool_call_count', 0)} "
+        f"hidden={value.get('hidden_tool_result_count', 0)} "
+        f"failed_tools={value.get('failed_tool_result_count', 0)} "
+        f"stagnation={decision_counts.get('tool_loop_stagnation', 0)} "
+        f"hard_safety={decision_counts.get('hard_model_round_limit_reached', 0)}"
+    )
+
+
+def _aggregate_efficiency_text(reports: list[FlowReport]) -> str:
+    summaries = [item.efficiency for item in reports if item.efficiency]
+    if not summaries:
+        return ""
+    total_calls = [_int_value(item.get("total_llm_calls")) or 0 for item in summaries]
+    total_tokens = [_int_value(item.get("total_llm_tokens")) or 0 for item in summaries]
+    duplicate_runs = sum(1 for item in summaries if (_int_value(item.get("duplicate_tool_call_count")) or 0) > 0)
+    harmful_duplicate_runs = sum(
+        1 for item in summaries if (_int_value(item.get("harmful_duplicate_tool_call_count")) or 0) > 0
+    )
+    recovery_duplicate_runs = sum(
+        1 for item in summaries if (_int_value(item.get("recovery_duplicate_tool_call_count")) or 0) > 0
+    )
+    hidden_runs = sum(1 for item in summaries if (_int_value(item.get("hidden_tool_result_count")) or 0) > 0)
+    stagnation_runs = 0
+    hard_safety_runs = 0
+    for item in summaries:
+        decisions = item.get("workflow_decisions")
+        decision_counts = decisions if isinstance(decisions, dict) else {}
+        if (_int_value(decision_counts.get("tool_loop_stagnation")) or 0) > 0:
+            stagnation_runs += 1
+        if (_int_value(decision_counts.get("hard_model_round_limit_reached")) or 0) > 0:
+            hard_safety_runs += 1
+    return (
+        f"avg_llm_calls={statistics.fmean(total_calls):.1f} "
+        f"max_llm_calls={max(total_calls)} "
+        f"avg_tokens={statistics.fmean(total_tokens):.0f} "
+        f"max_tokens={max(total_tokens)} "
+        f"duplicate_runs={duplicate_runs}/{len(summaries)} "
+        f"harmful_duplicate_runs={harmful_duplicate_runs}/{len(summaries)} "
+        f"recovery_duplicate_runs={recovery_duplicate_runs}/{len(summaries)} "
+        f"hidden_runs={hidden_runs}/{len(summaries)} "
+        f"stagnation_runs={stagnation_runs}/{len(summaries)} "
+        f"hard_safety_runs={hard_safety_runs}/{len(summaries)}"
+    )
+
+
+def _top_int_items(value: dict[Any, Any], *, limit: int) -> dict[str, int]:
+    items: list[tuple[str, int]] = []
+    for key, raw_count in value.items():
+        count = _int_value(raw_count)
+        if count is None:
+            continue
+        items.append((str(key), count))
+    return dict(sorted(items, key=lambda item: (-item[1], item[0]))[:limit])
+
+
 def _runtime_config_text(settings: object) -> str:
     return (
         "配置: "
@@ -1582,6 +1963,9 @@ def print_report(reports: list[FlowReport]) -> None:
     print(f"失败数: {sum(1 for item in reports if not item.success)}")
     print(f"平均耗时: {statistics.fmean(elapsed_values):.2f}s")
     print(f"最大耗时: {max(elapsed_values):.2f}s")
+    aggregate_efficiency = _aggregate_efficiency_text(reports)
+    if aggregate_efficiency:
+        print(f"效率摘要: {aggregate_efficiency}")
     print()
     for item in reports:
         status = "通过" if item.success else "失败"
@@ -1595,6 +1979,20 @@ def print_report(reports: list[FlowReport]) -> None:
         print(f"  record_counts: {_record_counts(item.record_ids)}")
         print(f"  artifact_count: {len(item.artifact_ids)} ids={_preview_list(item.artifact_ids, limit=8)}")
         print(f"  tool_call_counts: {_compact_json(item.tool_call_counts)}")
+        if item.efficiency:
+            print(f"  efficiency: {_efficiency_text(item.efficiency)}")
+            duplicate_tools = item.efficiency.get("duplicate_tool_calls")
+            if isinstance(duplicate_tools, dict) and duplicate_tools:
+                print(f"  duplicate_tools: {_compact_json(_top_int_items(duplicate_tools, limit=5))}")
+            recovery_duplicate_tools = item.efficiency.get("recovery_duplicate_tool_calls")
+            if isinstance(recovery_duplicate_tools, dict) and recovery_duplicate_tools:
+                print(f"  recovery_duplicate_tools: {_compact_json(_top_int_items(recovery_duplicate_tools, limit=5))}")
+            harmful_duplicate_tools = item.efficiency.get("harmful_duplicate_tool_calls")
+            if isinstance(harmful_duplicate_tools, dict) and harmful_duplicate_tools:
+                print(f"  harmful_duplicate_tools: {_compact_json(_top_int_items(harmful_duplicate_tools, limit=5))}")
+            hidden_tools = item.efficiency.get("hidden_tool_results")
+            if isinstance(hidden_tools, dict) and hidden_tools:
+                print(f"  hidden_tools: {_compact_json(_top_int_items(hidden_tools, limit=5))}")
         if item.retrieval_quality:
             print(f"  RAG召回: {_retrieval_quality_text(item.retrieval_quality)}")
         if item.quality_gate_passed is not None:
@@ -1641,7 +2039,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runs", type=int, default=1, help="执行完整三轮求职链路的次数。")
     parser.add_argument("--concurrency", type=int, default=1, help="并发 run 数；每个 run 使用独立 data 子目录。")
     parser.add_argument("--data-dir", type=Path, default=Path("data/live_career_smoke"), help="输出数据根目录。")
-    parser.add_argument("--max-tool-rounds", type=int, default=8, help="每轮对话允许的最大工具轮次。")
+    parser.add_argument("--max-tool-rounds", type=int, default=24, help="每轮对话允许的软工具预算。")
     parser.add_argument(
         "--project-action",
         choices=("none", "checklist", "interview", "custom_resume"),
@@ -1675,8 +2073,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--runs must be positive")
     if args.concurrency <= 0:
         parser.error("--concurrency must be positive")
-    if args.max_tool_rounds < 1 or args.max_tool_rounds > 10:
-        parser.error("--max-tool-rounds must be in range 1..10")
+    if args.max_tool_rounds < 1 or args.max_tool_rounds > 40:
+        parser.error("--max-tool-rounds must be in range 1..40")
     return args
 
 

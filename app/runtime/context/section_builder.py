@@ -19,6 +19,7 @@ from app.runtime.context.memory_sections import (
 from app.runtime.context.models import ContextAssemblyPlan, ContextAssemblyRole, ContextSection, ShortTermContextPlan
 from app.runtime.context.models import AgentCatalogItem
 from app.runtime.context.short_term import (
+    format_assigned_task_context_lines,
     format_assigned_task_lines,
     format_child_result_summary_lines,
     format_context_summary_lines,
@@ -115,7 +116,7 @@ def build_assembly_plan(
                     "- Do not delegate tasks with unresolved sequential dependencies; resolve prerequisites first.\n"
                     "- Do not pass depends_on to delegate_agents; this version only supports independent child tasks.\n"
                     "- Child agent ids such as resume_agent/job_agent are not tool names; never call them directly. Use delegate_agents with tasks[].target_agent_id.\n"
-                    "- Use max_tool_rounds 10-20 for child tasks that must create artifacts or product records.\n"
+                    "- Use max_tool_rounds 20-24 for child tasks that must create artifacts or product records.\n"
                     "- Product record ids must come from tool results, child-agent results, or list tools; do not invent ids.\n"
                     "- Keep each child instruction narrow, include constraints, and pass artifact_refs when shared artifacts matter.\n"
                     "- If the source material is pasted in the current user message, include the relevant source text directly in the child instruction.\n"
@@ -221,6 +222,20 @@ def build_assembly_plan(
                 item_count=len(short_term_plan.assigned_tasks),
             )
         )
+        assigned_task_context_lines = format_assigned_task_context_lines(short_term_plan.assigned_tasks)
+        if assigned_task_context_lines:
+            sections.append(
+                ContextSection(
+                    name="assigned_task_context",
+                    content=(
+                        "Deterministic task context:\n"
+                        + "\n".join(assigned_task_context_lines)
+                        + "\n\nUse provided_records and provided_artifacts as already-read inputs. "
+                        "Only call get/read/search tools for ids listed in missing_inputs or when the user asks for a new source."
+                    ),
+                    item_count=len(assigned_task_context_lines),
+                )
+            )
     if short_term_plan.child_result_summaries:
         sections.append(
             ContextSection(

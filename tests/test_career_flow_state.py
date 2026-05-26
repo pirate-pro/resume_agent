@@ -150,6 +150,33 @@ def test_extract_career_flow_state_ignores_runtime_block_as_product_output() -> 
     assert state.final_answer_ready is False
 
 
+def test_extract_career_flow_state_project_action_does_not_require_resume_version_again() -> None:
+    state = extract_career_flow_state(
+        [],
+        _context(),
+        user_message=(
+            "当前求职项目 application_id 是 application_alpha。请先调用 career_application_get 读取项目，"
+            "再复用其中已有的 resume_profile_id、career_profile_id、jd_analysis_id、job_fit_report_id "
+            "和 resume_version_ids。请执行投递前检查，检查定制简历状态。"
+        ),
+        workflow_state=CurrentWorkflowState(
+            refs={
+                "application_id": "application_alpha",
+                "resume_profile_id": "resume_profile_alpha",
+                "jd_analysis_id": "jd_alpha",
+                "job_fit_report_id": "fit_alpha",
+                "resume_version_id": "resume_version_alpha",
+            }
+        ),
+    )
+
+    assert state.refs["application_id"] == "application_alpha"
+    assert "resume_version" in state.completed_steps
+    assert state.missing_steps == []
+    assert state.final_answer_ready is False
+    assert state.next_action_hint == "围绕当前求职项目继续执行指定动作。"
+
+
 def test_extract_career_flow_state_skips_plain_chat_without_refs() -> None:
     state = extract_career_flow_state(
         [],

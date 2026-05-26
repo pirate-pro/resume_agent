@@ -134,7 +134,7 @@ def test_context_assembler_injects_invokable_agent_catalog_for_main_agent(tmp_pa
     assert "Do not create workspace files only to pass their paths to child agents" in bundle.system_prompt
     assert "Do not pass depends_on to delegate_agents" in bundle.system_prompt
     assert "Child agent ids such as resume_agent/job_agent are not tool names" in bundle.system_prompt
-    assert "Use max_tool_rounds 10-20 for child tasks that must create artifacts or product records" in bundle.system_prompt
+    assert "Use max_tool_rounds 20-24 for child tasks that must create artifacts or product records" in bundle.system_prompt
     assert "do not invent ids" in bundle.system_prompt
     assert any(definition.name == "delegate_agents" for definition in bundle.tool_definitions)
 
@@ -768,13 +768,7 @@ def test_context_assembler_injects_current_workflow_state_from_tool_results(tmp_
     assert "current_workflow_phase" in {section["name"] for section in bundle.system_prompt_sections}
     assert "Runtime tool plan for this model round:" in bundle.system_prompt
     assert "career_resume_version_create" in bundle.system_prompt
-    assert bundle.initial_visible_tool_names == [
-        "career_application_get",
-        "career_resume_profile_get",
-        "career_jd_analysis_get",
-        "career_job_fit_report_get",
-        "career_resume_version_create",
-    ]
+    assert bundle.initial_visible_tool_names == ["career_resume_version_create"]
     assert "current_runtime_tool_plan" in {section["name"] for section in bundle.system_prompt_sections}
     assert "resume_version_failed" not in bundle.system_prompt
     assert "resume_version_missing_career_application" not in bundle.system_prompt
@@ -891,6 +885,87 @@ def test_context_assembler_injects_assigned_task_for_other_agent(tmp_path: Path)
     assert "task_id=task_worker_1 from=agent_main instruction=分析 memory scaffold 的风险" in bundle.system_prompt
     assert "constraints: 不要改调度链路" in bundle.system_prompt
     assert "这是 sibling 的任务" not in bundle.system_prompt
+
+
+def test_context_assembler_builds_child_runtime_plan_from_task_context(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_task_context_plan")
+    session_repo.append_event(
+        "sess_task_context_plan",
+        EventRecord(
+            event_id="evt_assign_job_context",
+            session_id="sess_task_context_plan",
+            type=AGENT_TASK_ASSIGNED_EVENT,
+            payload=AgentTaskAssignedPayload(
+                task_id="task_job_1",
+                source_agent_id="agent_main",
+                target_agent_id="job_agent",
+                instruction="基于已提供上下文创建 JDAnalysis 和 JobFitReport。",
+                artifact_refs=["artifact_jd_alpha"],
+                task_context={
+                    "schema_version": 1,
+                    "phase": "jd_fit",
+                    "provided_inputs_complete": True,
+                    "known_refs": {
+                        "resume_profile_id": "resume_profile_alpha",
+                        "career_profile_id": "career_profile_default",
+                        "jd_analysis_id": "jd_analysis_id",
+                        "jd_source_artifact_id": "artifact_jd_alpha",
+                    },
+                    "provided_artifacts": [{"artifact_id": "artifact_jd_alpha", "text_preview": "JD 正文"}],
+                    "provided_records": {
+                        "resume_profile": {"record_id": "resume_profile_alpha"},
+                        "career_profile": {"record_id": "career_profile_default"},
+                    },
+                    "required_outputs": ["jd_analysis", "job_fit_report"],
+                    "allowed_initial_tools": ["career_jd_analysis_save"],
+                },
+                parent_run_id="run_main",
+                child_run_id="run_child_job",
+            ).to_payload(),
+            created_at=datetime.now(UTC),
+            agent_id="agent_main",
+            run_id="run_main",
+        ),
+    )
+    tool_registry = ToolRegistry(capability_registry=_capability_registry())
+    tool_registry.register(_StaticTool("session_read_artifact", "Read an artifact."))
+    tool_registry.register(_StaticTool("career_resume_profile_get", "Read resume profile."))
+    tool_registry.register(_StaticTool("career_profile_get", "Read career profile."))
+    tool_registry.register(_StaticTool("career_jd_analysis_save", "Save JD analysis."))
+
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=tool_registry,
+    )
+
+    bundle = assembler.assemble(
+        context=RunContext(
+            session_id="sess_task_context_plan",
+            run_id="run_child_job",
+            agent_id="job_agent",
+            turn_id="turn_child_job",
+            entry_agent_id="agent_main",
+            parent_run_id="run_main",
+            task_id="task_job_1",
+            trace_flags={},
+        ),
+        user_message="开始执行子任务",
+        skill_names=["base"],
+    )
+
+    assert bundle.runtime_tool_plan["phase"] == "jd_fit"
+    assert bundle.runtime_tool_plan["next_allowed_tools"] == ["career_jd_analysis_save"]
+    assert bundle.runtime_tool_plan["required_tools"] == ["career_jd_analysis_save"]
+    assert "session_read_artifact" in bundle.runtime_tool_plan["discouraged_tools"]
+    assert bundle.runtime_tool_plan["known_refs"]["resume_profile_id"] == "resume_profile_alpha"
+    assert "jd_analysis_id" not in bundle.runtime_tool_plan["known_refs"]
+    assert "Runtime tool plan for this model round:" in bundle.system_prompt
+    assert "TaskContext 已提供 JD 正文" in bundle.system_prompt
 
 
 def test_context_assembler_injects_child_result_summary_for_main_agent(tmp_path: Path) -> None:

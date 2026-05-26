@@ -35,11 +35,13 @@ def compact_tool_result_for_model(
     if tool_name == _TOOL_SEARCH_NAME and success:
         payload = _loads_json(content)
         if payload is not None:
+            if isinstance(payload, dict) and payload.get("event_type") == "tool_schema_not_revealed":
+                return _dump_bounded(_compact_hidden_tool_payload(payload), max_chars=1200)
             return _dump_bounded(_compact_tool_search_payload(payload), max_chars=1800)
     payload = _loads_json(content) if success else None
     if payload is not None:
         if isinstance(payload, dict) and payload.get("event_type") == "tool_schema_not_revealed":
-            return _dump_bounded(payload, max_chars=1200)
+            return _dump_bounded(_compact_hidden_tool_payload(payload), max_chars=1200)
         compact: dict[str, Any] | None = None
         if tool_name in _RETRIEVAL_TOOLS:
             compact = _compact_retrieval_payload(tool_name=tool_name, payload=payload)
@@ -68,6 +70,28 @@ def _loads_json(content: str) -> Any | None:
         return json.loads(content)
     except (TypeError, ValueError):
         return None
+
+
+def _compact_hidden_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("strict_runtime_plan") is True:
+        return _drop_none(
+            {
+                "workflow_runtime_result": True,
+                "event_type": payload.get("event_type"),
+                "policy": payload.get("policy"),
+                "reason": payload.get("reason"),
+                "strict_runtime_plan": True,
+                "tool_name": payload.get("tool_name"),
+                "required_tool": payload.get("required_tool"),
+                "next_allowed_tools": payload.get("next_allowed_tools"),
+                "required_tools": payload.get("required_tools"),
+                "missing_outputs": payload.get("missing_outputs"),
+                "required_tool_call_hint": payload.get("required_tool_call_hint"),
+                "correction": payload.get("correction"),
+                "message": payload.get("message"),
+            }
+        )
+    return payload
 
 
 def _compact_tool_search_payload(payload: Any) -> dict[str, Any]:
@@ -100,6 +124,7 @@ def _compact_retrieval_payload(*, tool_name: str, payload: Any) -> dict[str, Any
     citations = _as_list(context_pack.get("citations") if isinstance(context_pack, dict) else None)
     compact_hits = [_compact_retrieval_hit(hit) for hit in hits[:6]]
     context_pack_hits = [_minimal_retrieval_hit(hit) for hit in hits[:20]]
+    top_level_hits = context_pack_hits if tool_name == "retrieval_search" else None
     compact_context_pack = _drop_none(
         {
             "query": _text(query, 180),
@@ -125,6 +150,7 @@ def _compact_retrieval_payload(*, tool_name: str, payload: Any) -> dict[str, Any
             "omitted_count": data.get("omitted_count")
             or (context_pack.get("omitted_count") if isinstance(context_pack, dict) else None),
             "group_counts": data.get("group_counts") or _derive_group_counts(context_pack),
+            "hits": top_level_hits,
             "top_hits": compact_hits,
             "citations": [_compact_source_ref(citation) for citation in citations[:8]],
             "context_pack": compact_context_pack,
@@ -310,12 +336,18 @@ def _compact_product_write_payload(*, tool_name: str, payload: Any) -> dict[str,
     record_data = record if isinstance(record, dict) else {}
     record_type = _text(data.get("record_type"), 80)
     ids = _merge_id_fields(_collect_id_fields(data), _collect_id_fields(record_data))
+    record_view = (
+        _compact_product_record(record, record_type=record_type, include_metadata=True, text_chars=180)
+        if tool_name == "career_resume_profile_save"
+        else None
+    )
     return _drop_none(
         {
             "tool": tool_name,
             "model_view": "compact",
             "record_type": record_type,
             "ids": ids,
+            "record_id": _primary_record_id(ids),
             "status": data.get("status") or record_data.get("status"),
             "found": data.get("found"),
             "idempotent_reused": data.get("idempotent_reused"),
@@ -334,6 +366,7 @@ def _compact_product_write_payload(*, tool_name: str, payload: Any) -> dict[str,
             "recommendation": _text(data.get("recommendation") or record_data.get("recommendation"), 160),
             "artifact_refs": _compact_artifact_refs(data, record_data),
             "link_refs": _compact_link_refs(record_data),
+            "record": record_view,
             "evidence_refs": _compact_string_list(
                 data.get("evidence_refs") or record_data.get("evidence_refs"),
                 limit=8,
@@ -342,6 +375,7 @@ def _compact_product_write_payload(*, tool_name: str, payload: Any) -> dict[str,
             "next_actions": _compact_string_list(record_data.get("next_actions"), limit=4, item_chars=140),
             "risks": _compact_string_list(record_data.get("risks"), limit=4, item_chars=140),
             "resume_version_guidance": _job_fit_resume_version_guidance(record_data),
+            "job_fit_report_artifact_guidance": _job_fit_report_artifact_guidance(tool_name=tool_name),
             "updated_at": data.get("updated_at") or record_data.get("updated_at"),
             "completion_hint": _product_completion_hint(tool_name=tool_name),
             "full_result_hint": _FULL_RESULT_HINT,
@@ -354,9 +388,32 @@ def _product_completion_hint(*, tool_name: str) -> str | None:
         return "ResumeVersion 已保存；除非工具失败或用户明确要求另一版，否则不要再次创建 ResumeVersion。"
     if tool_name == "career_application_merge":
         return "CareerApplication 已更新；如果本轮目标已完成，直接给最终答复，不要重新读取全部关联记录。"
-    if tool_name in {"career_jd_analysis_save", "career_job_fit_report_save"}:
-        return "记录已保存；不要重复保存同一份分析结果。"
+    if tool_name == "career_jd_analysis_save":
+        return (
+            "JDAnalysis 已保存；下一步只创建唯一岗位匹配报告 artifact，随后调用 career_job_fit_report_save。"
+            "不要重复保存 JDAnalysis。"
+        )
+    if tool_name == "career_job_fit_report_save":
+        return "JobFitReport 已保存；不要重复保存同一份匹配分析结果。"
     return None
+
+
+def _job_fit_report_artifact_guidance(*, tool_name: str) -> dict[str, Any] | None:
+    if tool_name != "career_jd_analysis_save":
+        return None
+    return {
+        "next_tool": "session_create_text_artifact",
+        "then_tool": "career_job_fit_report_save",
+        "artifact_rule": "只创建一个用户可预览的岗位匹配报告 artifact，不要创建 JDAnalysis artifact。",
+        "content_rule": "session_create_text_artifact 必须传完整 Markdown content，不要传 content_chars/content_omitted/占位正文。",
+        "candidate_fact_rules": [
+            "已匹配/候选人已有能力只能来自 ResumeProfile、CareerProfile 或简历 artifact 中明确出现的事实。",
+            "JD 中未被简历支持的具体技能只能写入 gaps、风险、建议、待确认或面试追问。",
+            "PostgreSQL 只能作为关系型数据库大类的部分支持，不能扩写成 MySQL 具体经验。",
+            "不要用“RAG 通常涉及向量检索”推断候选人具备向量检索经验；向量检索未显式出现时写入缺口/待确认。",
+            "匹配表的能力项不要混入 JD 的未支持具体技术；例如 Docker/K8s、MySQL、向量检索未在简历中出现时必须拆到缺口。",
+        ],
+    }
 
 
 def _job_fit_resume_version_guidance(record: dict[str, Any]) -> dict[str, Any] | None:
@@ -519,6 +576,16 @@ def _merge_id_fields(*items: dict[str, Any]) -> dict[str, Any]:
             if key not in output:
                 output[key] = value
     return output
+
+
+def _primary_record_id(ids: dict[str, Any]) -> Any | None:
+    value = ids.get("record_id")
+    if value is not None:
+        return value
+    for key, item in ids.items():
+        if key.endswith("_id") and item is not None:
+            return item
+    return None
 
 
 def _compact_artifact_refs(*payloads: dict[str, Any]) -> dict[str, Any] | None:

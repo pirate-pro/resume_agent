@@ -49,6 +49,14 @@ __all__ = [
 ]
 
 _DEFAULT_CAREER_PROFILE_ID = "career_profile_default"
+_PRODUCT_EVIDENCE_PREFIXES = (
+    "resume_profile_",
+    "career_profile_",
+    "jd_",
+    "fit_",
+    "resume_version_",
+    "application_",
+)
 _CAREER_PROFILE_ALLOWED_UPDATE_FIELDS = {
     "career_goal",
     "target_roles",
@@ -74,6 +82,27 @@ _CAREER_PROFILE_LIST_UPDATE_FIELDS = {
     "resume_issues",
     "interview_weaknesses",
 }
+_CAREER_PROFILE_TEXT_UPDATE_FIELDS = {
+    "career_goal",
+    "education_summary",
+    "experience_summary",
+}
+_JOB_FIT_RECOMMENDATIONS = {"recommended", "cautious", "not_recommended"}
+_JOB_FIT_RECOMMENDATION_ALIASES = {
+    "recommend": "recommended",
+    "recommended": "recommended",
+    "推荐": "recommended",
+    "建议投递": "recommended",
+    "caution": "cautious",
+    "cautious": "cautious",
+    "谨慎": "cautious",
+    "谨慎推荐": "cautious",
+    "notrecommended": "not_recommended",
+    "not_recommended": "not_recommended",
+    "not recommended": "not_recommended",
+    "不推荐": "not_recommended",
+    "不建议": "not_recommended",
+}
 _CAREER_PROFILE_UPDATE_ALIASES = {
     "target_direction": "career_goal",
     "target_position": "target_roles",
@@ -87,8 +116,13 @@ _CAREER_PROFILE_IGNORED_UPDATE_FIELDS = {
     "job_market_fit",
     "key_project",
     "name",
+    "other",
+    "project",
+    "project_experience",
+    "projects",
     "resume_profile_id",
     "summary",
+    "work_experience",
     "work_experience_years",
 }
 _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS = {
@@ -103,6 +137,12 @@ _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS = {
     "risks",
     "stage",
     "summary",
+}
+_CAREER_APPLICATION_UPDATE_ALIASES = {
+    "action_items": "next_actions",
+    "next_step": "next_actions",
+    "next_steps": "next_actions",
+    "todo": "next_actions",
 }
 _CAREER_APPLICATION_STAGES = {
     "draft",
@@ -207,6 +247,32 @@ _RESUME_SOURCE_TECH_TERMS: dict[str, tuple[str, ...]] = {
     "vue": ("vue",),
     "websocket": ("websocket", "web socket"),
 }
+_RESUME_SOURCE_TERM_DISPLAY_NAMES = {
+    "agent": "Agent 工具调用",
+    "celery": "Celery",
+    "docker": "Docker",
+    "elasticsearch": "Elasticsearch",
+    "faiss": "FAISS",
+    "fastapi": "FastAPI",
+    "java": "Java",
+    "kubernetes": "Kubernetes",
+    "langchain": "LangChain",
+    "langgraph": "LangGraph",
+    "llm_api": "LLM API",
+    "milvus": "Milvus",
+    "mysql": "MySQL",
+    "postgresql": "PostgreSQL",
+    "python": "Python",
+    "pytorch": "PyTorch",
+    "rag": "RAG",
+    "react": "React",
+    "redis": "Redis",
+    "spring": "Spring",
+    "tensorflow": "TensorFlow",
+    "vector_search": "向量检索",
+    "vue": "Vue",
+    "websocket": "WebSocket",
+}
 
 
 class CareerResumeProfileSaveTool:
@@ -270,6 +336,29 @@ class CareerResumeProfileSaveTool:
                 lambda item: item.source_artifact_id == source_artifact_id,
             )
             if existing is not None:
+                if existing.diagnosis_artifact_id is None and diagnosis_artifact_id is not None:
+                    updated = existing.copy()
+                    updated.diagnosis_artifact_id = diagnosis_artifact_id
+                    updated.raw_text_artifact_id = updated.raw_text_artifact_id or raw_text_artifact_id
+                    updated.evidence_refs = _sanitize_current_session_evidence_refs(
+                        self._career_store,
+                        self._session_repository,
+                        run_context.session_id,
+                        _append_evidence_refs(
+                            list(updated.evidence_refs),
+                            source_artifact_id,
+                            raw_text_artifact_id,
+                            diagnosis_artifact_id,
+                        ),
+                    )
+                    saved = self._career_store.save_resume_profile(updated)
+                    return _record_result(
+                        "career_resume_profile_save",
+                        "resume_profile",
+                        saved.resume_profile_id,
+                        saved,
+                        extra={"idempotent_update": True, "updated_fields": ["diagnosis_artifact_id"]},
+                    )
                 return _record_result(
                     "career_resume_profile_save",
                     "resume_profile",
@@ -277,7 +366,7 @@ class CareerResumeProfileSaveTool:
                     existing,
                     extra={"idempotent_reused": True},
                 )
-            _validate_resume_profile_source_alignment(
+            args = _align_resume_profile_arguments_with_source(
                 self._session_repository,
                 run_context.session_id,
                 source_artifact_id,
@@ -289,7 +378,17 @@ class CareerResumeProfileSaveTool:
                 status=CareerRecordStatus.ACTIVE,
                 source_session_id=run_context.session_id,
                 source_artifact_id=source_artifact_id,
-                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
+                evidence_refs=_sanitize_current_session_evidence_refs(
+                    self._career_store,
+                    self._session_repository,
+                    run_context.session_id,
+                    _append_evidence_refs(
+                        _required_evidence_refs(args.get("evidence_refs")),
+                        source_artifact_id,
+                        raw_text_artifact_id,
+                        diagnosis_artifact_id,
+                    ),
+                ),
                 created_at=_now(),
                 updated_at=_now(),
                 basic_info=_optional_dict(args.get("basic_info"), field_name="basic_info"),
@@ -456,9 +555,32 @@ class CareerProfileMergeTool:
                 args.get("source_artifact_id"),
                 field_name="source_artifact_id",
             )
-            evidence_refs = _required_evidence_refs(args.get("evidence_refs"))
+            current = _current_session_record_by_id(
+                self._career_store.get_career_profile,
+                record_id,
+                run_context.session_id,
+            )
+            if record_id != _DEFAULT_CAREER_PROFILE_ID and current is None:
+                record_id = _DEFAULT_CAREER_PROFILE_ID
+                current = _current_session_record_by_id(
+                    self._career_store.get_career_profile,
+                    record_id,
+                    run_context.session_id,
+                )
+            evidence_refs = _sanitize_current_session_evidence_refs(
+                self._career_store,
+                self._session_repository,
+                run_context.session_id,
+                _append_evidence_refs(_required_evidence_refs(args.get("evidence_refs")), source_artifact_id),
+            )
             updates = _normalize_career_profile_updates(_required_dict(args.get("updates"), field_name="updates"))
-            current = self._career_store.get_career_profile(record_id)
+            if not evidence_refs and current is not None:
+                evidence_refs = _sanitize_current_session_evidence_refs(
+                    self._career_store,
+                    self._session_repository,
+                    run_context.session_id,
+                    _append_evidence_refs(current.evidence_refs, current.source_artifact_id),
+                )
             if current is None:
                 self._career_store.save_career_profile(
                     CareerProfile(
@@ -541,7 +663,12 @@ class CareerJDAnalysisSaveTool:
                 status=CareerRecordStatus.ACTIVE,
                 source_session_id=run_context.session_id,
                 source_artifact_id=source_artifact_id,
-                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
+                evidence_refs=_sanitize_current_session_evidence_refs(
+                    self._career_store,
+                    self._session_repository,
+                    run_context.session_id,
+                    _append_evidence_refs(_required_evidence_refs(args.get("evidence_refs")), source_artifact_id),
+                ),
                 created_at=_now(),
                 updated_at=_now(),
                 company=_optional_string(args.get("company")) or "",
@@ -680,11 +807,18 @@ class CareerJobFitReportSaveTool:
         run_context = validate_context(context)
         try:
             args = _require_arguments(arguments)
-            source_artifact_id = _required_current_artifact(
+            raw_source_artifact_id = args.get("source_artifact_id")
+            if _is_missing_merge_argument(raw_source_artifact_id):
+                raw_source_artifact_id = _infer_job_fit_source_artifact_id(
+                    self._career_store,
+                    session_id=run_context.session_id,
+                    args=args,
+                )
+            source_artifact_id = _require_current_artifact(
                 self._session_repository,
                 run_context.session_id,
-                args,
-                "source_artifact_id",
+                _required_string(raw_source_artifact_id, field_name="source_artifact_id"),
+                field_name="source_artifact_id",
             )
             report_artifact_id = _required_current_artifact(
                 self._session_repository,
@@ -704,8 +838,11 @@ class CareerJobFitReportSaveTool:
             )
             if resume_profile_id is None:
                 raise ToolExecutionError("'resume_profile_id' must be a non-empty string.")
+            raw_career_profile_id = args.get("career_profile_id")
+            if _is_missing_merge_argument(raw_career_profile_id) or _is_reserved_string(raw_career_profile_id):
+                raw_career_profile_id = _DEFAULT_CAREER_PROFILE_ID
             career_profile_id = _optional_prefixed_id(
-                _required_string(args.get("career_profile_id"), field_name="career_profile_id"),
+                _required_string(raw_career_profile_id, field_name="career_profile_id"),
                 "career_profile",
             )
             if career_profile_id is None:
@@ -738,6 +875,12 @@ class CareerJobFitReportSaveTool:
                 report_artifact_id,
                 resume_profile_id,
                 career_profile_id,
+            )
+            evidence_refs = _sanitize_current_session_evidence_refs(
+                self._career_store,
+                self._session_repository,
+                run_context.session_id,
+                evidence_refs,
             )
             existing = _find_current_session_record(
                 self._career_store.list_job_fit_reports(),
@@ -792,7 +935,7 @@ class CareerJobFitReportSaveTool:
                     args.get("interview_preparation_focus"),
                     field_name="interview_preparation_focus",
                 ),
-                recommendation=_optional_string(args.get("recommendation")) or "cautious",
+                recommendation=_optional_job_fit_recommendation(args),
                 report_artifact_id=report_artifact_id,
             )
             saved = self._career_store.save_job_fit_report(record)
@@ -918,6 +1061,14 @@ class CareerResumeVersionCreateTool:
                         "items": {"type": "string"},
                         "description": "Missing or weak facts belong here, not in the resume body.",
                     },
+                    "use_safe_fallback": {
+                        "type": "boolean",
+                        "description": (
+                            "When true and no content/artifact is provided, create a conservative, evidence-bound "
+                            "resume version from the saved ResumeProfile. Runtime uses this for deterministic "
+                            "required-action recovery; normal callers should prefer passing full content."
+                        ),
+                    },
                 },
                 "required": ["base_resume_profile_id", "title", "evidence_refs"],
             },
@@ -971,8 +1122,10 @@ class CareerResumeVersionCreateTool:
             )
             raw_artifact_id = args.get("artifact_id")
             content_arg = _optional_string(args.get("content"))
+            use_safe_fallback = _optional_bool_field(args.get("use_safe_fallback"), field_name="use_safe_fallback")
             safe_fallback_from_invalid_draft = False
             sanitized_unverified_contacts: list[str] = []
+            ignored_invalid_output_artifact_id: str | None = None
             artifact_id: str | None = None
             content: str
             if content_arg is not None:
@@ -1015,7 +1168,9 @@ class CareerResumeVersionCreateTool:
                         target_jd_analysis_id=target_jd_analysis_id,
                         title=title,
                         risk_notes=risk_notes,
-                        allow_without_prior_failure=_can_auto_fallback_resume_version_validation_error(str(exc)),
+                        allow_without_prior_failure=(
+                            use_safe_fallback or _can_auto_fallback_resume_version_validation_error(str(exc))
+                        ),
                     )
                     if fallback is None:
                         raise
@@ -1041,10 +1196,11 @@ class CareerResumeVersionCreateTool:
                     session_repository=self._session_repository,
                     context=run_context,
                     base_resume_profile_id=base_resume_profile_id,
-                    target_jd_analysis_id=target_jd_analysis_id,
-                    title=title,
-                    risk_notes=risk_notes,
-                )
+                        target_jd_analysis_id=target_jd_analysis_id,
+                        title=title,
+                        risk_notes=risk_notes,
+                        allow_without_prior_failure=use_safe_fallback,
+                    )
                 if fallback is None:
                     raise ToolExecutionError("career_resume_version_create requires either content or artifact_id.")
                 content = fallback["content"]
@@ -1064,28 +1220,94 @@ class CareerResumeVersionCreateTool:
                     risk_notes=risk_notes,
                 )
             else:
-                artifact_id = _require_current_generated_artifact(
-                    self._session_repository,
-                    run_context.session_id,
-                    _required_string(raw_artifact_id, field_name="artifact_id"),
-                    field_name="artifact_id",
-                )
-                content = _read_current_artifact_text_or_empty(
-                    self._session_repository,
-                    run_context.session_id,
-                    artifact_id,
-                )
-                _reject_invalid_resume_version_text(
-                    career_store=self._career_store,
-                    session_repository=self._session_repository,
-                    session_id=run_context.session_id,
-                    base_resume_profile_id=base_resume_profile_id,
-                    title=title,
-                    content=content,
-                    change_summary=change_summary,
-                    keyword_strategy=keyword_strategy,
-                    risk_notes=risk_notes,
-                )
+                requested_artifact_id = _required_string(raw_artifact_id, field_name="artifact_id")
+                try:
+                    requested_artifact = require_session_artifact(
+                        self._session_repository,
+                        run_context.session_id,
+                        requested_artifact_id,
+                    )
+                except ToolExecutionError as exc:
+                    raise ToolExecutionError(
+                        f"artifact_id must reference a current session artifact: {requested_artifact_id}"
+                    ) from exc
+                if requested_artifact.kind == "generated_file":
+                    artifact_id = requested_artifact.artifact_id
+                    content = _read_current_artifact_text_or_empty(
+                        self._session_repository,
+                        run_context.session_id,
+                        artifact_id,
+                    )
+                else:
+                    ignored_invalid_output_artifact_id = requested_artifact.artifact_id
+                    if ignored_invalid_output_artifact_id not in evidence_refs:
+                        evidence_refs.append(ignored_invalid_output_artifact_id)
+                    fallback = _safe_resume_version_fallback_after_validation_failure(
+                        career_store=self._career_store,
+                        session_repository=self._session_repository,
+                        context=run_context,
+                        base_resume_profile_id=base_resume_profile_id,
+                        target_jd_analysis_id=target_jd_analysis_id,
+                        title=title,
+                        risk_notes=risk_notes,
+                        allow_without_prior_failure=True,
+                    )
+                    if fallback is None:
+                        raise ToolExecutionError(
+                            "artifact_id must reference a generated_file artifact for ResumeVersion output; "
+                            f"got {requested_artifact.kind}: {requested_artifact.artifact_id}. If this is an "
+                            "input resume artifact, save a ResumeProfile first or pass markdown content so "
+                            "career_resume_version_create can create a new generated_file artifact."
+                        )
+                    content = fallback["content"]
+                    change_summary = fallback["change_summary"]
+                    keyword_strategy = fallback["keyword_strategy"]
+                    risk_notes = fallback["risk_notes"]
+                    safe_fallback_from_invalid_draft = True
+                try:
+                    _reject_invalid_resume_version_text(
+                        career_store=self._career_store,
+                        session_repository=self._session_repository,
+                        session_id=run_context.session_id,
+                        base_resume_profile_id=base_resume_profile_id,
+                        title=title,
+                        content=content,
+                        change_summary=change_summary,
+                        keyword_strategy=keyword_strategy,
+                        risk_notes=risk_notes,
+                    )
+                except ToolExecutionError as exc:
+                    fallback = _safe_resume_version_fallback_after_validation_failure(
+                        career_store=self._career_store,
+                        session_repository=self._session_repository,
+                        context=run_context,
+                        base_resume_profile_id=base_resume_profile_id,
+                        target_jd_analysis_id=target_jd_analysis_id,
+                        title=title,
+                        risk_notes=risk_notes,
+                        allow_without_prior_failure=(
+                            use_safe_fallback or _can_auto_fallback_resume_version_validation_error(str(exc))
+                        ),
+                    )
+                    if fallback is None:
+                        raise
+                    artifact_id = None
+                    content = fallback["content"]
+                    change_summary = fallback["change_summary"]
+                    keyword_strategy = fallback["keyword_strategy"]
+                    risk_notes = fallback["risk_notes"]
+                    safe_fallback_from_invalid_draft = True
+                    _reject_invalid_resume_version_text(
+                        career_store=self._career_store,
+                        session_repository=self._session_repository,
+                        session_id=run_context.session_id,
+                        base_resume_profile_id=base_resume_profile_id,
+                        title=title,
+                        content=content,
+                        change_summary=change_summary,
+                        keyword_strategy=keyword_strategy,
+                        risk_notes=risk_notes,
+                    )
 
             if artifact_id is None:
                 existing = _find_current_session_record(
@@ -1131,6 +1353,12 @@ class CareerResumeVersionCreateTool:
                     )
             if artifact_id not in evidence_refs:
                 evidence_refs.append(artifact_id)
+            evidence_refs = _sanitize_current_session_evidence_refs(
+                self._career_store,
+                self._session_repository,
+                run_context.session_id,
+                evidence_refs,
+            )
             record = ResumeVersion(
                 resume_version_id=_optional_prefixed_id(args.get("resume_version_id"), "resume_version")
                 or _new_id("resume_version"),
@@ -1155,6 +1383,8 @@ class CareerResumeVersionCreateTool:
         extra: dict[str, Any] = {}
         if safe_fallback_from_invalid_draft:
             extra["safe_fallback_from_invalid_draft"] = True
+        if ignored_invalid_output_artifact_id is not None:
+            extra["ignored_invalid_output_artifact_id"] = ignored_invalid_output_artifact_id
         if sanitized_unverified_contacts:
             extra["sanitized_unverified_contacts"] = sanitized_unverified_contacts
         return _record_result("career_resume_version_create", "resume_version", saved.resume_version_id, saved, extra=extra)
@@ -1293,6 +1523,16 @@ class CareerApplicationCreateTool:
                 prefix="resume_version",
                 field_name="resume_version_ids",
             )
+            resume_version_ids = _existing_current_session_resume_version_ids(
+                self._career_store,
+                session_id=run_context.session_id,
+                resume_version_ids=resume_version_ids,
+            )
+            evidence_refs = _remove_non_current_prefixed_refs(
+                evidence_refs,
+                prefix="resume_version_",
+                valid_ids=set(resume_version_ids),
+            )
             inferred_fit_record = _infer_single_current_fit_report(
                 self._career_store,
                 session_id=run_context.session_id,
@@ -1412,6 +1652,14 @@ class CareerApplicationCreateTool:
             )
             company = application_fields["company"]
             position = application_fields["position"]
+            _ensure_application_has_backing_context(
+                jd_record=jd_record,
+                fit_record=fit_record,
+                company=company,
+                position=position,
+                source_artifact_id=source_artifact_id,
+                resume_version_ids=resume_version_ids,
+            )
             evidence_refs = _append_evidence_refs(
                 evidence_refs,
                 source_artifact_id,
@@ -1421,7 +1669,8 @@ class CareerApplicationCreateTool:
                 job_fit_report_id,
                 *resume_version_ids,
             )
-            evidence_refs = _sanitize_current_session_artifact_evidence_refs(
+            evidence_refs = _sanitize_current_session_evidence_refs(
+                self._career_store,
                 self._session_repository,
                 run_context.session_id,
                 evidence_refs,
@@ -1575,7 +1824,7 @@ class CareerApplicationMergeTool:
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         try:
-            args = _normalize_merge_arguments(_require_arguments(arguments), id_fields=("application_id",))
+            args = _normalize_application_merge_arguments(_require_arguments(arguments))
             record_id = _required_string(args.get("application_id"), field_name="application_id")
             source_artifact_id = _optional_current_artifact(
                 self._session_repository,
@@ -1586,7 +1835,8 @@ class CareerApplicationMergeTool:
             record = self._career_store.merge_career_application(
                 record_id,
                 updates=_career_application_merge_updates(args.get("updates")),
-                evidence_refs=_sanitize_current_session_artifact_evidence_refs(
+                evidence_refs=_sanitize_current_session_evidence_refs(
+                    self._career_store,
                     self._session_repository,
                     run_context.session_id,
                     _required_evidence_refs(args.get("evidence_refs")),
@@ -1664,6 +1914,47 @@ def _normalize_application_stage(value: Any) -> Any:
     return stage
 
 
+def _normalize_application_merge_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Repair common CareerApplication merge shapes before strict field validation."""
+
+    try:
+        normalized = _normalize_merge_arguments(arguments, id_fields=("application_id",))
+    except ToolExecutionError:
+        raw_updates = arguments.get("updates")
+        if not isinstance(raw_updates, str) or not raw_updates.strip():
+            raise
+        normalized = dict(arguments)
+        normalized["updates"] = {"summary": raw_updates.strip()}
+    normalized = dict(normalized)
+
+    raw_updates = normalized.get("updates")
+    updates: dict[str, Any]
+    if isinstance(raw_updates, dict):
+        updates = dict(raw_updates)
+    elif isinstance(raw_updates, str) and raw_updates.strip():
+        try:
+            decoded_updates = _decode_json_objectish_string(raw_updates, field_name="updates")
+        except ToolExecutionError:
+            updates = {"summary": raw_updates.strip()}
+        else:
+            updates = dict(decoded_updates) if isinstance(decoded_updates, dict) else {"summary": raw_updates.strip()}
+    elif _is_missing_merge_argument(raw_updates):
+        updates = {}
+    else:
+        normalized["updates"] = raw_updates
+        return normalized
+
+    meta_fields = {"application_id", "evidence_refs", "source_artifact_id", "updates"}
+    for raw_key, value in normalized.items():
+        if raw_key in meta_fields:
+            continue
+        key = _CAREER_APPLICATION_UPDATE_ALIASES.get(raw_key, raw_key)
+        if key in _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS and key not in updates:
+            updates[key] = value
+    normalized["updates"] = updates
+    return normalized
+
+
 def _normalize_application_stage_or_default(value: Any, *, default: str) -> str:
     normalized = _normalize_application_stage(value)
     return normalized if normalized in _CAREER_APPLICATION_STAGES else default
@@ -1721,7 +2012,10 @@ def _looks_like_analysis_done_stage(value: str) -> bool:
 def _career_application_merge_updates(raw: Any) -> dict[str, Any]:
     payload = _required_dict(raw, field_name="updates")
     output: dict[str, Any] = {}
-    for key, value in payload.items():
+    for raw_key, value in payload.items():
+        if not isinstance(raw_key, str):
+            raise ToolExecutionError("CareerApplication merge update fields must be strings.")
+        key = _CAREER_APPLICATION_UPDATE_ALIASES.get(raw_key, raw_key)
         if key in _CAREER_APPLICATION_ALLOWED_UPDATE_FIELDS:
             if key == "stage":
                 normalized_stage = _normalize_application_stage(value)
@@ -1729,14 +2023,16 @@ def _career_application_merge_updates(raw: Any) -> dict[str, Any]:
                     output[key] = normalized_stage
                 continue
             elif key in {"summary", "notes"}:
-                value = _sanitize_career_application_text(_optional_string(value) or "")
+                value = _optional_career_application_text(value, field_name=key) or ""
             elif key in {"next_actions", "risks"}:
-                value = _sanitize_career_application_text_list(_optional_string_list(value, field_name=key))
+                value = _sanitize_career_application_text_list(
+                    _optional_career_application_text_list(value, field_name=key)
+                )
             output[key] = value
             continue
-        if key in _CAREER_APPLICATION_IGNORED_UPDATE_FIELDS:
+        if raw_key in _CAREER_APPLICATION_IGNORED_UPDATE_FIELDS:
             continue
-        raise ToolExecutionError(f"Unsupported CareerApplication merge field: {key}")
+        raise ToolExecutionError(f"Unsupported CareerApplication merge field: {raw_key}")
     if output.get("resume_version_ids") and "stage" not in output:
         output["stage"] = "ready_to_apply"
     return output
@@ -1770,6 +2066,71 @@ def _sanitize_career_application_text_list(values: list[str]) -> list[str]:
         output.append(sanitized)
         seen.add(sanitized)
     return output
+
+
+def _optional_career_application_text_list(raw: Any, *, field_name: str) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str) and raw.strip():
+        return [raw.strip()]
+    if not isinstance(raw, list):
+        raise ToolExecutionError(f"'{field_name}' must be a list of strings.")
+    output: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            if not item.strip():
+                continue
+            output.append(item.strip())
+            continue
+        if isinstance(item, dict):
+            text = _career_application_structured_item_text(item)
+            if text:
+                output.append(text)
+                continue
+            continue
+        raise ToolExecutionError(f"each '{field_name}' item must be a non-empty string.")
+    return output
+
+
+def _career_application_structured_item_text(item: dict[str, Any]) -> str | None:
+    primary = _first_optional_string(
+        item,
+        ("description", "summary", "content", "text", "action", "task", "title", "name", "risk", "item"),
+    )
+    if primary is None:
+        return None
+
+    parts: list[str] = []
+    severity = _optional_string(item.get("severity"))
+    if severity:
+        parts.append(f"[{severity}]")
+    kind = _optional_string(item.get("type"))
+    if kind:
+        parts.append(kind)
+    parts.append(primary)
+    mitigation = _optional_string(item.get("mitigation"))
+    if mitigation:
+        parts.append(f"mitigation: {mitigation}")
+    return " - ".join(parts)
+
+
+def _first_optional_string(payload: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = _optional_string(payload.get(key))
+        if value:
+            return value
+    return None
+
+
+def _optional_career_application_text(raw: Any, *, field_name: str) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return _sanitize_career_application_text(raw)
+    if isinstance(raw, list):
+        values = _optional_career_application_text_list(raw, field_name=field_name)
+        return "\n".join(_sanitize_career_application_text_list(values)) or None
+    raise ToolExecutionError(f"'{field_name}' must be a string or list of strings.")
 
 
 def _application_create_fields_from_sources(
@@ -1818,6 +2179,26 @@ def _application_create_fields_from_sources(
         "risks": _sanitize_career_application_text_list(risks),
         "notes": _sanitize_career_application_text(notes),
     }
+
+
+def _ensure_application_has_backing_context(
+    *,
+    jd_record: JDAnalysis | None,
+    fit_record: JobFitReport | None,
+    company: str,
+    position: str,
+    source_artifact_id: str | None,
+    resume_version_ids: list[str],
+) -> None:
+    if jd_record is not None or fit_record is not None:
+        return
+    if company.strip() or position.strip() or source_artifact_id is not None or resume_version_ids:
+        return
+    raise ToolExecutionError(
+        "CareerApplication requires a valid current-session JDAnalysis/JobFitReport, ResumeVersion, "
+        "or explicit company/position/source_artifact_id. Create JDAnalysis and JobFitReport before "
+        "creating a JD-backed application."
+    )
 
 
 def _application_summary_from_records(
@@ -1907,7 +2288,7 @@ def _ensure_career_profile_ref(
     source_artifact_id: str | None,
     evidence_refs: list[str],
 ) -> tuple[str, list[str]]:
-    if career_store.get_career_profile(career_profile_id) is not None:
+    if _current_session_record_by_id(career_store.get_career_profile, career_profile_id, session_id) is not None:
         return career_profile_id, _append_evidence_refs(evidence_refs, career_profile_id, source_artifact_id)
     fallback = _single_current_session_record(career_store.list_career_profiles(), session_id)
     if isinstance(fallback, CareerProfile):
@@ -1922,7 +2303,12 @@ def _ensure_career_profile_ref(
             source_artifact_id,
         )
     if career_profile_id != _DEFAULT_CAREER_PROFILE_ID:
-        raise ToolExecutionError(f"CareerProfile not found: {career_profile_id}")
+        evidence_refs = _remove_non_current_prefixed_refs(
+            evidence_refs,
+            prefix="career_profile_",
+            valid_ids={_DEFAULT_CAREER_PROFILE_ID},
+        )
+        career_profile_id = _DEFAULT_CAREER_PROFILE_ID
     now = _now()
     saved = career_store.save_career_profile(
         CareerProfile(
@@ -1997,6 +2383,23 @@ def _ensure_jd_analysis_ref(
         valid_ids={saved.jd_analysis_id},
     )
     return saved.jd_analysis_id, _append_evidence_refs(evidence_refs, saved.jd_analysis_id, source_artifact_id)
+
+
+def _infer_job_fit_source_artifact_id(
+    career_store: CareerProductStore,
+    *,
+    session_id: str,
+    args: dict[str, Any],
+) -> str | None:
+    jd_analysis_id = _optional_prefixed_id(args.get("jd_analysis_id"), "jd")
+    if jd_analysis_id is not None:
+        jd_record = _current_session_record_by_id(career_store.get_jd_analysis, jd_analysis_id, session_id)
+        if isinstance(jd_record, JDAnalysis) and jd_record.source_artifact_id:
+            return jd_record.source_artifact_id
+    fallback = _single_current_session_record(career_store.list_jd_analyses(), session_id)
+    if isinstance(fallback, JDAnalysis) and fallback.source_artifact_id:
+        return fallback.source_artifact_id
+    return None
 
 
 def _infer_jd_position(text: str) -> str:
@@ -2088,14 +2491,22 @@ def _sanitize_job_fit_matched_evidence(
 
 def _normalize_merge_arguments(arguments: dict[str, Any], *, id_fields: tuple[str, ...]) -> dict[str, Any]:
     """Repair common LLM merge argument nesting without weakening field validation."""
-    raw_updates = arguments.get("updates")
+    normalized = dict(arguments)
+    raw_updates = normalized.get("updates")
+    if _is_missing_merge_argument(raw_updates):
+        for alias in ("fields", "field_updates", "profile_fields", "profile_updates"):
+            alias_updates = normalized.get(alias)
+            if _is_missing_merge_argument(alias_updates):
+                continue
+            normalized["updates"] = alias_updates
+            raw_updates = alias_updates
+            break
     if not isinstance(raw_updates, str) or not raw_updates.strip():
-        return arguments
+        return normalized
     payload = _decode_json_objectish_string(raw_updates, field_name="updates")
     if not isinstance(payload, dict):
-        return arguments
+        return normalized
 
-    normalized = dict(arguments)
     meta_fields = {"evidence_refs", "source_artifact_id", *id_fields}
     for field_name in meta_fields:
         value = payload.get(field_name)
@@ -2177,12 +2588,15 @@ def _optional_current_artifact(
     *,
     field_name: str,
 ) -> str | None:
-    if raw is None:
+    value = _optional_string(raw)
+    if value is None:
+        return None
+    if not value.startswith("artifact_"):
         return None
     return _require_current_artifact(
         session_repository,
         session_id,
-        _required_string(raw, field_name=field_name),
+        value,
         field_name=field_name,
     )
 
@@ -2236,16 +2650,25 @@ def _optional_string(raw: Any) -> str | None:
     return normalized or None
 
 
+def _is_reserved_string(raw: Any) -> bool:
+    return isinstance(raw, str) and is_reserved_reference_value(raw.strip())
+
+
 def _optional_prefixed_id(raw: Any, prefix: str) -> str | None:
     value = _optional_string(raw)
     if value is None:
+        return None
+    if is_reserved_reference_value(value):
         return None
     marker = f"{prefix}_"
     stem = value[len(marker):] if value.startswith(marker) else value
     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_")
     if not slug:
         return None
-    return f"{marker}{slug[:100]}"
+    normalized = f"{marker}{slug[:100]}"
+    if is_reserved_reference_value(normalized):
+        return None
+    return normalized
 
 
 def _resolve_resume_version_base_profile_id(arguments: dict[str, Any], evidence_refs: list[str]) -> str:
@@ -2278,7 +2701,7 @@ def _optional_prefixed_id_list(raw: Any, *, prefix: str, field_name: str) -> lis
     for value in values:
         normalized = _optional_prefixed_id(value, prefix)
         if normalized is None:
-            raise ToolExecutionError(f"each '{field_name}' item must be a valid {prefix}_ id.")
+            continue
         if normalized in seen:
             continue
         output.append(normalized)
@@ -2318,6 +2741,57 @@ def _sanitize_current_session_artifact_evidence_refs(
         output.append(ref)
         seen.add(ref)
     return output
+
+
+def _sanitize_current_session_evidence_refs(
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    session_id: str,
+    evidence_refs: list[str],
+) -> list[str]:
+    artifact_sanitized = _sanitize_current_session_artifact_evidence_refs(
+        session_repository,
+        session_id,
+        evidence_refs,
+    )
+    current_product_ids = _current_session_product_ref_ids(career_store, session_id)
+    output: list[str] = []
+    seen: set[str] = set()
+    for ref in artifact_sanitized:
+        if _is_product_evidence_ref(ref) and ref not in current_product_ids:
+            continue
+        if ref in seen:
+            continue
+        output.append(ref)
+        seen.add(ref)
+    return output
+
+
+def _current_session_product_ref_ids(career_store: CareerProductStore, session_id: str) -> set[str]:
+    ids: set[str] = set()
+    for resume_profile in career_store.list_resume_profiles():
+        if resume_profile.source_session_id == session_id:
+            ids.add(resume_profile.resume_profile_id)
+    for career_profile in career_store.list_career_profiles():
+        if career_profile.source_session_id == session_id:
+            ids.add(career_profile.career_profile_id)
+    for jd_analysis in career_store.list_jd_analyses():
+        if jd_analysis.source_session_id == session_id:
+            ids.add(jd_analysis.jd_analysis_id)
+    for fit_report in career_store.list_job_fit_reports():
+        if fit_report.source_session_id == session_id:
+            ids.add(fit_report.job_fit_report_id)
+    for resume_version in career_store.list_resume_versions():
+        if resume_version.source_session_id == session_id:
+            ids.add(resume_version.resume_version_id)
+    for application in career_store.list_career_applications():
+        if application.source_session_id == session_id:
+            ids.add(application.application_id)
+    return ids
+
+
+def _is_product_evidence_ref(ref: str) -> bool:
+    return ref.startswith(_PRODUCT_EVIDENCE_PREFIXES)
 
 
 def _is_same_application_project(
@@ -2368,6 +2842,118 @@ def _validate_resume_profile_source_alignment(
         )
 
 
+def _align_resume_profile_arguments_with_source(
+    session_repository: SessionRepository,
+    session_id: str,
+    source_artifact_id: str,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    original_error: ToolExecutionError | None = None
+    try:
+        _validate_resume_profile_source_alignment(session_repository, session_id, source_artifact_id, args)
+        return args
+    except ToolExecutionError as exc:
+        message = str(exc)
+        if "明确技术证据" not in message and "丢失过多源简历" not in message:
+            raise
+        original_error = exc
+
+    repaired = _resume_profile_arguments_from_source(session_repository, session_id, source_artifact_id, args)
+    if repaired is None:
+        if original_error is not None:
+            raise original_error
+        raise ToolExecutionError("ResumeProfile 与 source_artifact_id 的明确技术证据不一致。")
+    _validate_resume_profile_source_alignment(session_repository, session_id, source_artifact_id, repaired)
+    return repaired
+
+
+def _resume_profile_arguments_from_source(
+    session_repository: SessionRepository,
+    session_id: str,
+    source_artifact_id: str,
+    args: dict[str, Any],
+) -> dict[str, Any] | None:
+    try:
+        source_text = session_repository.read_session_artifact_text(session_id, source_artifact_id)
+    except Exception:
+        return None
+    source_terms = _extract_resume_source_terms(source_text)
+    if len(source_terms) < 2:
+        return None
+
+    repaired = dict(args)
+    repaired["basic_info"] = _source_resume_basic_info(source_text)
+    repaired["education"] = _source_resume_section_items(source_text, ("教育", "教育背景"), field_name="description")
+    repaired["work_experience"] = _source_resume_section_items(
+        source_text,
+        ("经历", "工作经历", "工作经验"),
+        field_name="description",
+    )
+    repaired["project_experience"] = _source_resume_projects(source_text, source_terms)
+    repaired["skills"] = _source_term_display_names(source_terms)
+    repaired["certificates"] = _optional_list(args.get("certificates"), field_name="certificates")
+    repaired["awards"] = _optional_list(args.get("awards"), field_name="awards")
+    repaired["self_evaluation"] = ""
+    return repaired
+
+
+def _source_resume_basic_info(source_text: str) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    name = _source_labeled_value(source_text, ("候选人", "姓名", "name"))
+    if name:
+        output["name"] = name
+    target = _source_labeled_value(source_text, ("目标方向", "求职意向", "目标岗位", "target"))
+    if target:
+        output["target_direction"] = target
+    if not output:
+        output["note"] = "源简历未提供可确定的基本信息字段。"
+    return output
+
+
+def _source_resume_section_items(
+    source_text: str,
+    labels: tuple[str, ...],
+    *,
+    field_name: str,
+) -> list[dict[str, str]]:
+    value = _source_labeled_value(source_text, labels)
+    if not value:
+        return []
+    return [{field_name: value}]
+
+
+def _source_resume_projects(source_text: str, source_terms: set[str]) -> list[dict[str, Any]]:
+    value = _source_labeled_value(source_text, ("项目", "项目经历", "项目经验"))
+    if not value:
+        return []
+    return [{"description": value, "technologies": _source_term_display_names(source_terms)}]
+
+
+def _source_labeled_value(source_text: str, labels: tuple[str, ...]) -> str:
+    normalized_labels = tuple(label.casefold() for label in labels)
+    for raw_line in source_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        for label, lowered_label in zip(labels, normalized_labels, strict=True):
+            for separator in ("：", ":"):
+                prefix = f"{label}{separator}"
+                if line.startswith(prefix):
+                    return line[len(prefix) :].strip()
+                lowered_prefix = f"{lowered_label}{separator}"
+                if line.casefold().startswith(lowered_prefix):
+                    return line[len(lowered_prefix) :].strip()
+    return ""
+
+
+def _source_term_display_names(source_terms: set[str]) -> list[str]:
+    return [
+        _RESUME_SOURCE_TERM_DISPLAY_NAMES.get(term, term)
+        for term in sorted(source_terms)
+        if _RESUME_SOURCE_TERM_DISPLAY_NAMES.get(term, term).strip()
+    ]
+
+
 def _resume_profile_fact_text(args: dict[str, Any]) -> str:
     fact_payload = {
         "basic_info": args.get("basic_info"),
@@ -2395,6 +2981,8 @@ def _required_dict(raw: Any, *, field_name: str) -> dict[str, Any]:
     if isinstance(raw, str):
         decoded = _decode_json_object_string(raw, field_name=field_name)
         raw = decoded
+    if isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], dict):
+        raw = raw[0]
     if not isinstance(raw, dict):
         raise ToolExecutionError(f"'{field_name}' must be an object.")
     return dict(raw)
@@ -2491,10 +3079,95 @@ def _normalize_career_profile_updates(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_career_profile_update_value(field_name: str, value: Any) -> Any:
-    if field_name in _CAREER_PROFILE_LIST_UPDATE_FIELDS and isinstance(value, str):
-        normalized = value.strip()
-        return [normalized] if normalized else []
+    if field_name in _CAREER_PROFILE_LIST_UPDATE_FIELDS:
+        return _optional_career_profile_string_list(value, field_name=field_name)
+    if field_name in _CAREER_PROFILE_TEXT_UPDATE_FIELDS:
+        return _optional_career_profile_text(value, field_name=field_name) or ""
     return value
+
+
+def _optional_career_profile_string_list(raw: Any, *, field_name: str) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        normalized = raw.strip()
+        return [normalized] if normalized else []
+    if not isinstance(raw, list):
+        raise ToolExecutionError(f"'{field_name}' must be a list of strings.")
+    output: list[str] = []
+    for item in raw:
+        if item is None:
+            continue
+        if not isinstance(item, str):
+            raise ToolExecutionError(f"each '{field_name}' item must be a string.")
+        normalized = item.strip()
+        if normalized:
+            output.append(normalized)
+    return output
+
+
+def _optional_career_profile_text(raw: Any, *, field_name: str) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        normalized = raw.strip()
+        return normalized or None
+    if isinstance(raw, list):
+        values = _optional_string_list(raw, field_name=field_name)
+        return "；".join(values) or None
+    raise ToolExecutionError(f"'{field_name}' must be a string or list of strings.")
+
+
+def _optional_job_fit_recommendation(args: dict[str, Any]) -> str:
+    label = _coerce_job_fit_recommendation(args.get("recommendation_label"))
+    if label is not None:
+        return label
+    recommendation = _coerce_job_fit_recommendation(args.get("recommendation"))
+    if recommendation is not None:
+        return recommendation
+    return "cautious"
+
+
+def _coerce_job_fit_recommendation(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return _infer_job_fit_recommendation(" ".join(str(item) for item in raw))
+    if not isinstance(raw, str):
+        raise ToolExecutionError("'recommendation' must be a string.")
+    normalized = raw.strip()
+    if not normalized:
+        return None
+    lowered = normalized.casefold()
+    if lowered in _JOB_FIT_RECOMMENDATIONS:
+        return lowered
+    compact = re.sub(r"[\s_\-:：/|]+", "", lowered)
+    alias = _JOB_FIT_RECOMMENDATION_ALIASES.get(lowered) or _JOB_FIT_RECOMMENDATION_ALIASES.get(compact)
+    if alias is not None:
+        return alias
+    if normalized.startswith("["):
+        try:
+            payload = json.loads(normalized)
+        except ValueError:
+            payload = None
+        if isinstance(payload, list):
+            return _infer_job_fit_recommendation(" ".join(str(item) for item in payload))
+    return _infer_job_fit_recommendation(normalized)
+
+
+def _infer_job_fit_recommendation(text: str) -> str | None:
+    normalized = text.casefold()
+    if _has_any_text(normalized, ("not_recommended", "not recommended", "不推荐", "不建议", "不建议投递")):
+        return "not_recommended"
+    if _has_any_text(normalized, ("cautious", "谨慎", "谨慎推荐", "谨慎投递")):
+        return "cautious"
+    if _has_any_text(normalized, ("recommended", "recommend", "推荐", "建议投递", "匹配度较高", "高度契合")):
+        return "recommended"
+    return None
+
+
+def _has_any_text(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
 
 
 def _optional_list(raw: Any, *, field_name: str) -> list[Any]:
@@ -2528,6 +3201,9 @@ def _normalize_evidence_refs(refs: list[str]) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
     for ref in refs:
+        raw_ref = ref.strip().strip("`")
+        if is_reserved_reference_value(raw_ref):
+            continue
         normalized = _normalize_evidence_ref(ref)
         if is_reserved_reference_value(normalized):
             continue
@@ -2548,8 +3224,10 @@ def _normalize_evidence_ref(raw: str) -> str:
     raw_kind, raw_id = value.split(separator, 1)
     kind = _EVIDENCE_REF_TYPE_ALIASES.get(raw_kind.strip().lower())
     record_id = raw_id.strip().strip("`")
-    if kind is None or not record_id:
+    if not record_id:
         return value
+    if kind is None:
+        return _normalize_labeled_evidence_ref(record_id) or value
     if kind == "artifact" and record_id.startswith("artifact_"):
         return record_id
     if kind == "application" and record_id.startswith("application_"):
@@ -2569,6 +3247,28 @@ def _normalize_evidence_ref(raw: str) -> str:
     if kind == "sess" and record_id.startswith("sess_"):
         return record_id
     return value
+
+
+def _normalize_labeled_evidence_ref(record_id: str) -> str | None:
+    if record_id.startswith("artifact_"):
+        return record_id
+    if record_id.startswith("application_"):
+        return record_id
+    if record_id.startswith("career_profile_"):
+        return record_id
+    if record_id.startswith("fit_"):
+        return record_id
+    if record_id.startswith("job_fit_report_") or record_id.startswith("fit_report_"):
+        return _normalize_prefixed_alias(record_id, "fit")
+    if record_id.startswith("jd_"):
+        return record_id
+    if record_id.startswith("resume_profile_"):
+        return record_id
+    if record_id.startswith("resume_version_"):
+        return record_id
+    if record_id.startswith("sess_"):
+        return record_id
+    return None
 
 
 def _normalize_prefixed_alias(value: str, prefix: str) -> str:
@@ -2824,11 +3524,12 @@ def _current_run_resume_version_validation_failure_count(
 
 
 def _build_conservative_resume_version_content(*, profile: ResumeProfile, source_text: str, title: str) -> str:
+    _ = title
     name = _resume_profile_display_name(profile) or "候选人"
     lines = [
         f"# {name}",
         "",
-        f"> {title}",
+        "> 保守事实定制版本",
         "",
         "## 已证实简历事实",
         "",
@@ -3252,6 +3953,14 @@ def _optional_bool(raw: Any) -> bool:
     return raw
 
 
+def _optional_bool_field(raw: Any, *, field_name: str) -> bool:
+    if raw is None:
+        return False
+    if not isinstance(raw, bool):
+        raise ToolExecutionError(f"'{field_name}' must be a boolean.")
+    return raw
+
+
 def _single_current_session_record(records: list[Any], session_id: str) -> Any | None:
     matches = [record for record in records if getattr(record, "source_session_id", None) == session_id]
     if len(matches) == 1:
@@ -3349,6 +4058,20 @@ def _remove_non_current_prefixed_refs(
     valid_ids: set[str],
 ) -> list[str]:
     return [ref for ref in refs if not ref.startswith(prefix) or ref in valid_ids]
+
+
+def _existing_current_session_resume_version_ids(
+    career_store: CareerProductStore,
+    *,
+    session_id: str,
+    resume_version_ids: list[str],
+) -> list[str]:
+    valid_ids = {
+        item.resume_version_id
+        for item in career_store.list_resume_versions()
+        if item.source_session_id == session_id and item.status == CareerRecordStatus.ACTIVE
+    }
+    return [item for item in resume_version_ids if item in valid_ids]
 
 
 def _find_current_session_record(records: list[Any], session_id: str, predicate: Callable[[Any], bool]) -> Any | None:

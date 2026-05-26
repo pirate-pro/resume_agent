@@ -18,6 +18,8 @@ from app.domain.models import (
     ToolDefinition,
 )
 from app.domain.protocols import AgentDocumentRepository, SessionRepository, SkillRepository, ToolExecutor
+from app.domain.reference_ids import is_reserved_reference_value
+from app.runtime.agent_events import AgentTaskAssignedPayload
 from app.runtime.context.catalog import fallback_skill_description
 from app.runtime.context.constants import (
     ACTIVE_FILE_MAX_COUNT,
@@ -428,6 +430,9 @@ class ContextAssembler:
                 career_flow_state=career_flow_state,
                 workflow_state=workflow_state,
             )
+            task_context_runtime_plan = _runtime_tool_plan_from_assigned_task_context(assigned_tasks)
+            if task_context_runtime_plan is not None:
+                runtime_tool_plan = task_context_runtime_plan
 
         return ShortTermContextPlan(
             role=role,
@@ -524,8 +529,89 @@ def _merge_context_events(*event_groups: list[EventRecord]) -> list[EventRecord]
     return sorted(by_id.values(), key=lambda item: item.created_at)
 
 
+def _runtime_tool_plan_from_assigned_task_context(
+    assigned_tasks: list[AgentTaskAssignedPayload],
+) -> RuntimeToolPlan | None:
+    for task in reversed(assigned_tasks):
+        task_context = task.task_context
+        if not task_context or task_context.get("provided_inputs_complete") is not True:
+            continue
+        phase = _non_empty_string(task_context.get("phase"))
+        known_refs = _task_context_known_refs(task_context.get("known_refs"))
+        if phase == "resume_diagnosis" and task.target_agent_id == "resume_agent":
+            return RuntimeToolPlan(
+                phase="resume_diagnosis",
+                known_refs=known_refs,
+                missing_outputs=["diagnosis_artifact", "resume_profile"],
+                next_allowed_tools=["session_create_text_artifact"],
+                required_tools=["session_create_text_artifact"],
+                discouraged_tools=[
+                    "tool_search",
+                    "session_read_artifact",
+                    "session_list_artifacts",
+                    "session_plan_artifact_access",
+                    "session_search_artifact",
+                    "career_resume_profile_get",
+                    "career_resume_profile_save",
+                ],
+                schema_groups=["session_artifacts", "career_diagnosis"],
+                next_action=(
+                    "TaskContext 已提供简历正文；第一步只调用 session_create_text_artifact 创建简历诊断报告，"
+                    "不要重新读取 artifact。"
+                ),
+            )
+        if phase == "jd_fit" and task.target_agent_id == "job_agent":
+            return RuntimeToolPlan(
+                phase="jd_fit",
+                known_refs=known_refs,
+                missing_outputs=["jd_analysis", "job_fit_report"],
+                next_allowed_tools=["career_jd_analysis_save"],
+                required_tools=["career_jd_analysis_save"],
+                discouraged_tools=[
+                    "tool_search",
+                    "session_read_artifact",
+                    "session_list_artifacts",
+                    "session_plan_artifact_access",
+                    "session_search_artifact",
+                    "session_create_text_artifact",
+                    "career_resume_profile_get",
+                    "career_profile_get",
+                    "career_jd_analysis_get",
+                    "career_job_fit_report_get",
+                ],
+                schema_groups=["career_jd_fit"],
+                next_action=(
+                    "TaskContext 已提供 JD 正文、ResumeProfile 和 CareerProfile；第一步只调用 "
+                    "career_jd_analysis_save 保存 JDAnalysis，不要重新读取 artifact 或产品记录。"
+                ),
+            )
+    return None
+
+
+def _task_context_known_refs(raw_refs: object) -> dict[str, str]:
+    if not isinstance(raw_refs, dict):
+        return {}
+    refs: dict[str, str] = {}
+    for raw_key, raw_value in raw_refs.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_value, str):
+            continue
+        key = raw_key.strip()
+        value = raw_value.strip()
+        if not key or not value or is_reserved_reference_value(value):
+            continue
+        refs[key] = value
+    return refs
+
+
+def _non_empty_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def _runtime_tool_plan_payload(plan: RuntimeToolPlan) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "phase": plan.phase,
         "known_refs": dict(plan.known_refs),
         "missing_outputs": list(plan.missing_outputs),
@@ -534,6 +620,9 @@ def _runtime_tool_plan_payload(plan: RuntimeToolPlan) -> dict[str, object]:
         "final_answer_ready": plan.final_answer_ready,
         "next_action": plan.next_action,
     }
+    if plan.required_tools:
+        payload["required_tools"] = list(plan.required_tools)
+    return payload
 
 
 def _compact_assistant_history(content: str) -> str:

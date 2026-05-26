@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.api.dependencies.config import get_settings
-from app.api.dependencies.infrastructure import get_lock_manager, get_session_repository
+from app.api.dependencies.infrastructure import get_career_product_store, get_lock_manager, get_session_repository
 from app.api.dependencies.managers import (
     get_agent_capability_registry,
     get_agent_registry,
@@ -24,6 +24,7 @@ from app.services.memory_query_service import MemoryQueryService
 from app.services.session_artifact_service import SessionArtifactService
 from app.services.session_query_service import SessionQueryService
 from app.services.session_title_service import SessionTitleService
+from app.services.task_context_builder import TaskContextBuilder
 
 __all__ = [
     "get_agent_invocation_service",
@@ -49,6 +50,10 @@ def get_agent_task_runtime() -> AgentTaskRuntime:
         invocation_service=get_agent_invocation_service(),
         task_store=get_agent_task_store(),
         event_recorder=get_event_recorder(),
+        task_context_builder=TaskContextBuilder(
+            session_repository=get_session_repository(),
+            career_store=get_career_product_store(),
+        ),
         default_max_concurrency=get_settings().agent_task_max_concurrency,
     )
 

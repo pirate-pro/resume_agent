@@ -40,6 +40,7 @@ class AgentTaskAssignedPayload:
     instruction: str
     constraints: list[str] = field(default_factory=list)
     artifact_refs: list[str] = field(default_factory=list)
+    task_context: dict[str, Any] = field(default_factory=dict)
     parent_run_id: str | None = None
     child_run_id: str | None = None
 
@@ -50,6 +51,9 @@ class AgentTaskAssignedPayload:
         self.instruction = _require_non_empty("instruction", self.instruction)
         self.constraints = _normalize_string_list("constraints", self.constraints)
         self.artifact_refs = _normalize_string_list("artifact_refs", self.artifact_refs)
+        if not isinstance(self.task_context, dict):
+            raise ValidationError("task_context must be a dictionary.")
+        self.task_context = dict(self.task_context)
         self.parent_run_id = _normalize_optional("parent_run_id", self.parent_run_id)
         self.child_run_id = _normalize_optional("child_run_id", self.child_run_id)
 
@@ -61,6 +65,7 @@ class AgentTaskAssignedPayload:
             "instruction": self.instruction,
             "constraints": self.constraints,
             "artifact_refs": self.artifact_refs,
+            "task_context": self.task_context,
             "parent_run_id": self.parent_run_id,
             "child_run_id": self.child_run_id,
         }
@@ -76,6 +81,7 @@ class AgentTaskAssignedPayload:
             instruction=str(payload.get("instruction", "")),
             constraints=_payload_string_list(payload.get("constraints")),
             artifact_refs=_payload_string_list(payload.get("artifact_refs")),
+            task_context=_payload_dict(payload.get("task_context")),
             parent_run_id=_payload_optional_string(payload.get("parent_run_id")),
             child_run_id=_payload_optional_string(payload.get("child_run_id")),
         )
@@ -174,3 +180,11 @@ def _payload_optional_string(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _payload_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValidationError("payload dict field must be a dictionary.")
+    return dict(value)

@@ -120,6 +120,37 @@ def test_product_write_model_view_keeps_actionable_ids_without_full_record() -> 
     assert "record" not in compact_payload
 
 
+def test_jd_analysis_save_model_view_guides_single_fit_report_artifact() -> None:
+    payload = {
+        "record_type": "jd_analysis",
+        "record_id": "jd_alpha",
+        "record": {
+            "jd_analysis_id": "jd_alpha",
+            "source_artifact_id": "artifact_jd_alpha",
+            "company": "星河智能",
+            "position": "AI Agent 后端工程师",
+        },
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="career_jd_analysis_save",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    guidance = compact_payload["job_fit_report_artifact_guidance"]
+    assert compact_payload["model_view"] == "compact"
+    assert "唯一岗位匹配报告 artifact" in compact_payload["completion_hint"]
+    assert guidance["next_tool"] == "session_create_text_artifact"
+    assert guidance["then_tool"] == "career_job_fit_report_save"
+    assert "不要创建 JDAnalysis artifact" in guidance["artifact_rule"]
+    assert any("MySQL" in rule for rule in guidance["candidate_fact_rules"])
+    assert any("RAG 通常涉及向量检索" in rule for rule in guidance["candidate_fact_rules"])
+    assert any("Docker/K8s" in rule for rule in guidance["candidate_fact_rules"])
+    assert "record" not in compact_payload
+
+
 def test_product_get_model_view_deduplicates_metadata_and_keeps_domain_fields() -> None:
     payload = {
         "record_type": "resume_profile",
@@ -419,6 +450,44 @@ def test_small_delegate_result_still_uses_compact_model_view() -> None:
     assert compact_payload["results"][0]["target_agent_id"] == "job_agent"
     assert compact_payload["results"][0]["extracted_ids"] == ["jd_alpha", "fit_alpha"]
     assert "full_result_hint" in compact_payload
+
+
+def test_strict_hidden_tool_result_compacts_model_view() -> None:
+    payload = {
+        "workflow_runtime_result": True,
+        "event_type": "tool_schema_not_revealed",
+        "policy": "block",
+        "reason": "tool_hidden_by_runtime_plan",
+        "strict_runtime_plan": True,
+        "tool_name": "tool_search",
+        "required_tool": "career_application_merge",
+        "next_allowed_tools": ["career_application_merge"],
+        "required_tools": ["career_application_merge"],
+        "missing_outputs": ["career_application_resume_version_link"],
+        "known_refs": {
+            "application_id": "application_alpha",
+            "resume_version_id": "resume_version_alpha",
+        },
+        "required_tool_call_hint": {
+            "tool_name": "career_application_merge",
+            "available_args": {"application_id": "application_alpha"},
+            "missing_args": [],
+        },
+        "correction": "不要重试 tool_search；当前唯一允许的下一步工具是 career_application_merge。",
+        "message": "当前 workflow 已锁定唯一下一步工具；不要继续调用隐藏工具，直接调用 required_tool。",
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="tool_search",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["strict_runtime_plan"] is True
+    assert compact_payload["required_tool"] == "career_application_merge"
+    assert "known_refs" not in compact_payload
+    assert compact_payload["required_tool_call_hint"]["tool_name"] == "career_application_merge"
 
 
 def test_small_tool_result_passes_through_unchanged() -> None:

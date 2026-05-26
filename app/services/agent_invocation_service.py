@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 from uuid import uuid4
 
 from app.core.errors import ValidationError
@@ -41,6 +42,8 @@ class AgentInvocationRequest:
     max_tool_rounds: int = 10
     task_id: str | None = None
     child_run_id: str | None = None
+    task_context: dict[str, Any] = field(default_factory=dict)
+    record_result_summary: bool = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_context, RunContext):
@@ -50,12 +53,17 @@ class AgentInvocationRequest:
         self.constraints = _normalize_string_list("constraints", self.constraints)
         self.artifact_refs = normalize_agent_artifact_refs("artifact_refs", self.artifact_refs)
         self.skill_names = _normalize_optional_string_list("skill_names", self.skill_names)
-        if self.max_tool_rounds < 0 or self.max_tool_rounds > 20:
-            raise ValidationError("max_tool_rounds must be in range 0..20.")
+        if self.max_tool_rounds < 0 or self.max_tool_rounds > 40:
+            raise ValidationError("max_tool_rounds must be in range 0..40.")
         if self.task_id is not None:
             self.task_id = _require_non_empty("task_id", self.task_id)
         if self.child_run_id is not None:
             self.child_run_id = _require_non_empty("child_run_id", self.child_run_id)
+        if not isinstance(self.task_context, dict):
+            raise ValidationError("task_context must be a dictionary.")
+        self.task_context = dict(self.task_context)
+        if not isinstance(self.record_result_summary, bool):
+            raise ValidationError("record_result_summary must be bool.")
 
 
 @dataclass(slots=True)
@@ -120,6 +128,7 @@ class AgentInvocationService:
             source_context=request.source_context,
             target_agent_id=target_agent_id,
             child_run_id=request.child_run_id,
+            task_id=task_id,
         )
         self._record_task_assignment(task_id=task_id, request=request, child_context=child_context)
 
@@ -143,15 +152,16 @@ class AgentInvocationService:
         except Exception as exc:
             summary = _failure_summary(exc)
             failed_refs = AgentOutputRefs(input_artifact_refs=list(request.artifact_refs))
-            self._record_result_summary(
-                context=child_context,
-                task_id=task_id,
-                source_agent_id=target_agent_id,
-                target_agent_id=source_agent_id,
-                status="failed",
-                summary=summary,
-                refs=failed_refs,
-            )
+            if request.record_result_summary:
+                self._record_result_summary(
+                    context=child_context,
+                    task_id=task_id,
+                    source_agent_id=target_agent_id,
+                    target_agent_id=source_agent_id,
+                    status="failed",
+                    summary=summary,
+                    refs=failed_refs,
+                )
             raise
 
         summary = output.answer.strip() or "(no answer)"
@@ -162,15 +172,16 @@ class AgentInvocationService:
             run_id=child_context.run_id,
             input_artifact_refs=request.artifact_refs,
         )
-        self._record_result_summary(
-            context=child_context,
-            task_id=task_id,
-            source_agent_id=target_agent_id,
-            target_agent_id=source_agent_id,
-            status="completed",
-            summary=summary,
-            refs=output_refs,
-        )
+        if request.record_result_summary:
+            self._record_result_summary(
+                context=child_context,
+                task_id=task_id,
+                source_agent_id=target_agent_id,
+                target_agent_id=source_agent_id,
+                status="completed",
+                summary=summary,
+                refs=output_refs,
+            )
         return AgentInvocationResult(
             task_id=task_id,
             source_agent_id=source_agent_id,
@@ -210,6 +221,7 @@ class AgentInvocationService:
         source_context: RunContext,
         target_agent_id: str,
         child_run_id: str | None,
+        task_id: str,
     ) -> RunContext:
         return RunContext(
             session_id=source_context.session_id,
@@ -218,6 +230,7 @@ class AgentInvocationService:
             turn_id=f"turn_{uuid4().hex[:12]}",
             entry_agent_id=source_context.entry_agent_id,
             parent_run_id=source_context.run_id,
+            task_id=task_id,
             trace_flags=dict(source_context.trace_flags),
         )
 
@@ -235,6 +248,7 @@ class AgentInvocationService:
             instruction=request.instruction,
             constraints=request.constraints,
             artifact_refs=request.artifact_refs,
+            task_context=request.task_context,
             parent_run_id=request.source_context.run_id,
             child_run_id=child_context.run_id,
         )

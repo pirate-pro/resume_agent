@@ -28,6 +28,7 @@ from tools.smoke_career_live_flow import (
     TurnReport,
     _prepare_clean_run_data_dir,
     _runtime_config_text,
+    efficiency_summary,
     infer_failure_stage,
     inspect_flow_outputs,
     print_report,
@@ -116,6 +117,42 @@ def test_live_smoke_report_prints_concise_failure_summary(
     assert "artifact_count: 12" in output
     assert "answer_preview:" in output
     assert len(output) < 3000
+
+
+def test_live_smoke_report_prints_efficiency_summary(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    report = FlowReport(
+        run_index=1,
+        session_id="sess_live_career_efficiency",
+        data_dir=tmp_path / "run_001",
+        success=True,
+        elapsed_seconds=12.34,
+        efficiency={
+            "llm_calls_by_agent": {"agent_main": 3, "job_agent": 2},
+            "llm_tokens_by_agent": {"agent_main": 1200, "job_agent": 900},
+            "duplicate_tool_calls": {"agent_main:tool_search:{\"query\":\"resume\"}": 2},
+            "hidden_tool_results": {"job_agent:career_profile_get:tool_hidden_by_runtime_plan": 1},
+            "failed_tool_results": {},
+            "workflow_decisions": {"tool_loop_stagnation": 1},
+            "total_llm_calls": 5,
+            "total_llm_tokens": 2100,
+            "duplicate_tool_call_count": 1,
+            "hidden_tool_result_count": 1,
+            "failed_tool_result_count": 0,
+        },
+    )
+
+    print_report([report])
+
+    output = capsys.readouterr().out
+    assert "效率摘要: avg_llm_calls=5.0" in output
+    assert "efficiency: llm_calls=" in output
+    assert "duplicates=1" in output
+    assert "stagnation=1" in output
+    assert "duplicate_tools:" in output
+    assert "hidden_tools:" in output
 
 
 def test_infer_failure_stage_from_missing_records(tmp_path: Path) -> None:
@@ -208,6 +245,133 @@ def test_live_smoke_report_fails_when_project_action_does_not_merge(tmp_path: Pa
 
     assert not report.success
     assert "项目动作未回写 CareerApplication。" in report.errors
+
+
+def test_live_smoke_fails_when_final_answer_leaks_internal_runtime_text(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_internal_answer")
+    report.turns = [
+        TurnReport(
+            name="项目动作：面试准备",
+            answer='运行时工具状态摘要（完整工具结果见事件日志）： {"runtime_tool_state":"compact"}',
+            elapsed_seconds=1.0,
+            tool_calls=["career_application_get", "career_application_merge"],
+        )
+    ]
+    stack.session_repository.append_agent_event(
+        report.session_id,
+        "agent_main",
+        EventRecord(
+            event_id="evt_internal_answer",
+            session_id=report.session_id,
+            type="assistant_message",
+            payload={"content": '运行时工具状态摘要（完整工具结果见事件日志）： {"runtime_tool_state":"compact"}'},
+            created_at=app_now(),
+            agent_id="agent_main",
+            run_id="run_test",
+        ),
+    )
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "最终回答泄露内部 runtime 文案。" in report.errors
+    assert "检测到 assistant_message 泄露内部 runtime 文案。" in report.errors
+    assert report.failed_stage == "最终回答收束"
+
+
+def test_live_smoke_fails_when_final_answer_contains_pseudo_tool_call(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_pseudo_tool_call_answer")
+    pseudo_tool_call = (
+        "<tool_call>\n"
+        "<function=career_application_get>\n"
+        "<parameter=application_id>application_alpha</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    report.turns = [
+        TurnReport(
+            name="项目动作：面试准备",
+            answer=pseudo_tool_call,
+            elapsed_seconds=1.0,
+            tool_calls=["career_application_get", "career_application_merge"],
+        )
+    ]
+    stack.session_repository.append_agent_event(
+        report.session_id,
+        "agent_main",
+        EventRecord(
+            event_id="evt_pseudo_tool_call_answer",
+            session_id=report.session_id,
+            type="assistant_message",
+            payload={"content": pseudo_tool_call},
+            created_at=app_now(),
+            agent_id="agent_main",
+            run_id="run_test",
+        ),
+    )
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "最终回答包含伪工具调用或不可交付弱答复。" in report.errors
+    assert "检测到 assistant_message/agent_result_summary 包含伪工具调用或不可交付弱答复。" in report.errors
+    assert report.failed_stage == "最终回答收束"
+
+
+def test_live_smoke_fails_when_agent_result_summary_is_unusable(tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_unusable_agent_summary")
+    report.turns = [
+        TurnReport(
+            name="项目动作：面试准备",
+            answer="面试准备材料已生成。",
+            elapsed_seconds=1.0,
+            tool_calls=["career_application_get", "career_application_merge"],
+        )
+    ]
+    stack.session_repository.append_agent_event(
+        report.session_id,
+        "job_agent",
+        EventRecord(
+            event_id="evt_unusable_agent_summary",
+            session_id=report.session_id,
+            type="agent_result_summary",
+            payload={"summary": "我无法处理你的请求。"},
+            created_at=app_now(),
+            agent_id="job_agent",
+            run_id="run_test",
+        ),
+    )
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "检测到 assistant_message/agent_result_summary 包含伪工具调用或不可交付弱答复。" in report.errors
+    assert report.failed_stage == "最终回答收束"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "当前没有生成可用的最终答复。我已停止继续执行重复步骤，避免无效消耗；请补充关键信息后再试。",
+        "当前 workflow 守卫限制了我的直接工具调用，我需要委派子任务来完成定制简历的创建和合并。",
+    ],
+)
+def test_live_smoke_fails_when_final_answer_is_non_deliverable(answer: str, tmp_path: Path) -> None:
+    report, stack = _base_report_and_stack(tmp_path, session_id="sess_live_non_deliverable_answer")
+    report.turns = [
+        TurnReport(
+            name="项目动作：面试准备",
+            answer=answer,
+            elapsed_seconds=1.0,
+            tool_calls=["career_application_get", "career_application_merge"],
+        )
+    ]
+
+    inspect_flow_outputs(stack=stack, report=report)
+
+    assert not report.success
+    assert "最终回答包含伪工具调用或不可交付弱答复。" in report.errors
+    assert report.failed_stage == "最终回答收束"
 
 
 def test_live_smoke_passes_project_action_argument_to_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -327,6 +491,216 @@ def test_retrieval_quality_summary_reports_context_budget(tmp_path: Path) -> Non
     assert summary["max_requested_chars"] == 500
     assert summary["budget_violations"] == 0
     assert summary["source_type_counts"] == {"note": 2, "career_application": 1}
+
+
+def test_efficiency_summary_reports_cost_duplicates_hidden_and_decisions(tmp_path: Path) -> None:
+    session_id = "sess_live_efficiency"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _append_llm_usage(
+        repository,
+        session_id=session_id,
+        agent_id="agent_main",
+        event_id="evt_llm_main_1",
+        total_tokens=100,
+    )
+    _append_llm_usage(
+        repository,
+        session_id=session_id,
+        agent_id="job_agent",
+        event_id="evt_llm_job_1",
+        total_tokens=250,
+    )
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_call_1",
+        tool_name="session_create_text_artifact",
+        arguments={"artifact_id": "artifact_report", "content": "first draft"},
+        tool_call_id="call_1",
+    )
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_call_2",
+        tool_name="session_create_text_artifact",
+        arguments={"artifact_id": "artifact_report", "content": "rewritten draft"},
+        tool_call_id="call_2",
+    )
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_call_3",
+        tool_name="session_create_text_artifact",
+        arguments={"artifact_id": "artifact_other", "content": "different artifact"},
+        tool_call_id="call_3",
+    )
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_hidden",
+        tool_name="career_profile_get",
+        success=True,
+        content='{"workflow_runtime_result":true,"reason":"tool_hidden_by_runtime_plan"}',
+        tool_call_id="call_hidden",
+    )
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_failed",
+        tool_name="career_job_fit_report_save",
+        success=False,
+        content="validation failed",
+        tool_call_id="call_failed",
+    )
+    _append_workflow_decision(
+        repository,
+        session_id=session_id,
+        agent_id="agent_main",
+        event_id="evt_stagnation",
+        reason="tool_loop_stagnation",
+    )
+
+    summary = efficiency_summary(repository, session_id)
+
+    assert summary["llm_calls_by_agent"] == {"agent_main": 1, "job_agent": 1}
+    assert summary["llm_tokens_by_agent"] == {"agent_main": 100, "job_agent": 250}
+    assert summary["total_llm_calls"] == 2
+    assert summary["total_llm_tokens"] == 350
+    assert summary["duplicate_tool_call_count"] == 1
+    assert summary["harmful_duplicate_tool_call_count"] == 1
+    assert summary["recovery_duplicate_tool_call_count"] == 0
+    assert summary["hidden_tool_result_count"] == 1
+    assert summary["failed_tool_result_count"] == 1
+    assert summary["workflow_decisions"] == {"tool_loop_stagnation": 1}
+
+
+def test_efficiency_summary_separates_recovery_duplicates(tmp_path: Path) -> None:
+    session_id = "sess_live_recovery_duplicate"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    for index, success, content in [
+        (1, False, "ResumeVersion validation failed: invalid draft."),
+        (2, True, '{"record_type":"resume_version","record_id":"resume_version_alpha"}'),
+    ]:
+        call_id = f"call_resume_version_{index}"
+        _append_tool_call(
+            repository,
+            session_id=session_id,
+            event_id=f"evt_resume_version_call_{index}",
+            tool_name="career_resume_version_create",
+            arguments={"title": "定制简历", "base_resume_profile_id": "resume_profile_alpha"},
+            tool_call_id=call_id,
+        )
+        _append_tool_result(
+            repository,
+            session_id=session_id,
+            event_id=f"evt_resume_version_result_{index}",
+            tool_name="career_resume_version_create",
+            success=success,
+            content=content,
+            tool_call_id=call_id,
+        )
+
+    summary = efficiency_summary(repository, session_id)
+
+    assert summary["duplicate_tool_call_count"] == 1
+    assert summary["recovery_duplicate_tool_call_count"] == 1
+    assert summary["harmful_duplicate_tool_call_count"] == 0
+    assert summary["recovery_duplicate_tool_calls"]
+    assert not summary["harmful_duplicate_tool_calls"]
+
+
+def test_efficiency_summary_treats_guard_block_retry_as_recovery_duplicate(tmp_path: Path) -> None:
+    session_id = "sess_live_guard_retry_duplicate"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    for index, content in [
+        (
+            1,
+            '{"workflow_runtime_result":true,"policy":"block",'
+            '"reason":"job_fit_report_artifact_candidate_facts_conflict","result_created":false}',
+        ),
+        (2, '{"artifact_id":"artifact_report","title":"岗位匹配报告.md"}'),
+    ]:
+        call_id = f"call_report_{index}"
+        _append_tool_call(
+            repository,
+            session_id=session_id,
+            event_id=f"evt_report_call_{index}",
+            tool_name="session_create_text_artifact",
+            arguments={"title": "岗位匹配报告.md"},
+            tool_call_id=call_id,
+        )
+        _append_tool_result(
+            repository,
+            session_id=session_id,
+            event_id=f"evt_report_result_{index}",
+            tool_name="session_create_text_artifact",
+            success=True,
+            content=content,
+            tool_call_id=call_id,
+        )
+
+    summary = efficiency_summary(repository, session_id)
+
+    assert summary["duplicate_tool_call_count"] == 1
+    assert summary["recovery_duplicate_tool_call_count"] == 1
+    assert summary["harmful_duplicate_tool_call_count"] == 0
+
+
+def test_efficiency_summary_treats_replaced_hidden_duplicate_as_recovery_duplicate(tmp_path: Path) -> None:
+    session_id = "sess_live_replaced_duplicate"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_version_call_1",
+        tool_name="career_resume_version_create",
+        arguments={"title": "定制简历"},
+        tool_call_id="call_version_1",
+    )
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_version_result_1",
+        tool_name="career_resume_version_create",
+        success=True,
+        content='{"record_type":"resume_version","record_id":"resume_version_alpha"}',
+        tool_call_id="call_version_1",
+    )
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_version_call_2",
+        tool_name="career_resume_version_create",
+        arguments={"title": "定制简历"},
+        tool_call_id="call_version_2",
+    )
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_merge_call",
+        tool_name="career_application_merge",
+        arguments={"application_id": "application_alpha"},
+        tool_call_id="call_version_2",
+    )
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_merge_result",
+        tool_name="career_application_merge",
+        success=True,
+        content='{"record_type":"career_application","record_id":"application_alpha"}',
+        tool_call_id="call_version_2",
+    )
+
+    summary = efficiency_summary(repository, session_id)
+
+    assert summary["duplicate_tool_call_count"] == 1
+    assert summary["recovery_duplicate_tool_call_count"] == 1
+    assert summary["harmful_duplicate_tool_call_count"] == 0
 
 
 def test_live_smoke_report_fails_when_m12_action_skips_retrieval(tmp_path: Path) -> None:
@@ -951,6 +1325,52 @@ def _append_tool_result(
             },
             created_at=app_now(),
             agent_id="agent_main",
+            run_id="run_test",
+        ),
+    )
+
+
+def _append_llm_usage(
+    repository: JsonlSessionRepository,
+    *,
+    session_id: str,
+    agent_id: str,
+    event_id: str,
+    total_tokens: int,
+) -> None:
+    repository.append_agent_event(
+        session_id,
+        agent_id,
+        EventRecord(
+            event_id=event_id,
+            session_id=session_id,
+            type="llm_usage",
+            payload={"total_tokens": total_tokens},
+            created_at=app_now(),
+            agent_id=agent_id,
+            run_id="run_test",
+        ),
+    )
+
+
+def _append_workflow_decision(
+    repository: JsonlSessionRepository,
+    *,
+    session_id: str,
+    agent_id: str,
+    event_id: str,
+    reason: str,
+) -> None:
+    repository.append_agent_event(
+        session_id,
+        agent_id,
+        EventRecord(
+            event_id=event_id,
+            session_id=session_id,
+            type="workflow_runtime_decision",
+            payload={"reason": reason},
+            created_at=app_now(),
+            agent_id=agent_id,
             run_id="run_test",
         ),
     )

@@ -11,6 +11,7 @@ from app.api.dependencies.infrastructure import (
     get_memory_store,
     get_session_repository,
     get_skill_repository,
+    get_tool_call_ledger,
 )
 from app.api.dependencies.managers import (
     get_agent_registry,
@@ -128,4 +129,5 @@ def get_agent_runtime() -> AgentRuntime:
         tool_schema_always_visible=settings.tool_schema_always_visible,
         tool_context_window_mode=settings.tool_context_window_mode,
         workflow_guard=get_workflow_runtime_guard(),
+        tool_call_ledger=get_tool_call_ledger() if settings.enable_tool_gateway_ledger else None,
     )

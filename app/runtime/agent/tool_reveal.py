@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.domain.models import ToolDefinition, ToolExecutionResult
+from app.runtime.workflow.tool_hints import build_required_tool_call_hint
 
 __all__ = [
     "ToolRevealState",
@@ -112,7 +113,12 @@ def normalize_always_visible_tool_names(value: str | list[str] | None) -> list[s
     return output or list(_DEFAULT_ALWAYS_VISIBLE)
 
 
-def hidden_tool_result(tool_name: str, *, runtime_plan: dict[str, Any] | None = None) -> ToolExecutionResult:
+def hidden_tool_result(
+    tool_name: str,
+    *,
+    runtime_plan: dict[str, Any] | None = None,
+    strict_runtime_plan: bool = False,
+) -> ToolExecutionResult:
     payload: dict[str, Any] = {
         "recoverable": True,
         "event_type": "tool_schema_not_revealed",
@@ -123,30 +129,51 @@ def hidden_tool_result(tool_name: str, *, runtime_plan: dict[str, Any] | None = 
         next_allowed_tools = _string_list(runtime_plan.get("next_allowed_tools"))
         required_tools = _string_list(runtime_plan.get("required_tools")) or next_allowed_tools
         final_answer_ready = runtime_plan.get("final_answer_ready") is True
+        raw_known_refs = runtime_plan.get("known_refs")
+        known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
+        required_tool = required_tools[0] if len(required_tools) == 1 else None
         payload.update(
             {
                 "workflow_runtime_result": True,
                 "policy": "block",
+                "strict_runtime_plan": strict_runtime_plan,
+                "tool_executed": False,
+                "result_created": False,
                 "reason": "final_answer_ready_no_more_tools"
                 if final_answer_ready
                 else "tool_hidden_by_runtime_plan",
                 "message": (
                     "当前 workflow 关键产物已完成；不要继续搜索或调用工具，直接最终答复。"
                     if final_answer_ready
+                    else "当前 workflow 已锁定唯一下一步工具；不要继续调用隐藏工具，直接调用 required_tool。"
+                    if strict_runtime_plan
                     else "该工具本轮未揭示，因为当前 workflow 已收敛到确定下一步；不要继续调用隐藏工具。"
                 ),
                 "terminal": final_answer_ready,
                 "final_answer_ready": final_answer_ready,
+                "phase": runtime_plan.get("phase"),
                 "next_action": runtime_plan.get("next_action"),
                 "next_allowed_tools": next_allowed_tools,
                 "required_tools": required_tools,
-                "known_refs": runtime_plan.get("known_refs") if isinstance(runtime_plan.get("known_refs"), dict) else {},
+                "known_refs": known_refs,
+                "required_tool": required_tool,
+                "required_tool_call_hint": build_required_tool_call_hint(required_tool, known_refs),
+                "correction": _hidden_tool_correction(tool_name, required_tool),
                 "missing_outputs": _string_list(runtime_plan.get("missing_outputs")),
                 "blocked_tools": [tool_name],
             }
         )
+        raw_report_contract = runtime_plan.get("report_artifact_contract")
+        if isinstance(raw_report_contract, dict):
+            payload["report_artifact_contract"] = raw_report_contract
     content = json.dumps(payload, ensure_ascii=False)
     return ToolExecutionResult(tool_name=tool_name, success=True, content=content)
+
+
+def _hidden_tool_correction(blocked_tool_name: str, required_tool: str | None) -> str | None:
+    if required_tool is None:
+        return None
+    return f"不要重试 {blocked_tool_name}；当前唯一允许的下一步工具是 {required_tool}。"
 
 
 def _extract_revealed_tool_names(content: str) -> list[str]:

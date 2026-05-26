@@ -35,6 +35,7 @@ def build_career_phase_snapshot(
 
     required_outputs = _required_outputs(
         phase_name=phase_name,
+        intent=intent,
         refs=refs,
         multi_refs=multi_refs,
         career_flow_state=career_flow_state,
@@ -60,9 +61,15 @@ def build_career_phase_snapshot(
 def _career_intent(user_message: str) -> set[str]:
     text = user_message.strip().casefold()
     intents: set[str] = set()
-    if _has_any(text, ("定制简历", "简历版本", "生成一版简历", "改简历", "优化简历版本")):
+    application_action = _is_application_action_message(text)
+    non_jd_action = _is_non_jd_career_action_message(text)
+    if _requires_application_read_message(text):
+        intents.add("application_read_required")
+    if application_action or non_jd_action:
+        intents.add("application_action")
+    if not application_action and _has_any(text, ("定制简历", "简历版本", "生成一版简历", "改简历", "优化简历版本")):
         intents.add("resume_version")
-    if _has_any(text, ("匹配", "适配", "匹配报告", "投递建议", "jd", "岗位", "职位", "岗位描述", "职位描述")):
+    if _is_jd_fit_message(text, non_jd_action=non_jd_action):
         intents.add("jd_fit")
     if _has_any(text, ("简历", "resume", "画像", "诊断")):
         intents.add("resume_diagnosis")
@@ -74,10 +81,12 @@ def _career_intent(user_message: str) -> set[str]:
 def _select_phase(*, intent: set[str], refs: dict[str, str], multi_refs: dict[str, list[str]]) -> str | None:
     if "resume_version" in intent:
         return "resume_version"
-    if "jd_fit" in intent:
-        return "jd_fit"
     if "application_action" in intent and "application_id" in refs:
         return "application_action"
+    if "application_action" in intent and "jd_fit" not in intent:
+        return None
+    if "jd_fit" in intent:
+        return "jd_fit"
     if "resume_diagnosis" in intent:
         return "resume_diagnosis"
     if multi_refs.get("resume_version_ids"):
@@ -92,6 +101,7 @@ def _select_phase(*, intent: set[str], refs: dict[str, str], multi_refs: dict[st
 def _required_outputs(
     *,
     phase_name: str,
+    intent: set[str],
     refs: dict[str, str],
     multi_refs: dict[str, list[str]],
     career_flow_state: CareerFlowState,
@@ -111,7 +121,7 @@ def _required_outputs(
     if phase_name == "resume_version":
         resume_version_id = _last(multi_refs.get("resume_version_ids"))
         application_link = refs.get("application_id") if career_flow_state.final_answer_ready else None
-        return [
+        outputs = [
             _output("resume_profile", "resume_profile_id", refs.get("resume_profile_id")),
             _output("jd_analysis", "jd_analysis_id", refs.get("jd_analysis_id")),
             _output("job_fit_report", "job_fit_report_id", refs.get("job_fit_report_id")),
@@ -119,6 +129,9 @@ def _required_outputs(
             _output("resume_version", "resume_version_id", resume_version_id),
             _output("career_application_resume_version_link", "application_id", application_link),
         ]
+        if _resume_version_requires_application_read(intent=intent, career_flow_state=career_flow_state):
+            outputs.insert(4, _output("career_application_read", "application_id", None))
+        return outputs
     if phase_name == "application_action":
         return [_output("career_application", "application_id", refs.get("application_id"))]
     return []
@@ -185,7 +198,9 @@ def _blocked_tool_names(*, phase_name: str, missing_outputs: list[str]) -> list[
             blocked.append("career_resume_version_create")
         return blocked
     if phase_name == "resume_version" and (
-        "job_fit_report" in missing_outputs or "career_application" in missing_outputs
+        "career_application_read" in missing_outputs
+        or "job_fit_report" in missing_outputs
+        or "career_application" in missing_outputs
     ):
         return ["career_resume_version_create"]
     return []
@@ -209,6 +224,8 @@ def _next_action_hint(*, phase_name: str, missing_outputs: list[str], final_answ
             return "先创建 CareerApplication，把简历画像、JD 分析和匹配报告串起来。"
         return "匹配阶段产物已齐，可以总结匹配报告或进入定制简历。"
     if phase_name == "resume_version":
+        if "career_application_read" in missing_outputs:
+            return "先调用 career_application_get 读取当前 CareerApplication，再基于其关联记录生成 ResumeVersion。"
         if "resume_version" in missing_outputs:
             return "先生成 ResumeVersion；生成后必须 merge 回 CareerApplication。"
         if "career_application_resume_version_link" in missing_outputs:
@@ -244,3 +261,68 @@ def _last(values: list[str] | None) -> str | None:
 
 def _has_any(text: str, values: tuple[str, ...]) -> bool:
     return any(value in text for value in values)
+
+
+def _is_application_action_message(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "投递前检查",
+            "面试准备",
+            "申请进度",
+            "项目动作",
+            "pre_apply",
+            "pre-apply",
+            "interview prep",
+        ),
+    )
+
+
+def _is_non_jd_career_action_message(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "学习计划",
+            "学习任务",
+            "打卡",
+            "复盘",
+            "二面",
+            "一面",
+            "面试",
+            "保存为笔记",
+            "记住",
+            "先不要保存",
+            "先别新建",
+            "先不要建任务",
+            "不用我提供",
+            "不用提供",
+            "监督我完成",
+            "短板",
+        ),
+    )
+
+
+def _is_jd_fit_message(text: str, *, non_jd_action: bool) -> bool:
+    if _has_any(text, ("做匹配分析", "岗位匹配", "适配分析")):
+        return True
+    if non_jd_action:
+        return False
+    return _has_any(text, ("jd", "岗位描述", "职位描述", "投递建议", "匹配报告")) or (
+        _has_any(text, ("岗位", "职位")) and _has_any(text, ("匹配", "适配", "分析"))
+    )
+
+
+def _requires_application_read_message(text: str) -> bool:
+    return "career_application_get" in text or ("先调用" in text and "读取项目" in text)
+
+
+def _resume_version_requires_application_read(
+    *,
+    intent: set[str],
+    career_flow_state: CareerFlowState,
+) -> bool:
+    return (
+        "resume_version" in intent
+        and "application_read_required" in intent
+        and "career_application_get" not in set(career_flow_state.do_not_repeat_tools)
+    )

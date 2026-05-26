@@ -97,7 +97,10 @@ def collect_agent_output_refs(
 
 
 def _is_result_bearing_event(event: EventRecord) -> bool:
-    return event.type in {"tool_result", "assistant_message"}
+    if event.type != "tool_result":
+        return False
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    return payload.get("success") is True
 
 
 def _event_values(event: EventRecord) -> list[Any]:
@@ -109,8 +112,6 @@ def _event_values(event: EventRecord) -> list[Any]:
         if decoded is not None:
             values.append(decoded)
         return values
-    if event.type == "assistant_message":
-        return [payload.get("content")]
     return [payload]
 
 

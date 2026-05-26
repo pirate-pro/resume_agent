@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -30,6 +31,13 @@ from app.infra.llm.openai_streaming import (
 
 __all__ = ["OpenAICompatibleClient"]
 _logger = logging.getLogger(__name__)
+_TRANSIENT_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+_TRANSIENT_RETRY_BACKOFF_SECONDS = (0.5,)
+_TRANSIENT_HTTP_ERRORS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+)
 
 
 class OpenAICompatibleClient:
@@ -85,16 +93,19 @@ class OpenAICompatibleClient:
         )
 
         try:
-            response = self._http_client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+            response = _post_with_transient_retries(self._http_client, url, headers=headers, payload=payload)
         except httpx.HTTPStatusError as exc:
             if tools and _is_auto_tool_choice_error(exc):
                 _logger.warning("模型端未开启 auto tool choice，自动回退到无 tools 请求。")
                 retry_payload = dict(payload)
                 retry_payload.pop("tools", None)
                 try:
-                    response = self._http_client.post(url, headers=headers, json=retry_payload)
-                    response.raise_for_status()
+                    response = _post_with_transient_retries(
+                        self._http_client,
+                        url,
+                        headers=headers,
+                        payload=retry_payload,
+                    )
                 except httpx.HTTPError as retry_exc:
                     _logger.exception("模型请求回退后仍失败: %s", retry_exc)
                     raise ModelClientError(_build_model_request_error_message(retry_exc)) from retry_exc
@@ -197,3 +208,38 @@ def _extract_usage_payload(payload: dict[str, Any]) -> Any:
     if isinstance(nested, dict):
         return nested.get("usage")
     return None
+
+
+def _post_with_transient_retries(
+    client: httpx.Client,
+    url: str,
+    *,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+) -> httpx.Response:
+    attempts = len(_TRANSIENT_RETRY_BACKOFF_SECONDS) + 1
+    for attempt_index in range(attempts):
+        try:
+            response = client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            if not _should_retry_http_error(exc, attempt_index=attempt_index, attempts=attempts):
+                raise
+            _sleep_before_retry(attempt_index, error=exc)
+        except _TRANSIENT_HTTP_ERRORS as exc:
+            if attempt_index >= attempts - 1:
+                raise
+            _sleep_before_retry(attempt_index, error=exc)
+    raise AssertionError("unreachable transient retry state")
+
+
+def _should_retry_http_error(exc: httpx.HTTPStatusError, *, attempt_index: int, attempts: int) -> bool:
+    return exc.response.status_code in _TRANSIENT_STATUS_CODES and attempt_index < attempts - 1
+
+
+def _sleep_before_retry(attempt_index: int, *, error: Exception) -> None:
+    delay = _TRANSIENT_RETRY_BACKOFF_SECONDS[min(attempt_index, len(_TRANSIENT_RETRY_BACKOFF_SECONDS) - 1)]
+    _logger.warning("模型请求遇到可恢复异常，准备重试: attempt=%s delay=%.2fs error=%s", attempt_index + 1, delay, error)
+    if delay > 0:
+        time.sleep(delay)

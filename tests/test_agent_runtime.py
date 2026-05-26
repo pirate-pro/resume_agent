@@ -21,6 +21,7 @@ from app.domain.models import (
     ToolExecutionResult,
 )
 from app.domain.protocols import ChatModelClient, ModelResponse, StreamChunk
+from app.infra.storage.jsonl_tool_call_ledger import JsonlToolCallLedger
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
@@ -72,6 +73,7 @@ def _build_runtime(
     tool_schema_always_visible: str | list[str] | None = None,
     tool_context_window_mode: str = "off",
     workflow_guard: Any | None = None,
+    tool_call_ledger: JsonlToolCallLedger | None = None,
 ) -> tuple[AgentRuntime, JsonlSessionRepository, MemoryManager]:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     state_store = JsonlFileStateStore(root_dir=tmp_path / "state")
@@ -119,6 +121,7 @@ def _build_runtime(
         tool_schema_always_visible=tool_schema_always_visible,
         tool_context_window_mode=tool_context_window_mode,
         workflow_guard=workflow_guard,
+        tool_call_ledger=tool_call_ledger,
     )
     return runtime, session_repo, memory_manager
 
@@ -390,7 +393,7 @@ def test_runtime_recovers_when_final_round_returns_empty_answer(tmp_path: Path) 
 
 
 
-def test_runtime_stops_when_tool_round_limit_exceeded(tmp_path: Path) -> None:
+def test_runtime_finalizes_instead_of_returning_tool_round_limit(tmp_path: Path) -> None:
     model = SequenceModelClient(
         responses=[
             ModelResponse(
@@ -399,7 +402,7 @@ def test_runtime_stops_when_tool_round_limit_exceeded(tmp_path: Path) -> None:
             )
         ]
     )
-    runtime, _, _ = _build_runtime(tmp_path, model)
+    runtime, session_repo, _ = _build_runtime(tmp_path, model)
 
     output = runtime.run(
         AgentRunInput(
@@ -411,7 +414,94 @@ def test_runtime_stops_when_tool_round_limit_exceeded(tmp_path: Path) -> None:
         )
     )
 
-    assert "Tool call limit reached" in output.answer
+    assert "Tool call limit reached" not in output.answer
+    assert "停止继续执行重复步骤" in output.answer
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_3")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert any(item.get("reason") == "tool_call_soft_budget_exceeded" for item in decisions)
+    assert any(item.get("reason") == "tool_loop_stagnation" for item in decisions)
+
+
+def test_runtime_rejects_internal_limit_text_from_model_answer(tmp_path: Path) -> None:
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(
+                content='运行时工具状态摘要（完整工具结果见事件日志）： {"runtime_tool_state":"compact"}',
+                tool_calls=[],
+            ),
+            ModelResponse(content="这是可用的最终答复。", tool_calls=[]),
+        ]
+    )
+    runtime, session_repo, _ = _build_runtime(tmp_path, model)
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_internal_answer_recovery",
+            user_message="给我最终结果",
+            skill_names=["base"],
+            max_tool_rounds=1,
+            context=_context("sess_internal_answer_recovery"),
+        )
+    )
+
+    assert output.answer == "这是可用的最终答复。"
+    events = session_repo.list_events("sess_internal_answer_recovery")
+    assert any(event.type == "assistant_answer_rejected" for event in events)
+    assistant_messages = [event.payload["content"] for event in events if event.type == "assistant_message"]
+    assert assistant_messages == ["这是可用的最终答复。"]
+
+
+def test_runtime_repeated_tool_search_without_new_reveal_finalizes(tmp_path: Path) -> None:
+    class EmptyToolSearch:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps({"revealed_tool_names": [], "revealed_tool_count": 0}, ensure_ascii=False),
+            )
+
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "unknown"})]),
+            ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "unknown"})]),
+            ModelResponse(content="已基于当前上下文给出阶段性结果。", tool_calls=[]),
+        ]
+    )
+    runtime, session_repo, _ = _build_runtime(tmp_path, model, extra_tools=[EmptyToolSearch()])
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_repeated_empty_search",
+            user_message="找一个不存在的工具",
+            skill_names=["base", "tools"],
+            max_tool_rounds=5,
+            context=_context("sess_repeated_empty_search"),
+        )
+    )
+
+    assert output.answer == "已基于当前上下文给出阶段性结果。"
+    assert [call.name for call in output.tool_calls] == ["tool_search", "tool_search"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_repeated_empty_search")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert any(
+        item.get("reason") == "tool_loop_stagnation"
+        and item.get("stop_reason") == "schema_search_without_new_reveal"
+        for item in decisions
+    )
 
 
 def test_runtime_builds_valid_tool_message_flow(tmp_path: Path) -> None:
@@ -919,12 +1009,12 @@ def test_runtime_search_disclosure_uses_runtime_plan_initial_visible_tools(tmp_p
 
     assert output.answer == "done"
     assert model.calls == 3
-    assert "career_resume_version_create" in model.tool_names_by_call[0]
-    assert "career_application_get" in model.tool_names_by_call[0]
+    assert model.tool_names_by_call[0] == {"career_resume_version_create"}
+    assert "career_application_get" not in model.tool_names_by_call[0]
     assert "tool_search" not in model.tool_names_by_call[0]
     assert usage_event.payload["tool_disclosure_mode"] == "search"
-    assert usage_event.payload["visible_tool_count"] > 1
-    assert "career_resume_version_create" in usage_event.payload["visible_tool_names"]
+    assert usage_event.payload["visible_tool_count"] == 1
+    assert usage_event.payload["visible_tool_names"] == ["career_resume_version_create"]
     assert "tool_search" not in usage_event.payload["visible_tool_names"]
 
 
@@ -1101,6 +1191,138 @@ def test_runtime_tool_search_without_runtime_plan_keeps_pending_required_tool(tm
         event.payload.get("reason") == "premature_final_answer_with_pending_runtime_tools"
         for event in decisions
     )
+
+
+def test_runtime_keeps_prerequisite_next_allowed_tool_visible_with_required_tool(tmp_path: Path) -> None:
+    class StaticTool:
+        def __init__(self, name: str, content: str = "{}") -> None:
+            self._name = name
+            self._content = content
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name=self._name,
+                description=f"{self._name} description",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(tool_name=self._name, success=True, content=self._content)
+
+    runtime_plan_search_result = {
+        "runtime_plan_applied": True,
+        "runtime_plan_phase": "resume_diagnosis",
+        "runtime_next_action": "ResumeProfile 已存在；只读取画像并 merge 职业画像。",
+        "runtime_next_allowed_tools": ["career_resume_profile_get", "career_profile_merge"],
+        "runtime_missing_outputs": ["career_profile"],
+        "runtime_known_refs": {
+            "resume_profile_id": "resume_profile_alpha",
+            "diagnosis_artifact_id": "artifact_diagnosis",
+        },
+        "runtime_final_answer_ready": False,
+        "runtime_discouraged_tools": ["delegate_agents", "session_read_artifact", "session_list_artifacts"],
+        "revealed_tool_names": ["career_resume_profile_get", "career_profile_merge"],
+    }
+
+    class RuntimePlanPrerequisiteModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "更新职业画像"})],
+                )
+            if self.calls == 2:
+                assert {"career_resume_profile_get", "career_profile_merge"}.issubset(tool_names)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_resume_profile_get",
+                            arguments={"resume_profile_id": "resume_profile_alpha"},
+                        )
+                    ],
+                )
+            if self.calls == 3:
+                assert {"career_resume_profile_get", "career_profile_merge"}.issubset(tool_names)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_profile_merge",
+                            arguments={
+                                "career_profile_id": "career_profile_default",
+                                "updates": {"skills": ["Python"]},
+                            },
+                        )
+                    ],
+                )
+            return ModelResponse(content="职业画像已更新。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = RuntimePlanPrerequisiteModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[
+            StaticTool("tool_search", content=json.dumps(runtime_plan_search_result, ensure_ascii=False)),
+            StaticTool(
+                "career_resume_profile_get",
+                content='{"record_type":"resume_profile","record_id":"resume_profile_alpha"}',
+            ),
+            StaticTool(
+                "career_profile_merge",
+                content='{"record_type":"career_profile","record_id":"career_profile_default"}',
+            ),
+        ],
+        tool_schema_disclosure_mode="search",
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_runtime_plan_prerequisite_visible",
+            user_message="更新职业画像。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=4,
+            context=_context("sess_runtime_plan_prerequisite_visible"),
+        )
+    )
+
+    assert output.answer == "职业画像已更新。"
+    assert [call.name for call in output.tool_calls] == [
+        "tool_search",
+        "career_resume_profile_get",
+        "career_profile_merge",
+    ]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_runtime_plan_prerequisite_visible")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert not any(item.get("reason") == "hidden_tools_suppressed_required_tool_visible" for item in decisions)
 
 
 def test_runtime_search_disclosure_does_not_charge_schema_search_against_tool_round_limit(tmp_path: Path) -> None:
@@ -1413,6 +1635,169 @@ def test_runtime_recovers_when_final_answer_is_text_tool_invocation(tmp_path: Pa
     assert usage_events[-1].payload["phase"] == "final_answer_recovery"
 
 
+def test_runtime_recovers_when_final_answer_is_xml_tool_call_markup(tmp_path: Path) -> None:
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(
+                content=(
+                    "<tool_call>\n"
+                    "<function=career_application_get>\n"
+                    "<parameter=application_id>application_alpha</parameter>\n"
+                    "</function>\n"
+                    "</tool_call>"
+                ),
+                tool_calls=[],
+            ),
+            ModelResponse(content="已完成并汇总结果。", tool_calls=[]),
+        ]
+    )
+    runtime, session_repo, _ = _build_runtime(tmp_path, model)
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_xml_tool_call_answer",
+            user_message="给我最终结果。",
+            skill_names=["base"],
+            max_tool_rounds=1,
+            context=_context("sess_xml_tool_call_answer"),
+        )
+    )
+
+    assert output.answer == "已完成并汇总结果。"
+    rejected = [event.payload for event in session_repo.list_events("sess_xml_tool_call_answer") if event.type == "assistant_answer_rejected"]
+    assert any(item["reason"] == "tool_call_markup" for item in rejected)
+
+
+def test_runtime_recovers_when_final_answer_is_unusable_refusal(tmp_path: Path) -> None:
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(content="我无法处理你的请求。", tool_calls=[]),
+            ModelResponse(content="已完成并汇总结果。", tool_calls=[]),
+        ]
+    )
+    runtime, session_repo, _ = _build_runtime(tmp_path, model)
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_unusable_refusal_answer",
+            user_message="给我最终结果。",
+            skill_names=["base"],
+            max_tool_rounds=1,
+            context=_context("sess_unusable_refusal_answer"),
+        )
+    )
+
+    assert output.answer == "已完成并汇总结果。"
+    rejected = [
+        event.payload
+        for event in session_repo.list_events("sess_unusable_refusal_answer")
+        if event.type == "assistant_answer_rejected"
+    ]
+    assert any(item["reason"] == "weak_completed_workflow_answer" for item in rejected)
+
+
+def test_runtime_terminal_workflow_result_fallback_uses_completed_refs(tmp_path: Path) -> None:
+    class CompletedWorkflowTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "workflow_runtime_result": True,
+                        "policy": "block",
+                        "terminal": True,
+                        "stage": "resume_diagnosis",
+                        "stage_status": "completed",
+                        "next_action": "ResumeProfile 和 CareerProfile 已完成；不要继续读工具，直接答复用户。",
+                        "missing_outputs": [],
+                        "completed_refs": {
+                            "resume_profile_id": "resume_profile_alpha",
+                            "career_profile_id": "career_profile_default",
+                            "diagnosis_artifact_id": "artifact_diagnosis",
+                        },
+                        "next_allowed_tools": [],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class CompletedWorkflowBadRecoveryModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "read artifact"})],
+                )
+            assert tools == []
+            return ModelResponse(
+                content=(
+                    "<tool_call>\n"
+                    "<function=session_read_artifact>\n"
+                    "<parameter=artifact_id>artifact_diagnosis</parameter>\n"
+                    "</function>\n"
+                    "</tool_call>"
+                ),
+                tool_calls=[],
+            )
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = CompletedWorkflowBadRecoveryModelClient()
+    runtime, session_repo, _ = _build_runtime(tmp_path, model, extra_tools=[CompletedWorkflowTool()])
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_terminal_workflow_completed_refs",
+            user_message="诊断简历。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=2,
+            context=_context("sess_terminal_workflow_completed_refs"),
+        )
+    )
+
+    assert "简历诊断与画像沉淀已完成" in output.answer
+    assert "ResumeProfile: `resume_profile_alpha`" in output.answer
+    assert "CareerProfile: `career_profile_default`" in output.answer
+    assert "简历诊断报告: `artifact_diagnosis`" in output.answer
+    assert "当前没有生成可用的最终答复" not in output.answer
+    assert model.calls == 3
+    events = session_repo.list_events("sess_terminal_workflow_completed_refs")
+    assert any(
+        event.type == "workflow_runtime_decision" and event.payload.get("reason") == "workflow_final_answer_ready"
+        for event in events
+    )
+    rejected = [event.payload for event in events if event.type == "assistant_answer_rejected"]
+    assert any(item["reason"] == "tool_call_markup_after_recovery" for item in rejected)
+
+
 def test_runtime_does_not_accept_final_answer_when_runtime_plan_has_pending_tool(tmp_path: Path) -> None:
     class RuntimePlanSearchTool:
         def definition(self) -> ToolDefinition:
@@ -1602,9 +1987,13 @@ def test_runtime_does_not_execute_extra_tool_search_when_required_tool_is_visibl
             if self.calls == 2:
                 assert "career_resume_version_create" in tool_names
                 assert "tool_search" not in tool_names
+                assert "memory_write" not in tool_names
+                assert tool_names == {"career_resume_version_create"}
                 return ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "再搜一次"})])
             if self.calls == 3:
+                assert tool_names == {"career_resume_version_create"}
                 assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                assert any("本轮没有工具搜索阶段" in str(message.get("content", "")) for message in messages)
                 return ModelResponse(
                     content="",
                     tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
@@ -1629,7 +2018,7 @@ def test_runtime_does_not_execute_extra_tool_search_when_required_tool_is_visibl
         model,
         extra_tools=[search_tool, ResumeVersionTool()],
         tool_schema_disclosure_mode="search",
-        tool_schema_always_visible=["tool_search"],
+        tool_schema_always_visible=["tool_search", "memory_write"],
     )
 
     output = runtime.run(
@@ -1655,7 +2044,7 @@ def test_runtime_does_not_execute_extra_tool_search_when_required_tool_is_visibl
         for event in session_repo.list_events("sess_schema_search_pending_runtime")
         if event.type == "workflow_runtime_decision"
     ]
-    assert decisions[0]["reason"] == "schema_search_with_pending_runtime_tools"
+    assert decisions[0]["reason"] == "schema_search_suppressed_required_tool_visible"
 
 
 def test_runtime_requires_application_merge_after_resume_version_success(tmp_path: Path) -> None:
@@ -1773,6 +2162,1056 @@ def test_runtime_requires_application_merge_after_resume_version_success(tmp_pat
         if event.type == "workflow_runtime_decision"
     ]
     assert decisions[0]["reason"] == "premature_final_answer_with_pending_runtime_tools"
+
+
+def test_runtime_auto_executes_strict_required_tool_when_hidden_read_is_called(tmp_path: Path) -> None:
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "application_id": "application_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments["application_id"] == "application_alpha"
+            assert arguments["updates"] == {"resume_version_ids": ["resume_version_alpha"]}
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class HiddenReadInsteadOfMergeModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
+                )
+            if self.calls == 2:
+                assert tool_names == {"career_application_merge"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_get",
+                            arguments={"application_id": "application_alpha"},
+                            tool_call_id="call_hidden_get",
+                        )
+                    ],
+                )
+            return ModelResponse(content="定制简历已生成并关联项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = HiddenReadInsteadOfMergeModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ResumeVersionTool(), ApplicationMergeTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_strict_auto_required_tool",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_strict_auto_required_tool"),
+        )
+    )
+
+    assert output.answer == "定制简历已生成并关联项目。"
+    events = session_repo.list_events("sess_strict_auto_required_tool")
+    tool_results = [event.payload for event in events if event.type == "tool_result"]
+    assert [item["tool_name"] for item in tool_results] == [
+        "career_resume_version_create",
+        "career_application_merge",
+    ]
+    assert not any("tool_schema_not_revealed" in item["content"] for item in tool_results)
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item["reason"] == "strict_hidden_tool_replaced_with_required_tool" for item in decisions)
+    assert any(item["reason"] == "workflow_final_answer_ready" for item in decisions)
+
+
+def test_runtime_deterministic_final_fallback_lists_completed_refs(tmp_path: Path) -> None:
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "application_id": "application_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "career_application",
+                        "record_id": "application_alpha",
+                        "resume_version_id": "resume_version_alpha",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class EmptyRecoveryModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
+                )
+            if self.calls == 2:
+                assert {item["function"]["name"] for item in tools} == {"career_application_merge"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_merge",
+                            arguments={
+                                "application_id": "application_alpha",
+                                "updates": {"resume_version_ids": ["resume_version_alpha"]},
+                            },
+                        )
+                    ],
+                )
+            assert tools == []
+            return ModelResponse(content="", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = EmptyRecoveryModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ResumeVersionTool(), ApplicationMergeTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_deterministic_completed_fallback",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_deterministic_completed_fallback"),
+        )
+    )
+
+    assert "定制简历版本生成已完成" in output.answer
+    assert "ResumeVersion: `resume_version_alpha`" in output.answer
+    assert "CareerApplication: `application_alpha`" in output.answer
+    assert "模型没有生成可用总结" not in output.answer
+    assert model.calls == 3
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_deterministic_completed_fallback")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert any(item["reason"] == "workflow_final_answer_ready" for item in decisions)
+
+
+def test_runtime_rejects_weak_answer_after_workflow_is_complete(tmp_path: Path) -> None:
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "application_id": "application_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "career_application",
+                        "record_id": "application_alpha",
+                        "resume_version_id": "resume_version_alpha",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class WeakCompletedWorkflowModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
+                )
+            if self.calls == 2:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_merge",
+                            arguments={
+                                "application_id": "application_alpha",
+                                "updates": {"resume_version_ids": ["resume_version_alpha"]},
+                            },
+                        )
+                    ],
+                )
+            if self.calls == 3:
+                assert tools == []
+                return ModelResponse(
+                    content="当前 workflow 守卫限制了我的直接工具调用，我需要委派子任务来完成定制简历的创建和合并。",
+                    tool_calls=[],
+                )
+            assert tools == []
+            return ModelResponse(content="定制简历已生成并关联项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = WeakCompletedWorkflowModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ResumeVersionTool(), ApplicationMergeTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_weak_completed_workflow_answer",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_weak_completed_workflow_answer"),
+        )
+    )
+
+    assert output.answer == "定制简历已生成并关联项目。"
+    rejected = [
+        event.payload
+        for event in session_repo.list_events("sess_weak_completed_workflow_answer")
+        if event.type == "assistant_answer_rejected"
+    ]
+    assert any(item["reason"] == "weak_completed_workflow_answer" for item in rejected)
+
+
+def test_runtime_suppresses_hidden_read_when_required_tool_is_visible(tmp_path: Path) -> None:
+    class RuntimePlanSearchTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "runtime_plan_applied": True,
+                        "runtime_plan_phase": "resume_version",
+                        "runtime_next_action": "先读取 CareerApplication，再创建 ResumeVersion。",
+                        "runtime_next_allowed_tools": ["career_application_get"],
+                        "required_tools": ["career_application_get"],
+                        "runtime_missing_outputs": ["career_application_read", "resume_version"],
+                        "runtime_known_refs": {
+                            "application_id": "application_alpha",
+                            "resume_profile_id": "resume_profile_alpha",
+                            "jd_analysis_id": "jd_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                        },
+                        "revealed_tool_names": ["career_application_get"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationGetTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_get",
+                description="Get application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_get",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "career_application",
+                        "record_id": "application_alpha",
+                        "resume_profile_id": "resume_profile_alpha",
+                        "jd_analysis_id": "jd_alpha",
+                        "job_fit_report_id": "fit_alpha",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "application_id": "application_alpha",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class HiddenReadModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "定制简历"})])
+            if self.calls == 2:
+                assert tool_names == {"career_application_get"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_get",
+                            arguments={"application_id": "application_alpha"},
+                            tool_call_id="call_get_first",
+                        )
+                    ],
+                )
+            if self.calls == 3:
+                assert tool_names == {"career_resume_version_create"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_get",
+                            arguments={"application_id": "application_alpha"},
+                            tool_call_id="call_get_hidden",
+                        )
+                    ],
+                )
+            if self.calls == 4:
+                assert tool_names == {"career_application_merge"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_merge",
+                            arguments={
+                                "application_id": "application_alpha",
+                                "updates": {"resume_version_ids": ["resume_version_alpha"]},
+                            },
+                        )
+                    ],
+                )
+            assert tools == []
+            return ModelResponse(content="定制简历已生成并关联项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = HiddenReadModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[RuntimePlanSearchTool(), ApplicationGetTool(), ResumeVersionTool(), ApplicationMergeTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_hidden_read_suppressed_required_visible",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=5,
+            context=_context("sess_hidden_read_suppressed_required_visible"),
+        )
+    )
+
+    assert output.answer == "定制简历已生成并关联项目。"
+    events = session_repo.list_events("sess_hidden_read_suppressed_required_visible")
+    tool_calls = [event.payload["name"] for event in events if event.type == "tool_call"]
+    assert tool_calls == [
+        "tool_search",
+        "career_application_get",
+        "career_application_get",
+        "career_resume_version_create",
+        "career_application_merge",
+    ]
+    assert not any(
+        event.type == "tool_result" and "tool_hidden_by_runtime_plan" in event.payload.get("content", "")
+        for event in events
+    )
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item["reason"] == "strict_hidden_tool_replaced_with_required_tool" for item in decisions)
+
+
+def test_runtime_auto_executes_resume_version_safe_fallback_on_premature_answer(tmp_path: Path) -> None:
+    class RuntimePlanSearchTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "runtime_plan_applied": True,
+                        "runtime_plan_phase": "resume_version",
+                        "runtime_next_action": "先读取 CareerApplication，再创建 ResumeVersion。",
+                        "runtime_next_allowed_tools": ["career_application_get"],
+                        "required_tools": ["career_application_get"],
+                        "runtime_missing_outputs": ["career_application_read", "resume_version"],
+                        "runtime_known_refs": {
+                            "application_id": "application_alpha",
+                            "resume_profile_id": "resume_profile_alpha",
+                            "jd_analysis_id": "jd_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                        },
+                        "revealed_tool_names": ["career_application_get"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationGetTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_get",
+                description="Get application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_get",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "career_application",
+                        "record_id": "application_alpha",
+                        "resume_profile_id": "resume_profile_alpha",
+                        "jd_analysis_id": "jd_alpha",
+                        "job_fit_report_id": "fit_alpha",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}, "use_safe_fallback": {"type": "boolean"}},
+                },
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments["base_resume_profile_id"] == "resume_profile_alpha"
+            assert arguments["target_jd_analysis_id"] == "jd_alpha"
+            assert arguments["use_safe_fallback"] is True
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments["application_id"] == "application_alpha"
+            assert arguments["updates"] == {"resume_version_ids": ["resume_version_alpha"]}
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class PrematureAnswerModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(content="", tool_calls=[ToolCall(name="tool_search", arguments={"query": "定制简历"})])
+            if self.calls == 2:
+                assert tool_names == {"career_application_get"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_application_get", arguments={"application_id": "application_alpha"})],
+                )
+            if self.calls == 3:
+                assert tool_names == {"career_resume_version_create"}
+                return ModelResponse(content="定制简历已生成。", tool_calls=[])
+            if self.calls == 4:
+                assert tool_names == {"career_resume_version_create"}
+                assert any("运行时守卫" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(content="定制简历已生成。", tool_calls=[])
+            if self.calls == 5:
+                assert tool_names == {"career_application_merge"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_merge",
+                            arguments={
+                                "application_id": "application_alpha",
+                                "updates": {"resume_version_ids": ["resume_version_alpha"]},
+                            },
+                        )
+                    ],
+                )
+            assert tools == []
+            return ModelResponse(content="定制简历已生成并关联项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = PrematureAnswerModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[RuntimePlanSearchTool(), ApplicationGetTool(), ResumeVersionTool(), ApplicationMergeTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_resume_version_auto_safe_fallback",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=5,
+            context=_context("sess_resume_version_auto_safe_fallback"),
+        )
+    )
+
+    assert output.answer == "定制简历已生成并关联项目。"
+    events = session_repo.list_events("sess_resume_version_auto_safe_fallback")
+    tool_results = [event.payload["tool_name"] for event in events if event.type == "tool_result"]
+    assert tool_results == [
+        "tool_search",
+        "career_application_get",
+        "career_resume_version_create",
+        "career_application_merge",
+    ]
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item["reason"] == "strict_premature_answer_replaced_with_required_tool" for item in decisions)
+
+
+def test_runtime_breaks_repeated_schema_search_after_resume_version_pending_merge(tmp_path: Path) -> None:
+    class ToolSearch:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            raise AssertionError("tool_search should be hidden once career_application_merge is required")
+
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class RepeatedSearchBeforeMergeModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
+                )
+            if self.calls in {2, 3, 4}:
+                assert "career_application_merge" in tool_names
+                assert "tool_search" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "career_application_merge"})],
+                )
+            if self.calls == 5:
+                assert any("下一步只调用这些已揭示工具" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_application_merge", arguments={"application_id": "application_alpha"})],
+                )
+            return ModelResponse(content="定制简历已生成并关联项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = RepeatedSearchBeforeMergeModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ToolSearch(), ResumeVersionTool(), ApplicationMergeTool()],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_resume_version_search_then_merge",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=4,
+            context=_context("sess_resume_version_search_then_merge"),
+        )
+    )
+
+    assert output.answer == "定制简历已生成并关联项目。"
+    assert model.calls == 6
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_resume_version_search_then_merge")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == ["career_resume_version_create", "career_application_merge"]
+    hidden_search_results = [
+        event
+        for event in session_repo.list_events("sess_resume_version_search_then_merge")
+        if event.type == "tool_result" and event.payload["tool_name"] == "tool_search"
+    ]
+    assert hidden_search_results == []
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_resume_version_search_then_merge")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert [item["reason"] for item in decisions] == [
+        "schema_search_suppressed_required_tool_visible",
+        "schema_search_suppressed_required_tool_visible",
+        "schema_search_suppressed_required_tool_visible",
+        "workflow_final_answer_ready",
+    ]
+
+
+def test_gateway_runtime_allows_one_schema_search_correction_before_stagnation(tmp_path: Path) -> None:
+    class ToolSearch:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            raise AssertionError("tool_search should be hidden once career_application_merge is required")
+
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class DoubleSearchThenMergeModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_resume_version_create", arguments={"title": "定制简历"})],
+                )
+            if self.calls == 2:
+                assert "career_application_merge" in tool_names
+                assert "tool_search" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(name="tool_search", arguments={"query": "career_application_merge"}),
+                        ToolCall(name="tool_search", arguments={"query": "career_application_merge"}),
+                    ],
+                )
+            if self.calls == 3:
+                assert any("career_application_merge" in str(message.get("content", "")) for message in messages)
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="career_application_merge", arguments={"application_id": "application_alpha"})],
+                )
+            return ModelResponse(content="定制简历已生成并关联项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = DoubleSearchThenMergeModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ToolSearch(), ResumeVersionTool(), ApplicationMergeTool()],
+        tool_call_ledger=JsonlToolCallLedger(data_dir=tmp_path),
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_gateway_schema_search_correction",
+            user_message="生成定制简历",
+            skill_names=["base", "tools"],
+            max_tool_rounds=4,
+            context=_context("sess_gateway_schema_search_correction"),
+        )
+    )
+
+    assert output.answer == "定制简历已生成并关联项目。"
+    assert model.calls == 4
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_gateway_schema_search_correction")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == [
+        "career_resume_version_create",
+        "career_application_merge",
+    ]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_gateway_schema_search_correction")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert any(item.get("reason") == "schema_search_suppressed_required_tool_visible" for item in decisions)
+    assert not any(item.get("reason") == "tool_loop_stagnation" for item in decisions)
 
 
 def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path: Path) -> None:
@@ -2184,20 +3623,16 @@ def test_runtime_terminal_blocks_hidden_tool_search_after_delegate_final_ready(t
 
     assert output.answer == "简历诊断已完成。"
     assert search_tool.calls <= 1
-    assert model.calls in {3, 4}
+    assert model.calls == 3
+    events = session_repo.list_events("sess_final_ready_hidden_search")
     tool_calls = [
         event.payload["name"]
-        for event in session_repo.list_events("sess_final_ready_hidden_search")
+        for event in events
         if event.type == "tool_call"
     ]
-    assert tool_calls[-2:] == ["delegate_agents", "tool_search"]
-    terminal_result = [
-        json.loads(event.payload["content"])
-        for event in session_repo.list_events("sess_final_ready_hidden_search")
-        if event.type == "tool_result" and event.payload["tool_name"] == "tool_search"
-    ][-1]
-    assert terminal_result["terminal"] is True
-    assert terminal_result["reason"] == "final_answer_ready_no_more_tools"
+    assert tool_calls[-2:] == ["tool_search", "delegate_agents"]
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item["reason"] == "workflow_final_answer_ready" for item in decisions)
 
 
 def test_child_job_fit_success_results_narrow_next_round_tools(tmp_path: Path) -> None:
@@ -2368,6 +3803,125 @@ def test_child_job_fit_success_results_narrow_next_round_tools(tmp_path: Path) -
         "session_create_text_artifact",
         "career_job_fit_report_save",
     ]
+
+
+def test_job_fit_report_save_without_pending_plan_still_hides_completed_stage_tools(tmp_path: Path) -> None:
+    class JsonTool:
+        def __init__(self, name: str, payload: dict[str, Any]) -> None:
+            self._name = name
+            self._payload = payload
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name=self._name,
+                description=f"{self._name} test tool.",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name=self._name,
+                success=True,
+                content=json.dumps(self._payload, ensure_ascii=False),
+            )
+
+    class SaveWithoutPendingPlanModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if self.calls == 1:
+                assert "career_job_fit_report_save" in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_job_fit_report_save",
+                            arguments={"jd_analysis_id": "jd_alpha", "report_artifact_id": "artifact_fit_report"},
+                        )
+                    ],
+                )
+            assert "career_job_fit_report_save" not in tool_names
+            assert "session_create_text_artifact" not in tool_names
+            assert "career_jd_analysis_save" not in tool_names
+            return ModelResponse(content="匹配报告已保存。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = SaveWithoutPendingPlanModelClient()
+    runtime, _, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[
+            JsonTool(
+                "career_job_fit_report_save",
+                {
+                    "record_type": "job_fit_report",
+                    "record_id": "fit_alpha",
+                    "record": {
+                        "job_fit_report_id": "fit_alpha",
+                        "jd_analysis_id": "jd_alpha",
+                        "report_artifact_id": "artifact_fit_report",
+                    },
+                },
+            ),
+            JsonTool(
+                "session_create_text_artifact",
+                {"artifact_id": "artifact_late", "title": "求职项目记录"},
+            ),
+            JsonTool("career_jd_analysis_save", {"record_type": "jd_analysis", "record_id": "jd_alpha"}),
+        ],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=[
+            "memory_write",
+            "career_job_fit_report_save",
+            "session_create_text_artifact",
+            "career_jd_analysis_save",
+        ],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_job_fit_save_without_pending",
+            user_message="完成 JD 匹配子任务",
+            skill_names=["base", "tools"],
+            max_tool_rounds=2,
+            context=RunContext(
+                session_id="sess_job_fit_save_without_pending",
+                run_id="run_job_fit_save_without_pending",
+                agent_id="job_agent",
+                turn_id="turn_job_fit_save_without_pending",
+                entry_agent_id="agent_main",
+                parent_run_id="run_parent",
+            ),
+        )
+    )
+
+    assert output.answer == "匹配报告已保存。"
+    assert model.calls == 2
+    assert "career_job_fit_report_save" not in model.tool_names_by_call[1]
+    assert "session_create_text_artifact" not in model.tool_names_by_call[1]
+    assert "career_jd_analysis_save" not in model.tool_names_by_call[1]
 
 
 def test_runtime_uses_workflow_guard_tool_search_block_to_reveal_next_allowed_schema(tmp_path: Path) -> None:
@@ -2618,6 +4172,46 @@ def test_runtime_stream_recovers_when_final_round_returns_empty_answer(tmp_path:
     output = asyncio.run(_run())
 
     assert output.answer == "这是补出来的流式最终答复。"
+
+
+def test_runtime_stream_rejects_internal_limit_text_from_model_answer(tmp_path: Path) -> None:
+    model = SequenceModelClient(
+        responses=[
+            ModelResponse(content="Tool call limit reached before generating final answer.", tool_calls=[]),
+            ModelResponse(content="这是流式可用最终答复。", tool_calls=[]),
+        ]
+    )
+    runtime, session_repo, _ = _build_runtime(tmp_path, model)
+
+    class RecordingEventChannel(EventChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event: str, data: dict[str, Any]) -> None:
+            self.events.append((event, data))
+
+    async def _run() -> tuple[AgentRunOutput, list[tuple[str, dict[str, Any]]]]:
+        channel = RecordingEventChannel()
+        output = await runtime.run_stream(
+            AgentRunInput(
+                session_id="sess_stream_internal_answer_recovery",
+                user_message="给我最终结果",
+                skill_names=["base"],
+                max_tool_rounds=1,
+                context=_context("sess_stream_internal_answer_recovery"),
+            ),
+            channel,
+        )
+        return output, channel.events
+
+    output, events = asyncio.run(_run())
+
+    assert output.answer == "这是流式可用最终答复。"
+    answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
+    assert not any("Tool call limit reached" in delta for delta in answer_deltas)
+    session_events = session_repo.list_events("sess_stream_internal_answer_recovery")
+    assert any(event.type == "assistant_answer_rejected" for event in session_events)
 
 
 def test_runtime_stream_compacts_consumed_tool_exchange(tmp_path: Path) -> None:

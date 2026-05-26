@@ -71,7 +71,7 @@ def extract_current_workflow_state(events: list[EventRecord], context: RunContex
         if event.type == "tool_result":
             _merge_tool_result_event(refs, source_tools, event)
         elif event.type == AGENT_RESULT_SUMMARY_EVENT:
-            _merge_refs_from_value(refs, source_tools, event.payload, source_tool="child_agent_result")
+            _merge_agent_result_summary_event(refs, source_tools, event.payload)
     return CurrentWorkflowState(
         refs={key: refs[key] for key in _STATE_KEY_ORDER if key in refs},
         source_tools={key: source_tools[key] for key in _STATE_KEY_ORDER if key in source_tools},
@@ -107,10 +107,80 @@ def _merge_tool_result_event(
     decoded = _loads_json(content)
     if _is_runtime_block_payload(decoded):
         return
+    if tool_name == "delegate_agents":
+        _merge_delegate_agents_payload(refs, source_tools, decoded, source_tool=tool_name)
+        return
+    if tool_name == "agent_task_status":
+        return
     if decoded is None:
         _merge_refs_from_value(refs, source_tools, content, source_tool=tool_name)
         return
     _merge_refs_from_payload(refs, source_tools, decoded, source_tool=tool_name)
+
+
+def _merge_delegate_agents_payload(
+    refs: dict[str, str],
+    source_tools: dict[str, str],
+    payload: Any,
+    *,
+    source_tool: str,
+) -> None:
+    if not isinstance(payload, dict):
+        return
+    if _delegate_payload_allows_structured_refs(payload):
+        _merge_structured_child_refs(refs, source_tools, payload, source_tool=source_tool)
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return
+    for result in results:
+        if not isinstance(result, dict) or result.get("status") != "completed":
+            continue
+        _merge_structured_child_refs(refs, source_tools, result, source_tool=source_tool)
+
+
+def _merge_agent_result_summary_event(
+    refs: dict[str, str],
+    source_tools: dict[str, str],
+    payload: Any,
+) -> None:
+    if not isinstance(payload, dict) or payload.get("status") != "completed":
+        return
+    _merge_structured_child_refs(refs, source_tools, payload, source_tool="child_agent_result")
+
+
+def _merge_structured_child_refs(
+    refs: dict[str, str],
+    source_tools: dict[str, str],
+    payload: dict[str, Any],
+    *,
+    source_tool: str,
+) -> None:
+    for ref in _string_items(payload.get("product_refs")):
+        state_key = _state_key_for_ref(ref)
+        if state_key is not None:
+            _set_ref(refs, source_tools, state_key, ref, source_tool=source_tool, override=False)
+
+    artifact_key = _output_artifact_key_for_child(payload)
+    if artifact_key is None:
+        return
+    for ref in _string_items(payload.get("output_artifact_refs")):
+        _set_ref(refs, source_tools, artifact_key, ref, source_tool=source_tool, override=False)
+
+
+def _delegate_payload_allows_structured_refs(payload: dict[str, Any]) -> bool:
+    status = payload.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return True
+    return status.strip() not in {"failed", "skipped"}
+
+
+def _output_artifact_key_for_child(payload: dict[str, Any]) -> str | None:
+    agent_id = _optional_text(payload.get("target_agent_id")) or _optional_text(payload.get("source_agent_id"))
+    if agent_id == "resume_agent":
+        return "diagnosis_artifact_id"
+    if agent_id == "job_agent":
+        return "report_artifact_id"
+    return None
 
 
 def _merge_refs_from_payload(
@@ -344,6 +414,12 @@ def _is_runtime_block_payload(payload: Any) -> bool:
         and payload.get("policy") == "block"
         and payload.get("tool_executed") is False
     )
+
+
+def _string_items(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
 
 
 def _optional_text(value: Any) -> str | None:

@@ -14,6 +14,7 @@ from app.career.store import CareerProductStore
 from app.core.errors import SessionNotFoundError, StorageError, ValidationError
 from app.domain.models import RunContext, ToolCall, ToolExecutionResult
 from app.domain.protocols import SessionRepository
+from app.runtime.workflow.tool_hints import build_required_tool_call_hint
 
 __all__ = ["WorkflowGuardDecision", "WorkflowRuntimeGuard"]
 
@@ -73,6 +74,15 @@ _MAIN_RESUME_VERSION_PARTIAL_BLOCK_TOOLS = {
     "career_job_fit_report_get",
     "career_resume_version_get",
     "career_resume_version_create",
+}
+_MAIN_PROJECT_RESUME_VERSION_READ_BLOCK_TOOLS = _MAIN_STAGE_FINAL_BLOCK_TOOLS - {
+    "career_application_get",
+}
+_MAIN_PROJECT_RESUME_VERSION_CREATE_BLOCK_TOOLS = _MAIN_STAGE_FINAL_BLOCK_TOOLS - {
+    "career_resume_version_create",
+}
+_MAIN_PROJECT_RESUME_VERSION_MERGE_BLOCK_TOOLS = _MAIN_STAGE_FINAL_BLOCK_TOOLS - {
+    "career_application_merge",
 }
 _MAIN_RESUME_DIAGNOSIS_PARTIAL_BLOCK_TOOLS = {
     "delegate_agents",
@@ -137,6 +147,17 @@ _CHILD_JOB_FIT_LOW_LEVEL_TOOLS = [
     "career_jd_analysis_get",
     "career_job_fit_report_get",
 ]
+_CHILD_JOB_FIT_TERMINAL_BLOCKED_TOOLS = [
+    "tool_search",
+    *_CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
+    "session_create_text_artifact",
+    "career_jd_analysis_save",
+    "career_job_fit_report_save",
+]
+_CHILD_JOB_FIT_INPUT_LOCK_BLOCKED_TOOLS = [
+    *_CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
+    "tool_search",
+]
 _CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS = [
     "session_read_artifact",
     "session_list_artifacts",
@@ -144,6 +165,7 @@ _CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS = [
     "session_search_artifact",
     "career_resume_profile_get",
 ]
+_DEFAULT_CAREER_PROFILE_ID = "career_profile_default"
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +193,9 @@ class WorkflowRuntimeGuard:
         if main_stage_decision is not None:
             return main_stage_decision
         handlers: dict[str, Callable[[ToolCall, RunContext], WorkflowGuardDecision]] = {
+            "tool_search": self._inspect_child_job_fit_terminal_action,
             "delegate_agents": self._inspect_delegate_agents,
+            "memory_write": self._inspect_memory_write,
             "session_list_artifacts": self._inspect_child_low_level_action,
             "session_read_artifact": self._inspect_child_low_level_action,
             "session_create_text_artifact": self._inspect_session_create_text_artifact,
@@ -196,6 +220,37 @@ class WorkflowRuntimeGuard:
             return handler(tool_call, context)
         except (StorageError, ValidationError):
             return WorkflowGuardDecision(tool_call=tool_call)
+
+    def _inspect_memory_write(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+        args = _copy_arguments(tool_call.arguments)
+        content = _string_or_none(args.get("content")) or ""
+        tags = _string_list(args.get("tags"))
+        if not _looks_like_career_session_state_memory(content=content, tags=tags):
+            return WorkflowGuardDecision(tool_call=tool_call)
+        return _block_decision(
+            tool_call,
+            tool_name="memory_write",
+            reason="career_session_state_should_not_use_memory_write",
+            next_action=(
+                "这些求职产品 id / 当前进度已经由 product store 和 workflow state 记录；"
+                "不要写入长期 memory。继续当前求职 workflow 的下一步，或直接总结已完成内容。"
+            ),
+            missing_outputs=[],
+            lock_key=f"career_session_state_memory_write:{context.run_id}",
+            extra_payload={
+                "blocked_actions": ["memory_write"],
+                "storage": "product store / workflow state",
+            },
+            extra_event_payload={"storage": "product_store_workflow_state"},
+        )
+
+    def _inspect_child_job_fit_terminal_action(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+        terminal_decision = self._child_job_fit_terminal_decision(
+            tool_call,
+            context,
+            reason="child_job_fit_stage_complete_final_answer",
+        )
+        return terminal_decision or WorkflowGuardDecision(tool_call=tool_call)
 
     def _inspect_product_get(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
         if tool_call.name in {
@@ -319,7 +374,12 @@ class WorkflowRuntimeGuard:
         )
 
     def _main_stage_gate_for_message(self, context: RunContext, *, user_message: str) -> dict[str, Any] | None:
+        if _is_application_action_intent(user_message):
+            return None
         if _is_resume_version_intent(user_message):
+            project_gate = self._project_resume_version_stage_gate(context, user_message=user_message)
+            if project_gate is not None:
+                return project_gate
             if _allows_new_resume_version(user_message):
                 return None
             return self._resume_version_stage_gate(context)
@@ -332,6 +392,57 @@ class WorkflowRuntimeGuard:
                 return None
             return self._resume_diagnosis_stage_gate(context)
         return None
+
+    def _project_resume_version_stage_gate(self, context: RunContext, *, user_message: str) -> dict[str, Any] | None:
+        if not _requires_application_read_intent(user_message):
+            return None
+        refs = self._current_project_resume_version_refs(context)
+        if self._current_run_has_successful_tool(context, "career_application_merge"):
+            return {
+                "stage": "resume_version",
+                "status": "completed",
+                "reason": "main_project_resume_version_complete_final_answer",
+                "next_action": "CareerApplication 已读取，ResumeVersion 已创建并已合并；不要继续搜索、读取或重复更新，直接给用户最终答复。",
+                "missing_outputs": [],
+                "completed_refs": refs,
+                "blocked_tools": _MAIN_STAGE_FINAL_BLOCK_TOOLS,
+            }
+        if self._current_run_has_successful_tool(context, "career_resume_version_create"):
+            return {
+                "stage": "resume_version",
+                "status": "project_resume_version_ready_merge_application",
+                "reason": "main_project_resume_version_ready_merge_application",
+                "next_action": "ResumeVersion 已创建；不要继续搜索、读取项目或重复生成，下一步只调用 career_application_merge 把 resume_version_id 合并进当前求职项目。",
+                "missing_outputs": ["career_application_resume_version_link"],
+                "completed_refs": refs,
+                "next_allowed_tools": ["career_application_merge"],
+                "blocked_tools": _MAIN_PROJECT_RESUME_VERSION_MERGE_BLOCK_TOOLS,
+            }
+        if self._current_run_has_successful_tool(context, "career_application_get"):
+            return {
+                "stage": "resume_version",
+                "status": "project_application_loaded_create_version",
+                "reason": "main_project_resume_version_application_loaded_create_version",
+                "next_action": "CareerApplication 已读取；不要继续搜索、重复读取项目或重新读取关联记录，下一步只调用 career_resume_version_create 生成定制简历版本。",
+                "missing_outputs": ["resume_version", "career_application_resume_version_link"],
+                "completed_refs": refs,
+                "next_allowed_tools": ["career_resume_version_create"],
+                "blocked_tools": _MAIN_PROJECT_RESUME_VERSION_CREATE_BLOCK_TOOLS,
+            }
+        return {
+            "stage": "resume_version",
+            "status": "project_application_read_required",
+            "reason": "main_project_resume_version_read_application_first",
+            "next_action": "本次定制简历动作要求先读取当前 CareerApplication；不要搜索、委派或直接生成版本，下一步只调用 career_application_get。",
+            "missing_outputs": [
+                "career_application_read",
+                "resume_version",
+                "career_application_resume_version_link",
+            ],
+            "completed_refs": refs,
+            "next_allowed_tools": ["career_application_get"],
+            "blocked_tools": _MAIN_PROJECT_RESUME_VERSION_READ_BLOCK_TOOLS,
+        }
 
     def _jd_fit_stage_gate(self, context: RunContext) -> dict[str, Any] | None:
         if not self._current_run_has_any_successful_tool(
@@ -440,6 +551,13 @@ class WorkflowRuntimeGuard:
         kind = _string_or_none(args.get("kind")) or "generated_file"
         if kind == "pasted_text" and context.agent_id != context.entry_agent_id:
             return self._block_child_pasted_text_artifact(tool_call, context)
+        terminal_decision = self._child_job_fit_terminal_decision(
+            tool_call,
+            context,
+            reason="child_job_fit_stage_complete_final_answer",
+        )
+        if terminal_decision is not None:
+            return terminal_decision
         content = args.get("content")
         if isinstance(content, str) and content.strip():
             stage_output_decision = self._inspect_child_job_fit_stage_output_intent(tool_call, context, args)
@@ -695,14 +813,20 @@ class WorkflowRuntimeGuard:
         )
         if output_kind != "job_fit_report":
             return None
-        unsupported = self._unsupported_candidate_tech_claims(context, content)
-        if not unsupported:
+        invalid_claims = self._unsupported_candidate_tech_claim_details(context, content)
+        if not invalid_claims:
             return None
-        supported_facts = self._supported_candidate_facts(context)
+        unsupported = [f"{item['term']}: {item['claim']}" for item in invalid_claims]
+        fact_boundary = self._job_fit_report_fact_boundary_payload(
+            context,
+            unsupported_candidate_facts=unsupported,
+            invalid_claims=invalid_claims,
+        )
         runtime_plan = self._child_job_fit_runtime_plan(
             context,
             missing_outputs=["valid_job_fit_report_artifact"],
         )
+        repair_actions = _invalid_claim_repair_actions(invalid_claims)
         return _block_decision(
             tool_call,
             tool_name="session_create_text_artifact",
@@ -717,18 +841,23 @@ class WorkflowRuntimeGuard:
             ),
             missing_outputs=["valid_job_fit_report_artifact"],
             lock_key=f"child_job_fit_invalid_artifact:{context.run_id}",
+            repair_actions=repair_actions,
             extra_payload={
                 **runtime_plan,
                 "output_kind": output_kind,
                 "unsupported_candidate_facts": unsupported[:10],
-                "supported_candidate_facts": supported_facts,
+                "invalid_claims": invalid_claims[:10],
+                "supported_candidate_facts": fact_boundary["supported_candidate_facts"],
+                "report_fact_boundary": fact_boundary,
+                "rewrite_rules": fact_boundary["rewrite_rules"],
                 "blocked_actions": ["session_create_text_artifact"],
             },
             extra_event_payload={
                 **runtime_plan,
                 "output_kind": output_kind,
                 "unsupported_candidate_fact_count": len(unsupported),
-                "supported_candidate_facts": supported_facts,
+                "invalid_claim_count": len(invalid_claims),
+                "supported_candidate_facts": fact_boundary["supported_candidate_facts"],
             },
         )
 
@@ -739,10 +868,27 @@ class WorkflowRuntimeGuard:
     ) -> WorkflowGuardDecision:
         if context.agent_id != "job_agent" or context.agent_id == context.entry_agent_id:
             return WorkflowGuardDecision(tool_call=tool_call)
+        terminal_decision = self._child_job_fit_terminal_decision(
+            tool_call,
+            context,
+            reason="job_fit_report_record_already_saved",
+        )
+        if terminal_decision is not None:
+            return terminal_decision
         existing = self._latest_current_run_output_artifact(context, output_kind="job_fit_report")
         invalid_feedback = self._latest_child_output_invalid_feedback(context, output_kind="job_fit_report")
         if existing is None:
             if invalid_feedback is not None:
+                invalid_unsupported = invalid_feedback.get("unsupported_candidate_facts", [])
+                invalid_supported = invalid_feedback.get("supported_candidate_facts", [])
+                invalid_claims = invalid_feedback.get("invalid_claims", [])
+                fact_boundary = self._job_fit_report_fact_boundary_payload(
+                    context,
+                    unsupported_candidate_facts=invalid_unsupported if isinstance(invalid_unsupported, list) else [],
+                    invalid_claims=invalid_claims if isinstance(invalid_claims, list) else [],
+                )
+                if isinstance(invalid_supported, list) and invalid_supported:
+                    fact_boundary["supported_candidate_facts"] = invalid_supported[:12]
                 runtime_plan = self._child_job_fit_runtime_plan(
                     context,
                     missing_outputs=["valid_job_fit_report_artifact"],
@@ -760,8 +906,11 @@ class WorkflowRuntimeGuard:
                     extra_payload={
                         **runtime_plan,
                         "output_kind": "job_fit_report",
-                        "unsupported_candidate_facts": invalid_feedback.get("unsupported_candidate_facts", []),
-                        "supported_candidate_facts": invalid_feedback.get("supported_candidate_facts", []),
+                        "unsupported_candidate_facts": fact_boundary["unsupported_candidate_facts"],
+                        "invalid_claims": fact_boundary["invalid_claims"],
+                        "supported_candidate_facts": fact_boundary["supported_candidate_facts"],
+                        "report_fact_boundary": fact_boundary,
+                        "rewrite_rules": fact_boundary["rewrite_rules"],
                         "blocked_actions": [
                             "session_read_artifact",
                             "session_list_artifacts",
@@ -776,6 +925,9 @@ class WorkflowRuntimeGuard:
                         "output_kind": "job_fit_report",
                     },
                 )
+            input_snapshot = self._current_child_job_fit_input_snapshot(context)
+            if input_snapshot is not None:
+                return self._child_job_fit_input_snapshot_decision(tool_call, context, input_snapshot)
             return WorkflowGuardDecision(tool_call=tool_call)
         args = _copy_arguments(tool_call.arguments)
         if tool_call.name == "session_read_artifact":
@@ -893,6 +1045,45 @@ class WorkflowRuntimeGuard:
             },
         )
 
+    def _child_job_fit_terminal_decision(
+        self,
+        tool_call: ToolCall,
+        context: RunContext,
+        *,
+        reason: str,
+    ) -> WorkflowGuardDecision | None:
+        if context.agent_id != "job_agent" or context.agent_id == context.entry_agent_id:
+            return None
+        if not self._current_run_has_successful_tool(context, "career_job_fit_report_save"):
+            return None
+        existing = self._latest_current_run_output_artifact(context, output_kind="job_fit_report")
+        report_artifact_id = existing["artifact_id"] if existing is not None else None
+        runtime_plan = self._child_job_fit_runtime_plan(
+            context,
+            missing_outputs=[],
+            report_artifact_id=report_artifact_id,
+        )
+        return _block_decision(
+            tool_call,
+            tool_name=tool_call.name,
+            reason=reason,
+            next_action=(
+                "JDAnalysis、JobFitReport 和匹配报告 artifact 已完成；"
+                "停止搜索、读取、重写或重复保存，直接总结已保存的产品记录。"
+            ),
+            missing_outputs=[],
+            lock_key=f"child_job_fit_terminal:{context.run_id}",
+            extra_payload={
+                **runtime_plan,
+                "output_kind": "job_fit_report",
+                "blocked_actions": _CHILD_JOB_FIT_TERMINAL_BLOCKED_TOOLS,
+            },
+            extra_event_payload={
+                **runtime_plan,
+                "output_kind": "job_fit_report",
+            },
+        )
+
     def _child_output_next_action(self, context: RunContext, *, output_kind: str, artifact_id: str) -> str:
         if output_kind == "job_fit_report":
             if self._current_run_has_successful_tool(context, "career_job_fit_report_save"):
@@ -917,6 +1108,271 @@ class WorkflowRuntimeGuard:
             missing.append("job_fit_report")
         return missing
 
+    def _child_job_fit_input_snapshot_decision(
+        self,
+        tool_call: ToolCall,
+        context: RunContext,
+        input_snapshot: dict[str, Any],
+    ) -> WorkflowGuardDecision:
+        jd_saved = self._current_run_has_successful_tool(context, "career_jd_analysis_save")
+        missing_outputs = ["job_fit_report_artifact", "job_fit_report"] if jd_saved else [
+            "jd_analysis",
+            "job_fit_report_artifact",
+            "job_fit_report",
+        ]
+        next_allowed_tools = ["session_create_text_artifact"] if jd_saved else ["career_jd_analysis_save"]
+        required_tools = (
+            ["session_create_text_artifact", "career_job_fit_report_save"]
+            if jd_saved
+            else ["career_jd_analysis_save", "session_create_text_artifact", "career_job_fit_report_save"]
+        )
+        next_action = (
+            "JDAnalysis 已保存，且 JD / ResumeProfile / CareerProfile 输入快照已齐；"
+            "不要继续读取或 get/list。下一步只创建唯一岗位匹配报告 artifact，"
+            "随后调用 career_job_fit_report_save。"
+            if jd_saved
+            else "JD / ResumeProfile / CareerProfile 输入快照已齐；不要继续读取或 get/list。"
+            "下一步先调用 career_jd_analysis_save 保存 JDAnalysis，"
+            "再创建唯一岗位匹配报告 artifact 并调用 career_job_fit_report_save。"
+        )
+        return _block_decision(
+            tool_call,
+            tool_name=tool_call.name,
+            reason="job_fit_inputs_already_loaded",
+            next_action=next_action,
+            missing_outputs=missing_outputs,
+            lock_key=f"child_job_fit_inputs_loaded:{context.run_id}",
+            extra_payload={
+                "stage": "jd_fit",
+                "phase": "jd_fit",
+                "input_snapshot_complete": True,
+                "next_allowed_tools": next_allowed_tools,
+                "required_tools": required_tools,
+                "blocked_tools": _CHILD_JOB_FIT_INPUT_LOCK_BLOCKED_TOOLS,
+                "discouraged_tools": _CHILD_JOB_FIT_INPUT_LOCK_BLOCKED_TOOLS,
+                "known_refs": input_snapshot,
+                "completed_refs": input_snapshot,
+                "blocked_actions": _CHILD_JOB_FIT_INPUT_LOCK_BLOCKED_TOOLS,
+            },
+            extra_event_payload={
+                "stage": "jd_fit",
+                "phase": "jd_fit",
+                "input_snapshot_complete": True,
+                "next_allowed_tools": next_allowed_tools,
+                "required_tools": required_tools,
+                "known_refs": input_snapshot,
+            },
+        )
+
+    def _current_child_job_fit_input_snapshot(self, context: RunContext) -> dict[str, Any] | None:
+        if context.agent_id != "job_agent" or context.agent_id == context.entry_agent_id:
+            return None
+        if not self._current_child_task_requires_job_fit_report(context):
+            return None
+        read_artifact_ids = self._successful_session_read_artifact_ids(context)
+        if not read_artifact_ids:
+            return None
+        required_artifact_ids = self._current_child_task_artifact_refs(context)
+        if required_artifact_ids:
+            missing_artifact_ids = [item for item in required_artifact_ids if item not in read_artifact_ids]
+            if missing_artifact_ids:
+                return None
+            input_artifact_ids = required_artifact_ids
+        else:
+            input_artifact_ids = read_artifact_ids
+
+        resume_profile_id = self._latest_successful_product_get_id(
+            context,
+            tool_name="career_resume_profile_get",
+            id_field="resume_profile_id",
+        )
+        if resume_profile_id is None:
+            return None
+
+        snapshot: dict[str, Any] = {
+            "input_artifact_ids": sorted(dict.fromkeys(input_artifact_ids)),
+            "resume_profile_id": resume_profile_id,
+        }
+        jd_artifact_ids = [item for item in input_artifact_ids if item.startswith("artifact_jd")]
+        if jd_artifact_ids:
+            snapshot["jd_artifact_id"] = sorted(jd_artifact_ids)[0]
+
+        current_career_profile = _single_current_session_record(
+            self._career_store.list_career_profiles(),
+            context.session_id,
+        )
+        if current_career_profile is not None:
+            career_profile_id = self._latest_successful_product_get_id(
+                context,
+                tool_name="career_profile_get",
+                id_field="career_profile_id",
+            )
+            if career_profile_id is None:
+                return None
+            snapshot["career_profile_id"] = career_profile_id
+        return snapshot
+
+    def _successful_session_read_artifact_ids(self, context: RunContext) -> list[str]:
+        artifact_ids: list[str] = []
+        for event in self._session_repository.list_run_events(context.session_id, context.agent_id, context.run_id):
+            if event.type != "tool_result":
+                continue
+            if event.payload.get("tool_name") != "session_read_artifact" or event.payload.get("success") is not True:
+                continue
+            if _is_runtime_block_tool_result(event):
+                continue
+            payload = _loads_json_object(event.payload.get("content"))
+            if payload is None:
+                continue
+            artifact_id = _string_or_none(payload.get("artifact_id"))
+            if artifact_id is not None and artifact_id not in artifact_ids:
+                artifact_ids.append(artifact_id)
+        return artifact_ids
+
+    def _latest_successful_product_get_id(
+        self,
+        context: RunContext,
+        *,
+        tool_name: str,
+        id_field: str,
+    ) -> str | None:
+        record_id: str | None = None
+        for event in self._session_repository.list_run_events(context.session_id, context.agent_id, context.run_id):
+            if event.type != "tool_result":
+                continue
+            if event.payload.get("tool_name") != tool_name or event.payload.get("success") is not True:
+                continue
+            if _is_runtime_block_tool_result(event):
+                continue
+            payload = _loads_json_object(event.payload.get("content"))
+            if payload is None:
+                continue
+            record_id = _payload_record_id(payload, id_field)
+        return record_id
+
+    def _current_child_task_artifact_refs(self, context: RunContext) -> list[str]:
+        refs: list[str] = []
+        for event in self._session_repository.list_events(context.session_id):
+            if event.type != "agent_task_assigned":
+                continue
+            payload = event.payload
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("target_agent_id") != context.agent_id:
+                continue
+            child_run_id = payload.get("child_run_id")
+            if isinstance(child_run_id, str) and child_run_id and child_run_id != context.run_id:
+                continue
+            raw_refs = payload.get("artifact_refs")
+            if not isinstance(raw_refs, list):
+                continue
+            for raw_ref in raw_refs:
+                ref = _string_or_none(raw_ref)
+                if ref is not None and ref.startswith("artifact_") and ref not in refs:
+                    refs.append(ref)
+        jd_refs = [ref for ref in refs if ref.startswith("artifact_jd")]
+        return jd_refs or refs
+
+    def _current_child_job_fit_known_refs(
+        self,
+        context: RunContext,
+        *,
+        report_artifact_id: str | None = None,
+        include_default_career_profile: bool = False,
+    ) -> dict[str, Any]:
+        refs: dict[str, Any] = {}
+        current_refs = self._current_jd_fit_refs(context)
+        if current_refs is not None:
+            refs.update(current_refs)
+
+        input_snapshot = self._current_child_job_fit_input_snapshot(context)
+        if input_snapshot is not None:
+            refs.update(input_snapshot)
+
+        jd_artifact_id = self._current_child_job_fit_jd_artifact_id(context)
+        if jd_artifact_id is not None:
+            refs.setdefault("jd_artifact_id", jd_artifact_id)
+            refs.setdefault("source_artifact_id", jd_artifact_id)
+            refs.setdefault("jd_source_artifact_id", jd_artifact_id)
+
+        resume_profile_id = _string_or_none(refs.get("resume_profile_id"))
+        if resume_profile_id is None:
+            resume_profile_id = self._latest_successful_product_get_id(
+                context,
+                tool_name="career_resume_profile_get",
+                id_field="resume_profile_id",
+            )
+        if resume_profile_id is None:
+            resume_profile = _single_current_session_record(
+                self._career_store.list_resume_profiles(),
+                context.session_id,
+            )
+            if resume_profile is not None:
+                resume_profile_id = _string_or_none(getattr(resume_profile, "resume_profile_id", None))
+                resume_source_artifact_id = _string_or_none(getattr(resume_profile, "source_artifact_id", None))
+                if resume_source_artifact_id is not None:
+                    refs.setdefault("resume_source_artifact_id", resume_source_artifact_id)
+        if resume_profile_id is not None:
+            refs["resume_profile_id"] = resume_profile_id
+
+        career_profile_id = _string_or_none(refs.get("career_profile_id"))
+        if career_profile_id is None:
+            career_profile_id = self._latest_successful_product_get_id(
+                context,
+                tool_name="career_profile_get",
+                id_field="career_profile_id",
+            )
+        if career_profile_id is None:
+            career_profile = _single_current_session_record(
+                self._career_store.list_career_profiles(),
+                context.session_id,
+            )
+            if career_profile is not None:
+                career_profile_id = _string_or_none(getattr(career_profile, "career_profile_id", None))
+        if career_profile_id is None and include_default_career_profile:
+            career_profile_id = _DEFAULT_CAREER_PROFILE_ID
+        if career_profile_id is not None:
+            refs["career_profile_id"] = career_profile_id
+
+        jd_payload = self._latest_successful_tool_payload(context, "career_jd_analysis_save")
+        if jd_payload is not None:
+            jd_payload_refs = _payload_ids(jd_payload)
+            jd_analysis_id = _payload_record_id(jd_payload, "jd_analysis_id")
+            if jd_analysis_id is not None:
+                refs["jd_analysis_id"] = jd_analysis_id
+            jd_source_artifact_id = _string_or_none(jd_payload_refs.get("source_artifact_id"))
+            if jd_source_artifact_id is not None:
+                refs["source_artifact_id"] = jd_source_artifact_id
+                refs["jd_source_artifact_id"] = jd_source_artifact_id
+
+        jd_analysis_id = _string_or_none(refs.get("jd_analysis_id"))
+        if jd_analysis_id is not None and _string_or_none(refs.get("source_artifact_id")) is None:
+            jd_record = _current_record_by_id(
+                self._career_store.get_jd_analysis,
+                jd_analysis_id,
+                context.session_id,
+            )
+            jd_source_artifact_id = (
+                _string_or_none(getattr(jd_record, "source_artifact_id", None)) if jd_record is not None else None
+            )
+            if jd_source_artifact_id is not None:
+                refs["source_artifact_id"] = jd_source_artifact_id
+                refs["jd_source_artifact_id"] = jd_source_artifact_id
+
+        if report_artifact_id is not None:
+            refs["report_artifact_id"] = report_artifact_id
+
+        return {key: value for key, value in refs.items() if value is not None and value != ""}
+
+    def _current_child_job_fit_jd_artifact_id(self, context: RunContext) -> str | None:
+        artifact_ids = self._current_child_task_artifact_refs(context) or self._successful_session_read_artifact_ids(
+            context
+        )
+        for artifact_id in artifact_ids:
+            if artifact_id.startswith("artifact_jd"):
+                return artifact_id
+        return artifact_ids[0] if artifact_ids else None
+
     def _child_job_fit_runtime_plan(
         self,
         context: RunContext,
@@ -926,17 +1382,28 @@ class WorkflowRuntimeGuard:
     ) -> dict[str, Any]:
         missing = {item for item in missing_outputs if isinstance(item, str)}
         if "valid_job_fit_report_artifact" in missing or "job_fit_report_artifact" in missing:
+            known_refs = self._current_child_job_fit_known_refs(
+                context,
+                report_artifact_id=report_artifact_id,
+            )
             return {
+                "stage": "jd_fit",
+                "phase": "jd_fit",
                 "next_allowed_tools": ["session_create_text_artifact"],
                 "required_tools": ["session_create_text_artifact"],
                 "blocked_tools": _CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
-                "completed_refs": {},
+                "completed_refs": known_refs,
+                "known_refs": known_refs,
+                "report_artifact_contract": self._job_fit_report_fact_boundary_payload(context),
             }
         if "jd_analysis" in missing:
-            completed_refs = {}
-            if report_artifact_id is not None:
-                completed_refs["report_artifact_id"] = report_artifact_id
+            completed_refs = self._current_child_job_fit_known_refs(
+                context,
+                report_artifact_id=report_artifact_id,
+            )
             return {
+                "stage": "jd_fit",
+                "phase": "jd_fit",
                 "next_allowed_tools": ["career_jd_analysis_save"],
                 "required_tools": ["career_jd_analysis_save"],
                 "blocked_tools": [
@@ -945,12 +1412,17 @@ class WorkflowRuntimeGuard:
                     "career_job_fit_report_save",
                 ],
                 "completed_refs": completed_refs,
+                "known_refs": completed_refs,
             }
         if "job_fit_report" in missing:
-            completed_refs = {}
-            if report_artifact_id is not None:
-                completed_refs["report_artifact_id"] = report_artifact_id
+            completed_refs = self._current_child_job_fit_known_refs(
+                context,
+                report_artifact_id=report_artifact_id,
+                include_default_career_profile=True,
+            )
             return {
+                "stage": "jd_fit",
+                "phase": "jd_fit",
                 "next_allowed_tools": ["career_job_fit_report_save"],
                 "required_tools": ["career_job_fit_report_save"],
                 "blocked_tools": [
@@ -959,17 +1431,56 @@ class WorkflowRuntimeGuard:
                     "career_jd_analysis_save",
                 ],
                 "completed_refs": completed_refs,
+                "known_refs": completed_refs,
             }
+        completed_refs = self._current_child_job_fit_completed_refs(
+            context,
+            report_artifact_id=report_artifact_id,
+        )
         return {
+            "stage": "jd_fit",
+            "phase": "jd_fit",
             "next_allowed_tools": [],
             "required_tools": [],
+            "missing_outputs": [],
             "blocked_tools": [
-                *_CHILD_JOB_FIT_LOW_LEVEL_TOOLS,
-                "session_create_text_artifact",
-                "career_jd_analysis_save",
-                "career_job_fit_report_save",
+                *_CHILD_JOB_FIT_TERMINAL_BLOCKED_TOOLS,
             ],
-            "completed_refs": {"report_artifact_id": report_artifact_id} if report_artifact_id is not None else {},
+            "discouraged_tools": _CHILD_JOB_FIT_TERMINAL_BLOCKED_TOOLS,
+            "completed_refs": completed_refs,
+            "known_refs": completed_refs,
+            "terminal": True,
+            "final_answer_ready": True,
+            "next_action": "JobFitReport 已保存；停止工具调用，直接总结已保存的产品记录。",
+        }
+
+    def _job_fit_report_fact_boundary_payload(
+        self,
+        context: RunContext,
+        *,
+        unsupported_candidate_facts: list[str] | None = None,
+        invalid_claims: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        unsupported = unsupported_candidate_facts or []
+        invalid = invalid_claims or []
+        return {
+            "supported_candidate_facts": self._supported_candidate_facts(context),
+            "unsupported_candidate_facts": unsupported[:10],
+            "invalid_claims": invalid[:10],
+            "rewrite_rules": [
+                "已匹配/候选人已有能力只能来自 supported_candidate_facts 或简历原文明确事实。",
+                "JD 要求中未被简历支持的具体技能只能写入 gaps、风险、建议、待确认或面试追问。",
+                "PostgreSQL 可写为关系型数据库大类的部分支持，但不能扩写成 MySQL 具体经验。",
+                "不要用“RAG 通常涉及向量检索”推断候选人具备向量检索经验。",
+                "匹配表的能力项不要混入 Docker/K8s、MySQL、向量检索等未支持的 JD 具体技术。",
+                "不要继续读取资料；直接重新创建唯一岗位匹配报告 artifact。",
+            ],
+            "artifact_rules": {
+                "tool": "session_create_text_artifact",
+                "kind": "generated_file",
+                "content": "完整 Markdown 正文；不要传 content_chars、content_omitted 或占位正文。",
+                "user_visible_artifacts": "只创建一个岗位匹配报告 artifact；不要创建 JDAnalysis artifact。",
+            },
         }
 
     def _child_resume_diagnosis_runtime_plan(
@@ -1051,6 +1562,58 @@ class WorkflowRuntimeGuard:
             if payload.get("reason") != "job_fit_report_artifact_candidate_facts_conflict":
                 continue
             latest = payload
+        return latest
+
+    def _current_child_job_fit_completed_refs(
+        self,
+        context: RunContext,
+        *,
+        report_artifact_id: str | None,
+    ) -> dict[str, Any]:
+        refs: dict[str, Any] = {}
+        fit_payload = self._latest_successful_tool_payload(context, "career_job_fit_report_save")
+        fit_id = _payload_record_id(fit_payload, "job_fit_report_id") if fit_payload is not None else None
+        if fit_payload is not None:
+            refs.update(_payload_ids(fit_payload))
+            if fit_payload.get("record_type") == "job_fit_report" and fit_id is not None:
+                refs["job_fit_report_id"] = fit_id
+        fit_record = (
+            _current_record_by_id(self._career_store.get_job_fit_report, fit_id, context.session_id)
+            if fit_id is not None
+            else None
+        )
+        if fit_record is not None:
+            refs.update(
+                {
+                    "job_fit_report_id": fit_record.job_fit_report_id,
+                    "jd_analysis_id": fit_record.jd_analysis_id,
+                    "resume_profile_id": fit_record.resume_profile_id,
+                    "report_artifact_id": fit_record.report_artifact_id,
+                    "source_artifact_id": fit_record.source_artifact_id,
+                }
+            )
+            if fit_record.career_profile_id is not None:
+                refs["career_profile_id"] = fit_record.career_profile_id
+        else:
+            current_refs = self._current_jd_fit_refs(context)
+            if current_refs is not None:
+                refs.update(current_refs)
+        if report_artifact_id is not None:
+            refs["report_artifact_id"] = report_artifact_id
+        return refs
+
+    def _latest_successful_tool_payload(self, context: RunContext, tool_name: str) -> dict[str, Any] | None:
+        latest: dict[str, Any] | None = None
+        for event in self._session_repository.list_run_events(context.session_id, context.agent_id, context.run_id):
+            if event.type != "tool_result":
+                continue
+            if event.payload.get("tool_name") != tool_name or event.payload.get("success") is not True:
+                continue
+            if _is_runtime_block_tool_result(event):
+                continue
+            payload = _loads_json_object(event.payload.get("content"))
+            if payload is not None:
+                latest = payload
         return latest
 
     def _current_run_has_successful_tool(self, context: RunContext, tool_name: str) -> bool:
@@ -1175,6 +1738,36 @@ class WorkflowRuntimeGuard:
             refs["application_merged"] = False
         return refs
 
+    def _current_project_resume_version_refs(self, context: RunContext) -> dict[str, Any]:
+        refs: dict[str, Any] = {}
+        current_jd_fit_refs = self._current_jd_fit_refs(context)
+        if current_jd_fit_refs is not None:
+            refs.update(current_jd_fit_refs)
+
+        application_payload = self._latest_successful_tool_payload(context, "career_application_get")
+        if application_payload is not None:
+            refs.update(_payload_ids(application_payload))
+            application_id = _payload_record_id(application_payload, "application_id")
+            if application_id is not None:
+                refs["application_id"] = application_id
+
+        resume_version_payload = self._latest_successful_tool_payload(context, "career_resume_version_create")
+        if resume_version_payload is not None:
+            refs.update(_payload_ids(resume_version_payload))
+            resume_version_id = _payload_record_id(resume_version_payload, "resume_version_id")
+            if resume_version_id is not None:
+                refs["resume_version_id"] = resume_version_id
+
+        merge_payload = self._latest_successful_tool_payload(context, "career_application_merge")
+        if merge_payload is not None:
+            refs.update(_payload_ids(merge_payload))
+            application_id = _payload_record_id(merge_payload, "application_id")
+            if application_id is not None:
+                refs["application_id"] = application_id
+            if refs.get("resume_version_id"):
+                refs["application_merged"] = True
+        return refs
+
     def _current_resume_diagnosis_refs(self, context: RunContext) -> dict[str, Any] | None:
         resume_profile = _find_one(
             self._career_store.list_resume_profiles(),
@@ -1196,13 +1789,23 @@ class WorkflowRuntimeGuard:
         return refs
 
     def _unsupported_candidate_tech_claims(self, context: RunContext, content: str) -> list[str]:
+        return [
+            f"{item['term']}: {item['claim']}"
+            for item in self._unsupported_candidate_tech_claim_details(context, content)
+        ]
+
+    def _unsupported_candidate_tech_claim_details(self, context: RunContext, content: str) -> list[dict[str, str]]:
         support_text = self._current_resume_support_text(context)
         if not support_text.strip():
             return []
         normalized_support = _normalize_fact_text(support_text)
-        unsupported: list[str] = []
+        invalid_claims: list[dict[str, str]] = []
+        current_section = ""
         for line in content.splitlines():
             raw_line = line.strip()
+            section = _report_section_label(raw_line)
+            if section:
+                current_section = section
             if _line_is_report_topic_or_heading(raw_line):
                 continue
             normalized_line = _normalize_fact_text(line)
@@ -1217,8 +1820,17 @@ class WorkflowRuntimeGuard:
                     continue
                 if _first_present_alias(normalized_support, aliases) is not None:
                     continue
-                _append_unique(unsupported, f"{canonical}: {_truncate_text(line.strip(), 90)}")
-        return unsupported
+                claim = _truncate_text(line.strip(), 120)
+                detail = {
+                    "term": canonical,
+                    "claim": claim,
+                    "section": current_section or "unknown",
+                    "reason": "term_not_supported_by_resume_profile_or_resume_artifact",
+                    "rewrite_to": "gap_or_risk_or_interview_focus",
+                }
+                if detail not in invalid_claims:
+                    invalid_claims.append(detail)
+        return invalid_claims[:10]
 
     def _supported_candidate_facts(self, context: RunContext) -> list[str]:
         support_text = self._current_resume_support_text(context)
@@ -1291,8 +1903,56 @@ class WorkflowRuntimeGuard:
     def _inspect_resume_profile_save(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
         args = _copy_arguments(tool_call.arguments)
         source_artifact_id = _string_or_none(args.get("source_artifact_id"))
+        diagnosis_artifact_id = _string_or_none(args.get("diagnosis_artifact_id"))
+        repair_actions: list[dict[str, str]] = []
+        if context.agent_id == "resume_agent" and context.agent_id != context.entry_agent_id:
+            existing_diagnosis = self._latest_current_run_output_artifact(context, output_kind="resume_diagnosis")
+            if diagnosis_artifact_id is None and existing_diagnosis is None:
+                known_refs: dict[str, Any] = {}
+                if source_artifact_id is not None:
+                    known_refs["source_artifact_id"] = source_artifact_id
+                    known_refs["resume_source_artifact_id"] = source_artifact_id
+                return _block_decision(
+                    tool_call,
+                    tool_name="career_resume_profile_save",
+                    reason="resume_profile_save_before_diagnosis_artifact",
+                    next_action=(
+                        "还没有简历诊断 artifact；不要先保存 ResumeProfile。"
+                        "下一步只调用 session_create_text_artifact 创建简历诊断报告 artifact，"
+                        "随后再调用 career_resume_profile_save，并把 diagnosis_artifact_id 设为该 artifact_id。"
+                    ),
+                    missing_outputs=["diagnosis_artifact", "resume_profile"],
+                    lock_key=f"child_resume_profile_before_diagnosis:{context.run_id}",
+                    extra_payload={
+                        "stage": "resume_diagnosis",
+                        "phase": "resume_diagnosis",
+                        "next_allowed_tools": ["session_create_text_artifact"],
+                        "required_tools": ["session_create_text_artifact"],
+                        "known_refs": known_refs,
+                        "blocked_actions": ["career_resume_profile_save"],
+                        "discouraged_tools": _CHILD_RESUME_DIAGNOSIS_LOW_LEVEL_TOOLS
+                        + ["tool_search", "career_resume_profile_save", "career_resume_profile_get"],
+                    },
+                    extra_event_payload={
+                        "stage": "resume_diagnosis",
+                        "phase": "resume_diagnosis",
+                        "next_allowed_tools": ["session_create_text_artifact"],
+                        "required_tools": ["session_create_text_artifact"],
+                    },
+                )
+            if diagnosis_artifact_id is None and existing_diagnosis is not None:
+                args["diagnosis_artifact_id"] = existing_diagnosis["artifact_id"]
+                diagnosis_artifact_id = existing_diagnosis["artifact_id"]
+                repair_actions.append(
+                    {
+                        "field": "diagnosis_artifact_id",
+                        "action": "set_from_current_run_resume_diagnosis_artifact",
+                        "value": existing_diagnosis["artifact_id"],
+                    }
+                )
         if source_artifact_id is None:
-            return WorkflowGuardDecision(tool_call=tool_call)
+            repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
+            return _repair_decision(tool_call, repaired_call, repair_actions)
         existing = _find_one(
             self._career_store.list_resume_profiles(),
             lambda item: item.source_session_id == context.session_id
@@ -1300,7 +1960,11 @@ class WorkflowRuntimeGuard:
             and item.source_artifact_id == source_artifact_id,
         )
         if existing is None:
-            return WorkflowGuardDecision(tool_call=tool_call)
+            repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
+            return _repair_decision(tool_call, repaired_call, repair_actions)
+        if existing.diagnosis_artifact_id is None and diagnosis_artifact_id is not None:
+            repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
+            return _repair_decision(tool_call, repaired_call, repair_actions)
         return _reuse_decision(
             tool_call,
             tool_name="career_resume_profile_save",
@@ -1308,9 +1972,17 @@ class WorkflowRuntimeGuard:
             record_id=existing.resume_profile_id,
             record=existing,
             lock_key=f"resume_profile:{source_artifact_id}",
+            repair_actions=repair_actions,
         )
 
     def _inspect_jd_analysis_save(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+        terminal_decision = self._child_job_fit_terminal_decision(
+            tool_call,
+            context,
+            reason="child_job_fit_stage_complete_final_answer",
+        )
+        if terminal_decision is not None:
+            return terminal_decision
         args = _copy_arguments(tool_call.arguments)
         source_artifact_id = _string_or_none(args.get("source_artifact_id"))
         if source_artifact_id is None:
@@ -1333,6 +2005,13 @@ class WorkflowRuntimeGuard:
         )
 
     def _inspect_job_fit_report_save(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
+        terminal_decision = self._child_job_fit_terminal_decision(
+            tool_call,
+            context,
+            reason="job_fit_report_record_already_saved",
+        )
+        if terminal_decision is not None:
+            return terminal_decision
         args = _copy_arguments(tool_call.arguments)
         repair_actions: list[dict[str, str]] = []
         args, repair_actions = self._repair_jd_and_resume_refs(args, context, repair_actions)
@@ -1518,10 +2197,19 @@ class WorkflowRuntimeGuard:
         raw_updates = args.get("updates")
         updates = dict(raw_updates) if isinstance(raw_updates, dict) else {}
         raw_version_ids = updates.get("resume_version_ids")
-        if not isinstance(raw_version_ids, list) or version_id not in raw_version_ids:
-            merged_version_ids = [item for item in raw_version_ids if isinstance(item, str)] if isinstance(raw_version_ids, list) else []
-            if version_id not in merged_version_ids:
-                merged_version_ids.append(version_id)
+        active_version_ids = {
+            item.resume_version_id
+            for item in active_versions
+            if isinstance(getattr(item, "resume_version_id", None), str)
+        }
+        merged_version_ids = (
+            [item for item in raw_version_ids if isinstance(item, str) and item in active_version_ids]
+            if isinstance(raw_version_ids, list)
+            else []
+        )
+        if version_id not in merged_version_ids:
+            merged_version_ids.append(version_id)
+        if not isinstance(raw_version_ids, list) or merged_version_ids != raw_version_ids:
             updates["resume_version_ids"] = merged_version_ids
             args["updates"] = updates
             repair_actions.append(
@@ -1534,6 +2222,22 @@ class WorkflowRuntimeGuard:
             )
         raw_refs = args.get("evidence_refs")
         refs = list(raw_refs) if isinstance(raw_refs, list) else []
+        cleaned_refs = [
+            ref
+            for ref in refs
+            if not isinstance(ref, str) or not ref.startswith("resume_version_") or ref in active_version_ids
+        ]
+        if cleaned_refs != refs:
+            refs = cleaned_refs
+            args["evidence_refs"] = refs
+            repair_actions.append(
+                {
+                    "field": "evidence_refs",
+                    "from": "invalid_resume_version_refs",
+                    "to": version_id,
+                    "reason": "remove_non_current_resume_version_evidence",
+                }
+            )
         if version_id not in refs:
             refs.append(version_id)
             args["evidence_refs"] = refs
@@ -1603,7 +2307,12 @@ class WorkflowRuntimeGuard:
                     policy="reuse",
                     repair_actions=repair_actions,
                 )
-        if _string_or_none(args.get("content")) is None and _string_or_none(args.get("artifact_id")) is None:
+        safe_fallback_requested = args.get("use_safe_fallback") is True
+        if (
+            _string_or_none(args.get("content")) is None
+            and _string_or_none(args.get("artifact_id")) is None
+            and not safe_fallback_requested
+        ):
             compacted_fields = [
                 field_name
                 for field_name in ("content_omitted", "content_preview", "content_chars")
@@ -1626,6 +2335,14 @@ class WorkflowRuntimeGuard:
                 if compacted_fields
                 else "resume_version_missing_content_or_artifact"
             )
+            required_tool_call_hint = build_required_tool_call_hint(
+                "career_resume_version_create",
+                self._resume_version_create_hint_refs(
+                    context,
+                    base_resume_profile_id=base_resume_profile_id,
+                    target_jd_analysis_id=target_jd_analysis_id,
+                ),
+            )
             return _block_decision(
                 tool_call,
                 tool_name="career_resume_version_create",
@@ -1641,11 +2358,24 @@ class WorkflowRuntimeGuard:
                     "next_allowed_tools": ["career_resume_version_create"],
                     "required_tools": ["career_resume_version_create"],
                     "compacted_fields": compacted_fields,
+                    "required_tool_call_hint": required_tool_call_hint,
+                    "retry_tool_call_skeleton": _hint_skeleton(required_tool_call_hint),
+                    "blocked_retry_tools": [
+                        "tool_search",
+                        "session_read_artifact",
+                        "career_application_get",
+                        "career_application_list",
+                        "career_resume_profile_get",
+                        "career_jd_analysis_get",
+                        "career_job_fit_report_get",
+                    ],
                 },
                 extra_event_payload={
                     "next_allowed_tools": ["career_resume_version_create"],
+                    "required_tools": ["career_resume_version_create"],
                     "missing_outputs": ["resume_version"],
                     "compacted_fields": compacted_fields,
+                    "required_tool_call_hint": required_tool_call_hint,
                 },
             )
         if base_resume_profile_id is not None and target_jd_analysis_id is not None:
@@ -1660,6 +2390,45 @@ class WorkflowRuntimeGuard:
                 return prerequisite_decision
         repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
         return _repair_decision(tool_call, repaired_call, repair_actions)
+
+    def _resume_version_create_hint_refs(
+        self,
+        context: RunContext,
+        *,
+        base_resume_profile_id: str | None,
+        target_jd_analysis_id: str | None,
+    ) -> dict[str, Any]:
+        refs: dict[str, Any] = {}
+        if base_resume_profile_id is not None:
+            refs["resume_profile_id"] = base_resume_profile_id
+        if target_jd_analysis_id is not None:
+            refs["jd_analysis_id"] = target_jd_analysis_id
+        application = _single_current_session_record(self._career_store.list_career_applications(), context.session_id)
+        if application is not None:
+            for source_key, target_key in (
+                ("application_id", "application_id"),
+                ("resume_profile_id", "resume_profile_id"),
+                ("career_profile_id", "career_profile_id"),
+                ("jd_analysis_id", "jd_analysis_id"),
+                ("job_fit_report_id", "job_fit_report_id"),
+                ("source_artifact_id", "jd_source_artifact_id"),
+            ):
+                raw_value = getattr(application, source_key, None)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    refs.setdefault(target_key, raw_value.strip())
+        fit_report = _single_current_session_record(self._career_store.list_job_fit_reports(), context.session_id)
+        if fit_report is not None:
+            for source_key, target_key in (
+                ("job_fit_report_id", "job_fit_report_id"),
+                ("resume_profile_id", "resume_profile_id"),
+                ("career_profile_id", "career_profile_id"),
+                ("jd_analysis_id", "jd_analysis_id"),
+                ("source_artifact_id", "report_artifact_id"),
+            ):
+                raw_value = getattr(fit_report, source_key, None)
+                if isinstance(raw_value, str) and raw_value.strip():
+                    refs.setdefault(target_key, raw_value.strip())
+        return refs
 
     def _current_run_resume_version_validation_failure_count(self, context: RunContext) -> int:
         count = 0
@@ -1817,9 +2586,17 @@ class WorkflowRuntimeGuard:
         repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
 
         signature = _delegate_signature(repaired_call.arguments)
+        semantic_signature = _delegate_semantic_signature(repaired_call.arguments)
         if signature is None:
             return _repair_decision(tool_call, repaired_call, repair_actions)
         previous = self._latest_delegate_result_for_signature(context, signature)
+        reuse_lock = f"delegate_agents:{signature}"
+        reuse_message = "已复用同一 run 内相同 artifact_refs 和 target_agent_id 的委派结果，避免重复委派。"
+        if previous is None and semantic_signature is not None:
+            previous = self._latest_delegate_result_for_semantic_signature(context, semantic_signature)
+            if previous is not None:
+                reuse_lock = f"delegate_agents_semantic:{semantic_signature}"
+                reuse_message = "已复用同一 run 内语义相同的委派结果，避免换一种说法重复委派同一子任务。"
         jd_fit_intent = _is_jd_fit_only_intent(self._latest_user_message(context))
         if previous is not None and jd_fit_intent:
             if _single_current_session_record(self._career_store.list_job_fit_reports(), context.session_id) is None:
@@ -1832,8 +2609,8 @@ class WorkflowRuntimeGuard:
                 "workflow_runtime_result": True,
                 "policy": "reuse",
                 "idempotent_reused": True,
-                "lock_key": f"delegate_agents:{signature}",
-                "message": "已复用同一 run 内相同 artifact_refs 和 target_agent_id 的委派结果，避免重复委派。",
+                "lock_key": reuse_lock,
+                "message": reuse_message,
             }
         )
         return WorkflowGuardDecision(
@@ -1847,7 +2624,8 @@ class WorkflowRuntimeGuard:
                 "workflow_runtime_result": True,
                 "policy": "reuse",
                 "tool_name": "delegate_agents",
-                "lock_key": f"delegate_agents:{signature}",
+                "lock_key": reuse_lock,
+                "semantic_signature": semantic_signature,
                 "repair_actions": repair_actions,
             },
         )
@@ -1916,6 +2694,8 @@ class WorkflowRuntimeGuard:
             "并在 JobFitReport.report_artifact_id 中引用该 artifact。"
             f"报告里的“已匹配/候选人已有能力”只能来自 supported_candidate_facts：{fact_text}；"
             "JD 中未出现在这些事实里的要求，只能写入 gaps、风险、建议或待确认。"
+            "不要用“RAG 通常涉及向量检索”推断候选人具备向量检索经验；"
+            "匹配表的能力项也不要混入 Docker/K8s、MySQL、向量检索等未支持的 JD 具体技术。"
             "调用 session_create_text_artifact 时必须把完整 Markdown 正文传入 content 字段，"
             "不要传 content_chars、content_omitted 或占位正文。"
             "artifact 创建成功后立即调用 career_job_fit_report_save，不要再次创建或重写报告 artifact。"
@@ -2118,6 +2898,17 @@ class WorkflowRuntimeGuard:
             id_attr="resume_profile_id",
             reason="single_current_session_resume_profile",
         )
+        args, repair_actions = self._repair_record_ref(
+            args,
+            context,
+            repair_actions,
+            field="career_profile_id",
+            prefix="career_profile_",
+            records=self._career_store.list_career_profiles(),
+            getter=self._career_store.get_career_profile,
+            id_attr="career_profile_id",
+            reason="single_current_session_career_profile",
+        )
         return args, repair_actions
 
     def _repair_record_ref(
@@ -2163,6 +2954,33 @@ class WorkflowRuntimeGuard:
                 continue
             call_id = event.payload.get("tool_call_id")
             if not isinstance(call_id, str) or _delegate_signature(call_args_by_id.get(call_id)) != signature:
+                continue
+            payload = _loads_json_object(event.payload.get("content"))
+            if payload is None or payload.get("status") not in {"completed", "skipped"}:
+                continue
+            return payload
+        return None
+
+    def _latest_delegate_result_for_semantic_signature(
+        self,
+        context: RunContext,
+        semantic_signature: str,
+    ) -> dict[str, Any] | None:
+        call_args_by_id: dict[str, Any] = {}
+        for event in self._session_repository.list_run_events(context.session_id, context.agent_id, context.run_id):
+            if event.type == "tool_call" and event.payload.get("name") == "delegate_agents":
+                call_id = event.payload.get("tool_call_id")
+                if isinstance(call_id, str):
+                    call_args_by_id[call_id] = event.payload.get("arguments")
+                continue
+            if event.type != "tool_result" or event.payload.get("tool_name") != "delegate_agents":
+                continue
+            if event.payload.get("success") is not True:
+                continue
+            call_id = event.payload.get("tool_call_id")
+            if not isinstance(call_id, str):
+                continue
+            if _delegate_semantic_signature(call_args_by_id.get(call_id)) != semantic_signature:
                 continue
             payload = _loads_json_object(event.payload.get("content"))
             if payload is None or payload.get("status") not in {"completed", "skipped"}:
@@ -2289,6 +3107,13 @@ def _repair_decision(
             "repair_actions": repair_actions,
         },
     )
+
+
+def _hint_skeleton(hint: dict[str, Any] | None) -> dict[str, Any] | None:
+    if hint is None:
+        return None
+    skeleton = hint.get("retry_tool_call_skeleton")
+    return skeleton if isinstance(skeleton, dict) else None
 
 
 def _record_payload(record: Any) -> dict[str, Any]:
@@ -2673,6 +3498,82 @@ def _line_looks_like_candidate_claim(normalized_line: str) -> bool:
     )
 
 
+def _report_section_label(raw_line: str) -> str:
+    stripped = raw_line.strip().strip("|").strip()
+    if not stripped:
+        return ""
+    normalized = _normalize_fact_text(stripped)
+    if stripped.startswith("#"):
+        return _truncate_text(stripped.lstrip("#").strip(), 80)
+    if _has_any(normalized, ("已匹配", "明确匹配", "匹配能力", "候选人优势", "优势")):
+        return "matched_or_strengths"
+    if _has_any(normalized, ("差距", "缺口", "风险", "待确认", "面试追问", "建议")):
+        return "gap_or_risk_or_interview_focus"
+    if _has_any(normalized, ("匹配矩阵", "能力匹配", "匹配度评估")):
+        return "match_matrix"
+    return ""
+
+
+def _invalid_claim_repair_actions(invalid_claims: list[dict[str, str]]) -> list[dict[str, str]]:
+    actions: list[dict[str, str]] = []
+    seen_terms: set[str] = set()
+    for claim in invalid_claims:
+        term = claim.get("term", "").strip()
+        if not term or term in seen_terms:
+            continue
+        seen_terms.add(term)
+        actions.append(
+            {
+                "action": "move_unsupported_term_to_gap_or_risk",
+                "term": term,
+                "from": claim.get("section", "unknown"),
+                "to": "gap_or_risk_or_interview_focus",
+                "reason": claim.get("reason", "term_not_supported_by_resume_profile_or_resume_artifact"),
+            }
+        )
+    return actions
+
+
+def _looks_like_career_session_state_memory(*, content: str, tags: list[str]) -> bool:
+    normalized = _normalize_fact_text(" ".join([content, *tags]))
+    if not normalized:
+        return False
+    if "sessionstate" in normalized or "session_state" in normalized:
+        return True
+    product_markers = (
+        "resumeprofileid",
+        "careerprofile",
+        "jdanalysisid",
+        "jobfitreportid",
+        "applicationid",
+        "resumeversion",
+        "resume_profile",
+        "career_profile",
+        "jd_analysis",
+        "job_fit_report",
+        "career_application",
+        "resume_version",
+    )
+    workflow_markers = (
+        "已完成",
+        "已更新",
+        "已生成",
+        "可直接复用",
+        "岗位匹配",
+        "简历解析",
+        "诊断",
+        "workflow",
+        "productstore",
+    )
+    return _has_any(normalized, product_markers) and _has_any(normalized, workflow_markers)
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
 def _first_present_alias(normalized_text: str, aliases: tuple[str, ...]) -> str | None:
     for alias in aliases:
         normalized_alias = _normalize_fact_text(alias)
@@ -2692,6 +3593,111 @@ def _append_unique(output: list[str], value: str) -> None:
 
 def _truncate_text(value: str, limit: int) -> str:
     return value if len(value) <= limit else f"{value[: max(0, limit - 1)]}…"
+
+
+def _delegate_semantic_signature(arguments: Any) -> str | None:
+    if not isinstance(arguments, dict):
+        return None
+    raw_tasks = arguments.get("tasks")
+    if not isinstance(raw_tasks, list) or not raw_tasks:
+        return None
+    parts: list[str] = []
+    for task in raw_tasks:
+        if not isinstance(task, dict):
+            return None
+        target_agent_id = _string_or_none(task.get("target_agent_id"))
+        if target_agent_id is None:
+            return None
+        instruction = _string_or_none(task.get("instruction")) or ""
+        artifact_refs = _delegate_task_artifact_refs(task, instruction)
+        product_refs = _delegate_task_product_refs(task, instruction)
+        phase = _delegate_task_phase(target_agent_id, instruction, artifact_refs)
+        required_outputs = _delegate_task_required_outputs(target_agent_id, instruction)
+        parts.append(
+            ":".join(
+                [
+                    target_agent_id,
+                    phase,
+                    f"artifacts={','.join(artifact_refs)}",
+                    f"products={','.join(product_refs)}",
+                    f"outputs={','.join(required_outputs)}",
+                ]
+            )
+        )
+    return "|".join(sorted(parts))
+
+
+def _delegate_task_artifact_refs(task: dict[str, Any], instruction: str) -> list[str]:
+    refs: list[str] = []
+    raw_refs = task.get("artifact_refs")
+    if isinstance(raw_refs, list):
+        for raw_ref in raw_refs:
+            ref = _string_or_none(raw_ref)
+            if ref is not None and ref.startswith("artifact_"):
+                _append_unique(refs, ref)
+    for ref in re.findall(r"\bartifact_[A-Za-z0-9_-]+\b", instruction):
+        _append_unique(refs, ref)
+    return sorted(refs)
+
+
+def _delegate_task_product_refs(task: dict[str, Any], instruction: str) -> list[str]:
+    refs: list[str] = []
+    raw_refs = task.get("artifact_refs")
+    texts = [instruction]
+    if isinstance(raw_refs, list):
+        texts.extend(ref for ref in raw_refs if isinstance(ref, str))
+    ignored_field_names = {
+        "resume_profile_id",
+        "career_profile_id",
+        "jd_analysis_id",
+        "job_fit_report_id",
+        "application_id",
+        "resume_version_id",
+    }
+    pattern = re.compile(
+        r"\b(?:resume_profile|career_profile|job_fit_report|resume_version|application|jd|fit)_[A-Za-z0-9_-]+\b"
+    )
+    for text in texts:
+        for ref in pattern.findall(text):
+            if ref in ignored_field_names or ref.startswith("artifact_"):
+                continue
+            _append_unique(refs, ref)
+    return sorted(refs)
+
+
+def _delegate_task_phase(target_agent_id: str, instruction: str, artifact_refs: list[str]) -> str:
+    normalized = instruction.casefold()
+    compact = _normalize_fact_text(instruction)
+    if target_agent_id == "job_agent" and (
+        _task_requires_job_fit_report(instruction)
+        or any(ref.startswith("artifact_jd") for ref in artifact_refs)
+        or _has_any(normalized, ("jd", "job description", "岗位", "职位", "匹配"))
+    ):
+        return "jd_fit"
+    if target_agent_id == "resume_agent" and _has_any(
+        compact,
+        ("简历诊断", "诊断简历", "简历画像", "解析简历", "resumeprofile"),
+    ):
+        return "resume_diagnosis"
+    return "general"
+
+
+def _delegate_task_required_outputs(target_agent_id: str, instruction: str) -> list[str]:
+    normalized = instruction.casefold()
+    compact = _normalize_fact_text(instruction)
+    outputs: list[str] = []
+    if target_agent_id == "job_agent":
+        if _has_any(normalized, ("jdanalysis", "career_jd_analysis_save")) or _has_any(compact, ("jd分析", "岗位分析")):
+            outputs.append("jd_analysis")
+        if _task_requires_job_fit_report(instruction):
+            _append_unique(outputs, "jd_analysis")
+            outputs.append("job_fit_report")
+    elif target_agent_id == "resume_agent":
+        if _has_any(compact, ("简历画像", "resumeprofile")):
+            outputs.append("resume_profile")
+        if _has_any(compact, ("诊断报告", "简历诊断")):
+            outputs.append("diagnosis_artifact")
+    return sorted(outputs)
 
 
 def _delegate_signature(arguments: Any) -> str | None:
@@ -2742,6 +3748,8 @@ def _is_runtime_block_tool_result(event: Any) -> bool:
         return False
     content = payload.get("content")
     decoded = _loads_json_object(content)
+    if decoded is not None and decoded.get("event_type") == "tool_schema_not_revealed":
+        return True
     return (
         decoded is not None
         and decoded.get("workflow_runtime_result") is True
@@ -2803,6 +3811,8 @@ def _is_resume_version_intent(message: str) -> bool:
     text = message.strip().casefold()
     if not text:
         return False
+    if _is_application_action_intent(text):
+        return False
     if re.search(r"生成\s*简历\s*画像", text):
         return False
     return _has_any(
@@ -2818,6 +3828,31 @@ def _is_resume_version_intent(message: str) -> bool:
             "custom resume",
         ),
     ) or re.search(r"生成\s*(一版|一份|新版|定制|可投递|优化后)?\s*简历(?!\s*画像)", text) is not None
+
+
+def _is_application_action_intent(message: str) -> bool:
+    text = message.strip().casefold()
+    if not text:
+        return False
+    return _has_any(
+        text,
+        (
+            "投递前检查",
+            "面试准备",
+            "申请进度",
+            "项目动作",
+            "pre_apply",
+            "pre-apply",
+            "interview prep",
+        ),
+    )
+
+
+def _requires_application_read_intent(message: str) -> bool:
+    text = message.strip().casefold()
+    if not text:
+        return False
+    return "career_application_get" in text or ("先调用" in text and "读取项目" in text)
 
 
 def _is_resume_diagnosis_intent(message: str) -> bool:

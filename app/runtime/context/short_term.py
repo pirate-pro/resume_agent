@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from typing import Any
 
 from app.core.errors import ValidationError
 from app.domain.models import EventRecord, RunContext
@@ -100,6 +102,20 @@ def format_assigned_task_lines(tasks: list[AgentTaskAssignedPayload]) -> list[st
     return lines
 
 
+def format_assigned_task_context_lines(tasks: list[AgentTaskAssignedPayload]) -> list[str]:
+    lines: list[str] = []
+    for task in tasks:
+        if not task.task_context:
+            continue
+        payload = {
+            "task_id": task.task_id,
+            "target_agent_id": task.target_agent_id,
+            "context": _bounded_context_value(task.task_context),
+        }
+        lines.append(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return lines
+
+
 def format_child_result_summary_lines(results: list[AgentResultSummaryPayload]) -> list[str]:
     lines: list[str] = []
     for result in results:
@@ -134,6 +150,34 @@ def is_other_agent_related_event(event: EventRecord, context: RunContext) -> boo
     if event.run_id == context.run_id:
         return True
     return event.parent_run_id == context.run_id
+
+
+def _bounded_context_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 5:
+        return _shorten_scalar(value)
+    if isinstance(value, dict):
+        output: dict[str, Any] = {}
+        for index, (raw_key, raw_value) in enumerate(value.items()):
+            if index >= 32:
+                output["_truncated_keys"] = max(0, len(value) - 32)
+                break
+            output[str(raw_key)] = _bounded_context_value(raw_value, depth=depth + 1)
+        return output
+    if isinstance(value, list):
+        items = [_bounded_context_value(item, depth=depth + 1) for item in value[:16]]
+        if len(value) > 16:
+            items.append({"_truncated_items": len(value) - 16})
+        return items
+    return _shorten_scalar(value)
+
+
+def _shorten_scalar(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if len(text) <= 1200:
+        return text
+    return text[:1200].rstrip() + "...(truncated)"
 
 
 def is_main_agent_orchestration_event(event: EventRecord, context: RunContext) -> bool:

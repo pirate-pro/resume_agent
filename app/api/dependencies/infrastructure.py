@@ -9,6 +9,7 @@ from app.api.dependencies.config import get_settings
 from app.career.store import CareerProductStore
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.jsonl_tool_call_ledger import JsonlToolCallLedger
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.knowledge.store import KnowledgeStore
@@ -30,6 +31,7 @@ __all__ = [
     "get_session_repository",
     "get_skill_repository",
     "get_state_store",
+    "get_tool_call_ledger",
 ]
 
 
@@ -37,6 +39,12 @@ __all__ = [
 def get_session_repository() -> JsonlSessionRepository:
     settings = get_settings()
     return JsonlSessionRepository(data_dir=settings.data_dir)
+
+
+@lru_cache(maxsize=1)
+def get_tool_call_ledger() -> JsonlToolCallLedger:
+    settings = get_settings()
+    return JsonlToolCallLedger(data_dir=settings.data_dir)
 
 
 @lru_cache(maxsize=1)

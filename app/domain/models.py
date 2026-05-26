@@ -56,6 +56,7 @@ class RunContext:
     turn_id: str
     entry_agent_id: str
     parent_run_id: str | None = None
+    task_id: str | None = None
     trace_flags: dict[str, bool] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -66,6 +67,8 @@ class RunContext:
         self.entry_agent_id = _require_non_empty("entry_agent_id", self.entry_agent_id)
         if self.parent_run_id is not None:
             self.parent_run_id = _require_non_empty("parent_run_id", self.parent_run_id)
+        if self.task_id is not None:
+            self.task_id = _require_non_empty("task_id", self.task_id)
         if not isinstance(self.trace_flags, dict):
             raise ValidationError("trace_flags must be a dictionary.")
         normalized_flags: dict[str, bool] = {}
@@ -341,8 +344,8 @@ class AgentRunInput:
         for skill_name in self.skill_names:
             normalized_skill_names.append(_require_non_empty("skill_name", skill_name))
         self.skill_names = normalized_skill_names
-        if self.max_tool_rounds < 0 or self.max_tool_rounds > 20:
-            raise ValidationError("max_tool_rounds must be in range 0..20.")
+        if self.max_tool_rounds < 0 or self.max_tool_rounds > 40:
+            raise ValidationError("max_tool_rounds must be in range 0..40.")
 
 
 @dataclass(slots=True)

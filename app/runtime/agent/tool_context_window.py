@@ -26,6 +26,30 @@ _MAX_REVEALED_TOOL_NAMES = 32
 _TEXT_LIMIT = 180
 _FAILED_CONTENT_PREVIEW_CHARS = 220
 _LONG_CONTENT_ARGUMENT_CHARS = 480
+_STRICT_REQUIRED_TOOL_SUPPORTING_TOOLS = {
+    "career_application_merge": {"career_resume_version_create"},
+    "career_resume_version_create": {
+        "career_application_get",
+        "career_resume_profile_get",
+        "career_jd_analysis_get",
+        "career_job_fit_report_get",
+    },
+    "career_job_fit_report_save": {
+        "session_create_text_artifact",
+        "career_jd_analysis_save",
+    },
+    "session_create_text_artifact": {
+        "session_read_artifact",
+        "career_resume_profile_get",
+        "career_profile_get",
+        "career_jd_analysis_save",
+        "career_jd_analysis_get",
+    },
+    "career_resume_profile_save": {
+        "session_create_text_artifact",
+        "session_read_artifact",
+    },
+}
 _ID_PREFIX_RE = re.compile(
     r"^(artifact|resume_profile|career_profile|jd|fit|resume_version|application|note|learning_task|learning_plan|weakness|checkin|task_group|task)_[A-Za-z0-9_-]+$"
 )
@@ -124,12 +148,17 @@ class ToolContextWindow:
     def mode(self) -> str:
         return self._mode
 
-    def render_messages(self) -> list[dict[str, Any]]:
+    def render_messages(
+        self,
+        *,
+        runtime_plan: dict[str, Any] | None = None,
+        strict_mode: bool = False,
+    ) -> list[dict[str, Any]]:
         messages = list(self._base_messages)
         if self._mode == "off":
             messages.extend(self._history_messages)
         else:
-            state_message = self._state_message()
+            state_message = self._state_message(runtime_plan=runtime_plan, strict_mode=strict_mode)
             if state_message is not None:
                 messages.append(state_message)
         if self._pending_exchange is not None:
@@ -169,10 +198,15 @@ class ToolContextWindow:
         text = content.strip()
         if not text:
             return
-        self._base_messages.append({"role": "user", "content": text})
+        self._base_messages.append({"role": "assistant", "content": text})
 
-    def usage_payload(self) -> dict[str, Any]:
-        state_message = self._state_message()
+    def usage_payload(
+        self,
+        *,
+        runtime_plan: dict[str, Any] | None = None,
+        strict_mode: bool = False,
+    ) -> dict[str, Any]:
+        state_message = self._state_message(runtime_plan=runtime_plan, strict_mode=strict_mode)
         pending_messages = self._pending_exchange.messages() if self._pending_exchange is not None else []
         return {
             "tool_context_window_mode": self._mode,
@@ -185,40 +219,66 @@ class ToolContextWindow:
             else 0,
         }
 
-    def _state_message(self) -> dict[str, str] | None:
+    def _state_message(
+        self,
+        *,
+        runtime_plan: dict[str, Any] | None = None,
+        strict_mode: bool = False,
+    ) -> dict[str, str] | None:
         if self._mode != "compact" or not self._observations:
             return None
-        payload = self._state_payload()
+        payload = self._state_payload(runtime_plan=runtime_plan, strict_mode=strict_mode)
         content = _dump_bounded(payload, max_chars=self._max_state_chars)
         return {
             "role": "assistant",
             "content": f"运行时工具状态摘要（完整工具结果见事件日志）：\n{content}",
         }
 
-    def _state_payload(self) -> dict[str, Any]:
-        observations = self._observations[-self._max_observations :]
+    def _state_payload(
+        self,
+        *,
+        runtime_plan: dict[str, Any] | None = None,
+        strict_mode: bool = False,
+    ) -> dict[str, Any]:
+        observations = _strict_runtime_observations(
+            self._observations,
+            runtime_plan=runtime_plan,
+            strict_mode=strict_mode,
+        )
+        observations = observations[-self._max_observations :]
         detailed_observations = observations[-_DEFAULT_DETAILED_OBSERVATIONS:]
         older_observations = observations[: -_DEFAULT_DETAILED_OBSERVATIONS]
-        latest_refs = _latest_refs(self._observations)
-        revealed_tool_names = _latest_revealed_tool_names(self._observations)
+        plan_known_refs = _runtime_plan_known_refs(runtime_plan)
+        latest_refs = _latest_refs(observations)
+        latest_refs.update(plan_known_refs)
+        revealed_tool_names = _latest_revealed_tool_names(observations)
         revealed_tool_groups = _revealed_tool_groups(revealed_tool_names)
         latest_errors = [
             observation.error
-            for observation in reversed(self._observations)
+            for observation in reversed(observations)
             if observation.error
         ][:3]
         successful_tools = _dedupe(
-            [observation.tool_name for observation in self._observations if observation.success]
+            [observation.tool_name for observation in observations if observation.success]
         )[-12:]
+        strict_required_tools = _runtime_plan_tool_names((runtime_plan or {}).get("required_tools"))
         return _drop_empty(
             {
                 "runtime_tool_state": "compact",
+                "strict_runtime_plan": True if strict_mode and runtime_plan is not None else None,
                 "tool_call_count": len(self._observations),
+                "shown_tool_call_count": len(observations)
+                if strict_mode and len(observations) != len(self._observations)
+                else None,
+                "required_tools": strict_required_tools,
+                "known_refs": plan_known_refs,
+                "missing_outputs": _runtime_plan_tool_names((runtime_plan or {}).get("missing_outputs")),
+                "discouraged_tools": _strict_discouraged_tools(runtime_plan) if strict_mode else [],
                 "successful_tools": successful_tools,
                 "tool_search_guidance": _tool_search_guidance(revealed_tool_names),
                 "revealed_tool_names": revealed_tool_names,
                 "revealed_tool_groups": revealed_tool_groups,
-                "workflow_completion_guidance": _workflow_completion_guidance(self._observations),
+                "workflow_completion_guidance": _workflow_completion_guidance(observations),
                 "latest_refs": latest_refs,
                 "older_observation_summary": _older_observation_summary(older_observations),
                 "recent_observations": [observation.to_payload() for observation in detailed_observations],
@@ -372,6 +432,63 @@ def _workflow_completion_guidance(observations: list[ToolObservation]) -> list[s
     if {"career_resume_version_create", "career_application_merge"} <= successful_tools:
         hints.append("定制简历已创建并已合并进 CareerApplication；下一步应给最终答复，不要重新读取全部关联记录。")
     return hints
+
+
+def _strict_runtime_observations(
+    observations: list[ToolObservation],
+    *,
+    runtime_plan: dict[str, Any] | None,
+    strict_mode: bool,
+) -> list[ToolObservation]:
+    if not strict_mode or runtime_plan is None:
+        return list(observations)
+    required_tools = _runtime_plan_tool_names(runtime_plan.get("required_tools"))
+    if not required_tools:
+        required_tools = _runtime_plan_tool_names(runtime_plan.get("next_allowed_tools"))
+    if len(required_tools) != 1:
+        return list(observations)
+    required_tool = required_tools[0]
+    supporting_tools = {required_tool, *_STRICT_REQUIRED_TOOL_SUPPORTING_TOOLS.get(required_tool, set())}
+    discouraged_tools = set(_strict_discouraged_tools(runtime_plan))
+    filtered: list[ToolObservation] = []
+    for observation in observations:
+        if observation.tool_name in supporting_tools:
+            filtered.append(observation)
+            continue
+        if observation.tool_name not in discouraged_tools:
+            filtered.append(observation)
+    return filtered
+
+
+def _strict_discouraged_tools(runtime_plan: dict[str, Any] | None) -> list[str]:
+    if runtime_plan is None:
+        return []
+    names = [
+        *_runtime_plan_tool_names(runtime_plan.get("discouraged_tools")),
+        *_runtime_plan_tool_names(runtime_plan.get("blocked_tools")),
+        *_runtime_plan_tool_names(runtime_plan.get("blocked_actions")),
+        "tool_search",
+    ]
+    return [name for name in _dedupe(names) if name]
+
+
+def _runtime_plan_tool_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            output.append(item.strip())
+    return output
+
+
+def _runtime_plan_known_refs(runtime_plan: dict[str, Any] | None) -> dict[str, Any]:
+    if runtime_plan is None:
+        return {}
+    raw_refs = runtime_plan.get("known_refs")
+    if not isinstance(raw_refs, dict):
+        return {}
+    return {str(key): value for key, value in raw_refs.items() if isinstance(key, str) and value is not None}
 
 
 def _workflow_runtime_summary(payload: dict[str, Any]) -> str:

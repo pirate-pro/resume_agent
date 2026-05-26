@@ -52,8 +52,8 @@ class DelegateAgentsTool:
                                     "type": "integer",
                                     "default": 10,
                                     "minimum": 0,
-                                    "maximum": 20,
-                                    "description": "Use 10-20 when the child must create artifacts or product records.",
+                                    "maximum": 40,
+                                    "description": "Use 20-24 when the child must create artifacts or product records.",
                                 },
                             },
                             "required": ["target_agent_id", "instruction"],
@@ -255,6 +255,6 @@ def _optional_string_list(
 
 
 def _parse_max_tool_rounds(raw: Any) -> int:
-    if not isinstance(raw, int) or raw < 0 or raw > 20:
-        raise ToolExecutionError("'max_tool_rounds' must be an integer in range 0..20.")
+    if not isinstance(raw, int) or raw < 0 or raw > 40:
+        raise ToolExecutionError("'max_tool_rounds' must be an integer in range 0..40.")
     return raw

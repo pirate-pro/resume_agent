@@ -13,14 +13,17 @@ from app.domain.agent_task_protocols import AgentTaskStore
 from app.domain.agent_tasks import AgentTaskRecord, AgentTaskSpec
 from app.domain.models import RunContext
 from app.runtime.agent_events import (
+    AGENT_RESULT_SUMMARY_EVENT,
     AGENT_TASK_COMPLETED_EVENT,
     AGENT_TASK_FAILED_EVENT,
     AGENT_TASK_GROUP_COMPLETED_EVENT,
     AGENT_TASK_GROUP_CREATED_EVENT,
     AGENT_TASK_STARTED_EVENT,
+    AgentResultSummaryPayload,
 )
 from app.runtime.event_recorder import EventRecorder
 from app.services.agent_invocation_service import AgentInvocationRequest, AgentInvocationService
+from app.services.task_context_builder import TaskContextBuilder
 
 __all__ = [
     "AgentTaskGroupRequest",
@@ -34,6 +37,10 @@ __all__ = [
 _DEFAULT_MAX_CONCURRENCY = 3
 _MAX_TASKS_PER_GROUP = 8
 _TOOL_CALL_LIMIT_MESSAGE = "Tool call limit reached"
+_UNRELIABLE_FALLBACK_MARKERS = (
+    "没有生成可用的最终答复",
+    "已停止继续执行重复步骤",
+)
 
 
 @dataclass(slots=True)
@@ -139,6 +146,7 @@ class AgentTaskRuntime:
         invocation_service: AgentInvocationService,
         task_store: AgentTaskStore,
         event_recorder: EventRecorder | None = None,
+        task_context_builder: TaskContextBuilder | None = None,
         default_max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
     ) -> None:
         if default_max_concurrency <= 0:
@@ -146,6 +154,7 @@ class AgentTaskRuntime:
         self._invocation_service = invocation_service
         self._task_store = task_store
         self._event_recorder = event_recorder
+        self._task_context_builder = task_context_builder
         self._default_max_concurrency = default_max_concurrency
 
     def run_group(self, request: AgentTaskGroupRequest) -> AgentTaskGroupResult:
@@ -199,6 +208,11 @@ class AgentTaskRuntime:
                         "detail": _running_detail(running),
                     },
                 )
+                task_context = self._build_task_context(
+                    request=request,
+                    spec=spec,
+                    task_id=record.task_id,
+                )
                 try:
                     result = await asyncio.to_thread(
                         self._invocation_service.invoke,
@@ -212,6 +226,8 @@ class AgentTaskRuntime:
                             max_tool_rounds=spec.max_tool_rounds,
                             task_id=record.task_id,
                             child_run_id=child_run_id,
+                            task_context=task_context,
+                            record_result_summary=self._event_recorder is None,
                         ),
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -224,6 +240,17 @@ class AgentTaskRuntime:
                             **_task_progress_payload(failed),
                             "detail": _shorten(error, 160),
                         },
+                    )
+                    self._record_result_summary_event(
+                        request.source_context,
+                        task_id=record.task_id,
+                        target_agent_id=spec.target_agent_id,
+                        status="failed",
+                        summary=error,
+                        child_run_id=child_run_id,
+                        artifact_refs=spec.artifact_refs,
+                        output_artifact_refs=[],
+                        product_refs=[],
                     )
                     return AgentTaskResult(
                         task_id=record.task_id,
@@ -250,21 +277,32 @@ class AgentTaskRuntime:
                         {
                             **_task_progress_payload(failed),
                             "detail": _shorten(completion_error, 160),
-                            "artifact_refs": result.artifact_refs,
-                            "output_artifact_refs": result.output_artifact_refs,
-                            "product_refs": result.product_refs,
+                            "artifact_refs": list(spec.artifact_refs),
+                            "output_artifact_refs": [],
+                            "product_refs": [],
                         },
+                    )
+                    self._record_result_summary_event(
+                        request.source_context,
+                        task_id=record.task_id,
+                        target_agent_id=spec.target_agent_id,
+                        status="failed",
+                        summary=completion_error,
+                        child_run_id=result.child_run_id,
+                        artifact_refs=spec.artifact_refs,
+                        output_artifact_refs=[],
+                        product_refs=[],
                     )
                     return AgentTaskResult(
                         task_id=record.task_id,
                         target_agent_id=spec.target_agent_id,
                         status="failed",
                         summary=completion_error,
-                        answer=result.answer,
+                        answer=completion_error,
                         child_run_id=result.child_run_id,
-                        artifact_refs=result.artifact_refs,
-                        output_artifact_refs=result.output_artifact_refs,
-                        product_refs=result.product_refs,
+                        artifact_refs=list(spec.artifact_refs),
+                        output_artifact_refs=[],
+                        product_refs=[],
                         error=completion_error,
                     )
                 completed = self._task_store.mark_completed(
@@ -284,6 +322,17 @@ class AgentTaskRuntime:
                         "output_artifact_refs": result.output_artifact_refs,
                         "product_refs": result.product_refs,
                     },
+                )
+                self._record_result_summary_event(
+                    request.source_context,
+                    task_id=record.task_id,
+                    target_agent_id=spec.target_agent_id,
+                    status="completed",
+                    summary=result.summary,
+                    child_run_id=result.child_run_id,
+                    artifact_refs=result.artifact_refs,
+                    output_artifact_refs=result.output_artifact_refs,
+                    product_refs=result.product_refs,
                 )
                 return AgentTaskResult(
                     task_id=record.task_id,
@@ -325,6 +374,73 @@ class AgentTaskRuntime:
         if self._event_recorder is None:
             return
         self._event_recorder.record(context=context, event_type=event_type, payload=payload)
+
+    def _record_result_summary_event(
+        self,
+        context: RunContext,
+        *,
+        task_id: str,
+        target_agent_id: str,
+        status: str,
+        summary: str,
+        child_run_id: str | None,
+        artifact_refs: list[str],
+        output_artifact_refs: list[str],
+        product_refs: list[str],
+    ) -> None:
+        if self._event_recorder is None or child_run_id is None:
+            return
+        payload = AgentResultSummaryPayload(
+            task_id=task_id,
+            source_agent_id=target_agent_id,
+            target_agent_id=context.agent_id,
+            status=status,
+            summary=summary,
+            artifact_refs=artifact_refs,
+            output_artifact_refs=output_artifact_refs,
+            product_refs=product_refs,
+            parent_run_id=context.run_id,
+        )
+        child_context = RunContext(
+            session_id=context.session_id,
+            run_id=child_run_id,
+            agent_id=target_agent_id,
+            turn_id=context.turn_id,
+            entry_agent_id=context.entry_agent_id,
+            parent_run_id=context.run_id,
+            trace_flags=dict(context.trace_flags),
+            task_id=task_id,
+        )
+        self._event_recorder.record(
+            context=child_context,
+            event_type=AGENT_RESULT_SUMMARY_EVENT,
+            payload=payload.to_payload(),
+        )
+
+    def _build_task_context(
+        self,
+        *,
+        request: AgentTaskGroupRequest,
+        spec: AgentTaskSpec,
+        task_id: str,
+    ) -> dict[str, object]:
+        if self._task_context_builder is None:
+            return {}
+        try:
+            return self._task_context_builder.build(
+                source_context=request.source_context,
+                target_agent_id=spec.target_agent_id,
+                task_id=task_id,
+                instruction=spec.instruction,
+                artifact_refs=spec.artifact_refs,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "schema_version": 1,
+                "task_id": task_id,
+                "target_agent_id": spec.target_agent_id,
+                "context_build_error": _safe_error_message(exc),
+            }
 
 
 def _run_coroutine_sync(coro: Coroutine[object, object, AgentTaskGroupResult]) -> AgentTaskGroupResult:
@@ -417,6 +533,8 @@ def _child_completion_error(*, spec: AgentTaskSpec, result: object) -> str | Non
     summary = _result_text(result, "summary")
     if _TOOL_CALL_LIMIT_MESSAGE in answer or _TOOL_CALL_LIMIT_MESSAGE in summary:
         return "子 Agent 达到工具调用上限，未生成可靠最终结果；该任务不能标记为完成。"
+    if any(marker in answer or marker in summary for marker in _UNRELIABLE_FALLBACK_MARKERS):
+        return "子 Agent 未生成可靠最终结果；该任务不能标记为完成。"
     if spec.target_agent_id == "job_agent" and _task_requires_job_fit_report(spec.instruction):
         product_refs = _result_refs(result, "product_refs")
         output_artifact_refs = _result_refs(result, "output_artifact_refs")

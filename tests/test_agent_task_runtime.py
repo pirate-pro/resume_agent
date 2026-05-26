@@ -434,11 +434,11 @@ def test_child_agent_tool_events_are_projected_as_safe_task_progress(tmp_path: P
     assert result.status == "completed"
     assert result.results[0].output_artifact_refs == []
     assert result.results[0].artifact_refs == []
-    assert result.results[0].product_refs == ["resume_profile_progress_001"]
+    assert result.results[0].product_refs == []
     visible_events = bundle.session_repository.list_events("sess_delegate")
     result_summary_events = [event for event in visible_events if event.type == "agent_result_summary"]
     assert result_summary_events[0].payload["output_artifact_refs"] == []
-    assert result_summary_events[0].payload["product_refs"] == ["resume_profile_progress_001"]
+    assert result_summary_events[0].payload["product_refs"] == []
     progress_events = [event for event in visible_events if event.type == "agent_task_progress"]
     source_types = {event.payload["source_event_type"] for event in progress_events}
     assert {"tool_call", "tool_result", "assistant_message"} <= source_types
@@ -488,7 +488,7 @@ def test_child_task_runtime_marks_tool_limit_answer_as_failed(tmp_path: Path) ->
     assert result.status == "failed"
     assert result.results[0].status == "failed"
     assert result.results[0].error is not None
-    assert "工具调用上限" in result.results[0].error
+    assert "未生成可靠最终结果" in result.results[0].error
     failed_events = [event for event in bundle.session_repository.list_events("sess_delegate") if event.type == "agent_task_failed"]
     assert failed_events
 
@@ -515,6 +515,15 @@ def test_job_fit_child_task_requires_report_product_and_artifact(tmp_path: Path)
     assert result.results[0].status == "failed"
     assert result.results[0].error is not None
     assert "缺少 job_fit_report, report_artifact" in result.results[0].error
+    assert result.results[0].answer == result.results[0].error
+    assert result.results[0].output_artifact_refs == []
+    assert result.results[0].product_refs == []
+    result_summaries = [
+        event for event in bundle.session_repository.list_events("sess_delegate") if event.type == "agent_result_summary"
+    ]
+    assert result_summaries
+    assert result_summaries[-1].payload["status"] == "failed"
+    assert result_summaries[-1].payload["summary"] == result.results[0].error
 
 
 def test_resume_child_task_requires_real_resume_profile_product(tmp_path: Path) -> None:

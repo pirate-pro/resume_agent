@@ -15,6 +15,7 @@ from app.api.dependencies.infrastructure import (
     get_session_repository,
     get_skill_repository,
     get_state_store,
+    get_tool_call_ledger,
 )
 from app.api.dependencies.managers import (
     get_agent_capability_registry,
@@ -82,5 +83,6 @@ __all__ = [
     "get_state_manager",
     "get_state_store",
     "get_tool_registry",
+    "get_tool_call_ledger",
     "get_token_usage_debug_service",
 ]

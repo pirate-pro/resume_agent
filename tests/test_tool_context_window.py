@@ -203,6 +203,87 @@ def test_compact_state_carries_revealed_tools_guidance() -> None:
     assert "不要为了这些工具再次调用 tool_search" in state_content
 
 
+def test_strict_compact_state_filters_discouraged_observations_but_keeps_required_support() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    get_call = ToolCall(
+        name="career_application_get",
+        arguments={"application_id": "application_alpha"},
+        tool_call_id="call_get",
+    )
+    get_content = json.dumps(
+        {
+            "record_type": "career_application",
+            "record_id": "application_alpha",
+            "record": {"application_id": "application_alpha"},
+        },
+        ensure_ascii=False,
+    )
+    create_call = ToolCall(
+        name="career_resume_version_create",
+        arguments={"base_resume_profile_id": "resume_profile_alpha", "content": "# 简历"},
+        tool_call_id="call_create",
+    )
+    create_content = json.dumps(
+        {
+            "record_type": "resume_version",
+            "record_id": "resume_version_alpha",
+            "record": {
+                "resume_version_id": "resume_version_alpha",
+                "artifact_id": "artifact_resume_version_alpha",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [get_call, create_call]),
+        tool_messages=[
+            build_tool_result_message(tool_call_id="call_get", content=get_content),
+            build_tool_result_message(tool_call_id="call_create", content=create_content),
+        ],
+        observations=[
+            build_tool_observation(
+                tool_call=get_call,
+                result=ToolExecutionResult(tool_name="career_application_get", success=True, content=get_content),
+                model_visible_content=get_content,
+            ),
+            build_tool_observation(
+                tool_call=create_call,
+                result=ToolExecutionResult(
+                    tool_name="career_resume_version_create",
+                    success=True,
+                    content=create_content,
+                ),
+                model_visible_content=create_content,
+            ),
+        ],
+    )
+    window.consume_pending_exchange()
+
+    rendered = window.render_messages(
+        runtime_plan={
+            "phase": "resume_version",
+            "required_tools": ["career_application_merge"],
+            "next_allowed_tools": ["career_application_merge"],
+            "known_refs": {
+                "application_id": "application_alpha",
+                "resume_version_id": "resume_version_alpha",
+            },
+            "missing_outputs": ["career_application_resume_version_link"],
+            "discouraged_tools": ["career_application_get", "tool_search"],
+        },
+        strict_mode=True,
+    )
+    payload = json.loads(str(rendered[1]["content"]).split("\n", 1)[1])
+    recent_tools = [item["tool"] for item in payload["recent_observations"]]
+
+    assert payload["strict_runtime_plan"] is True
+    assert payload["shown_tool_call_count"] == 1
+    assert recent_tools == ["career_resume_version_create"]
+    assert payload["known_refs"]["application_id"] == "application_alpha"
+    assert payload["latest_refs"]["resume_version_id"] == "resume_version_alpha"
+
+
 def test_compact_state_tells_model_to_stop_after_completed_resume_version_flow() -> None:
     window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
     create_call = ToolCall(

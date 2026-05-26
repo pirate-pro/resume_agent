@@ -13,6 +13,8 @@ __all__ = [
     "ensure_tool_call_ids",
     "normalize_tool_context_window_mode",
     "to_model_tool_schema",
+    "ToolGateway",
+    "ToolGatewayResult",
 ]
 
 from app.runtime.agent.post_run_maintenance import PostRunMaintenanceScheduler
@@ -29,3 +31,4 @@ from app.runtime.agent.tool_messages import (
     to_model_tool_schema,
 )
 from app.runtime.agent.tool_runner import ToolExecutionRunner
+from app.runtime.agent.tool_gateway import ToolGateway, ToolGatewayResult

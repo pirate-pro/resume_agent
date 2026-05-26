@@ -10,6 +10,7 @@ import pytest
 from app.career.models import validate_evidence_refs
 from app.core.errors import ValidationError
 from app.domain.models import EventRecord, RunContext
+from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT
 from app.runtime.context.career_flow_state import extract_career_flow_state
 from app.runtime.context.models import CurrentWorkflowState
 from app.runtime.context.workflow_state import extract_current_workflow_state
@@ -135,6 +136,59 @@ def test_resume_version_artifact_like_text_is_not_product_ref() -> None:
     assert "resume_version_id" not in workflow_state.refs
     assert "resume_version_ids" not in career_state.multi_refs
     assert career_state.missing_steps == ["resume_version"]
+
+
+def test_failed_delegate_result_text_refs_do_not_become_workflow_refs() -> None:
+    failed_delegate = _tool_result(
+        {
+            "status": "failed",
+            "results": [
+                {
+                    "target_agent_id": "job_agent",
+                    "status": "failed",
+                    "summary": "job_agent JD 匹配子任务未完成：缺少 job_fit_report, report_artifact。",
+                    "answer": "我已保存 JDAnalysis jd_fake_hallucinated 和 JobFitReport fit_fake_hallucinated。",
+                    "product_refs": ["resume_profile_real", "career_profile_default"],
+                    "output_artifact_refs": [],
+                }
+            ],
+        },
+        tool_name="delegate_agents",
+    )
+    stale_child_summary = EventRecord(
+        event_id="evt_child_summary",
+        session_id="sess_refs",
+        agent_id="job_agent",
+        run_id="run_child",
+        parent_run_id="run_current",
+        type=AGENT_RESULT_SUMMARY_EVENT,
+        payload={
+            "task_id": "task_job",
+            "source_agent_id": "job_agent",
+            "target_agent_id": "agent_main",
+            "status": "completed",
+            "summary": "我已保存 JDAnalysis jd_fake_summary 和 JobFitReport fit_fake_summary。",
+            "artifact_refs": ["artifact_jd_input"],
+            "output_artifact_refs": [],
+            "product_refs": ["resume_profile_real", "career_profile_default"],
+        },
+        created_at=datetime.now(UTC),
+    )
+    events = [failed_delegate, stale_child_summary]
+
+    workflow_state = extract_current_workflow_state(events, _context())
+    career_state = extract_career_flow_state(
+        events,
+        _context(),
+        user_message="请分析 JD 并生成岗位匹配报告",
+        workflow_state=CurrentWorkflowState(refs={"resume_profile_id": "resume_profile_real"}),
+    )
+
+    assert "jd_analysis_id" not in workflow_state.refs
+    assert "job_fit_report_id" not in workflow_state.refs
+    assert "jd_analysis_id" not in career_state.refs
+    assert "job_fit_report_id" not in career_state.refs
+    assert career_state.missing_steps == ["jd_analysis", "job_fit_report"]
 
 
 def test_evidence_ref_validation_rejects_reserved_tool_like_refs() -> None:

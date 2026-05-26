@@ -340,6 +340,38 @@ def test_agent_invocation_child_prompt_contains_assigned_task(tmp_path: Path) ->
     assert "Main orchestration state:" not in prompt
 
 
+def test_agent_invocation_child_prompt_contains_task_context(tmp_path: Path) -> None:
+    bundle = _build_bundle(tmp_path)
+    bundle.session_repository.create_session("sess_child_task_context")
+
+    bundle.service.invoke(
+        AgentInvocationRequest(
+            source_context=_source_context("sess_child_task_context"),
+            target_agent_id="resume_agent",
+            instruction="解析简历上下文",
+            task_id="task_context_invoke",
+            task_context={
+                "schema_version": 1,
+                "task_id": "task_context_invoke",
+                "known_refs": {"resume_source_artifact_id": "artifact_resume_ctx"},
+                "provided_inputs_complete": True,
+            },
+            max_tool_rounds=0,
+        )
+    )
+
+    assignment = next(
+        event
+        for event in bundle.session_repository.list_orchestration_events("sess_child_task_context")
+        if event.type == AGENT_TASK_ASSIGNED_EVENT
+    )
+    assert assignment.payload["task_context"]["known_refs"]["resume_source_artifact_id"] == "artifact_resume_ctx"
+    assert len(bundle.model_client.calls) == 1
+    prompt = bundle.model_client.calls[0]["system_prompt"]
+    assert "Deterministic task context:" in prompt
+    assert "artifact_resume_ctx" in prompt
+
+
 def test_agent_invocation_rejects_unallowed_child_skill(tmp_path: Path) -> None:
     bundle = _build_bundle(tmp_path)
     bundle.session_repository.create_session("sess_child_skill")

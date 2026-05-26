@@ -91,7 +91,7 @@ def extract_career_flow_state(
         if event.type == "tool_result":
             _merge_tool_result(accumulator, event=event, context=context)
         elif event.type == AGENT_RESULT_SUMMARY_EVENT:
-            _merge_value(accumulator, event.payload)
+            _merge_agent_result_summary(accumulator, event.payload)
 
     if not intent and not accumulator.refs and not accumulator.multi_refs:
         return CareerFlowState()
@@ -174,6 +174,11 @@ def _seed_multi_refs_from_workflow_state(
 def _career_intent(user_message: str) -> set[str]:
     text = user_message.strip().casefold()
     intents: set[str] = set()
+    application_action = _is_application_action_message(text)
+    if application_action:
+        intents.add("application_action")
+        intents.add("career_application")
+        return intents
     if _has_any(text, ("简历", "resume", "画像", "诊断")):
         intents.add("resume_profile")
     if _has_any(text, ("jd", "岗位", "职位", "岗位描述", "职位描述")):
@@ -202,6 +207,9 @@ def _merge_tool_result(accumulator: _CareerFlowAccumulator, *, event: EventRecor
     accumulator.successful_tools.add(tool_name)
     if event.run_id == context.run_id:
         accumulator.current_run_successful_tools.add(tool_name)
+    if tool_name == "delegate_agents":
+        _merge_delegate_agents_result(accumulator, decoded)
+        return
     _merge_value(accumulator, decoded if decoded is not None else content)
 
     if tool_name == "career_resume_version_create" and event.run_id == context.run_id:
@@ -212,6 +220,53 @@ def _merge_tool_result(accumulator: _CareerFlowAccumulator, *, event: EventRecor
         and accumulator.resume_version_created_current_run
     ):
         accumulator.application_merged_after_resume_version = True
+
+
+def _merge_delegate_agents_result(accumulator: _CareerFlowAccumulator, payload: Any) -> None:
+    if not isinstance(payload, dict):
+        return
+    if _delegate_payload_allows_structured_refs(payload):
+        _merge_structured_child_refs(accumulator, payload)
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return
+    for result in results:
+        if not isinstance(result, dict) or result.get("status") != "completed":
+            continue
+        _merge_structured_child_refs(accumulator, result)
+
+
+def _merge_agent_result_summary(accumulator: _CareerFlowAccumulator, payload: Any) -> None:
+    if not isinstance(payload, dict) or payload.get("status") != "completed":
+        return
+    _merge_structured_child_refs(accumulator, payload)
+
+
+def _merge_structured_child_refs(accumulator: _CareerFlowAccumulator, payload: dict[str, Any]) -> None:
+    for ref in _string_items(payload.get("product_refs")):
+        _merge_ref(accumulator, ref, record_type=None)
+
+    artifact_key = _output_artifact_key_for_child(payload)
+    if artifact_key is None:
+        return
+    for ref in _string_items(payload.get("output_artifact_refs")):
+        _set_ref(accumulator, artifact_key, ref)
+
+
+def _delegate_payload_allows_structured_refs(payload: dict[str, Any]) -> bool:
+    status = payload.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return True
+    return status.strip() not in {"failed", "skipped"}
+
+
+def _output_artifact_key_for_child(payload: dict[str, Any]) -> str | None:
+    agent_id = _optional_text(payload.get("target_agent_id")) or _optional_text(payload.get("source_agent_id"))
+    if agent_id == "resume_agent":
+        return "diagnosis_artifact_id"
+    if agent_id == "job_agent":
+        return "report_artifact_id"
+    return None
 
 
 def _merge_value(accumulator: _CareerFlowAccumulator, value: Any, *, record_type: str | None = None) -> None:
@@ -417,6 +472,8 @@ def _next_action_hint(
         return "需要基于简历 artifact 生成 ResumeProfile。"
     if missing_steps:
         return f"下一步补齐 {','.join(missing_steps)}。"
+    if "career_application" in intent:
+        return "围绕当前求职项目继续执行指定动作。"
     if intent:
         return "已确认当前求职流程状态；避免重复读取已确认记录。"
     return None
@@ -466,6 +523,12 @@ def _is_runtime_block_payload(payload: Any) -> bool:
     )
 
 
+def _string_items(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+
+
 def _optional_text(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -475,3 +538,18 @@ def _optional_text(value: Any) -> str | None:
 
 def _has_any(text: str, values: tuple[str, ...]) -> bool:
     return any(value in text for value in values)
+
+
+def _is_application_action_message(text: str) -> bool:
+    return _has_any(
+        text,
+        (
+            "投递前检查",
+            "面试准备",
+            "申请进度",
+            "项目动作",
+            "pre_apply",
+            "pre-apply",
+            "interview prep",
+        ),
+    )

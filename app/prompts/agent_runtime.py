@@ -7,6 +7,7 @@ __all__ = ["FINAL_ANSWER_RECOVERY_PROMPT"]
 FINAL_ANSWER_RECOVERY_PROMPT = (
     "你已经拿到了前面对话和工具结果。现在请直接给用户最终答复。"
     "不要再调用任何工具。"
+    "不要输出 <tool_call>、<function=...>、<parameter=...> 或任何伪工具调用文本。"
     "如果你已经创建、修改或读取了文件，要明确说明结果和相关文件路径。"
     "如果前文要求生成内容用于展示，就把最终内容直接回复给用户，而不是只写入文件。"
     "如果最终内容应为 Markdown 文档，不要再额外包一层 ```markdown 外层代码块；"

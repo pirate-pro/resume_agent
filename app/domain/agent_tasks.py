@@ -66,8 +66,8 @@ class AgentTaskSpec:
         self.artifact_refs = _normalize_artifact_refs("artifact_refs", self.artifact_refs)
         self.skill_names = _normalize_string_list("skill_names", self.skill_names)
         self.depends_on = _normalize_string_list("depends_on", self.depends_on)
-        if self.max_tool_rounds < 0 or self.max_tool_rounds > 20:
-            raise ValidationError("max_tool_rounds must be in range 0..20.")
+        if self.max_tool_rounds < 0 or self.max_tool_rounds > 40:
+            raise ValidationError("max_tool_rounds must be in range 0..40.")
 
 
 @dataclass(slots=True)
@@ -146,8 +146,8 @@ class AgentTaskRecord:
         self.constraints = _normalize_string_list("constraints", self.constraints)
         self.artifact_refs = _normalize_artifact_refs("artifact_refs", self.artifact_refs)
         self.skill_names = _normalize_string_list("skill_names", self.skill_names)
-        if self.max_tool_rounds < 0 or self.max_tool_rounds > 20:
-            raise ValidationError("max_tool_rounds must be in range 0..20.")
+        if self.max_tool_rounds < 0 or self.max_tool_rounds > 40:
+            raise ValidationError("max_tool_rounds must be in range 0..40.")
         self.status = _normalize_status("task", self.status, _TASK_STATUSES)
         self.child_run_id = _normalize_optional_string("child_run_id", self.child_run_id)
         self.summary = _normalize_optional_string("summary", self.summary)

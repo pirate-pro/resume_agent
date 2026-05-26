@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 import httpx
+import pytest
 
+import app.infra.llm.openai_compatible_client as client_module
 from app.infra.llm.openai_compatible_client import OpenAICompatibleClient
 
 __all__ = []
@@ -22,6 +24,20 @@ class _FakeHttpClient:
             json=self._payload,
             request=httpx.Request("POST", "http://example.test/v1/chat/completions"),
         )
+
+
+class _FlakyTimeoutHttpClient:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+        self.call_count = 0
+
+    def post(self, url: str, headers: dict[str, str], json: dict[str, Any]) -> httpx.Response:
+        _ = (headers, json)
+        self.call_count += 1
+        request = httpx.Request("POST", url)
+        if self.call_count == 1:
+            raise httpx.ReadTimeout("The read operation timed out", request=request)
+        return httpx.Response(status_code=200, json=self._payload, request=request)
 
 
 def test_generate_preserves_provider_reasoning_content() -> None:
@@ -43,6 +59,23 @@ def test_generate_preserves_provider_reasoning_content() -> None:
     assert response.usage.prompt_tokens == 11
     assert response.usage.completion_tokens == 7
     assert response.usage.total_tokens == 18
+
+
+def test_generate_retries_transient_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client_module, "_TRANSIENT_RETRY_BACKOFF_SECONDS", (0.0,))
+    http_client = _FlakyTimeoutHttpClient(_response_payload())
+    client = OpenAICompatibleClient(
+        base_url="http://example.test/v1",
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=1,
+        http_client=cast(httpx.Client, http_client),
+    )
+
+    response = client.generate(system_prompt="system", messages=[{"role": "user", "content": "hi"}], tools=[])
+
+    assert http_client.call_count == 2
+    assert response.model == "test-model"
 
 
 def _response_payload() -> dict[str, Any]:

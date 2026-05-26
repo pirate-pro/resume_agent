@@ -84,11 +84,76 @@ def test_hidden_tool_result_uses_runtime_plan_when_available() -> None:
     payload = json.loads(result.content)
     assert payload["workflow_runtime_result"] is True
     assert payload["policy"] == "block"
+    assert payload["tool_executed"] is False
+    assert payload["result_created"] is False
     assert payload["reason"] == "tool_hidden_by_runtime_plan"
+    assert payload["phase"] == "jd_fit"
     assert payload["next_allowed_tools"] == ["career_job_fit_report_save"]
     assert payload["required_tools"] == ["career_job_fit_report_save"]
     assert payload["known_refs"] == {"report_artifact_id": "artifact_fit_report"}
+    assert payload["required_tool"] == "career_job_fit_report_save"
+    assert payload["correction"] == "不要重试 session_read_artifact；当前唯一允许的下一步工具是 career_job_fit_report_save。"
+    assert payload["required_tool_call_hint"]["tool_name"] == "career_job_fit_report_save"
+    assert payload["required_tool_call_hint"]["available_args"] == {
+        "career_profile_id": "career_profile_default",
+        "report_artifact_id": "artifact_fit_report",
+    }
+    assert "resume_profile_id" in payload["required_tool_call_hint"]["missing_args"]
     assert payload["blocked_tools"] == ["session_read_artifact"]
+
+
+def test_hidden_tool_result_hints_resume_version_create_args() -> None:
+    result = hidden_tool_result(
+        "tool_search",
+        runtime_plan={
+            "phase": "resume_version",
+            "next_action": "只生成定制简历版本。",
+            "next_allowed_tools": ["career_resume_version_create"],
+            "required_tools": ["career_resume_version_create"],
+            "known_refs": {
+                "resume_profile_id": "resume_profile_alpha",
+                "career_profile_id": "career_profile_default",
+                "jd_analysis_id": "jd_alpha",
+                "job_fit_report_id": "fit_alpha",
+            },
+            "missing_outputs": ["resume_version"],
+        },
+    )
+
+    payload = json.loads(result.content)
+    hint = payload["required_tool_call_hint"]
+    assert hint["tool_name"] == "career_resume_version_create"
+    assert hint["available_args"]["base_resume_profile_id"] == "resume_profile_alpha"
+    assert hint["available_args"]["target_jd_analysis_id"] == "jd_alpha"
+    assert hint["retry_tool_call_skeleton"]["title"] == "定制简历"
+    assert "content_or_artifact_id" in hint["missing_args"]
+    assert "不要再 tool_search/get/list" in hint["instruction"]
+
+
+def test_hidden_tool_result_hints_application_merge_args() -> None:
+    result = hidden_tool_result(
+        "tool_search",
+        runtime_plan={
+            "phase": "resume_version",
+            "next_action": "只合并简历版本。",
+            "next_allowed_tools": ["career_application_merge"],
+            "required_tools": ["career_application_merge"],
+            "known_refs": {
+                "application_id": "application_alpha",
+                "resume_version_id": "resume_version_alpha",
+                "resume_version_artifact_id": "artifact_resume_version_alpha",
+            },
+            "missing_outputs": ["career_application_resume_version_link"],
+        },
+    )
+
+    payload = json.loads(result.content)
+    hint = payload["required_tool_call_hint"]
+    assert hint["tool_name"] == "career_application_merge"
+    assert hint["available_args"]["application_id"] == "application_alpha"
+    assert hint["available_args"]["updates"] == {"resume_version_ids": ["resume_version_alpha"]}
+    assert hint["available_args"]["evidence_refs"] == ["resume_version_alpha", "artifact_resume_version_alpha"]
+    assert hint["missing_args"] == []
 
 
 def test_hidden_tool_result_terminal_when_runtime_plan_is_final_ready() -> None:
@@ -108,6 +173,8 @@ def test_hidden_tool_result_terminal_when_runtime_plan_is_final_ready() -> None:
     payload = json.loads(result.content)
     assert payload["workflow_runtime_result"] is True
     assert payload["policy"] == "block"
+    assert payload["tool_executed"] is False
+    assert payload["result_created"] is False
     assert payload["terminal"] is True
     assert payload["final_answer_ready"] is True
     assert payload["reason"] == "final_answer_ready_no_more_tools"
