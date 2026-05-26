@@ -617,3 +617,105 @@ M36 收住了三类问题：
 - session_create_text_artifact 同标题同阶段多次重写
 - career_jd_analysis_save / career_job_fit_report_save 首稿被业务事实边界纠正后重写
 ```
+
+## M37：任务图和 artifact source 语义幂等收敛
+
+M36 r3 的 duplicate_runs=2/6 不是数据库副作用重复，而是两类上层任务图问题：
+
+```text
+1. run_003:
+   job_agent 生成岗位匹配报告 artifact 时，前两版被事实边界拦截。
+   这是 recovery duplicate，正确性没问题，但会消耗 token/时间。
+
+2. run_004:
+   main-agent 在 JD 阶段把同一个目标拆成两个 job_agent 子任务：
+   - 一个做 JDAnalysis/JobFitReport
+   - 一个试图让 job_agent 创建 CareerApplication
+
+   但 CareerApplication 是 main-agent 工具，不属于 job_agent。
+   第二个 child run 被 runtime 纠偏后又执行同一组 JDAnalysis/JobFitReport 保存，
+   依靠业务幂等复用结果，所以 harmful_duplicate=0，但 task graph 已经错了。
+```
+
+根因判断：
+
+```text
+之前只在工具层做幂等，能兜住副作用；
+但没有在 delegate/task graph 层表达：
+
+JD 匹配阶段：
+  job_agent 只负责 JDAnalysis + 唯一匹配报告 artifact + JobFitReport
+  main-agent 在 child fan-in 后再调用 career_application_create
+
+因此同一个阶段可以被 main-agent 拆成并发 sibling job task，
+再由底层幂等兜底，表现为“重复保存但无 harmful duplicate”。
+```
+
+本轮修改：
+
+```text
+app/services/task_context_builder.py
+  - task_context 不再把 artifact_refs[0] 盲目写成 jd_source_artifact_id。
+  - 根据 artifact_id/title/text_preview 判断 JD artifact 与 resume artifact。
+  - job_agent 同时收到 resume + JD refs 时：
+    jd_source_artifact_id/source_artifact_id 指向 JD；
+    resume_source_artifact_id 指向简历。
+
+app/runtime/workflow/guard.py
+  - JD 匹配阶段 canonicalize delegate task graph：
+    - 同一 JD source 只保留一个 job_agent child task。
+    - 依赖 JobFitReport 的 CareerApplication child task 不再派给 job_agent；
+      改为 main-agent 在 JobFitReport 返回后调用 career_application_create。
+    - 单个 job_agent task 若提到 CareerApplication，会追加 DAG 边界说明：
+      job_agent 不声明已创建 CareerApplication。
+
+app/runtime/workflow/tool_idempotency.py
+  - session_create_text_artifact 的 idempotency key 加入 workflow source scope：
+    - job_fit_report: jd_source_artifact_id/source_artifact_id/jd_analysis_id
+    - resume_diagnosis: resume_source_artifact_id/source_artifact_id/resume_profile_id
+    - resume_version_artifact: jd_analysis_id/target_jd_analysis_id/job_fit_report_id
+  - 目标是避免“同 parent run 下不同 source 的 artifact”误复用，
+    同时仍能复用同一 source 的重复输出。
+```
+
+验证：
+
+```text
+uv run pytest -q
+=> passed
+
+uv run mypy --explicit-package-bases app/runtime/agent_runtime.py app/runtime/workflow/tool_plan.py \
+  app/runtime/workflow/guard.py app/runtime/workflow/tool_idempotency.py \
+  app/services/task_context_builder.py tools/smoke_career_live_flow.py \
+  tests/test_agent_runtime.py tests/test_runtime_tool_plan.py \
+  tests/test_career_live_smoke_report.py tests/test_workflow_runtime_guard.py \
+  tests/test_task_context_builder.py tests/test_tool_policy.py
+=> Success: no issues found in 12 source files
+
+data/live_career_smoke_m37_task_graph_idempotency_6x3_r1
+runs=6 concurrency=3
+passed=6/6
+avg_elapsed=182.03s
+max_elapsed=221.91s
+avg_llm_calls=20.5
+max_llm_calls=23
+avg_tokens=122650
+max_tokens=140370
+duplicate_runs=0/6
+harmful_duplicate_runs=0/6
+recovery_duplicate_runs=0/6
+hidden_runs=0/6
+stagnation_runs=0/6
+hard_safety_runs=0/6
+```
+
+结论：
+
+```text
+这轮不是继续补某个工具重复调用，而是把重复保存上移到任务图层解决：
+先阻止 main-agent 派发同源 sibling job task，
+再让 artifact 幂等 key 按 workflow source 精确复用。
+
+当前 6x3 live smoke 已经从 M36 r3 的 duplicate_runs=2/6
+降到 duplicate_runs=0/6。
+```
