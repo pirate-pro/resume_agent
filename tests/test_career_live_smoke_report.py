@@ -132,12 +132,20 @@ def test_live_smoke_report_prints_efficiency_summary(
         efficiency={
             "llm_calls_by_agent": {"agent_main": 3, "job_agent": 2},
             "llm_tokens_by_agent": {"agent_main": 1200, "job_agent": 900},
+            "llm_calls_by_phase": {"tool_loop": 4, "final_answer_recovery": 1},
+            "llm_tokens_by_phase": {"tool_loop": 1500, "final_answer_recovery": 600},
+            "llm_prompt_parts": {"system_prompt_estimate_tokens": 800, "messages_estimate_tokens": 500},
+            "llm_system_prompt_sections": {"agent_identity": 300, "tool_catalog": 200},
             "duplicate_tool_calls": {"agent_main:tool_search:{\"query\":\"resume\"}": 2},
             "hidden_tool_results": {"job_agent:career_profile_get:tool_hidden_by_runtime_plan": 1},
             "failed_tool_results": {},
             "workflow_decisions": {"tool_loop_stagnation": 1},
             "total_llm_calls": 5,
             "total_llm_tokens": 2100,
+            "total_prompt_tokens": 1800,
+            "total_completion_tokens": 300,
+            "final_answer_recovery_tokens": 600,
+            "final_answer_recovery_calls": 1,
             "duplicate_tool_call_count": 1,
             "hidden_tool_result_count": 1,
             "failed_tool_result_count": 0,
@@ -148,7 +156,11 @@ def test_live_smoke_report_prints_efficiency_summary(
 
     output = capsys.readouterr().out
     assert "效率摘要: avg_llm_calls=5.0" in output
+    assert "avg_final_answer_recovery_tokens=600" in output
     assert "efficiency: llm_calls=" in output
+    assert "cost_profile: phase_tokens=" in output
+    assert "final_answer_recovery=600/1" in output
+    assert "top_sections=" in output
     assert "duplicates=1" in output
     assert "stagnation=1" in output
     assert "duplicate_tools:" in output
@@ -503,6 +515,18 @@ def test_efficiency_summary_reports_cost_duplicates_hidden_and_decisions(tmp_pat
         agent_id="agent_main",
         event_id="evt_llm_main_1",
         total_tokens=100,
+        prompt_tokens=80,
+        completion_tokens=20,
+        phase="tool_loop",
+        prompt_parts={
+            "system_prompt_estimate_tokens": 50,
+            "messages_estimate_tokens": 20,
+            "tools_estimate_tokens": 10,
+        },
+        system_prompt_sections=[
+            {"name": "agent_identity", "tokens": 30},
+            {"name": "tool_catalog", "tokens": 20},
+        ],
     )
     _append_llm_usage(
         repository,
@@ -510,6 +534,18 @@ def test_efficiency_summary_reports_cost_duplicates_hidden_and_decisions(tmp_pat
         agent_id="job_agent",
         event_id="evt_llm_job_1",
         total_tokens=250,
+        prompt_tokens=210,
+        completion_tokens=40,
+        phase="final_answer_recovery",
+        prompt_parts={
+            "system_prompt_estimate_tokens": 70,
+            "messages_estimate_tokens": 40,
+            "tool_pending_message_estimate_tokens": 30,
+        },
+        system_prompt_sections=[
+            {"name": "agent_identity", "tokens": 40},
+            {"name": "assigned_task_context", "tokens": 30},
+        ],
     )
     _append_tool_call(
         repository,
@@ -565,8 +601,24 @@ def test_efficiency_summary_reports_cost_duplicates_hidden_and_decisions(tmp_pat
 
     assert summary["llm_calls_by_agent"] == {"agent_main": 1, "job_agent": 1}
     assert summary["llm_tokens_by_agent"] == {"agent_main": 100, "job_agent": 250}
+    assert summary["llm_calls_by_phase"] == {"final_answer_recovery": 1, "tool_loop": 1}
+    assert summary["llm_tokens_by_phase"] == {"final_answer_recovery": 250, "tool_loop": 100}
+    assert summary["llm_prompt_parts"]["system_prompt_estimate_tokens"] == 120
+    assert summary["llm_prompt_parts"]["messages_estimate_tokens"] == 60
+    assert summary["llm_prompt_parts"]["tools_estimate_tokens"] == 10
+    assert summary["llm_prompt_parts"]["tool_pending_message_estimate_tokens"] == 30
+    assert summary["llm_system_prompt_sections"] == {
+        "agent_identity": 70,
+        "assigned_task_context": 30,
+        "tool_catalog": 20,
+    }
+    assert summary["final_answer_recovery_tokens_by_agent"] == {"job_agent": 250}
     assert summary["total_llm_calls"] == 2
     assert summary["total_llm_tokens"] == 350
+    assert summary["total_prompt_tokens"] == 290
+    assert summary["total_completion_tokens"] == 60
+    assert summary["final_answer_recovery_calls"] == 1
+    assert summary["final_answer_recovery_tokens"] == 250
     assert summary["duplicate_tool_call_count"] == 1
     assert summary["harmful_duplicate_tool_call_count"] == 1
     assert summary["recovery_duplicate_tool_call_count"] == 0
@@ -1337,7 +1389,23 @@ def _append_llm_usage(
     agent_id: str,
     event_id: str,
     total_tokens: int,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    phase: str | None = None,
+    prompt_parts: dict[str, int] | None = None,
+    system_prompt_sections: list[dict[str, object]] | None = None,
 ) -> None:
+    payload: dict[str, object] = {
+        "total_tokens": total_tokens,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
+    if phase is not None:
+        payload["phase"] = phase
+    if prompt_parts:
+        payload.update(prompt_parts)
+    if system_prompt_sections is not None:
+        payload["system_prompt_sections"] = system_prompt_sections
     repository.append_agent_event(
         session_id,
         agent_id,
@@ -1345,7 +1413,7 @@ def _append_llm_usage(
             event_id=event_id,
             session_id=session_id,
             type="llm_usage",
-            payload={"total_tokens": total_tokens},
+            payload=payload,
             created_at=app_now(),
             agent_id=agent_id,
             run_id="run_test",

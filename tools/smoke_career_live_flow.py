@@ -1351,10 +1351,26 @@ _STABLE_TOOL_ARG_KEYS = (
     "title",
 )
 
+_LLM_PROMPT_PART_KEYS = (
+    "system_prompt_estimate_tokens",
+    "messages_estimate_tokens",
+    "tools_estimate_tokens",
+    "workflow_rules_estimate_tokens",
+    "tool_pending_message_estimate_tokens",
+    "tool_state_message_estimate_tokens",
+)
+
 
 def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> dict[str, Any]:
     llm_calls_by_agent: Counter[str] = Counter()
     llm_tokens_by_agent: Counter[str] = Counter()
+    llm_calls_by_phase: Counter[str] = Counter()
+    llm_tokens_by_phase: Counter[str] = Counter()
+    llm_prompt_parts: Counter[str] = Counter()
+    llm_system_prompt_sections: Counter[str] = Counter()
+    final_answer_recovery_tokens_by_agent: Counter[str] = Counter()
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
     tool_calls_by_agent: Counter[str] = Counter()
     tool_fingerprints: Counter[str] = Counter()
     tool_fingerprint_call_ids: dict[str, list[str]] = defaultdict(list)
@@ -1370,8 +1386,25 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
         payload = event.payload if isinstance(event.payload, dict) else {}
         agent_id = str(event.agent_id or "unknown")
         if event.type == "llm_usage":
+            total_tokens = _int_value(payload.get("total_tokens")) or 0
+            phase = str(payload.get("phase") or "unknown")
+            total_prompt_tokens += _int_value(payload.get("prompt_tokens")) or 0
+            total_completion_tokens += _int_value(payload.get("completion_tokens")) or 0
             llm_calls_by_agent[agent_id] += 1
-            llm_tokens_by_agent[agent_id] += _int_value(payload.get("total_tokens")) or 0
+            llm_tokens_by_agent[agent_id] += total_tokens
+            llm_calls_by_phase[phase] += 1
+            llm_tokens_by_phase[phase] += total_tokens
+            for key in _LLM_PROMPT_PART_KEYS:
+                llm_prompt_parts[key] += _int_value(payload.get(key)) or 0
+            raw_sections = payload.get("system_prompt_sections")
+            if isinstance(raw_sections, list):
+                for raw_section in raw_sections:
+                    if not isinstance(raw_section, dict):
+                        continue
+                    section_name = str(raw_section.get("name") or "unknown")
+                    llm_system_prompt_sections[section_name] += _int_value(raw_section.get("tokens")) or 0
+            if phase == "final_answer_recovery":
+                final_answer_recovery_tokens_by_agent[agent_id] += total_tokens
             continue
         if event.type == "tool_call":
             tool_name = payload.get("name")
@@ -1431,6 +1464,11 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
     return {
         "llm_calls_by_agent": dict(sorted(llm_calls_by_agent.items())),
         "llm_tokens_by_agent": dict(sorted(llm_tokens_by_agent.items())),
+        "llm_calls_by_phase": dict(sorted(llm_calls_by_phase.items())),
+        "llm_tokens_by_phase": dict(sorted(llm_tokens_by_phase.items())),
+        "llm_prompt_parts": dict(sorted(llm_prompt_parts.items())),
+        "llm_system_prompt_sections": dict(sorted(llm_system_prompt_sections.items())),
+        "final_answer_recovery_tokens_by_agent": dict(sorted(final_answer_recovery_tokens_by_agent.items())),
         "tool_calls_by_agent": dict(sorted(tool_calls_by_agent.items())),
         "duplicate_tool_calls": duplicate_tool_calls,
         "harmful_duplicate_tool_calls": harmful_duplicate_tool_calls,
@@ -1440,6 +1478,10 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
         "workflow_decisions": dict(sorted(workflow_decisions.items())),
         "total_llm_calls": sum(llm_calls_by_agent.values()),
         "total_llm_tokens": sum(llm_tokens_by_agent.values()),
+        "total_prompt_tokens": total_prompt_tokens,
+        "total_completion_tokens": total_completion_tokens,
+        "final_answer_recovery_calls": llm_calls_by_phase.get("final_answer_recovery", 0),
+        "final_answer_recovery_tokens": llm_tokens_by_phase.get("final_answer_recovery", 0),
         "duplicate_tool_call_count": sum(count - 1 for count in duplicate_tool_calls.values()),
         "harmful_duplicate_tool_call_count": sum(count - 1 for count in harmful_duplicate_tool_calls.values()),
         "recovery_duplicate_tool_call_count": sum(count - 1 for count in recovery_duplicate_tool_calls.values()),
@@ -1864,12 +1906,26 @@ def _efficiency_text(value: dict[str, Any]) -> str:
     )
 
 
+def _cost_profile_text(value: dict[str, Any]) -> str:
+    return (
+        f"phase_tokens={_compact_json(value.get('llm_tokens_by_phase', {}))} "
+        f"final_answer_recovery={value.get('final_answer_recovery_tokens', 0)}/"
+        f"{value.get('final_answer_recovery_calls', 0)} "
+        f"prompt_parts={_compact_json(value.get('llm_prompt_parts', {}))} "
+        f"top_sections={_compact_json(_top_int_items(_dict_value(value.get('llm_system_prompt_sections')), limit=6))}"
+    )
+
+
 def _aggregate_efficiency_text(reports: list[FlowReport]) -> str:
     summaries = [item.efficiency for item in reports if item.efficiency]
     if not summaries:
         return ""
     total_calls = [_int_value(item.get("total_llm_calls")) or 0 for item in summaries]
     total_tokens = [_int_value(item.get("total_llm_tokens")) or 0 for item in summaries]
+    total_prompt_tokens = [_int_value(item.get("total_prompt_tokens")) or 0 for item in summaries]
+    total_completion_tokens = [_int_value(item.get("total_completion_tokens")) or 0 for item in summaries]
+    recovery_tokens = [_int_value(item.get("final_answer_recovery_tokens")) or 0 for item in summaries]
+    recovery_calls = [_int_value(item.get("final_answer_recovery_calls")) or 0 for item in summaries]
     duplicate_runs = sum(1 for item in summaries if (_int_value(item.get("duplicate_tool_call_count")) or 0) > 0)
     harmful_duplicate_runs = sum(
         1 for item in summaries if (_int_value(item.get("harmful_duplicate_tool_call_count")) or 0) > 0
@@ -1892,6 +1948,11 @@ def _aggregate_efficiency_text(reports: list[FlowReport]) -> str:
         f"max_llm_calls={max(total_calls)} "
         f"avg_tokens={statistics.fmean(total_tokens):.0f} "
         f"max_tokens={max(total_tokens)} "
+        f"avg_prompt_tokens={statistics.fmean(total_prompt_tokens):.0f} "
+        f"avg_completion_tokens={statistics.fmean(total_completion_tokens):.0f} "
+        f"avg_final_answer_recovery_tokens={statistics.fmean(recovery_tokens):.0f} "
+        f"max_final_answer_recovery_tokens={max(recovery_tokens)} "
+        f"avg_final_answer_recovery_calls={statistics.fmean(recovery_calls):.1f} "
         f"duplicate_runs={duplicate_runs}/{len(summaries)} "
         f"harmful_duplicate_runs={harmful_duplicate_runs}/{len(summaries)} "
         f"recovery_duplicate_runs={recovery_duplicate_runs}/{len(summaries)} "
@@ -1899,6 +1960,10 @@ def _aggregate_efficiency_text(reports: list[FlowReport]) -> str:
         f"stagnation_runs={stagnation_runs}/{len(summaries)} "
         f"hard_safety_runs={hard_safety_runs}/{len(summaries)}"
     )
+
+
+def _dict_value(value: Any) -> dict[Any, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _top_int_items(value: dict[Any, Any], *, limit: int) -> dict[str, int]:
@@ -1981,6 +2046,7 @@ def print_report(reports: list[FlowReport]) -> None:
         print(f"  tool_call_counts: {_compact_json(item.tool_call_counts)}")
         if item.efficiency:
             print(f"  efficiency: {_efficiency_text(item.efficiency)}")
+            print(f"  cost_profile: {_cost_profile_text(item.efficiency)}")
             duplicate_tools = item.efficiency.get("duplicate_tool_calls")
             if isinstance(duplicate_tools, dict) and duplicate_tools:
                 print(f"  duplicate_tools: {_compact_json(_top_int_items(duplicate_tools, limit=5))}")
