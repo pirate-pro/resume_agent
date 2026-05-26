@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -26,6 +27,8 @@ _MAX_REVEALED_TOOL_NAMES = 32
 _TEXT_LIMIT = 180
 _FAILED_CONTENT_PREVIEW_CHARS = 220
 _LONG_CONTENT_ARGUMENT_CHARS = 480
+_CONTENT_ARGUMENT_KEYS = frozenset({"content", "markdown", "body", "report", "resume_content"})
+_MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _STRICT_REQUIRED_TOOL_SUPPORTING_TOOLS = {
     "career_application_merge": {"career_resume_version_create"},
     "career_resume_version_create": {
@@ -586,22 +589,74 @@ def _older_observation_summary(observations: list[ToolObservation]) -> dict[str,
 
 def _compact_arguments(arguments: dict[str, Any], *, content_preview_chars: int = 0) -> dict[str, Any]:
     output: dict[str, Any] = {}
+    shown_fields = 0
     for key, value in arguments.items():
         if not isinstance(key, str):
             continue
-        if key == "content" and isinstance(value, str):
-            output["content_omitted"] = {"chars": len(value)}
-            if content_preview_chars > 0:
-                output["content_preview"] = _truncate(value, content_preview_chars)
+        if key in _CONTENT_ARGUMENT_KEYS and isinstance(value, str):
+            _add_compacted_text_argument(
+                output,
+                key=key,
+                value=value,
+                preview_chars=content_preview_chars,
+            )
+            shown_fields += 1
+            if shown_fields >= 12:
+                break
             continue
         output[key] = _compact_value(value, text_chars=120, depth=0)
-        if len(output) >= 12:
+        shown_fields += 1
+        if shown_fields >= 12:
             break
     return output
 
 
+def _add_compacted_text_argument(
+    output: dict[str, Any],
+    *,
+    key: str,
+    value: str,
+    preview_chars: int,
+) -> None:
+    chars = len(value)
+    output[f"{key}_omitted"] = {"chars": chars}
+    output[f"{key}_chars"] = chars
+    output[f"{key}_hash"] = _text_hash(value)
+    heading = _first_markdown_heading(value)
+    if heading:
+        heading_key = "first_heading" if key == "content" else f"{key}_first_heading"
+        output[heading_key] = heading
+    if preview_chars > 0:
+        output[f"{key}_preview"] = _truncate(value, preview_chars)
+
+
+def _text_hash(value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    return f"sha256:{digest}"
+
+
+def _first_markdown_heading(value: str) -> str | None:
+    fallback: str | None = None
+    for line in value.splitlines()[:40]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = _MARKDOWN_HEADING_RE.match(line)
+        if match:
+            return _truncate(match.group(1), 100)
+        if fallback is None:
+            fallback = stripped
+    return _truncate(fallback, 100) if fallback else None
+
+
 def _has_long_content_argument(arguments: Any) -> bool:
-    return isinstance(arguments, dict) and isinstance(arguments.get("content"), str) and len(arguments["content"]) > _LONG_CONTENT_ARGUMENT_CHARS
+    if not isinstance(arguments, dict):
+        return False
+    for key in _CONTENT_ARGUMENT_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str) and len(value) > _LONG_CONTENT_ARGUMENT_CHARS:
+            return True
+    return False
 
 
 def _collect_ids(payload: Any) -> dict[str, Any]:

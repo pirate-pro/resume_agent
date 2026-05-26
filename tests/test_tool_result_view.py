@@ -301,7 +301,17 @@ def test_delegate_agents_model_view_keeps_task_summaries_and_artifacts() -> None
         "If career tools are not visible yet, call tool_search for the career group first.",
     ]
     assert "子 agent 完整回答。" * 80 not in compact
-    assert len(compact_payload["results"][0]["answer_preview"]) < len(long_answer)
+    assert "answer_preview" not in compact_payload["results"][0]
+    assert compact_payload["results"][0]["answer_omitted"] == {
+        "chars": len(long_answer + " diagnosis artifact: artifact_resume_diagnosis")
+    }
+    assert len(compact_payload["results"][0]["summary"]) < 260
+    assert compact_payload["results"][0]["actionable_snapshot"]["resume_profile_id"] == "resume_profile_alpha"
+    assert compact_payload["results"][0]["actionable_snapshot"]["diagnosis_artifact_id"] == "artifact_resume_diagnosis"
+    assert compact_payload["results"][0]["actionable_snapshot"]["preferred_read_tool_if_facts_missing"] == "career_resume_profile_get"
+    assert "do not read the diagnosis artifact" in compact_payload["results"][0]["actionable_snapshot"]["next_input_hint"]
+    assert "next_input_hint" in compact_payload
+    assert "full_result_hint" not in compact_payload
 
 
 def test_product_list_model_view_keeps_actionable_record_fields() -> None:
@@ -449,7 +459,12 @@ def test_small_delegate_result_still_uses_compact_model_view() -> None:
     assert compact_payload["model_view"] == "compact"
     assert compact_payload["results"][0]["target_agent_id"] == "job_agent"
     assert compact_payload["results"][0]["extracted_ids"] == ["jd_alpha", "fit_alpha"]
-    assert "full_result_hint" in compact_payload
+    assert compact_payload["results"][0]["actionable_snapshot"]["jd_analysis_id"] == "jd_alpha"
+    assert compact_payload["results"][0]["actionable_snapshot"]["job_fit_report_id"] == "fit_alpha"
+    assert compact_payload["results"][0]["actionable_snapshot"]["preferred_read_tool_if_score_missing"] == "career_job_fit_report_get"
+    assert "do not read the report artifact" in compact_payload["results"][0]["actionable_snapshot"]["next_input_hint"]
+    assert "next_input_hint" in compact_payload
+    assert "full_result_hint" not in compact_payload
 
 
 def test_strict_hidden_tool_result_compacts_model_view() -> None:

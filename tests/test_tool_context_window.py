@@ -158,6 +158,8 @@ def test_observation_drops_large_content_arguments_and_extracts_tool_search_reve
 
     assert observation.arguments_preview["content_omitted"] == {"chars": 1000}
     assert "content" not in observation.arguments_preview
+    assert observation.arguments_preview["content_chars"] == 1000
+    assert str(observation.arguments_preview["content_hash"]).startswith("sha256:")
     assert observation.revealed_tool_names == ["career_resume_version_create", "career_application_merge"]
     assert "revealed 2 tools" in str(observation.summary)
 
@@ -395,6 +397,9 @@ def test_compact_window_replays_successful_tool_call_arguments_compactly() -> No
 
     assert "content" not in replayed_arguments
     assert replayed_arguments["content_omitted"] == {"chars": len(long_content)}
+    assert replayed_arguments["content_chars"] == len(long_content)
+    assert str(replayed_arguments["content_hash"]).startswith("sha256:")
+    assert replayed_arguments["first_heading"] == "定制简历"
     assert replayed_arguments["resume_version_id"] == "resume_version_alpha"
     assert replayed_arguments["evidence_refs"] == ["artifact_resume_alpha", "fit_alpha"]
 
@@ -429,7 +434,69 @@ def test_compact_window_summarizes_failed_long_content_arguments_for_repair() ->
 
     assert replayed_arguments["content_omitted"] == {"chars": len(long_content)}
     assert replayed_arguments["content_preview"].startswith("# 定制简历")
+    assert replayed_arguments["content_chars"] == len(long_content)
+    assert str(replayed_arguments["content_hash"]).startswith("sha256:")
     assert "content" not in replayed_arguments
+
+
+def test_compact_window_replays_markdown_body_report_arguments_compactly() -> None:
+    window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
+    markdown = "# 匹配报告\n" + "岗位匹配正文\n" * 300
+    body = "邮件正文\n" * 260
+    report = "结构化报告\n" * 240
+    resume_content = "# 定制简历\n" + "简历正文\n" * 260
+    call = ToolCall(
+        name="session_create_text_artifact",
+        arguments={
+            "title": "岗位匹配报告.md",
+            "markdown": markdown,
+            "body": body,
+            "report": report,
+            "resume_content": resume_content,
+        },
+        tool_call_id="call_artifact",
+    )
+    content = json.dumps(
+        {
+            "artifact_id": "artifact_report_alpha",
+            "title": "岗位匹配报告.md",
+            "status": "ready",
+        },
+        ensure_ascii=False,
+    )
+
+    window.set_pending_exchange(
+        assistant_message=build_assistant_tool_call_message("", [call]),
+        tool_messages=[build_tool_result_message(tool_call_id="call_artifact", content=content)],
+        observations=[
+            build_tool_observation(
+                tool_call=call,
+                result=ToolExecutionResult(
+                    tool_name="session_create_text_artifact",
+                    success=True,
+                    content=content,
+                ),
+                model_visible_content=content,
+            )
+        ],
+    )
+
+    rendered = window.render_messages()
+    replayed_arguments = json.loads(rendered[1]["tool_calls"][0]["function"]["arguments"])
+
+    assert replayed_arguments["title"] == "岗位匹配报告.md"
+    original_values = {
+        "markdown": markdown,
+        "body": body,
+        "report": report,
+        "resume_content": resume_content,
+    }
+    for field, original_value in original_values.items():
+        assert field not in replayed_arguments
+        assert replayed_arguments[f"{field}_omitted"] == {"chars": len(original_value)}
+        assert replayed_arguments[f"{field}_chars"] == len(original_value)
+        assert str(replayed_arguments[f"{field}_hash"]).startswith("sha256:")
+    assert replayed_arguments["markdown_first_heading"] == "匹配报告"
 
 
 def test_compact_state_tells_model_not_to_duplicate_created_text_artifact() -> None:

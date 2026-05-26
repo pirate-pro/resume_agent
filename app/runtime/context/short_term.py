@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from app.core.errors import ValidationError
@@ -17,6 +18,24 @@ from app.runtime.agent_events import (
 from app.runtime.context_compactor import CONTEXT_SUMMARY_EVENT
 
 _logger = logging.getLogger(__name__)
+_CHILD_RESULT_SUMMARY_CHARS = 260
+_OPTIONAL_PAYLOAD_ITEM_CHARS = 180
+_KNOWN_REF_RE = re.compile(
+    r"\b(?:artifact|resume_profile|career_profile|resume_version|application|fit|jd|jd_analysis|job_fit_report|task_group|task)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}\b"
+)
+_KNOWN_REF_FIELD_NAMES = {
+    "artifact_id",
+    "resume_profile_id",
+    "career_profile_id",
+    "resume_version_id",
+    "application_id",
+    "fit_id",
+    "jd_id",
+    "jd_analysis_id",
+    "job_fit_report_id",
+    "task_group_id",
+    "task_id",
+}
 
 
 def latest_context_summaries(events: list[EventRecord], context: RunContext) -> list[EventRecord]:
@@ -125,12 +144,14 @@ def format_child_result_summary_lines(results: list[AgentResultSummaryPayload]) 
                 ("artifact_refs", result.artifact_refs),
                 ("output_artifact_refs", result.output_artifact_refs),
                 ("product_refs", result.product_refs),
+                ("summary_refs", _extract_known_refs(result.summary)),
+                ("next_hint", _child_result_next_hints(result)),
             ]
         )
         suffix = f" [{'; '.join(extras)}]" if extras else ""
         lines.append(
             f"- task_id={result.task_id} agent={result.source_agent_id} status={result.status} "
-            f"summary={result.summary}{suffix}"
+            f"summary={_compact_summary_text(result.summary, max_chars=_CHILD_RESULT_SUMMARY_CHARS)}{suffix}"
         )
     return lines
 
@@ -140,8 +161,74 @@ def format_optional_payload_parts(parts: list[tuple[str, list[str]]]) -> list[st
     for label, values in parts:
         if not values:
             continue
-        output.append(f"{label}: {', '.join(values)}")
+        compact_values = [_truncate_inline(value, _OPTIONAL_PAYLOAD_ITEM_CHARS) for value in values[:8]]
+        output.append(f"{label}: {', '.join(compact_values)}")
     return output
+
+
+def _compact_summary_text(value: str, *, max_chars: int) -> str:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in value.splitlines():
+        line = _strip_markdown_noise(raw_line)
+        if not line or line in seen:
+            continue
+        lines.append(line)
+        seen.add(line)
+        if len(lines) >= 4:
+            break
+    text = "；".join(lines) if lines else value.strip()
+    return _truncate_inline(text, max_chars)
+
+
+def _strip_markdown_noise(value: str) -> str:
+    line = value.strip()
+    if not line:
+        return ""
+    if line.strip("-*_`| ") == "":
+        return ""
+    if re.fullmatch(r"\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?", line):
+        return ""
+    line = re.sub(r"^#{1,6}\s*", "", line)
+    line = line.strip("*` ")
+    return re.sub(r"\s+", " ", line)
+
+
+def _extract_known_refs(value: str) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for match in _KNOWN_REF_RE.finditer(value):
+        item = match.group(0)
+        if item in _KNOWN_REF_FIELD_NAMES or item in seen:
+            continue
+        output.append(item)
+        seen.add(item)
+        if len(output) >= 12:
+            break
+    return output
+
+
+def _child_result_next_hints(result: AgentResultSummaryPayload) -> list[str]:
+    if result.status != "completed":
+        return []
+    if result.source_agent_id == "resume_agent":
+        return [
+            "use product_refs/resume_profile_id for career_profile_merge; if profile facts are missing, use career_resume_profile_get, not diagnosis artifact read"
+        ]
+    if result.source_agent_id == "job_agent":
+        return [
+            "use product_refs/output_artifact_refs for CareerApplication; if score is missing, use career_job_fit_report_get, not report artifact read"
+        ]
+    return []
+
+
+def _truncate_inline(value: str, max_chars: int) -> str:
+    text = str(value).strip()
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 1:
+        return text[:max_chars]
+    return f"{text[: max_chars - 1]}…"
 
 
 def is_other_agent_related_event(event: EventRecord, context: RunContext) -> bool:
