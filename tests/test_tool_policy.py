@@ -89,6 +89,32 @@ def test_text_artifact_idempotency_classifies_ascii_resume_diagnosis_title() -> 
     )
 
 
+def test_text_artifact_idempotency_scopes_job_fit_report_by_jd_source() -> None:
+    call = ToolCall(
+        name="session_create_text_artifact",
+        arguments={
+            "title": "岗位匹配报告 - AI 应用开发工程师",
+            "content": "候选人 Python/FastAPI 匹配，向量检索写入差距。",
+            "kind": "generated_file",
+        },
+    )
+
+    key = tool_idempotency_key(
+        call,
+        _context(),
+        pending_runtime_plan={
+            "phase": "jd_fit",
+            "required_tools": ["session_create_text_artifact"],
+            "missing_outputs": ["job_fit_report_artifact", "job_fit_report"],
+            "known_refs": {"jd_source_artifact_id": "artifact_jd_alpha"},
+        },
+    )
+
+    assert key == (
+        "session_create_text_artifact:sess_policy:run_policy:jd=artifact_jd_alpha:job_fit_report"
+    )
+
+
 def test_policy_marks_read_only_cacheable() -> None:
     call = ToolCall(name="career_application_get", arguments={"application_id": "application_a"})
     policy = resolve_tool_execution_policy(call, _context())

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.career.models import CareerProfile, CareerRecordStatus, ResumeProfile
 from app.career.store import CareerProductStore
@@ -21,7 +22,14 @@ def _context(session_id: str) -> RunContext:
     )
 
 
-def _add_artifact(repository: JsonlSessionRepository, session_id: str, artifact_id: str, text: str) -> None:
+def _add_artifact(
+    repository: JsonlSessionRepository,
+    session_id: str,
+    artifact_id: str,
+    text: str,
+    *,
+    title: str = "jd.txt",
+) -> None:
     root = repository.get_session_root_path(session_id)
     artifact_dir = root / "artifacts" / artifact_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -33,7 +41,7 @@ def _add_artifact(repository: JsonlSessionRepository, session_id: str, artifact_
             artifact_id=artifact_id,
             session_id=session_id,
             kind="uploaded_file",
-            title="jd.txt",
+            title=title,
             media_type="text/plain",
             size_bytes=len(text.encode("utf-8")),
             status="ready",
@@ -49,7 +57,7 @@ def _add_artifact(repository: JsonlSessionRepository, session_id: str, artifact_
     )
 
 
-def test_task_context_builder_supplies_job_agent_records_and_artifact(tmp_path) -> None:
+def test_task_context_builder_supplies_job_agent_records_and_artifact(tmp_path: Path) -> None:
     session_id = "sess_task_context"
     session_repository = JsonlSessionRepository(data_dir=tmp_path / "sessions")
     session_repository.create_session(session_id)
@@ -106,7 +114,7 @@ def test_task_context_builder_supplies_job_agent_records_and_artifact(tmp_path) 
     assert "career_resume_profile_get:resume_profile_ctx_001" in context["reuse_policy"]["already_provided"]
 
 
-def test_task_context_builder_ignores_schema_field_names_as_refs(tmp_path) -> None:
+def test_task_context_builder_ignores_schema_field_names_as_refs(tmp_path: Path) -> None:
     session_id = "sess_task_context_schema_refs"
     session_repository = JsonlSessionRepository(data_dir=tmp_path / "sessions")
     session_repository.create_session(session_id)
@@ -127,3 +135,38 @@ def test_task_context_builder_ignores_schema_field_names_as_refs(tmp_path) -> No
     assert context["known_refs"]["jd_source_artifact_id"] == "artifact_jd_ctx_002"
     assert "resume_profile_id" not in context["known_refs"]
     assert "jd_analysis_id" not in context["known_refs"]
+
+
+def test_task_context_builder_prefers_jd_artifact_when_resume_ref_comes_first(tmp_path: Path) -> None:
+    session_id = "sess_task_context_mixed_refs"
+    session_repository = JsonlSessionRepository(data_dir=tmp_path / "sessions")
+    session_repository.create_session(session_id)
+    _add_artifact(
+        session_repository,
+        session_id,
+        "artifact_resume_ctx_003",
+        "候选人：张三\n技能：Python、FastAPI。",
+        title="候选人简历.txt",
+    )
+    _add_artifact(
+        session_repository,
+        session_id,
+        "artifact_jd_ctx_003",
+        "公司招聘 AI 应用开发工程师，要求 Python、RAG。",
+        title="目标岗位 JD.txt",
+    )
+
+    context = TaskContextBuilder(
+        session_repository=session_repository,
+        career_store=CareerProductStore(root_dir=tmp_path / "career"),
+    ).build(
+        source_context=_context(session_id),
+        target_agent_id="job_agent",
+        task_id="task_ctx_003",
+        instruction="请基于这两个 artifact 完成岗位分析。",
+        artifact_refs=["artifact_resume_ctx_003", "artifact_jd_ctx_003"],
+    )
+
+    assert context["known_refs"]["jd_source_artifact_id"] == "artifact_jd_ctx_003"
+    assert context["known_refs"]["source_artifact_id"] == "artifact_jd_ctx_003"
+    assert context["known_refs"]["resume_source_artifact_id"] == "artifact_resume_ctx_003"

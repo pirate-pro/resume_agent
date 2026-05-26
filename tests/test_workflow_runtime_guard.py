@@ -2133,6 +2133,98 @@ def test_delegate_agents_jd_fit_task_gets_single_report_artifact_boundary_withou
     )
 
 
+def test_delegate_agents_jd_fit_defers_dependent_application_task_to_main(tmp_path: Path) -> None:
+    guard, store, repo = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+    store.save_career_profile(_career_profile())
+    context = _context()
+    _append_user_message(
+        repo,
+        context,
+        "请直接基于这个 JD artifact 分析我和岗位的匹配度，并保存岗位分析和匹配报告。",
+    )
+
+    decision = guard.inspect(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "tasks": [
+                    {
+                        "target_agent_id": "job_agent",
+                        "instruction": "基于 artifact_jd_live_001 完成 JD 分析并保存 JDAnalysis。",
+                        "artifact_refs": ["artifact_jd_live_001"],
+                    },
+                    {
+                        "target_agent_id": "job_agent",
+                        "instruction": (
+                            "创建 CareerApplication 求职项目，关联 resume_profile_id=resume_profile_real、"
+                            "career_profile_id=career_profile_default、job_fit_report_id=fit_placeholder。"
+                        ),
+                        "artifact_refs": [],
+                    },
+                ],
+                "wait": True,
+            },
+            tool_call_id="call_delegate_with_application_child",
+        ),
+        context,
+    )
+
+    assert decision.result is None
+    assert len(decision.tool_call.arguments["tasks"]) == 1
+    task = decision.tool_call.arguments["tasks"][0]
+    assert task["artifact_refs"] == ["artifact_jd_live_001"]
+    assert "career_job_fit_report_save" in task["instruction"]
+    assert decision.event_payload is not None
+    assert any(
+        item["reason"] == "jd_fit_delegation_defers_application_to_main"
+        for item in decision.event_payload["repair_actions"]
+    )
+
+
+def test_delegate_agents_jd_fit_keeps_one_child_task_per_jd_source(tmp_path: Path) -> None:
+    guard, store, repo = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+    store.save_career_profile(_career_profile())
+    context = _context()
+    _append_user_message(
+        repo,
+        context,
+        "请直接基于这个 JD artifact 分析我和岗位的匹配度，并保存岗位分析和匹配报告。",
+    )
+
+    decision = guard.inspect(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "tasks": [
+                    {
+                        "target_agent_id": "job_agent",
+                        "instruction": "分析 artifact_jd_live_001，生成岗位匹配报告。",
+                        "artifact_refs": ["artifact_jd_live_001"],
+                    },
+                    {
+                        "target_agent_id": "job_agent",
+                        "instruction": "读取 artifact_jd_live_001 后保存 JobFitReport。",
+                        "artifact_refs": ["artifact_jd_live_001"],
+                    },
+                ],
+                "wait": True,
+            },
+            tool_call_id="call_delegate_duplicate_job_fit_children",
+        ),
+        context,
+    )
+
+    assert decision.result is None
+    assert len(decision.tool_call.arguments["tasks"]) == 1
+    assert decision.event_payload is not None
+    assert any(
+        item["reason"] == "jd_fit_delegation_dedupes_same_source_job_task"
+        for item in decision.event_payload["repair_actions"]
+    )
+
+
 def test_delegate_agents_moves_product_ids_out_of_artifact_refs(tmp_path: Path) -> None:
     guard, store, repo = _guard(tmp_path)
     store.save_resume_profile(_resume_profile())

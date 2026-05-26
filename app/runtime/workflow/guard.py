@@ -2712,6 +2712,16 @@ class WorkflowRuntimeGuard:
         if not isinstance(raw_tasks, list):
             return args, repair_actions
 
+        args, repair_actions = self._canonicalize_delegate_jd_fit_task_graph(
+            args,
+            context,
+            jd_fit_intent=jd_fit_intent,
+            repair_actions=repair_actions,
+        )
+        raw_tasks = args.get("tasks")
+        if not isinstance(raw_tasks, list):
+            return args, repair_actions
+
         boundary_changed = False
         boundary_tasks: list[Any] = []
         for raw_task in raw_tasks:
@@ -2836,6 +2846,81 @@ class WorkflowRuntimeGuard:
                     "from": "jd_analysis_only",
                     "to": "jd_analysis_and_job_fit_report",
                     "reason": "jd_fit_stage_requires_single_job_agent_completion",
+                }
+            )
+        return args, repair_actions
+
+    def _canonicalize_delegate_jd_fit_task_graph(
+        self,
+        args: dict[str, Any],
+        context: RunContext,
+        *,
+        jd_fit_intent: bool,
+        repair_actions: list[dict[str, str]],
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        if not jd_fit_intent:
+            return args, repair_actions
+        if _single_current_session_record(self._career_store.list_job_fit_reports(), context.session_id) is not None:
+            return args, repair_actions
+        raw_tasks = args.get("tasks")
+        if not isinstance(raw_tasks, list) or len(raw_tasks) <= 1:
+            return args, repair_actions
+
+        changed = False
+        deferred_application = False
+        deduped_same_source = False
+        seen_jd_fit_sources: set[str] = set()
+        tasks: list[Any] = []
+        for raw_task in raw_tasks:
+            if not isinstance(raw_task, dict):
+                tasks.append(raw_task)
+                continue
+            task = dict(raw_task)
+            if _string_or_none(task.get("target_agent_id")) != "job_agent":
+                tasks.append(task)
+                continue
+            instruction = _string_or_none(task.get("instruction")) or ""
+            if _is_dependent_application_delegate_task(instruction):
+                changed = True
+                deferred_application = True
+                continue
+            if _is_jd_fit_delegate_task(task, instruction):
+                source_key = _delegate_jd_fit_source_key(task, instruction)
+                if source_key in seen_jd_fit_sources:
+                    changed = True
+                    deduped_same_source = True
+                    continue
+                seen_jd_fit_sources.add(source_key)
+                if _mentions_application_record(instruction) and not _has_application_defer_notice(instruction):
+                    task["instruction"] = (
+                        f"{instruction}\n\n"
+                        "WorkflowRuntime DAG 边界：CareerApplication 由 main-agent 在 JobFitReport 返回后调用 "
+                        "career_application_create 创建或复用；job_agent 本子任务只负责 JDAnalysis、"
+                        "唯一岗位匹配报告 artifact 和 JobFitReport，不要声明已创建 CareerApplication。"
+                    )
+                    changed = True
+                    deferred_application = True
+            tasks.append(task)
+
+        if not changed or not tasks:
+            return args, repair_actions
+        args["tasks"] = tasks
+        if deferred_application:
+            repair_actions.append(
+                {
+                    "field": "delegate_agents.tasks",
+                    "from": "dependent_career_application_child_task",
+                    "to": "main_agent_career_application_create_after_job_fit",
+                    "reason": "jd_fit_delegation_defers_application_to_main",
+                }
+            )
+        if deduped_same_source:
+            repair_actions.append(
+                {
+                    "field": "delegate_agents.tasks",
+                    "from": "duplicate_same_source_job_fit_child_tasks",
+                    "to": "single_job_agent_task_per_jd_source",
+                    "reason": "jd_fit_delegation_dedupes_same_source_job_task",
                 }
             )
         return args, repair_actions
@@ -3698,6 +3783,93 @@ def _delegate_task_required_outputs(target_agent_id: str, instruction: str) -> l
         if _has_any(compact, ("诊断报告", "简历诊断")):
             outputs.append("diagnosis_artifact")
     return sorted(outputs)
+
+
+def _is_jd_fit_delegate_task(task: dict[str, Any], instruction: str) -> bool:
+    artifact_refs = _delegate_task_artifact_refs(task, instruction)
+    return _delegate_task_phase("job_agent", instruction, artifact_refs) == "jd_fit" and (
+        _task_requests_jd_fit_generation(instruction)
+        or any(_looks_like_jd_artifact_ref(ref) for ref in artifact_refs)
+    )
+
+
+def _task_requests_jd_fit_generation(text: str) -> bool:
+    normalized = text.strip().casefold()
+    compact = _normalize_fact_text(text)
+    if not normalized:
+        return False
+    return _has_any(
+        normalized,
+        (
+            "jdanalysis",
+            "career_jd_analysis_save",
+            "career_job_fit_report_save",
+            "jobfitreport",
+            "job fit report",
+        ),
+    ) or _has_any(
+        compact,
+        (
+            "分析jd",
+            "解析jd",
+            "jd分析",
+            "岗位分析",
+            "职位分析",
+            "生成岗位匹配报告",
+            "创建岗位匹配报告",
+            "保存岗位匹配报告",
+            "输出岗位匹配报告",
+            "生成匹配报告",
+            "创建匹配报告",
+            "保存匹配报告",
+            "输出匹配报告",
+        ),
+    )
+
+
+def _is_dependent_application_delegate_task(instruction: str) -> bool:
+    if not _mentions_application_record(instruction):
+        return False
+    return not _task_requests_jd_fit_generation(instruction)
+
+
+def _mentions_application_record(text: str) -> bool:
+    normalized = text.strip().casefold()
+    compact = _normalize_fact_text(text)
+    return _has_any(normalized, ("careerapplication", "career_application")) or _has_any(
+        compact,
+        (
+            "求职项目",
+            "求职申请",
+            "投递项目",
+            "申请项目",
+        ),
+    )
+
+
+def _has_application_defer_notice(text: str) -> bool:
+    normalized = text.casefold()
+    compact = _normalize_fact_text(text)
+    return "careerapplication 由 main-agent" in normalized or "careerapplication由mainagent" in compact
+
+
+def _delegate_jd_fit_source_key(task: dict[str, Any], instruction: str) -> str:
+    artifact_refs = _delegate_task_artifact_refs(task, instruction)
+    jd_refs = [ref for ref in artifact_refs if _looks_like_jd_artifact_ref(ref)]
+    if jd_refs:
+        return f"jd_artifact:{jd_refs[0]}"
+    if artifact_refs:
+        return f"artifacts:{','.join(artifact_refs)}"
+    product_refs = _delegate_task_product_refs(task, instruction)
+    jd_product_refs = [ref for ref in product_refs if ref.startswith("jd_")]
+    if jd_product_refs:
+        return f"jd_record:{jd_product_refs[0]}"
+    return "current_jd_fit"
+
+
+def _looks_like_jd_artifact_ref(ref: str) -> bool:
+    lowered = ref.casefold()
+    return lowered.startswith("artifact_jd") or "_jd_" in lowered or lowered.endswith("_jd")
 
 
 def _delegate_signature(arguments: Any) -> str | None:

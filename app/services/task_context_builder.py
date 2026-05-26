@@ -50,15 +50,19 @@ class TaskContextBuilder:
     ) -> dict[str, Any]:
         events = self._session_repository.list_events(source_context.session_id)
         workflow_state = extract_current_workflow_state(events, source_context)
-        known_refs: dict[str, str] = dict(workflow_state.refs)
-        _merge_refs_from_text(known_refs, instruction)
-        _merge_artifact_refs(known_refs, target_agent_id=target_agent_id, artifact_refs=artifact_refs)
-
         provided_artifacts = [
             snapshot
             for artifact_id in artifact_refs
             if (snapshot := self._artifact_snapshot(source_context.session_id, artifact_id)) is not None
         ]
+        known_refs: dict[str, str] = dict(workflow_state.refs)
+        _merge_refs_from_text(known_refs, instruction)
+        _merge_artifact_refs(
+            known_refs,
+            target_agent_id=target_agent_id,
+            artifact_refs=artifact_refs,
+            provided_artifacts=provided_artifacts,
+        )
         provided_records = self._provided_records(known_refs, target_agent_id=target_agent_id)
         missing_inputs = _missing_inputs(
             target_agent_id=target_agent_id,
@@ -190,14 +194,76 @@ def _record_snapshot(record_type: str, record_id: str, record: Any) -> dict[str,
     )
 
 
-def _merge_artifact_refs(known_refs: dict[str, str], *, target_agent_id: str, artifact_refs: list[str]) -> None:
-    for artifact_id in artifact_refs:
+def _merge_artifact_refs(
+    known_refs: dict[str, str],
+    *,
+    target_agent_id: str,
+    artifact_refs: list[str],
+    provided_artifacts: list[dict[str, Any]],
+) -> None:
+    valid_refs = [artifact_id for artifact_id in artifact_refs if artifact_id.startswith("artifact_")]
+    if not valid_refs:
+        return
+    roles = {
+        str(item.get("artifact_id")): _artifact_role(item)
+        for item in provided_artifacts
+        if isinstance(item.get("artifact_id"), str)
+    }
+    if target_agent_id == "resume_agent":
+        resume_ref = _first_ref_for_role(valid_refs, roles, "resume") or valid_refs[0]
+        known_refs.setdefault("resume_source_artifact_id", resume_ref)
+        return
+    if target_agent_id == "job_agent":
+        jd_ref = _first_ref_for_role(valid_refs, roles, "jd") or valid_refs[0]
+        known_refs.setdefault("jd_source_artifact_id", jd_ref)
+        known_refs.setdefault("source_artifact_id", jd_ref)
+        job_resume_ref = _first_ref_for_role(valid_refs, roles, "resume")
+        if job_resume_ref is not None:
+            known_refs.setdefault("resume_source_artifact_id", job_resume_ref)
+        return
+    for artifact_id in valid_refs:
         if not artifact_id.startswith("artifact_"):
             continue
-        if target_agent_id == "resume_agent":
-            known_refs.setdefault("resume_source_artifact_id", artifact_id)
-        elif target_agent_id == "job_agent":
-            known_refs.setdefault("jd_source_artifact_id", artifact_id)
+        known_refs.setdefault("source_artifact_id", artifact_id)
+
+
+def _first_ref_for_role(refs: list[str], roles: dict[str, str | None], role: str) -> str | None:
+    for artifact_id in refs:
+        if roles.get(artifact_id) == role:
+            return artifact_id
+    return None
+
+
+def _artifact_role(snapshot: dict[str, Any]) -> str | None:
+    text = " ".join(
+        str(snapshot.get(key) or "")
+        for key in ("artifact_id", "title", "description", "text_preview")
+    ).casefold()
+    compact = _normalize_text_key(text)
+    if _has_any(
+        compact,
+        (
+            "jobdescription",
+            "岗位jd",
+            "目标岗位",
+            "招聘",
+            "职位描述",
+            "任职要求",
+            "岗位要求",
+        ),
+    ) or re.search(r"\bjd\b", text):
+        return "jd"
+    if _has_any(compact, ("resume", "cv", "candidate", "候选人", "简历", "工作经历", "项目经历")):
+        return "resume"
+    return None
+
+
+def _normalize_text_key(text: str) -> str:
+    return re.sub(r"[\s_\-—:：|｜/\\（）()【】\[\].。]+", "", text.strip().casefold())
+
+
+def _has_any(text: str, needles: tuple[str, ...]) -> bool:
+    return any(needle in text for needle in needles)
 
 
 def _merge_refs_from_text(known_refs: dict[str, str], text: str) -> None:

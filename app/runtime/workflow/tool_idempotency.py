@@ -32,8 +32,10 @@ def tool_idempotency_key(
         output_kind = _workflow_output_kind_from_runtime_plan(pending_runtime_plan) or _workflow_output_kind(args)
         if output_kind is None:
             return None
+        source_scope = _workflow_output_source_scope(output_kind, pending_runtime_plan)
         task_or_run = _string_or_none(context.parent_run_id) or context.run_id
-        return f"session_create_text_artifact:{context.session_id}:{task_or_run}:{output_kind}"
+        scope = f"{task_or_run}:{source_scope}" if source_scope is not None else task_or_run
+        return f"session_create_text_artifact:{context.session_id}:{scope}:{output_kind}"
     if tool_call.name == "career_job_fit_report_save":
         key = _key_from_fields(
             "career_job_fit_report_save",
@@ -154,6 +156,36 @@ def _workflow_output_kind_from_runtime_plan(plan: dict[str, Any] | None) -> str 
             return "job_fit_report"
     if phase == "resume_version" and "resume_version" in missing_outputs:
         return "resume_version_artifact"
+    return None
+
+
+def _workflow_output_source_scope(output_kind: str, plan: dict[str, Any] | None) -> str | None:
+    if not isinstance(plan, dict):
+        return None
+    refs = plan.get("known_refs") or plan.get("completed_refs") or {}
+    if not isinstance(refs, dict):
+        return None
+    if output_kind == "job_fit_report":
+        source = (
+            _string_or_none(refs.get("jd_source_artifact_id"))
+            or _string_or_none(refs.get("source_artifact_id"))
+            or _string_or_none(refs.get("jd_analysis_id"))
+        )
+        return f"jd={source}" if source is not None else None
+    if output_kind == "resume_diagnosis":
+        source = (
+            _string_or_none(refs.get("resume_source_artifact_id"))
+            or _string_or_none(refs.get("source_artifact_id"))
+            or _string_or_none(refs.get("resume_profile_id"))
+        )
+        return f"resume={source}" if source is not None else None
+    if output_kind == "resume_version_artifact":
+        source = (
+            _string_or_none(refs.get("jd_analysis_id"))
+            or _string_or_none(refs.get("target_jd_analysis_id"))
+            or _string_or_none(refs.get("job_fit_report_id"))
+        )
+        return f"target={source}" if source is not None else None
     return None
 
 
