@@ -232,6 +232,75 @@ def _save_resume_profile(registry: ToolRegistry, resume_artifact_id: str, diagno
     )
 
 
+def test_job_fit_report_save_parses_score_breakdown_key_value_text(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        title="简历.txt",
+        content="候选人具备 Python、FastAPI、RAG 和 Agent 工具调用经验。",
+    )
+    diagnosis_artifact_id = _create_text_artifact(
+        registry,
+        title="诊断.md",
+        content="诊断报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    report_artifact_id = _create_text_artifact(
+        registry,
+        title="匹配报告.md",
+        content="岗位匹配报告",
+        kind="generated_file",
+        media_type="text/markdown",
+    )
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        title="JD.txt",
+        content="AI 应用开发工程师，需要 Python、FastAPI、RAG、Agent 工程和向量检索经验。",
+    )
+    _save_resume_profile(registry, resume_artifact_id, diagnosis_artifact_id)
+    _execute(
+        registry,
+        "career_jd_analysis_save",
+        {
+            "jd_analysis_id": "jd_alpha",
+            "source_artifact_id": jd_artifact_id,
+            "evidence_refs": [jd_artifact_id],
+            "company": "星河智能",
+            "position": "AI 应用开发工程师",
+            "required_skills": ["Python", "FastAPI", "RAG", "Agent 工程", "向量检索"],
+        },
+        _context(agent_id="job_agent"),
+    )
+
+    payload = _execute(
+        registry,
+        "career_job_fit_report_save",
+        {
+            "source_artifact_id": jd_artifact_id,
+            "jd_analysis_id": "jd_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "report_artifact_id": report_artifact_id,
+            "overall_score": 80,
+            "score_breakdown": "Python: 100, FastAPI: 100, RAG: 100, Agent 工程: 80, 向量检索: 0",
+            "matched_evidence": ["Python", "FastAPI", "RAG", "Agent 工具调用"],
+            "gaps": ["向量检索经验缺失"],
+            "recommendation": "cautious",
+        },
+        _context(agent_id="job_agent"),
+    )
+
+    assert payload["record"]["score_breakdown"] == {
+        "Python": 100,
+        "FastAPI": 100,
+        "RAG": 100,
+        "Agent 工程": 80,
+        "向量检索": 0,
+    }
+
+
 def test_session_create_text_artifact_is_pathless_and_readable(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_career")

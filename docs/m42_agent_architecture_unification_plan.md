@@ -1,6 +1,6 @@
 # M42：Agent 架构统一与解耦方案
 
-> 状态：M42-A 架构文档已落地；M42-B `ActionPayloadBuilder` 初版已落地；M42-C `ToolCallController` skeleton 已落地；M42-D `action_plan.py` 已拆出；M42-E delegation guard 收缩已落地；M42-F Tool Gateway policy boundary 已落地；M42-G Tool Capability Registry 已落地。本文承接 M41：P0 `career_full` 已通过两批 `6x3` live smoke 停止线，下一阶段不继续为 harmless duplicate 或偶发长尾追加 guard，而是统一 runtime / workflow / state machine / skill / contract / gateway 的职责边界。
+> 状态：M42-A 架构文档已落地；M42-B `ActionPayloadBuilder` 初版已落地；M42-C `ToolCallController` skeleton 已落地；M42-D `action_plan.py` 已拆出；M42-E delegation guard 收缩已落地；M42-F Tool Gateway policy boundary 已落地；M42-G Tool Capability Registry 已落地；M42-H/I live regression 与工具参数 canonicalization 已验证。本文承接 M41：P0 `career_full` 已通过两批 `6x3` live smoke 停止线，下一阶段不继续为 harmless duplicate 或偶发长尾追加 guard，而是统一 runtime / workflow / state machine / skill / contract / gateway 的职责边界。
 
 ## 1. 背景
 
@@ -897,6 +897,111 @@ artifact_count=5
 M42 的结构收敛没有在 career_full P0 stream 路径上引入退化。
 本轮只做 focused regression，不继续扩大到 6x3；
 是否需要高并发回归应由后续产品变更风险决定，而不是每次结构小迁移都默认全量压测。
+```
+
+### M42-I：Full matrix regression and score_breakdown canonicalization
+
+执行：
+
+```text
+uv run python tools/smoke_live_matrix.py \
+  --all-p0 \
+  --all-p1 \
+  --runs 1 \
+  --concurrency 6 \
+  --stream \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m42_post_commit_full_matrix_c6_r1 \
+  --json-report data/live_smoke_matrix_m42_post_commit_full_matrix_c6_r1/report.json \
+  --quiet
+```
+
+结果：
+
+```text
+passed=10/11
+failed=1/11
+avg_elapsed=138.93s
+max_elapsed=286.56s
+avg_llm_calls=10.0
+max_llm_calls=24
+avg_tokens=49225
+max_tokens=122658
+harmful_duplicate_runs=1/11
+hidden_runs=0/11
+```
+
+失败场景：
+
+```text
+career_full
+失败点：JD 匹配阶段第一次 career_job_fit_report_save 参数不合法。
+
+具体错误：
+  'score_breakdown' must be an object.
+
+模型第一次传入：
+  score_breakdown="Python: 100, FastAPI: 100, RAG: 100, Agent 工程: 80, 向量检索: 0, 后端服务落地: 100"
+
+随后模型第二次改成 object 后成功。
+最终产品记录完整，但 smoke 判定 failed_tool_result + harmful_duplicate。
+```
+
+根因：
+
+```text
+这是工具输入 canonicalization 缺口，不是 workflow 状态机缺口。
+career_job_fit_report_save 的 schema 要求 score_breakdown 是 object；
+真实模型偶发输出可机械解析的 key-value 文本。
+工具层没有把这种文本归一化为 dict，导致一次失败写工具和一次重试。
+```
+
+修复：
+
+```text
+在 app/tools/builtin_tools/career.py 的 _optional_score_breakdown 中增加 key-value 文本解析：
+  "Python: 100, FastAPI: 100" -> {"Python": 100, "FastAPI": 100}
+
+边界：
+  只解析明确的 key:value 列表；
+  JSON object 字符串仍走原有 _required_dict；
+  无法解析的文本继续报错；
+  不新增 workflow guard；
+  不改变幂等、ledger 或 runtime plan。
+```
+
+验证：
+
+```text
+uv run pytest \
+  tests/test_career_tools.py::test_job_fit_report_save_parses_score_breakdown_key_value_text \
+  tests/test_tool_gateway.py \
+  tests/test_workflow_runtime_guard.py \
+  -q
+
+uv run python tools/smoke_live_matrix.py \
+  --scenario career_full \
+  --runs 1 \
+  --concurrency 1 \
+  --stream \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m42_score_breakdown_fix_career_full_c1_r1 \
+  --json-report data/live_smoke_matrix_m42_score_breakdown_fix_career_full_c1_r1/report.json \
+  --quiet
+```
+
+focused live 结果：
+
+```text
+passed=1/1
+failed=0/1
+elapsed=203.10s
+llm_calls=14
+tokens=68717
+duplicate_tool_call_count=0
+harmful_duplicate_tool_call_count=0
+hidden_tool_result_count=0
+failed_tool_result_count=0
 ```
 
 ## 9. 成功标准

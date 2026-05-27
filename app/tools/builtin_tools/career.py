@@ -3766,12 +3766,38 @@ def _optional_score(raw: Any, *, field_name: str, default: int) -> int:
 def _optional_score_breakdown(raw: Any) -> dict[str, int]:
     if raw is None:
         return {}
+    if isinstance(raw, str):
+        parsed = _parse_score_breakdown_text(raw)
+        if parsed is not None:
+            raw = parsed
     source = _required_dict(raw, field_name="score_breakdown")
     output: dict[str, int] = {}
     for raw_key, raw_score in source.items():
         key = _required_string(raw_key, field_name="score_breakdown key")
         output[key] = _normalize_score_value(raw_score, field_name=f"score_breakdown.{key}")
     return output
+
+
+def _parse_score_breakdown_text(raw: str) -> dict[str, str] | None:
+    text = raw.strip()
+    if not text or text.startswith("{"):
+        return None
+    output: dict[str, str] = {}
+    for part in re.split(r"[,，;；\n]+", text):
+        if not part.strip():
+            continue
+        if ":" in part:
+            key, value = part.split(":", 1)
+        elif "：" in part:
+            key, value = part.split("：", 1)
+        else:
+            return None
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            return None
+        output[key] = value
+    return output or None
 
 
 def _normalize_score_value(raw: Any, *, field_name: str) -> int:
