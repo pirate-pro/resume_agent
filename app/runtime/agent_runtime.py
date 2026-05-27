@@ -8,18 +8,22 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
-from app.core.errors import ValidationError
+from app.core.errors import ToolExecutionError, ValidationError
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, ToolCall, ToolExecutionResult
 from app.domain.protocols import ChatModelClient, ModelResponse, TokenUsage, ToolExecutor
 from app.domain.tool_call_protocols import ToolCallLedger
-from app.prompts.agent_runtime import FINAL_ANSWER_RECOVERY_PROMPT
+from app.prompts.agent_runtime import FINAL_ANSWER_RECOVERY_PROMPT, FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT
 from app.runtime.agent import (
     PostRunMaintenanceScheduler,
+    ToolCallController,
     ToolContextWindow,
     ToolExecutionRunner,
     ToolGateway,
+    MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN,
     build_assistant_tool_call_message,
+    build_final_answer_recovery_context,
     build_tool_result_message,
     build_tool_observation,
     compact_tool_result_for_model,
@@ -41,6 +45,12 @@ from app.runtime.event_recorder import EventRecorder
 from app.runtime.mid_term_flusher import MidTermFlusher
 from app.runtime.session_manager import SessionManager
 from app.runtime.workflow import WorkflowGuardDecision, WorkflowRuntimeGuard
+from app.runtime.workflow.action_payloads import (
+    build_action_payload_tool_call_from_plan,
+    build_required_tool_call_hint_for_plan,
+)
+from app.runtime.workflow.executor import WorkflowExecutorDryRun, dry_run_workflow_executor, tool_names_from_definitions
+from app.runtime.workflow.state import unified_workflow_state_from_runtime_plan
 from app.runtime.workflow.tool_plan import (
     is_premature_runtime_plan_answer,
     known_refs_from_successful_tool_result,
@@ -55,7 +65,6 @@ from app.runtime.workflow.tool_plan import (
     runtime_plan_notice,
     workflow_incomplete_answer,
 )
-from app.runtime.workflow.tool_hints import build_required_tool_call_hint
 from app.services.answer_normalizer import AnswerNormalizer
 
 __all__ = ["AgentRuntime"]
@@ -64,7 +73,6 @@ _SCHEMA_SEARCH_TOOL_NAME = "tool_search"
 _MAX_SCHEMA_SEARCH_ROUNDS = 3
 _MAX_PENDING_SCHEMA_SEARCH_NOTICE_ROUNDS = 2
 _MAX_PREMATURE_WORKFLOW_REMINDERS = 2
-_MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN = 1
 _HARD_MODEL_ROUND_FLOOR = 12
 _HARD_MODEL_ROUND_MULTIPLIER = 3
 _MAX_NO_PROGRESS_OBSERVATIONS = 3
@@ -72,11 +80,6 @@ _MAX_REPEATED_NO_PROGRESS_FINGERPRINTS = 2
 _MAX_REPEATED_ERROR_SIGNATURES = 2
 _MAX_SCHEMA_SEARCH_WITHOUT_NEW_REVEAL = 2
 _MAX_SUPPRESSED_REQUIRED_SCHEMA_SEARCH_RETRY_ROUNDS = 1
-_STRICT_AUTO_EXECUTE_REQUIRED_TOOLS = {
-    "career_application_merge",
-    "career_job_fit_report_save",
-    "career_resume_version_create",
-}
 _TEXT_TOOL_INVOCATION_RE = re.compile(r"^\s*<tool_invocation\b[^>]*?/>\s*$", re.IGNORECASE | re.DOTALL)
 _TEXT_TOOL_CALL_MARKUP_RE = re.compile(
     r"<\s*/?\s*tool_call\b|<\s*function\s*=|<\s*/\s*function\s*>|<\s*parameter\s*=",
@@ -112,6 +115,49 @@ _WEAK_COMPLETED_WORKFLOW_ACTION_PATTERNS = (
     re.compile(r"现在(?:读取|调用|创建|生成)", re.IGNORECASE),
     re.compile(r"需要先(?:读取|调用|创建|生成|获取)", re.IGNORECASE),
 )
+_RESUME_VERSION_EXECUTOR_CONTRACT_ID = "career.resume_version.project_action.v1"
+_RESUME_DIAGNOSIS_EXECUTOR_CONTRACT_ID = "career.resume_diagnosis.child.v1"
+_RESUME_VERSION_EXECUTOR_SYSTEM_PROMPT = """你是求职产品中的定制简历正文生成器。
+
+只输出一个 JSON object，不要输出 Markdown fence，不要调用工具。字段：
+{
+  "title": "定制简历标题",
+  "content": "Markdown 简历正文",
+  "change_summary": ["基于证据的修改点"],
+  "keyword_strategy": ["只列候选人证据支持的关键词"],
+  "risk_notes": ["缺失或需要用户确认的事实"]
+}
+
+硬性规则：
+- 简历正文只能使用对话上下文、产品记录和 source artifact 中已经出现的候选人事实。
+- JD 技能可以用于强调已有事实；不能把候选人未证实的技能、公司、时间、指标、联系方式、学历或项目写进正文。
+- 缺失事实写入 risk_notes，不要写进 content。
+"""
+_RESUME_DIAGNOSIS_EXECUTOR_SYSTEM_PROMPT = """你是求职产品中的简历诊断结构化生成器。
+
+只输出一个 JSON object，不要输出 Markdown fence，不要调用工具。字段：
+{
+  "diagnosis_title": "简历诊断报告标题",
+  "diagnosis_markdown": "Markdown 诊断报告正文",
+  "resume_profile": {
+    "resume_profile_id": "可省略",
+    "basic_info": {},
+    "education": [],
+    "work_experience": [],
+    "project_experience": [],
+    "skills": [],
+    "certificates": [],
+    "awards": [],
+    "self_evaluation": "",
+    "diagnosis": {}
+  }
+}
+
+硬性规则：
+- 只能使用用户提供的简历 artifact / 任务上下文里的候选人事实。
+- 不要补造公司、学校、时间、联系方式、指标、证书或技能。
+- 缺失内容只能写成诊断建议或 diagnosis 中的缺口，不要写进结构化事实字段。
+"""
 
 
 @dataclass(slots=True)
@@ -291,6 +337,14 @@ class AgentRuntime:
             payload=context.memory_summary,
         )
 
+        executor_output = self._try_execute_workflow_contract_sync(
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+        )
+        if executor_output is not None:
+            return executor_output
+
         tool_reveal_state = ToolRevealState.create(
             mode=self._tool_schema_disclosure_mode_for_context(run_context),
             available_definitions=context.tool_definitions,
@@ -313,6 +367,7 @@ class AgentRuntime:
         hidden_runtime_tool_suppression_counts: dict[str, int] = {}
         pending_runtime_plan = pending_runtime_plan_from_context_bundle(context.runtime_tool_plan)
         runtime_known_refs = _runtime_plan_known_refs(pending_runtime_plan)
+        tool_call_controller = ToolCallController()
         progress_tracker = _ToolLoopProgressTracker()
         max_model_rounds = _hard_model_round_limit(run_input.max_tool_rounds)
         while round_index <= max_model_rounds:
@@ -383,7 +438,12 @@ class AgentRuntime:
                     tool_reveal_state=tool_reveal_state,
                 ):
                     auto_tool_call = (
-                        _strict_required_tool_auto_call_from_plan(
+                        build_action_payload_tool_call_from_plan(
+                            pending_runtime_plan=pending_runtime_plan,
+                            visible_tool_names_for_round=visible_tool_names_for_round,
+                        )
+                        or
+                        tool_call_controller.strict_required_tool_auto_call_from_plan(
                             pending_runtime_plan=pending_runtime_plan,
                             visible_tool_names_for_round=visible_tool_names_for_round,
                         )
@@ -396,7 +456,7 @@ class AgentRuntime:
                         self._event_recorder.record(
                             context=run_context,
                             event_type="workflow_runtime_decision",
-                            payload=_strict_auto_execute_event_payload(
+                            payload=tool_call_controller.strict_auto_execute_event_payload(
                                 blocked_tool_call=None,
                                 replacement_tool_call=resolved_tool_calls[0],
                                 pending_runtime_plan=pending_runtime_plan,
@@ -440,6 +500,7 @@ class AgentRuntime:
                             system_prompt=context.system_prompt,
                             messages=messages,
                             original_user_message=run_input.user_message,
+                            pending_runtime_plan=pending_runtime_plan,
                         )
                     answer = answer or "(no answer)"
                     break
@@ -450,23 +511,48 @@ class AgentRuntime:
                 pending_runtime_plan=pending_runtime_plan,
                 tool_reveal_state=tool_reveal_state,
             ):
-                premature_workflow_reminders += 1
-                suppressed_required_schema_search_notice_index = premature_workflow_reminders
-                self._event_recorder.record(
-                    context=run_context,
-                    event_type="workflow_runtime_decision",
-                    payload={
-                        "policy": "suppress",
-                        "reason": "schema_search_suppressed_required_tool_visible",
-                        "runtime_plan": pending_runtime_plan,
-                        "reminder_index": premature_workflow_reminders,
-                    },
+                schema_auto_tool_call = (
+                    build_action_payload_tool_call_from_plan(
+                        pending_runtime_plan=pending_runtime_plan,
+                        visible_tool_names_for_round=visible_tool_names_for_round,
+                        tool_call_id=resolved_tool_calls[0].tool_call_id if resolved_tool_calls else None,
+                    )
+                    if strict_runtime_tool_mode
+                    and premature_workflow_reminders >= _MAX_SUPPRESSED_REQUIRED_SCHEMA_SEARCH_RETRY_ROUNDS
+                    else None
                 )
-                tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
-                if premature_workflow_reminders <= _MAX_SCHEMA_SEARCH_ROUNDS:
-                    schema_search_rounds += 1
-                    round_index += 1
-                    continue
+                if schema_auto_tool_call is not None:
+                    original_tool_call = resolved_tool_calls[0] if resolved_tool_calls else None
+                    resolved_tool_calls = ensure_tool_call_ids([schema_auto_tool_call])
+                    schema_search_only = False
+                    self._event_recorder.record(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload=tool_call_controller.strict_auto_execute_event_payload(
+                            blocked_tool_call=original_tool_call,
+                            replacement_tool_call=resolved_tool_calls[0],
+                            pending_runtime_plan=pending_runtime_plan,
+                            reason="strict_schema_search_replaced_with_required_tool",
+                        ),
+                    )
+                else:
+                    premature_workflow_reminders += 1
+                    suppressed_required_schema_search_notice_index = premature_workflow_reminders
+                    self._event_recorder.record(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload={
+                            "policy": "suppress",
+                            "reason": "schema_search_suppressed_required_tool_visible",
+                            "runtime_plan": pending_runtime_plan,
+                            "reminder_index": premature_workflow_reminders,
+                        },
+                    )
+                    tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
+                    if premature_workflow_reminders <= _MAX_SCHEMA_SEARCH_ROUNDS:
+                        schema_search_rounds += 1
+                        round_index += 1
+                        continue
             if schema_search_only and _is_final_answer_ready_runtime_plan(pending_runtime_plan):
                 schema_search_rounds = 0
             elif schema_search_only:
@@ -484,7 +570,7 @@ class AgentRuntime:
                         },
                     )
                 schema_search_rounds += 1
-            hidden_runtime_tool_names = _hidden_runtime_tool_names_to_suppress(
+            hidden_runtime_tool_names = tool_call_controller.hidden_runtime_tool_names_to_suppress(
                 resolved_tool_calls,
                 pending_runtime_plan=pending_runtime_plan,
                 visible_tool_names_for_round=visible_tool_names_for_round,
@@ -504,12 +590,12 @@ class AgentRuntime:
                     )
                     answer = _deterministic_final_answer_fallback(pending_runtime_plan)
                     break
-                suppression_key = _hidden_runtime_tool_suppression_key(
+                suppression_key = tool_call_controller.hidden_runtime_tool_suppression_key(
                     pending_runtime_plan=pending_runtime_plan,
                     hidden_tool_names=hidden_runtime_tool_names,
                 )
                 suppression_count = hidden_runtime_tool_suppression_counts.get(suppression_key, 0)
-                if suppression_count >= _MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN:
+                if suppression_count >= MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN:
                     self._event_recorder.record(
                         context=run_context,
                         event_type="workflow_runtime_decision",
@@ -608,12 +694,12 @@ class AgentRuntime:
                 )
                 execution_tool_call = tool_call
                 if tool_call.name not in visible_tool_names_for_round:
-                    support_tool_allowed = _hidden_runtime_support_tool_allowed(
+                    support_tool_allowed = tool_call_controller.hidden_runtime_support_tool_allowed(
                         tool_call,
                         pending_runtime_plan=pending_runtime_plan,
                     )
                     replacement_tool_call = (
-                        _strict_required_tool_auto_call(
+                        tool_call_controller.strict_required_tool_auto_call(
                             tool_call,
                             pending_runtime_plan=pending_runtime_plan,
                             visible_tool_names_for_round=visible_tool_names_for_round,
@@ -626,7 +712,7 @@ class AgentRuntime:
                         self._event_recorder.record(
                             context=run_context,
                             event_type="workflow_runtime_decision",
-                            payload=_strict_auto_execute_event_payload(
+                            payload=tool_call_controller.strict_auto_execute_event_payload(
                                 blocked_tool_call=tool_call,
                                 replacement_tool_call=replacement_tool_call,
                                 pending_runtime_plan=pending_runtime_plan,
@@ -874,6 +960,7 @@ class AgentRuntime:
                     system_prompt=context.system_prompt,
                     messages=tool_context_window.render_messages(),
                     original_user_message=run_input.user_message,
+                    pending_runtime_plan=pending_runtime_plan,
                 )
                 answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
@@ -883,6 +970,7 @@ class AgentRuntime:
                     system_prompt=context.system_prompt,
                     messages=tool_context_window.render_messages(),
                     original_user_message=run_input.user_message,
+                    pending_runtime_plan=pending_runtime_plan,
                 )
                 answer = answer or "(no answer)"
                 break
@@ -906,6 +994,7 @@ class AgentRuntime:
                     system_prompt=context.system_prompt,
                     messages=tool_context_window.render_messages(),
                     original_user_message=run_input.user_message,
+                    pending_runtime_plan=pending_runtime_plan,
                 )
                 answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
@@ -926,6 +1015,7 @@ class AgentRuntime:
                 system_prompt=context.system_prompt,
                 messages=tool_context_window.render_messages(),
                 original_user_message=run_input.user_message,
+                pending_runtime_plan=pending_runtime_plan,
             )
             answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
         if not answer and _is_premature_workflow_answer(
@@ -967,6 +1057,1234 @@ class AgentRuntime:
             answer=answer,
             tool_calls=used_tool_calls,
             memory_hits=context.memory_hits,
+        )
+
+    def _try_execute_workflow_contract_sync(
+        self,
+        *,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+    ) -> AgentRunOutput | None:
+        pending_runtime_plan = pending_runtime_plan_from_context_bundle(context.runtime_tool_plan)
+        if pending_runtime_plan is None:
+            return None
+        workflow_state = unified_workflow_state_from_runtime_plan(pending_runtime_plan)
+        decision = dry_run_workflow_executor(
+            state=workflow_state,
+            context=run_context,
+            available_tool_names=tool_names_from_definitions(context.tool_definitions),
+        )
+        if decision.matched_contract_id not in {
+            _RESUME_DIAGNOSIS_EXECUTOR_CONTRACT_ID,
+            _RESUME_VERSION_EXECUTOR_CONTRACT_ID,
+        }:
+            return None
+        if not decision.executable:
+            self._event_recorder.record(
+                context=run_context,
+                event_type="workflow_runtime_decision",
+                payload={
+                    "policy": "skip",
+                    "reason": "workflow_executor_not_executable",
+                    **_workflow_executor_decision_payload(decision),
+                },
+            )
+            return None
+
+        self._event_recorder.record(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "execute",
+                "reason": "workflow_executor_contract_matched",
+                **_workflow_executor_decision_payload(decision),
+            },
+        )
+        if decision.matched_contract_id == _RESUME_DIAGNOSIS_EXECUTOR_CONTRACT_ID:
+            return self._execute_resume_diagnosis_child_contract(
+                decision=decision,
+                run_context=run_context,
+                run_input=run_input,
+                context=context,
+                pending_runtime_plan=pending_runtime_plan,
+            )
+        return self._execute_resume_version_project_action_contract(
+            decision=decision,
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+            pending_runtime_plan=pending_runtime_plan,
+        )
+
+    def _execute_resume_diagnosis_child_contract(
+        self,
+        *,
+        decision: WorkflowExecutorDryRun,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        pending_runtime_plan: dict[str, Any],
+    ) -> AgentRunOutput | None:
+        raw_known_refs = pending_runtime_plan.get("known_refs")
+        known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
+        source_artifact_id = str(known_refs.get("resume_source_artifact_id") or "").strip()
+        if not source_artifact_id:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_source_artifact_id",
+                result=None,
+                reason="workflow_executor_missing_source_artifact",
+            )
+            return None
+
+        draft = self._build_resume_diagnosis_executor_payload(
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+            source_artifact_id=source_artifact_id,
+        )
+        artifact_args = _resume_diagnosis_artifact_args_from_draft(draft)
+        if artifact_args is None:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_diagnosis_draft_generation",
+                result=None,
+                reason="workflow_executor_draft_unusable",
+            )
+            return None
+
+        used_tool_calls: list[ToolCall] = []
+        executor_runtime_plan = pending_runtime_plan
+        artifact_result = self._execute_workflow_executor_tool_sync(
+            tool_call=_workflow_executor_tool_call("session_create_text_artifact", artifact_args),
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+        )
+        if artifact_result is None or not artifact_result.success:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="session_create_text_artifact",
+                result=artifact_result,
+            )
+            return None
+        diagnosis_artifact_id = _artifact_id_from_tool_result(artifact_result)
+        if diagnosis_artifact_id is None:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="session_create_text_artifact",
+                result=artifact_result,
+                reason="missing_diagnosis_artifact_id",
+            )
+            return None
+        executor_runtime_plan = _advance_workflow_executor_runtime_plan(
+            tool_name="session_create_text_artifact",
+            result=artifact_result,
+            previous_pending_plan=executor_runtime_plan,
+        )
+
+        profile_args = _resume_profile_save_args_from_draft(
+            draft,
+            source_artifact_id=source_artifact_id,
+            diagnosis_artifact_id=diagnosis_artifact_id,
+        )
+        if profile_args is None:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_profile_payload",
+                result=None,
+                reason="workflow_executor_draft_unusable",
+            )
+            return None
+        profile_result = self._execute_workflow_executor_tool_sync(
+            tool_call=_workflow_executor_tool_call("career_resume_profile_save", profile_args),
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+        )
+        if profile_result is None or not profile_result.success:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_profile_save",
+                result=profile_result,
+            )
+            return None
+        resume_profile_id = _record_id_from_tool_result(profile_result, fallback_key="resume_profile_id")
+        if resume_profile_id is None:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_profile_save",
+                result=profile_result,
+                reason="missing_resume_profile_id",
+            )
+            return None
+
+        answer = _workflow_executor_resume_diagnosis_answer(
+            resume_profile_id=resume_profile_id,
+            diagnosis_artifact_id=diagnosis_artifact_id,
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "finalize",
+                "reason": "workflow_executor_completed",
+                "contract_id": decision.matched_contract_id,
+                "resume_profile_id": resume_profile_id,
+                "diagnosis_artifact_id": diagnosis_artifact_id,
+            },
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="assistant_message",
+            payload={"content": answer},
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="run_finished",
+            payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls), "workflow_executor": True},
+        )
+        self._dispatch_post_run_maintenance_sync(run_context)
+        return AgentRunOutput(
+            session_id=run_context.session_id,
+            answer=answer,
+            tool_calls=used_tool_calls,
+            memory_hits=context.memory_hits,
+        )
+
+    def _execute_resume_version_project_action_contract(
+        self,
+        *,
+        decision: WorkflowExecutorDryRun,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        pending_runtime_plan: dict[str, Any],
+    ) -> AgentRunOutput | None:
+        raw_known_refs = pending_runtime_plan.get("known_refs")
+        known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
+        application_id = str(known_refs.get("application_id") or "").strip()
+        resume_profile_id = str(known_refs.get("resume_profile_id") or "").strip()
+        jd_analysis_id = str(known_refs.get("jd_analysis_id") or "").strip()
+        job_fit_report_id = str(known_refs.get("job_fit_report_id") or "").strip()
+        used_tool_calls: list[ToolCall] = []
+        planned_tool_names = {step.tool_name for step in decision.planned_steps}
+        executor_runtime_plan = pending_runtime_plan
+        application_result: ToolExecutionResult | None = None
+
+        if "career_application_get" in planned_tool_names:
+            application_call = _workflow_executor_tool_call(
+                "career_application_get",
+                {"application_id": application_id},
+            )
+            application_result = self._execute_workflow_executor_tool_sync(
+                tool_call=application_call,
+                run_context=run_context,
+                pending_runtime_plan=executor_runtime_plan,
+                used_tool_calls=used_tool_calls,
+            )
+            if application_result is None or not application_result.success:
+                self._record_workflow_executor_failure(
+                    run_context=run_context,
+                    decision=decision,
+                    failed_step="career_application_get",
+                    result=application_result,
+                )
+                return None
+            executor_runtime_plan = _advance_workflow_executor_runtime_plan(
+                tool_name="career_application_get",
+                result=application_result,
+                previous_pending_plan=executor_runtime_plan,
+            )
+
+        draft_args = self._build_resume_version_executor_create_args(
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+            application_result=application_result,
+            resume_profile_id=resume_profile_id,
+            jd_analysis_id=jd_analysis_id,
+            job_fit_report_id=job_fit_report_id,
+            application_id=application_id,
+        )
+        if draft_args is None:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_version_draft_generation",
+                result=None,
+                reason="workflow_executor_draft_unusable",
+            )
+            return None
+        create_call = _workflow_executor_tool_call("career_resume_version_create", draft_args)
+        create_result = self._execute_workflow_executor_tool_sync(
+            tool_call=create_call,
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+        )
+        if create_result is None or not create_result.success:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_version_create",
+                result=create_result,
+            )
+            return None
+
+        resume_version_id = _record_id_from_tool_result(create_result, fallback_key="resume_version_id")
+        if resume_version_id is None:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_version_create",
+                result=create_result,
+                reason="missing_resume_version_id",
+            )
+            return None
+        executor_runtime_plan = _advance_workflow_executor_runtime_plan(
+            tool_name="career_resume_version_create",
+            result=create_result,
+            previous_pending_plan=executor_runtime_plan,
+        )
+
+        evidence_refs = _dedupe_non_empty_strings(
+            [application_id, resume_profile_id, jd_analysis_id, job_fit_report_id, resume_version_id]
+        )
+        merge_call = _workflow_executor_tool_call(
+            "career_application_merge",
+            {
+                "application_id": application_id,
+                "updates": {"resume_version_ids": [resume_version_id]},
+                "evidence_refs": evidence_refs,
+            },
+        )
+        merge_result = self._execute_workflow_executor_tool_sync(
+            tool_call=merge_call,
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+        )
+        if merge_result is None or not merge_result.success:
+            self._record_workflow_executor_failure(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_application_merge",
+                result=merge_result,
+            )
+            return None
+
+        artifact_id = _artifact_id_from_resume_version_result(create_result)
+        answer = _workflow_executor_resume_version_answer(
+            application_id=application_id,
+            resume_version_id=resume_version_id,
+            artifact_id=artifact_id,
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "finalize",
+                "reason": "workflow_executor_completed",
+                "contract_id": decision.matched_contract_id,
+                "resume_version_id": resume_version_id,
+                "application_id": application_id,
+                "artifact_id": artifact_id,
+            },
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="assistant_message",
+            payload={"content": answer},
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="run_finished",
+            payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls), "workflow_executor": True},
+        )
+        self._dispatch_post_run_maintenance_sync(run_context)
+        return AgentRunOutput(
+            session_id=run_context.session_id,
+            answer=answer,
+            tool_calls=used_tool_calls,
+            memory_hits=context.memory_hits,
+        )
+
+    def _execute_workflow_executor_tool_sync(
+        self,
+        *,
+        tool_call: ToolCall,
+        run_context: RunContext,
+        pending_runtime_plan: dict[str, Any],
+        used_tool_calls: list[ToolCall],
+    ) -> ToolExecutionResult | None:
+        self._event_recorder.record(
+            context=run_context,
+            event_type="tool_call",
+            payload={
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+                "tool_call_id": tool_call.tool_call_id,
+                "auto_executed": True,
+                "workflow_executor": True,
+            },
+        )
+        execution_tool_call = tool_call
+        if self._tool_gateway is not None:
+            gateway_result = self._tool_gateway.execute(
+                tool_call,
+                run_context,
+                pending_runtime_plan=pending_runtime_plan,
+            )
+            execution_tool_call = gateway_result.tool_call
+            result = gateway_result.result
+            if gateway_result.event_payload is not None:
+                self._event_recorder.record(
+                    context=run_context,
+                    event_type="workflow_runtime_decision",
+                    payload=gateway_result.event_payload,
+                )
+        else:
+            guard_decision = self._inspect_workflow_guard(tool_call, run_context)
+            execution_tool_call = guard_decision.tool_call
+            if guard_decision.event_payload is not None:
+                self._event_recorder.record(
+                    context=run_context,
+                    event_type="workflow_runtime_decision",
+                    payload=guard_decision.event_payload,
+                )
+            result = guard_decision.result or self._tool_runner.execute_safely(execution_tool_call, run_context)
+        used_tool_calls.append(execution_tool_call)
+        self._event_recorder.record(
+            context=run_context,
+            event_type="tool_result",
+            payload={
+                "tool_name": result.tool_name,
+                "success": result.success,
+                "content": result.content,
+                "tool_call_id": execution_tool_call.tool_call_id,
+            },
+        )
+        return result
+
+    def _workflow_executor_source_records(
+        self,
+        *,
+        run_context: RunContext,
+        resume_profile_id: str,
+        jd_analysis_id: str,
+        job_fit_report_id: str,
+        application_id: str,
+    ) -> dict[str, Any]:
+        records: dict[str, Any] = {}
+        for key, tool_name, arguments in (
+            ("resume_profile", "career_resume_profile_get", {"resume_profile_id": resume_profile_id}),
+            ("jd_analysis", "career_jd_analysis_get", {"jd_analysis_id": jd_analysis_id}),
+            ("job_fit_report", "career_job_fit_report_get", {"job_fit_report_id": job_fit_report_id}),
+            ("career_application", "career_application_get", {"application_id": application_id}),
+        ):
+            payload = self._workflow_executor_read_record(
+                tool_name=tool_name,
+                arguments=arguments,
+                context=run_context,
+            )
+            record = payload.get("record") if isinstance(payload, dict) else None
+            if isinstance(record, dict):
+                records[key] = _compact_workflow_executor_record(key, record)
+        return records
+
+    def _workflow_executor_read_record(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+        context: RunContext,
+    ) -> dict[str, Any]:
+        try:
+            result = self._tool_executor.execute(
+                ToolCall(
+                    name=tool_name,
+                    arguments=arguments,
+                    tool_call_id=f"call_workflow_executor_read_{uuid4().hex[:12]}",
+                ),
+                context,
+            )
+        except (ToolExecutionError, ValidationError):
+            return {}
+        if not result.success:
+            return {}
+        try:
+            payload = json.loads(result.content)
+        except (TypeError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    async def _execute_workflow_executor_tool_async(
+        self,
+        *,
+        tool_call: ToolCall,
+        run_context: RunContext,
+        pending_runtime_plan: dict[str, Any],
+        used_tool_calls: list[ToolCall],
+        channel: EventChannel,
+    ) -> ToolExecutionResult | None:
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="tool_call",
+            payload={
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+                "tool_call_id": tool_call.tool_call_id,
+                "auto_executed": True,
+                "workflow_executor": True,
+            },
+            channel=channel,
+        )
+        execution_tool_call = tool_call
+        if self._tool_gateway is not None:
+            gateway_result = await self._tool_gateway.execute_async(
+                tool_call,
+                run_context,
+                pending_runtime_plan=pending_runtime_plan,
+            )
+            execution_tool_call = gateway_result.tool_call
+            result = gateway_result.result
+            if gateway_result.event_payload is not None:
+                await self._event_recorder.record_async(
+                    context=run_context,
+                    event_type="workflow_runtime_decision",
+                    payload=gateway_result.event_payload,
+                    channel=channel,
+                )
+        else:
+            guard_decision = self._inspect_workflow_guard(tool_call, run_context)
+            execution_tool_call = guard_decision.tool_call
+            if guard_decision.event_payload is not None:
+                await self._event_recorder.record_async(
+                    context=run_context,
+                    event_type="workflow_runtime_decision",
+                    payload=guard_decision.event_payload,
+                    channel=channel,
+                )
+            result = guard_decision.result or await self._tool_runner.execute_safely_async(
+                execution_tool_call,
+                run_context,
+            )
+        used_tool_calls.append(execution_tool_call)
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="tool_result",
+            payload={
+                "tool_name": result.tool_name,
+                "success": result.success,
+                "content": result.content,
+                "tool_call_id": execution_tool_call.tool_call_id,
+            },
+            channel=channel,
+        )
+        return result
+
+    def _build_resume_diagnosis_executor_payload(
+        self,
+        *,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        source_artifact_id: str,
+    ) -> dict[str, Any]:
+        system_prompt, messages = _resume_diagnosis_executor_messages(
+            user_message=run_input.user_message,
+            context_messages=context.messages,
+            source_artifact_id=source_artifact_id,
+        )
+        response = self._model_client.generate(system_prompt=system_prompt, messages=messages, tools=[])
+        self._record_llm_usage(
+            run_context=run_context,
+            system_prompt=system_prompt,
+            system_prompt_sections=[],
+            messages=messages,
+            tools=[],
+            model_response=response,
+            tool_calls=[],
+            mode="sync",
+            phase="workflow_executor",
+            round_index=None,
+        )
+        if response.tool_calls:
+            self._event_recorder.record(
+                context=run_context,
+                event_type="workflow_runtime_decision",
+                payload={
+                    "policy": "fallback",
+                    "reason": "workflow_executor_draft_model_returned_tool_calls",
+                    "tool_call_count": len(response.tool_calls),
+                },
+            )
+            return {}
+        return _resume_diagnosis_draft_from_model_content(response.content)
+
+    async def _build_resume_diagnosis_executor_payload_stream(
+        self,
+        *,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        source_artifact_id: str,
+        channel: EventChannel,
+    ) -> dict[str, Any]:
+        system_prompt, messages = _resume_diagnosis_executor_messages(
+            user_message=run_input.user_message,
+            context_messages=context.messages,
+            source_artifact_id=source_artifact_id,
+        )
+        parts: list[str] = []
+        reasoning_parts: list[str] = []
+        usage: TokenUsage | None = None
+        model: str | None = None
+        resolved_tool_calls: list[ToolCall] = []
+        async for chunk in self._model_client.generate_stream(system_prompt=system_prompt, messages=messages, tools=[]):
+            if chunk.delta:
+                parts.append(chunk.delta)
+            if chunk.reasoning_delta:
+                reasoning_parts.append(chunk.reasoning_delta)
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if chunk.model:
+                model = chunk.model
+            if chunk.finished:
+                resolved_tool_calls = ensure_tool_call_ids(chunk.tool_calls or [])
+        content = "".join(parts).strip()
+        await self._record_llm_usage_async(
+            run_context=run_context,
+            system_prompt=system_prompt,
+            system_prompt_sections=[],
+            messages=messages,
+            tools=[],
+            content=content,
+            reasoning_content="".join(reasoning_parts).strip(),
+            tool_calls=resolved_tool_calls,
+            usage=usage,
+            model=model,
+            mode="stream",
+            phase="workflow_executor",
+            round_index=None,
+            channel=channel,
+        )
+        if resolved_tool_calls:
+            await self._event_recorder.record_async(
+                context=run_context,
+                event_type="workflow_runtime_decision",
+                payload={
+                    "policy": "fallback",
+                    "reason": "workflow_executor_draft_model_returned_tool_calls",
+                    "tool_call_count": len(resolved_tool_calls),
+                },
+                channel=channel,
+            )
+            return {}
+        return _resume_diagnosis_draft_from_model_content(content)
+
+    def _build_resume_version_executor_create_args(
+        self,
+        *,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        application_result: ToolExecutionResult | None,
+        resume_profile_id: str,
+        jd_analysis_id: str,
+        job_fit_report_id: str,
+        application_id: str,
+    ) -> dict[str, Any] | None:
+        system_prompt, messages = _resume_version_executor_messages(
+            user_message=run_input.user_message,
+            context_messages=context.messages,
+            application_result=application_result.content if application_result is not None else None,
+            source_records=self._workflow_executor_source_records(
+                run_context=run_context,
+                resume_profile_id=resume_profile_id,
+                jd_analysis_id=jd_analysis_id,
+                job_fit_report_id=job_fit_report_id,
+                application_id=application_id,
+            ),
+            resume_profile_id=resume_profile_id,
+            jd_analysis_id=jd_analysis_id,
+            job_fit_report_id=job_fit_report_id,
+            application_id=application_id,
+        )
+        response = self._model_client.generate(system_prompt=system_prompt, messages=messages, tools=[])
+        self._record_llm_usage(
+            run_context=run_context,
+            system_prompt=system_prompt,
+            system_prompt_sections=[],
+            messages=messages,
+            tools=[],
+            model_response=response,
+            tool_calls=[],
+            mode="sync",
+            phase="workflow_executor",
+            round_index=None,
+        )
+        if response.tool_calls:
+            self._event_recorder.record(
+                context=run_context,
+                event_type="workflow_runtime_decision",
+                payload={
+                    "policy": "fallback",
+                    "reason": "workflow_executor_draft_model_returned_tool_calls",
+                    "tool_call_count": len(response.tool_calls),
+                },
+            )
+            return None
+        draft = _resume_version_draft_from_model_content(response.content)
+        return _resume_version_create_args_from_draft(
+            draft,
+            application_id=application_id,
+            resume_profile_id=resume_profile_id,
+            jd_analysis_id=jd_analysis_id,
+            job_fit_report_id=job_fit_report_id,
+        )
+
+    async def _build_resume_version_executor_create_args_stream(
+        self,
+        *,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        application_result: ToolExecutionResult | None,
+        resume_profile_id: str,
+        jd_analysis_id: str,
+        job_fit_report_id: str,
+        application_id: str,
+        channel: EventChannel,
+    ) -> dict[str, Any] | None:
+        system_prompt, messages = _resume_version_executor_messages(
+            user_message=run_input.user_message,
+            context_messages=context.messages,
+            application_result=application_result.content if application_result is not None else None,
+            source_records=self._workflow_executor_source_records(
+                run_context=run_context,
+                resume_profile_id=resume_profile_id,
+                jd_analysis_id=jd_analysis_id,
+                job_fit_report_id=job_fit_report_id,
+                application_id=application_id,
+            ),
+            resume_profile_id=resume_profile_id,
+            jd_analysis_id=jd_analysis_id,
+            job_fit_report_id=job_fit_report_id,
+            application_id=application_id,
+        )
+        parts: list[str] = []
+        reasoning_parts: list[str] = []
+        usage: TokenUsage | None = None
+        model: str | None = None
+        resolved_tool_calls: list[ToolCall] = []
+        async for chunk in self._model_client.generate_stream(system_prompt=system_prompt, messages=messages, tools=[]):
+            if chunk.delta:
+                parts.append(chunk.delta)
+            if chunk.reasoning_delta:
+                reasoning_parts.append(chunk.reasoning_delta)
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if chunk.model:
+                model = chunk.model
+            if chunk.finished:
+                resolved_tool_calls = ensure_tool_call_ids(chunk.tool_calls or [])
+        content = "".join(parts).strip()
+        await self._record_llm_usage_async(
+            run_context=run_context,
+            system_prompt=system_prompt,
+            system_prompt_sections=[],
+            messages=messages,
+            tools=[],
+            content=content,
+            reasoning_content="".join(reasoning_parts).strip(),
+            tool_calls=resolved_tool_calls,
+            usage=usage,
+            model=model,
+            mode="stream",
+            phase="workflow_executor",
+            round_index=None,
+            channel=channel,
+        )
+        if resolved_tool_calls:
+            await self._event_recorder.record_async(
+                context=run_context,
+                event_type="workflow_runtime_decision",
+                payload={
+                    "policy": "fallback",
+                    "reason": "workflow_executor_draft_model_returned_tool_calls",
+                    "tool_call_count": len(resolved_tool_calls),
+                },
+                channel=channel,
+            )
+            return None
+        draft = _resume_version_draft_from_model_content(content)
+        return _resume_version_create_args_from_draft(
+            draft,
+            application_id=application_id,
+            resume_profile_id=resume_profile_id,
+            jd_analysis_id=jd_analysis_id,
+            job_fit_report_id=job_fit_report_id,
+        )
+
+    def _record_workflow_executor_failure(
+        self,
+        *,
+        run_context: RunContext,
+        decision: WorkflowExecutorDryRun,
+        failed_step: str,
+        result: ToolExecutionResult | None,
+        reason: str = "workflow_executor_step_failed",
+    ) -> None:
+        self._event_recorder.record(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "fallback",
+                "reason": reason,
+                "failed_step": failed_step,
+                "contract_id": decision.matched_contract_id,
+                "tool_success": result.success if result is not None else None,
+                "tool_result_preview": result.content[:240] if result is not None else None,
+            },
+        )
+
+    async def _try_execute_workflow_contract_stream(
+        self,
+        *,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        channel: EventChannel,
+    ) -> AgentRunOutput | None:
+        pending_runtime_plan = pending_runtime_plan_from_context_bundle(context.runtime_tool_plan)
+        if pending_runtime_plan is None:
+            return None
+        workflow_state = unified_workflow_state_from_runtime_plan(pending_runtime_plan)
+        decision = dry_run_workflow_executor(
+            state=workflow_state,
+            context=run_context,
+            available_tool_names=tool_names_from_definitions(context.tool_definitions),
+        )
+        if decision.matched_contract_id not in {
+            _RESUME_DIAGNOSIS_EXECUTOR_CONTRACT_ID,
+            _RESUME_VERSION_EXECUTOR_CONTRACT_ID,
+        }:
+            return None
+        if not decision.executable:
+            await self._event_recorder.record_async(
+                context=run_context,
+                event_type="workflow_runtime_decision",
+                payload={
+                    "policy": "skip",
+                    "reason": "workflow_executor_not_executable",
+                    **_workflow_executor_decision_payload(decision),
+                },
+                channel=channel,
+            )
+            return None
+
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "execute",
+                "reason": "workflow_executor_contract_matched",
+                **_workflow_executor_decision_payload(decision),
+            },
+            channel=channel,
+        )
+        if decision.matched_contract_id == _RESUME_DIAGNOSIS_EXECUTOR_CONTRACT_ID:
+            return await self._execute_resume_diagnosis_child_contract_stream(
+                decision=decision,
+                run_context=run_context,
+                run_input=run_input,
+                context=context,
+                pending_runtime_plan=pending_runtime_plan,
+                channel=channel,
+            )
+        return await self._execute_resume_version_project_action_contract_stream(
+            decision=decision,
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+            pending_runtime_plan=pending_runtime_plan,
+            channel=channel,
+        )
+
+    async def _execute_resume_diagnosis_child_contract_stream(
+        self,
+        *,
+        decision: WorkflowExecutorDryRun,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        pending_runtime_plan: dict[str, Any],
+        channel: EventChannel,
+    ) -> AgentRunOutput | None:
+        raw_known_refs = pending_runtime_plan.get("known_refs")
+        known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
+        source_artifact_id = str(known_refs.get("resume_source_artifact_id") or "").strip()
+        if not source_artifact_id:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_source_artifact_id",
+                result=None,
+                reason="workflow_executor_missing_source_artifact",
+                channel=channel,
+            )
+            return None
+
+        draft = await self._build_resume_diagnosis_executor_payload_stream(
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+            source_artifact_id=source_artifact_id,
+            channel=channel,
+        )
+        artifact_args = _resume_diagnosis_artifact_args_from_draft(draft)
+        if artifact_args is None:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_diagnosis_draft_generation",
+                result=None,
+                reason="workflow_executor_draft_unusable",
+                channel=channel,
+            )
+            return None
+
+        used_tool_calls: list[ToolCall] = []
+        executor_runtime_plan = pending_runtime_plan
+        artifact_result = await self._execute_workflow_executor_tool_async(
+            tool_call=_workflow_executor_tool_call("session_create_text_artifact", artifact_args),
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+            channel=channel,
+        )
+        if artifact_result is None or not artifact_result.success:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="session_create_text_artifact",
+                result=artifact_result,
+                channel=channel,
+            )
+            return None
+        diagnosis_artifact_id = _artifact_id_from_tool_result(artifact_result)
+        if diagnosis_artifact_id is None:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="session_create_text_artifact",
+                result=artifact_result,
+                reason="missing_diagnosis_artifact_id",
+                channel=channel,
+            )
+            return None
+        executor_runtime_plan = _advance_workflow_executor_runtime_plan(
+            tool_name="session_create_text_artifact",
+            result=artifact_result,
+            previous_pending_plan=executor_runtime_plan,
+        )
+
+        profile_args = _resume_profile_save_args_from_draft(
+            draft,
+            source_artifact_id=source_artifact_id,
+            diagnosis_artifact_id=diagnosis_artifact_id,
+        )
+        if profile_args is None:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_profile_payload",
+                result=None,
+                reason="workflow_executor_draft_unusable",
+                channel=channel,
+            )
+            return None
+        profile_result = await self._execute_workflow_executor_tool_async(
+            tool_call=_workflow_executor_tool_call("career_resume_profile_save", profile_args),
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+            channel=channel,
+        )
+        if profile_result is None or not profile_result.success:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_profile_save",
+                result=profile_result,
+                channel=channel,
+            )
+            return None
+        resume_profile_id = _record_id_from_tool_result(profile_result, fallback_key="resume_profile_id")
+        if resume_profile_id is None:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_profile_save",
+                result=profile_result,
+                reason="missing_resume_profile_id",
+                channel=channel,
+            )
+            return None
+
+        answer = _workflow_executor_resume_diagnosis_answer(
+            resume_profile_id=resume_profile_id,
+            diagnosis_artifact_id=diagnosis_artifact_id,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "finalize",
+                "reason": "workflow_executor_completed",
+                "contract_id": decision.matched_contract_id,
+                "resume_profile_id": resume_profile_id,
+                "diagnosis_artifact_id": diagnosis_artifact_id,
+            },
+            channel=channel,
+        )
+        await self._emit_stream_answer_meta_if_changed(
+            channel=channel,
+            content=answer,
+            tool_calls=used_tool_calls,
+            previous_meta=None,
+        )
+        await channel.emit("answer_delta", {"delta": answer})
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="assistant_message",
+            payload={"content": answer},
+            channel=channel,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="run_finished",
+            payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls), "workflow_executor": True},
+            channel=channel,
+        )
+        self._dispatch_post_run_maintenance_async(run_context)
+        return AgentRunOutput(
+            session_id=run_context.session_id,
+            answer=answer,
+            tool_calls=used_tool_calls,
+            memory_hits=context.memory_hits,
+        )
+
+    async def _execute_resume_version_project_action_contract_stream(
+        self,
+        *,
+        decision: WorkflowExecutorDryRun,
+        run_context: RunContext,
+        run_input: AgentRunInput,
+        context: Any,
+        pending_runtime_plan: dict[str, Any],
+        channel: EventChannel,
+    ) -> AgentRunOutput | None:
+        raw_known_refs = pending_runtime_plan.get("known_refs")
+        known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
+        application_id = str(known_refs.get("application_id") or "").strip()
+        resume_profile_id = str(known_refs.get("resume_profile_id") or "").strip()
+        jd_analysis_id = str(known_refs.get("jd_analysis_id") or "").strip()
+        job_fit_report_id = str(known_refs.get("job_fit_report_id") or "").strip()
+        used_tool_calls: list[ToolCall] = []
+        planned_tool_names = {step.tool_name for step in decision.planned_steps}
+        executor_runtime_plan = pending_runtime_plan
+        application_result: ToolExecutionResult | None = None
+
+        if "career_application_get" in planned_tool_names:
+            application_call = _workflow_executor_tool_call(
+                "career_application_get",
+                {"application_id": application_id},
+            )
+            application_result = await self._execute_workflow_executor_tool_async(
+                tool_call=application_call,
+                run_context=run_context,
+                pending_runtime_plan=executor_runtime_plan,
+                used_tool_calls=used_tool_calls,
+                channel=channel,
+            )
+            if application_result is None or not application_result.success:
+                await self._record_workflow_executor_failure_async(
+                    run_context=run_context,
+                    decision=decision,
+                    failed_step="career_application_get",
+                    result=application_result,
+                    channel=channel,
+                )
+                return None
+            executor_runtime_plan = _advance_workflow_executor_runtime_plan(
+                tool_name="career_application_get",
+                result=application_result,
+                previous_pending_plan=executor_runtime_plan,
+            )
+
+        draft_args = await self._build_resume_version_executor_create_args_stream(
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+            application_result=application_result,
+            resume_profile_id=resume_profile_id,
+            jd_analysis_id=jd_analysis_id,
+            job_fit_report_id=job_fit_report_id,
+            application_id=application_id,
+            channel=channel,
+        )
+        if draft_args is None:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="resume_version_draft_generation",
+                result=None,
+                reason="workflow_executor_draft_unusable",
+                channel=channel,
+            )
+            return None
+        create_call = _workflow_executor_tool_call("career_resume_version_create", draft_args)
+        create_result = await self._execute_workflow_executor_tool_async(
+            tool_call=create_call,
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+            channel=channel,
+        )
+        if create_result is None or not create_result.success:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_version_create",
+                result=create_result,
+                channel=channel,
+            )
+            return None
+
+        resume_version_id = _record_id_from_tool_result(create_result, fallback_key="resume_version_id")
+        if resume_version_id is None:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_resume_version_create",
+                result=create_result,
+                reason="missing_resume_version_id",
+                channel=channel,
+            )
+            return None
+        executor_runtime_plan = _advance_workflow_executor_runtime_plan(
+            tool_name="career_resume_version_create",
+            result=create_result,
+            previous_pending_plan=executor_runtime_plan,
+        )
+
+        evidence_refs = _dedupe_non_empty_strings(
+            [application_id, resume_profile_id, jd_analysis_id, job_fit_report_id, resume_version_id]
+        )
+        merge_call = _workflow_executor_tool_call(
+            "career_application_merge",
+            {
+                "application_id": application_id,
+                "updates": {"resume_version_ids": [resume_version_id]},
+                "evidence_refs": evidence_refs,
+            },
+        )
+        merge_result = await self._execute_workflow_executor_tool_async(
+            tool_call=merge_call,
+            run_context=run_context,
+            pending_runtime_plan=executor_runtime_plan,
+            used_tool_calls=used_tool_calls,
+            channel=channel,
+        )
+        if merge_result is None or not merge_result.success:
+            await self._record_workflow_executor_failure_async(
+                run_context=run_context,
+                decision=decision,
+                failed_step="career_application_merge",
+                result=merge_result,
+                channel=channel,
+            )
+            return None
+
+        artifact_id = _artifact_id_from_resume_version_result(create_result)
+        answer = _workflow_executor_resume_version_answer(
+            application_id=application_id,
+            resume_version_id=resume_version_id,
+            artifact_id=artifact_id,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "finalize",
+                "reason": "workflow_executor_completed",
+                "contract_id": decision.matched_contract_id,
+                "resume_version_id": resume_version_id,
+                "application_id": application_id,
+                "artifact_id": artifact_id,
+            },
+            channel=channel,
+        )
+        await self._emit_stream_answer_meta_if_changed(
+            channel=channel,
+            content=answer,
+            tool_calls=used_tool_calls,
+            previous_meta=None,
+        )
+        await channel.emit("answer_delta", {"delta": answer})
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="assistant_message",
+            payload={"content": answer},
+            channel=channel,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="run_finished",
+            payload={"answer_length": len(answer), "tool_calls": len(used_tool_calls), "workflow_executor": True},
+            channel=channel,
+        )
+        self._dispatch_post_run_maintenance_async(run_context)
+        return AgentRunOutput(
+            session_id=run_context.session_id,
+            answer=answer,
+            tool_calls=used_tool_calls,
+            memory_hits=context.memory_hits,
+        )
+
+    async def _record_workflow_executor_failure_async(
+        self,
+        *,
+        run_context: RunContext,
+        decision: WorkflowExecutorDryRun,
+        failed_step: str,
+        result: ToolExecutionResult | None,
+        channel: EventChannel,
+        reason: str = "workflow_executor_step_failed",
+    ) -> None:
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="workflow_runtime_decision",
+            payload={
+                "policy": "fallback",
+                "reason": reason,
+                "failed_step": failed_step,
+                "contract_id": decision.matched_contract_id,
+                "tool_success": result.success if result is not None else None,
+                "tool_result_preview": result.content[:240] if result is not None else None,
+            },
+            channel=channel,
         )
 
     async def run_stream(self, run_input: AgentRunInput, channel: EventChannel) -> AgentRunOutput:
@@ -1019,6 +2337,15 @@ class AgentRuntime:
             channel=channel,
         )
 
+        executor_output = await self._try_execute_workflow_contract_stream(
+            run_context=run_context,
+            run_input=run_input,
+            context=context,
+            channel=channel,
+        )
+        if executor_output is not None:
+            return executor_output
+
         tool_reveal_state = ToolRevealState.create(
             mode=self._tool_schema_disclosure_mode_for_context(run_context),
             available_definitions=context.tool_definitions,
@@ -1039,6 +2366,7 @@ class AgentRuntime:
         hidden_runtime_tool_suppression_counts: dict[str, int] = {}
         pending_runtime_plan = pending_runtime_plan_from_context_bundle(context.runtime_tool_plan)
         runtime_known_refs = _runtime_plan_known_refs(pending_runtime_plan)
+        tool_call_controller = ToolCallController()
         progress_tracker = _ToolLoopProgressTracker()
         max_model_rounds = _hard_model_round_limit(run_input.max_tool_rounds)
         while round_index <= max_model_rounds:
@@ -1135,7 +2463,7 @@ class AgentRuntime:
                     tool_reveal_state=tool_reveal_state,
                 ):
                     auto_tool_call = (
-                        _strict_required_tool_auto_call_from_plan(
+                        tool_call_controller.strict_required_tool_auto_call_from_plan(
                             pending_runtime_plan=pending_runtime_plan,
                             visible_tool_names_for_round=visible_tool_names_for_round,
                         )
@@ -1149,7 +2477,7 @@ class AgentRuntime:
                         await self._event_recorder.record_async(
                             context=run_context,
                             event_type="workflow_runtime_decision",
-                            payload=_strict_auto_execute_event_payload(
+                            payload=tool_call_controller.strict_auto_execute_event_payload(
                                 blocked_tool_call=None,
                                 replacement_tool_call=resolved_tool_calls[0],
                                 pending_runtime_plan=pending_runtime_plan,
@@ -1206,6 +2534,7 @@ class AgentRuntime:
                             original_user_message=run_input.user_message,
                             previous_tool_calls=used_tool_calls,
                             channel=channel,
+                            pending_runtime_plan=pending_runtime_plan,
                         )
                     if answer and round_content_deltas:
                         emitted_answer_meta: tuple[str, str, str, str, str] | None = None
@@ -1227,6 +2556,7 @@ class AgentRuntime:
                             original_user_message=run_input.user_message,
                             previous_tool_calls=used_tool_calls,
                             channel=channel,
+                            pending_runtime_plan=pending_runtime_plan,
                         )
                     answer = answer or "(no answer)"
                     break
@@ -1237,24 +2567,50 @@ class AgentRuntime:
                 pending_runtime_plan=pending_runtime_plan,
                 tool_reveal_state=tool_reveal_state,
             ):
-                premature_workflow_reminders += 1
-                suppressed_required_schema_search_notice_index = premature_workflow_reminders
-                await self._event_recorder.record_async(
-                    context=run_context,
-                    event_type="workflow_runtime_decision",
-                    payload={
-                        "policy": "suppress",
-                        "reason": "schema_search_suppressed_required_tool_visible",
-                        "runtime_plan": pending_runtime_plan,
-                        "reminder_index": premature_workflow_reminders,
-                    },
-                    channel=channel,
+                schema_auto_tool_call = (
+                    build_action_payload_tool_call_from_plan(
+                        pending_runtime_plan=pending_runtime_plan,
+                        visible_tool_names_for_round=visible_tool_names_for_round,
+                        tool_call_id=resolved_tool_calls[0].tool_call_id if resolved_tool_calls else None,
+                    )
+                    if strict_runtime_tool_mode
+                    and premature_workflow_reminders >= _MAX_SUPPRESSED_REQUIRED_SCHEMA_SEARCH_RETRY_ROUNDS
+                    else None
                 )
-                tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
-                if premature_workflow_reminders <= _MAX_SCHEMA_SEARCH_ROUNDS:
-                    schema_search_rounds += 1
-                    round_index += 1
-                    continue
+                if schema_auto_tool_call is not None:
+                    original_tool_call = resolved_tool_calls[0] if resolved_tool_calls else None
+                    resolved_tool_calls = ensure_tool_call_ids([schema_auto_tool_call])
+                    schema_search_only = False
+                    await self._event_recorder.record_async(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload=tool_call_controller.strict_auto_execute_event_payload(
+                            blocked_tool_call=original_tool_call,
+                            replacement_tool_call=resolved_tool_calls[0],
+                            pending_runtime_plan=pending_runtime_plan,
+                            reason="strict_schema_search_replaced_with_required_tool",
+                        ),
+                        channel=channel,
+                    )
+                else:
+                    premature_workflow_reminders += 1
+                    suppressed_required_schema_search_notice_index = premature_workflow_reminders
+                    await self._event_recorder.record_async(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload={
+                            "policy": "suppress",
+                            "reason": "schema_search_suppressed_required_tool_visible",
+                            "runtime_plan": pending_runtime_plan,
+                            "reminder_index": premature_workflow_reminders,
+                        },
+                        channel=channel,
+                    )
+                    tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
+                    if premature_workflow_reminders <= _MAX_SCHEMA_SEARCH_ROUNDS:
+                        schema_search_rounds += 1
+                        round_index += 1
+                        continue
             if schema_search_only and _is_final_answer_ready_runtime_plan(pending_runtime_plan):
                 schema_search_rounds = 0
             elif schema_search_only:
@@ -1273,7 +2629,7 @@ class AgentRuntime:
                         channel=channel,
                     )
                 schema_search_rounds += 1
-            hidden_runtime_tool_names = _hidden_runtime_tool_names_to_suppress(
+            hidden_runtime_tool_names = tool_call_controller.hidden_runtime_tool_names_to_suppress(
                 resolved_tool_calls,
                 pending_runtime_plan=pending_runtime_plan,
                 visible_tool_names_for_round=visible_tool_names_for_round,
@@ -1295,12 +2651,12 @@ class AgentRuntime:
                     round_content_deltas = []
                     answer = _deterministic_final_answer_fallback(pending_runtime_plan)
                     break
-                suppression_key = _hidden_runtime_tool_suppression_key(
+                suppression_key = tool_call_controller.hidden_runtime_tool_suppression_key(
                     pending_runtime_plan=pending_runtime_plan,
                     hidden_tool_names=hidden_runtime_tool_names,
                 )
                 suppression_count = hidden_runtime_tool_suppression_counts.get(suppression_key, 0)
-                if suppression_count >= _MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN:
+                if suppression_count >= MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN:
                     await self._event_recorder.record_async(
                         context=run_context,
                         event_type="workflow_runtime_decision",
@@ -1402,12 +2758,12 @@ class AgentRuntime:
                 )
                 execution_tool_call = tool_call
                 if tool_call.name not in visible_tool_names_for_round:
-                    support_tool_allowed = _hidden_runtime_support_tool_allowed(
+                    support_tool_allowed = tool_call_controller.hidden_runtime_support_tool_allowed(
                         tool_call,
                         pending_runtime_plan=pending_runtime_plan,
                     )
                     replacement_tool_call = (
-                        _strict_required_tool_auto_call(
+                        tool_call_controller.strict_required_tool_auto_call(
                             tool_call,
                             pending_runtime_plan=pending_runtime_plan,
                             visible_tool_names_for_round=visible_tool_names_for_round,
@@ -1420,7 +2776,7 @@ class AgentRuntime:
                         await self._event_recorder.record_async(
                             context=run_context,
                             event_type="workflow_runtime_decision",
-                            payload=_strict_auto_execute_event_payload(
+                            payload=tool_call_controller.strict_auto_execute_event_payload(
                                 blocked_tool_call=tool_call,
                                 replacement_tool_call=replacement_tool_call,
                                 pending_runtime_plan=pending_runtime_plan,
@@ -1681,6 +3037,7 @@ class AgentRuntime:
                     original_user_message=run_input.user_message,
                     previous_tool_calls=used_tool_calls,
                     channel=channel,
+                    pending_runtime_plan=pending_runtime_plan,
                 )
                 answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
@@ -1692,6 +3049,7 @@ class AgentRuntime:
                     original_user_message=run_input.user_message,
                     previous_tool_calls=used_tool_calls,
                     channel=channel,
+                    pending_runtime_plan=pending_runtime_plan,
                 )
                 answer = answer or "(no answer)"
                 break
@@ -1718,6 +3076,7 @@ class AgentRuntime:
                     original_user_message=run_input.user_message,
                     previous_tool_calls=used_tool_calls,
                     channel=channel,
+                    pending_runtime_plan=pending_runtime_plan,
                 )
                 answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
@@ -1741,6 +3100,7 @@ class AgentRuntime:
                 original_user_message=run_input.user_message,
                 previous_tool_calls=used_tool_calls,
                 channel=channel,
+                pending_runtime_plan=pending_runtime_plan,
             )
             answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
         if not answer and _is_premature_workflow_answer(
@@ -1839,6 +3199,7 @@ class AgentRuntime:
             system_prompt=system_prompt,
             messages=messages,
             original_user_message=original_user_message,
+            pending_runtime_plan=pending_runtime_plan,
         )
         recovered_rejection_reason = _final_answer_rejection_reason(
             recovered,
@@ -1889,6 +3250,7 @@ class AgentRuntime:
             original_user_message=original_user_message,
             previous_tool_calls=previous_tool_calls,
             channel=channel,
+            pending_runtime_plan=pending_runtime_plan,
         )
         recovered_rejection_reason = _final_answer_rejection_reason(
             recovered,
@@ -1915,23 +3277,29 @@ class AgentRuntime:
         system_prompt: str,
         messages: list[dict[str, Any]],
         original_user_message: str,
+        pending_runtime_plan: dict[str, Any] | None = None,
     ) -> str:
         _logger.warning("最终轮未返回正文，触发同步补答: user_message=%s", original_user_message[:120])
-        recovery_messages = [
-            *messages,
-            {
-                "role": "assistant",
-                "content": FINAL_ANSWER_RECOVERY_PROMPT,
-            },
-        ]
+        recovery_context = build_final_answer_recovery_context(
+            messages=messages,
+            original_user_message=original_user_message,
+            recovery_prompt=FINAL_ANSWER_RECOVERY_PROMPT,
+            pending_runtime_plan=pending_runtime_plan,
+        )
+        self._event_recorder.record(
+            context=run_context,
+            event_type="finalization_packet",
+            payload=recovery_context.packet.to_event_payload(used_for_recovery=recovery_context.used_packet),
+        )
+        recovery_messages = recovery_context.messages
         model_response = self._model_client.generate(
-            system_prompt=system_prompt,
+            system_prompt=FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT,
             messages=recovery_messages,
             tools=[],
         )
         self._record_llm_usage(
             run_context=run_context,
-            system_prompt=system_prompt,
+            system_prompt=FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT,
             messages=recovery_messages,
             tools=[],
             model_response=model_response,
@@ -1953,22 +3321,29 @@ class AgentRuntime:
         original_user_message: str,
         previous_tool_calls: list[ToolCall],
         channel: EventChannel,
+        pending_runtime_plan: dict[str, Any] | None = None,
     ) -> str:
         _logger.warning("最终轮未返回正文，触发流式补答: user_message=%s", original_user_message[:120])
-        recovery_messages = [
-            *messages,
-            {
-                "role": "assistant",
-                "content": FINAL_ANSWER_RECOVERY_PROMPT,
-            },
-        ]
+        recovery_context = build_final_answer_recovery_context(
+            messages=messages,
+            original_user_message=original_user_message,
+            recovery_prompt=FINAL_ANSWER_RECOVERY_PROMPT,
+            pending_runtime_plan=pending_runtime_plan,
+        )
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="finalization_packet",
+            payload=recovery_context.packet.to_event_payload(used_for_recovery=recovery_context.used_packet),
+            channel=channel,
+        )
+        recovery_messages = recovery_context.messages
         parts: list[str] = []
         reasoning_parts: list[str] = []
         usage: TokenUsage | None = None
         model: str | None = None
         resolved_tool_calls: list[ToolCall] = []
         async for chunk in self._model_client.generate_stream(
-            system_prompt=system_prompt,
+            system_prompt=FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT,
             messages=recovery_messages,
             tools=[],
         ):
@@ -1984,7 +3359,7 @@ class AgentRuntime:
                 resolved_tool_calls = ensure_tool_call_ids(chunk.tool_calls or [])
         await self._record_llm_usage_async(
             run_context=run_context,
-            system_prompt=system_prompt,
+            system_prompt=FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT,
             messages=recovery_messages,
             tools=[],
             content="".join(parts).strip(),
@@ -2163,9 +3538,7 @@ def _strict_runtime_tool_mode(
 def _strict_runtime_plan_notice(pending_runtime_plan: dict[str, Any] | None) -> str:
     completion_tools = runtime_plan_completion_tools(pending_runtime_plan or {})
     required_tool = completion_tools[0] if len(completion_tools) == 1 else "未明确"
-    raw_known_refs = pending_runtime_plan.get("known_refs") if pending_runtime_plan is not None else None
-    known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
-    hint = build_required_tool_call_hint(required_tool, known_refs) if required_tool != "未明确" else None
+    hint = build_required_tool_call_hint_for_plan(required_tool, pending_runtime_plan) if required_tool != "未明确" else None
     missing_outputs = ", ".join(_string_list_from_runtime_plan((pending_runtime_plan or {}).get("missing_outputs")))
     lines = [
         f"运行时守卫：当前 workflow 已锁定唯一下一步工具：{required_tool}。",
@@ -2200,6 +3573,418 @@ def _report_artifact_contract_notice(pending_runtime_plan: dict[str, Any] | None
     return "匹配报告事实边界：生成报告正文时只把 supported_candidate_facts 当作候选人事实；unsupported_candidate_facts 只能写入差距/风险/面试准备。\n" + content
 
 
+def _workflow_executor_decision_payload(decision: WorkflowExecutorDryRun) -> dict[str, Any]:
+    return {
+        "workflow_executor": True,
+        "contract_id": decision.matched_contract_id,
+        "confidence": decision.confidence,
+        "matched_contract_count": decision.matched_contract_count,
+        "required_refs": list(decision.required_refs),
+        "missing_refs": list(decision.missing_refs),
+        "required_tools": list(decision.required_tools),
+        "missing_tools": list(decision.missing_tools),
+        "reason_not_executable": decision.reason_not_executable,
+        "planned_steps": [
+            {
+                "index": step.index,
+                "tool_name": step.tool_name,
+                "args_from_refs": dict(step.args_from_refs),
+                "resolved_args": dict(step.resolved_args),
+                "args_from_previous_result": dict(step.args_from_previous_result),
+                "requires_model_payload": step.requires_model_payload,
+                "output_ref": step.output_ref,
+                "only_if_missing_output": step.only_if_missing_output,
+            }
+            for step in decision.planned_steps
+        ],
+    }
+
+
+def _workflow_executor_tool_call(tool_name: str, arguments: dict[str, Any]) -> ToolCall:
+    return ToolCall(
+        name=tool_name,
+        arguments=arguments,
+        tool_call_id=f"call_workflow_executor_{uuid4().hex[:12]}",
+    )
+
+
+def _compact_workflow_executor_record(record_key: str, record: dict[str, Any]) -> dict[str, Any]:
+    field_map = {
+        "resume_profile": (
+            "resume_profile_id",
+            "source_artifact_id",
+            "basic_info",
+            "education",
+            "work_experience",
+            "project_experience",
+            "skills",
+            "certificates",
+            "awards",
+            "self_evaluation",
+        ),
+        "jd_analysis": (
+            "jd_analysis_id",
+            "source_artifact_id",
+            "company",
+            "position",
+            "seniority",
+            "required_skills",
+            "preferred_skills",
+            "responsibilities",
+            "keywords",
+        ),
+        "job_fit_report": (
+            "job_fit_report_id",
+            "jd_analysis_id",
+            "resume_profile_id",
+            "career_profile_id",
+            "overall_score",
+            "matched_evidence",
+            "gaps",
+            "resume_optimization_direction",
+            "interview_preparation_focus",
+            "recommendation",
+        ),
+        "career_application": (
+            "application_id",
+            "position",
+            "stage",
+            "priority",
+            "summary",
+            "next_actions",
+            "risks",
+            "resume_version_ids",
+        ),
+    }
+    fields = field_map.get(record_key, ())
+    output: dict[str, Any] = {}
+    for field_name in fields:
+        value = record.get(field_name)
+        if value in (None, "", [], {}):
+            continue
+        output[field_name] = value
+    return output
+
+
+def _resume_version_executor_messages(
+    *,
+    user_message: str,
+    context_messages: list[dict[str, Any]],
+    application_result: str | None,
+    source_records: dict[str, Any],
+    resume_profile_id: str,
+    jd_analysis_id: str,
+    job_fit_report_id: str,
+    application_id: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    return (
+        _RESUME_VERSION_EXECUTOR_SYSTEM_PROMPT,
+        [
+            {
+                "role": "user",
+                "content": _resume_version_executor_prompt(
+                    user_message=user_message,
+                    context_messages=context_messages,
+                    application_result=application_result,
+                    source_records=source_records,
+                    resume_profile_id=resume_profile_id,
+                    jd_analysis_id=jd_analysis_id,
+                    job_fit_report_id=job_fit_report_id,
+                    application_id=application_id,
+                ),
+            }
+        ],
+    )
+
+
+def _resume_version_executor_prompt(
+    *,
+    user_message: str,
+    context_messages: list[dict[str, Any]],
+    application_result: str | None,
+    source_records: dict[str, Any],
+    resume_profile_id: str,
+    jd_analysis_id: str,
+    job_fit_report_id: str,
+    application_id: str,
+) -> str:
+    context_preview = _compact_executor_context_messages(context_messages)
+    payload = {
+        "user_message": user_message,
+        "known_refs": {
+            "application_id": application_id,
+            "resume_profile_id": resume_profile_id,
+            "jd_analysis_id": jd_analysis_id,
+            "job_fit_report_id": job_fit_report_id,
+        },
+        "source_records": source_records,
+        "recent_non_assistant_context": context_preview,
+        "output_contract": {
+            "title": "string",
+            "content": "markdown resume body",
+            "change_summary": ["evidence-backed changes only"],
+            "keyword_strategy": ["candidate-supported keywords only"],
+            "risk_notes": ["missing facts or confirmation needs"],
+        },
+    }
+    if application_result is not None:
+        payload["career_application_get_result"] = _shorten_runtime_notice_payload(application_result)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _resume_version_create_args_from_draft(
+    draft: dict[str, Any],
+    *,
+    application_id: str,
+    resume_profile_id: str,
+    jd_analysis_id: str,
+    job_fit_report_id: str,
+) -> dict[str, Any]:
+    title = str(draft.get("title") or "定制简历").strip() or "定制简历"
+    evidence_refs = _dedupe_non_empty_strings(
+        [application_id, resume_profile_id, jd_analysis_id, job_fit_report_id]
+    )
+    args: dict[str, Any] = {
+        "base_resume_profile_id": resume_profile_id,
+        "target_jd_analysis_id": jd_analysis_id,
+        "title": title,
+        "artifact_title": title,
+        "evidence_refs": evidence_refs,
+        "change_summary": _string_list_from_value(draft.get("change_summary")),
+        "keyword_strategy": _string_list_from_value(draft.get("keyword_strategy")),
+        "risk_notes": _string_list_from_value(draft.get("risk_notes")),
+    }
+    resume_version_id = _non_empty_string(draft.get("resume_version_id"))
+    if resume_version_id is not None:
+        args["resume_version_id"] = resume_version_id
+    content = _non_empty_string(draft.get("content"))
+    if content is not None:
+        args["content"] = content
+    else:
+        args["use_safe_fallback"] = True
+    return args
+
+
+def _compact_executor_context_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    for message in messages[-8:]:
+        role = str(message.get("role") or "").strip()
+        content = message.get("content")
+        if not role or not isinstance(content, str) or not content.strip():
+            continue
+        if role == "assistant":
+            continue
+        text = " ".join(content.strip().split())
+        if len(text) > 1600:
+            text = text[:1599] + "…"
+        output.append({"role": role, "content": text})
+    return output
+
+
+def _resume_version_draft_from_model_content(content: str) -> dict[str, Any]:
+    payload = _json_object(_strip_json_fence(content))
+    if isinstance(payload, dict):
+        return payload
+    normalized = content.strip()
+    if len(normalized) >= 80:
+        return {"content": normalized}
+    return {}
+
+
+def _strip_json_fence(content: str) -> str:
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    if len(lines) >= 3 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _record_id_from_tool_result(result: ToolExecutionResult, *, fallback_key: str) -> str | None:
+    payload = _json_object(result.content)
+    if payload is None:
+        return None
+    record_id = _non_empty_string(payload.get("record_id"))
+    if record_id is not None:
+        return record_id
+    record = payload.get("record")
+    if isinstance(record, dict):
+        return _non_empty_string(record.get(fallback_key))
+    return None
+
+
+def _artifact_id_from_resume_version_result(result: ToolExecutionResult) -> str | None:
+    return _artifact_id_from_tool_result(result)
+
+
+def _artifact_id_from_tool_result(result: ToolExecutionResult) -> str | None:
+    payload = _json_object(result.content)
+    if payload is None:
+        return None
+    artifact_id = _non_empty_string(payload.get("artifact_id"))
+    if artifact_id is not None:
+        return artifact_id
+    record = payload.get("record")
+    if isinstance(record, dict):
+        return _non_empty_string(record.get("artifact_id"))
+    return None
+
+
+def _workflow_executor_resume_version_answer(
+    *,
+    application_id: str,
+    resume_version_id: str,
+    artifact_id: str | None,
+) -> str:
+    lines = [
+        "定制简历版本已生成并关联到当前求职项目。",
+        "",
+        f"- CareerApplication: `{application_id}`",
+        f"- ResumeVersion: `{resume_version_id}`",
+    ]
+    if artifact_id:
+        lines.append(f"- 简历 artifact: `{artifact_id}`")
+    return "\n".join(lines)
+
+
+def _workflow_executor_resume_diagnosis_answer(
+    *,
+    resume_profile_id: str,
+    diagnosis_artifact_id: str,
+) -> str:
+    return "\n".join(
+        [
+            "简历诊断已完成并保存为结构化画像。",
+            "",
+            f"- ResumeProfile: `{resume_profile_id}`",
+            f"- 诊断报告 artifact: `{diagnosis_artifact_id}`",
+        ]
+    )
+
+
+def _dedupe_non_empty_strings(values: list[Any]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        if raw is None:
+            continue
+        item = str(raw).strip()
+        if not item or item == "None" or item in seen:
+            continue
+        output.append(item)
+        seen.add(item)
+    return output
+
+
+def _resume_diagnosis_executor_messages(
+    *,
+    user_message: str,
+    context_messages: list[dict[str, Any]],
+    source_artifact_id: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    payload = {
+        "user_message": user_message,
+        "known_refs": {"resume_source_artifact_id": source_artifact_id},
+        "recent_non_assistant_context": _compact_executor_context_messages(context_messages),
+        "output_contract": {
+            "diagnosis_title": "string",
+            "diagnosis_markdown": "markdown diagnosis report",
+            "resume_profile": {
+                "resume_profile_id": "optional resume_profile_* id",
+                "basic_info": {},
+                "education": [],
+                "work_experience": [],
+                "project_experience": [],
+                "skills": [],
+                "certificates": [],
+                "awards": [],
+                "self_evaluation": "string",
+                "diagnosis": {},
+            },
+        },
+    }
+    return (
+        _RESUME_DIAGNOSIS_EXECUTOR_SYSTEM_PROMPT,
+        [{"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)}],
+    )
+
+
+def _resume_diagnosis_draft_from_model_content(content: str) -> dict[str, Any]:
+    payload = _json_object(_strip_json_fence(content))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resume_diagnosis_artifact_args_from_draft(draft: dict[str, Any]) -> dict[str, Any] | None:
+    title = _non_empty_string(draft.get("diagnosis_title")) or "简历质量诊断报告"
+    content = _non_empty_string(draft.get("diagnosis_markdown"))
+    if content is None:
+        raw_diagnosis = draft.get("diagnosis")
+        if isinstance(raw_diagnosis, dict):
+            content = _non_empty_string(raw_diagnosis.get("markdown"))
+    if content is None:
+        return None
+    return {
+        "title": title,
+        "content": content,
+        "kind": "generated_file",
+        "media_type": "text/markdown",
+        "description": "简历质量诊断报告",
+    }
+
+
+def _resume_profile_save_args_from_draft(
+    draft: dict[str, Any],
+    *,
+    source_artifact_id: str,
+    diagnosis_artifact_id: str,
+) -> dict[str, Any] | None:
+    raw_profile = draft.get("resume_profile")
+    profile = raw_profile if isinstance(raw_profile, dict) else {}
+    if not profile:
+        return None
+    args: dict[str, Any] = {
+        "source_artifact_id": source_artifact_id,
+        "evidence_refs": _dedupe_non_empty_strings([source_artifact_id, diagnosis_artifact_id]),
+        "raw_text_artifact_id": source_artifact_id,
+        "diagnosis_artifact_id": diagnosis_artifact_id,
+        "basic_info": _dict_from_value(profile.get("basic_info")),
+        "education": _list_from_value(profile.get("education")),
+        "work_experience": _list_from_value(profile.get("work_experience")),
+        "project_experience": _list_from_value(profile.get("project_experience")),
+        "skills": _list_from_value(profile.get("skills")),
+        "certificates": _list_from_value(profile.get("certificates")),
+        "awards": _list_from_value(profile.get("awards")),
+        "self_evaluation": _non_empty_string(profile.get("self_evaluation")) or "",
+        "diagnosis": _dict_from_value(profile.get("diagnosis")),
+    }
+    resume_profile_id = _non_empty_string(profile.get("resume_profile_id"))
+    if resume_profile_id is not None and resume_profile_id.startswith("resume_profile_"):
+        args["resume_profile_id"] = resume_profile_id
+    if not any(args.get(key) for key in ("basic_info", "education", "work_experience", "project_experience", "skills")):
+        return None
+    return args
+
+
+def _dict_from_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_from_value(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _string_list_from_value(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    for raw in value:
+        item = _non_empty_string(raw)
+        if item is not None:
+            output.append(item)
+    return _dedupe_non_empty_strings(output)
+
+
 def _visible_tool_definitions_for_runtime_plan(
     *,
     tool_reveal_state: ToolRevealState,
@@ -2224,189 +4009,11 @@ def _visible_tool_definitions_for_runtime_plan(
     return [definition for definition in visible_definitions if definition.name not in hidden_tools]
 
 
-def _strict_required_tool_auto_call(
-    tool_call: ToolCall,
-    *,
-    pending_runtime_plan: dict[str, Any] | None,
-    visible_tool_names_for_round: set[str],
-) -> ToolCall | None:
-    return _strict_required_tool_auto_call_from_plan(
-        pending_runtime_plan=pending_runtime_plan,
-        visible_tool_names_for_round=visible_tool_names_for_round,
-        tool_call_id=tool_call.tool_call_id,
-    )
-
-
-def _strict_required_tool_auto_call_from_plan(
-    *,
-    pending_runtime_plan: dict[str, Any] | None,
-    visible_tool_names_for_round: set[str],
-    tool_call_id: str | None = None,
-) -> ToolCall | None:
-    if pending_runtime_plan is None or pending_runtime_plan.get("final_answer_ready") is True:
-        return None
-    completion_tools = runtime_plan_completion_tools(pending_runtime_plan)
-    if len(completion_tools) != 1:
-        return None
-    required_tool = completion_tools[0]
-    if required_tool not in _STRICT_AUTO_EXECUTE_REQUIRED_TOOLS:
-        return None
-    if required_tool not in visible_tool_names_for_round:
-        return None
-    raw_known_refs = pending_runtime_plan.get("known_refs")
-    known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
-    hint = build_required_tool_call_hint(required_tool, known_refs)
-    if hint is None:
-        return None
-    if _string_list_from_runtime_plan(hint.get("missing_args")):
-        if required_tool != "career_resume_version_create":
-            return None
-    if required_tool == "career_resume_version_create":
-        raw_arguments = _strict_resume_version_create_auto_args(hint)
-    else:
-        raw_arguments = hint.get("retry_tool_call_skeleton")
-        if not isinstance(raw_arguments, dict):
-            raw_arguments = hint.get("available_args")
-    if not isinstance(raw_arguments, dict) or not raw_arguments:
-        return None
-    arguments = json.loads(json.dumps(raw_arguments, ensure_ascii=False))
-    return ToolCall(name=required_tool, arguments=arguments, tool_call_id=tool_call_id)
-
-
-def _strict_resume_version_create_auto_args(hint: dict[str, Any]) -> dict[str, Any] | None:
-    missing_args = _string_list_from_runtime_plan(hint.get("missing_args"))
-    blocking_missing_args = [item for item in missing_args if item != "content_or_artifact_id"]
-    if blocking_missing_args:
-        return None
-    available_args = hint.get("available_args")
-    if not isinstance(available_args, dict):
-        return None
-    required_fields = ("base_resume_profile_id", "target_jd_analysis_id", "evidence_refs")
-    if any(field not in available_args for field in required_fields):
-        return None
-    arguments = dict(available_args)
-    if _non_empty_string(arguments.get("artifact_id")) is None and _non_empty_string(arguments.get("content")) is None:
-        arguments["use_safe_fallback"] = True
-    return arguments
-
-
 def _non_empty_string(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     stripped = value.strip()
     return stripped or None
-
-
-def _hidden_runtime_support_tool_allowed(
-    tool_call: ToolCall,
-    *,
-    pending_runtime_plan: dict[str, Any] | None,
-) -> bool:
-    if pending_runtime_plan is None or pending_runtime_plan.get("final_answer_ready") is True:
-        return False
-    if pending_runtime_plan.get("phase") != "resume_version":
-        return False
-    if tool_call.name != "session_create_text_artifact":
-        return False
-    if "resume_version" not in _string_list_from_runtime_plan(pending_runtime_plan.get("missing_outputs")):
-        return False
-    arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
-    title = arguments.get("title")
-    kind = arguments.get("kind")
-    if kind is not None and kind != "generated_file":
-        return False
-    return isinstance(title, str) and _looks_like_resume_version_artifact_title(title)
-
-
-def _looks_like_resume_version_artifact_title(title: str) -> bool:
-    normalized = title.strip().casefold()
-    compact = "".join(ch for ch in normalized if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
-    if "简历" in compact and ("诊断" in compact or "画像" in compact):
-        return False
-    if "简历版本" in compact or "定制简历" in compact:
-        return True
-    return "resume" in compact and "version" in compact
-
-
-def _hidden_runtime_tool_names_to_suppress(
-    tool_calls: list[ToolCall],
-    *,
-    pending_runtime_plan: dict[str, Any] | None,
-    visible_tool_names_for_round: set[str],
-    strict_runtime_tool_mode: bool,
-) -> list[str]:
-    if pending_runtime_plan is None or not tool_calls:
-        return []
-    if not _is_final_answer_ready_runtime_plan(pending_runtime_plan) and not any(
-        tool_name in visible_tool_names_for_round for tool_name in runtime_plan_completion_tools(pending_runtime_plan)
-    ):
-        return []
-    blocked: list[str] = []
-    for tool_call in tool_calls:
-        if tool_call.name in visible_tool_names_for_round:
-            return []
-        if _hidden_runtime_support_tool_allowed(tool_call, pending_runtime_plan=pending_runtime_plan):
-            return []
-        if strict_runtime_tool_mode and _strict_required_tool_auto_call(
-            tool_call,
-            pending_runtime_plan=pending_runtime_plan,
-            visible_tool_names_for_round=visible_tool_names_for_round,
-        ) is not None:
-            return []
-        blocked.append(tool_call.name)
-    output: list[str] = []
-    seen: set[str] = set()
-    for name in blocked:
-        if name in seen:
-            continue
-        output.append(name)
-        seen.add(name)
-    return output
-
-
-def _hidden_runtime_tool_suppression_key(
-    *,
-    pending_runtime_plan: dict[str, Any] | None,
-    hidden_tool_names: list[str],
-) -> str:
-    raw_refs = pending_runtime_plan.get("known_refs") if pending_runtime_plan is not None else None
-    known_refs = raw_refs if isinstance(raw_refs, dict) else {}
-    payload = {
-        "phase": pending_runtime_plan.get("phase") if pending_runtime_plan is not None else None,
-        "required_tools": runtime_plan_completion_tools(pending_runtime_plan or {}),
-        "missing_outputs": _string_list_from_runtime_plan(
-            pending_runtime_plan.get("missing_outputs") if pending_runtime_plan is not None else None
-        ),
-        "blocked_tools": hidden_tool_names,
-        "known_ref_keys": sorted(str(key) for key in known_refs),
-    }
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _strict_auto_execute_event_payload(
-    *,
-    blocked_tool_call: ToolCall | None,
-    replacement_tool_call: ToolCall,
-    pending_runtime_plan: dict[str, Any] | None,
-) -> dict[str, Any]:
-    raw_known_refs = pending_runtime_plan.get("known_refs") if pending_runtime_plan is not None else None
-    known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
-    reason = (
-        "strict_premature_answer_replaced_with_required_tool"
-        if blocked_tool_call is None
-        else "strict_hidden_tool_replaced_with_required_tool"
-    )
-    return {
-        "workflow_runtime_result": True,
-        "policy": "repair",
-        "reason": reason,
-        "strict_runtime_plan": True,
-        "tool_executed": True,
-        "blocked_tool_name": blocked_tool_call.name if blocked_tool_call is not None else None,
-        "tool_name": replacement_tool_call.name,
-        "required_tool": replacement_tool_call.name,
-        "required_tool_call_hint": build_required_tool_call_hint(replacement_tool_call.name, known_refs),
-    }
 
 
 def _is_premature_workflow_answer(
@@ -2515,6 +4122,14 @@ def _workflow_phase_display_name(phase: Any) -> str:
         return "JD 分析与岗位匹配"
     if phase == "resume_version":
         return "定制简历版本生成"
+    if phase == "note_write":
+        return "笔记保存"
+    if phase == "rag_note_write":
+        return "召回内容保存笔记"
+    if phase == "rag_learning_task_create":
+        return "召回内容创建学习任务"
+    if phase == "interview_review_update":
+        return "面试复盘更新"
     if phase == "application_action":
         return "求职项目更新"
     return "当前阶段"
@@ -2527,6 +4142,14 @@ def _workflow_completed_next_step(phase: Any) -> str | None:
         return "下一步可以基于匹配结果生成定制简历，或继续推进当前求职项目。"
     if phase == "resume_version":
         return "定制简历版本已关联到求职项目，可以继续查看、修改或推进投递准备。"
+    if phase == "note_write":
+        return "笔记已保存，可以继续整理或补充内容。"
+    if phase == "rag_note_write":
+        return "笔记已保存，可以继续整理或补充复盘内容。"
+    if phase == "rag_learning_task_create":
+        return "学习任务已创建，可以继续安排打卡或拆分任务。"
+    if phase == "interview_review_update":
+        return "面试复盘已保存并同步到求职项目，可以继续创建学习任务或准备下一轮。"
     if phase == "application_action":
         return "求职项目已更新，可以继续查看项目状态或执行下一步动作。"
     return None
@@ -2543,6 +4166,8 @@ def _workflow_ref_summary_lines(known_refs: dict[str, Any]) -> list[str]:
         "application_id": "CareerApplication",
         "resume_version_id": "ResumeVersion",
         "resume_version_artifact_id": "定制简历 artifact",
+        "note_id": "Note",
+        "learning_task_id": "LearningTask",
     }
     output: list[str] = []
     for key, label in labels.items():
@@ -2606,6 +4231,26 @@ def _runtime_plan_with_known_refs(plan: dict[str, Any] | None, known_refs: dict[
     refs.update(known_refs)
     merged["known_refs"] = refs
     return merged
+
+
+def _advance_workflow_executor_runtime_plan(
+    *,
+    tool_name: str,
+    result: ToolExecutionResult,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not result.success:
+        return previous_pending_plan or {}
+    next_plan = pending_runtime_plan_from_successful_tool_result(
+        tool_name,
+        result.content,
+        previous_pending_plan=previous_pending_plan,
+    )
+    if next_plan is None:
+        return previous_pending_plan or {}
+    known_refs = _runtime_plan_known_refs(previous_pending_plan)
+    known_refs.update(_runtime_plan_known_refs(next_plan))
+    return _runtime_plan_with_known_refs(next_plan, known_refs) or {}
 
 
 def _runtime_plan_progressed(*, before: dict[str, Any] | None, after: dict[str, Any] | None) -> bool:

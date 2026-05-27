@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 
 from app.domain.models import ToolCall, ToolExecutionResult
-from app.runtime.agent.tool_context_window import ToolContextWindow, build_tool_observation
+from app.runtime.agent.tool_context_window import (
+    ToolContextWindow,
+    build_tool_observation,
+    sanitize_messages_for_final_answer,
+)
 from app.runtime.agent.tool_messages import build_assistant_tool_call_message, build_tool_result_message
 
 __all__ = []
@@ -158,8 +162,6 @@ def test_observation_drops_large_content_arguments_and_extracts_tool_search_reve
 
     assert observation.arguments_preview["content_omitted"] == {"chars": 1000}
     assert "content" not in observation.arguments_preview
-    assert observation.arguments_preview["content_chars"] == 1000
-    assert str(observation.arguments_preview["content_hash"]).startswith("sha256:")
     assert observation.revealed_tool_names == ["career_resume_version_create", "career_application_merge"]
     assert "revealed 2 tools" in str(observation.summary)
 
@@ -397,9 +399,6 @@ def test_compact_window_replays_successful_tool_call_arguments_compactly() -> No
 
     assert "content" not in replayed_arguments
     assert replayed_arguments["content_omitted"] == {"chars": len(long_content)}
-    assert replayed_arguments["content_chars"] == len(long_content)
-    assert str(replayed_arguments["content_hash"]).startswith("sha256:")
-    assert replayed_arguments["first_heading"] == "定制简历"
     assert replayed_arguments["resume_version_id"] == "resume_version_alpha"
     assert replayed_arguments["evidence_refs"] == ["artifact_resume_alpha", "fit_alpha"]
 
@@ -434,69 +433,80 @@ def test_compact_window_summarizes_failed_long_content_arguments_for_repair() ->
 
     assert replayed_arguments["content_omitted"] == {"chars": len(long_content)}
     assert replayed_arguments["content_preview"].startswith("# 定制简历")
-    assert replayed_arguments["content_chars"] == len(long_content)
-    assert str(replayed_arguments["content_hash"]).startswith("sha256:")
     assert "content" not in replayed_arguments
 
 
-def test_compact_window_replays_markdown_body_report_arguments_compactly() -> None:
+def test_final_answer_messages_drop_raw_repaired_tool_arguments() -> None:
     window = ToolContextWindow(base_messages=[{"role": "user", "content": "开始"}], mode="compact")
-    markdown = "# 匹配报告\n" + "岗位匹配正文\n" * 300
-    body = "邮件正文\n" * 260
-    report = "结构化报告\n" * 240
-    resume_content = "# 定制简历\n" + "简历正文\n" * 260
     call = ToolCall(
-        name="session_create_text_artifact",
+        name="career_profile_merge",
         arguments={
-            "title": "岗位匹配报告.md",
-            "markdown": markdown,
-            "body": body,
-            "report": report,
-            "resume_content": resume_content,
+            "career_profile_id": "career_profile_default",
+            "updates": {
+                "skills": ["Python", "C++", "Spring Boot"],
+                "strengths": ["C++ 服务端经验"],
+            },
+            "evidence_refs": ["resume_profile_alpha"],
         },
-        tool_call_id="call_artifact",
+        tool_call_id="call_profile",
     )
     content = json.dumps(
         {
-            "artifact_id": "artifact_report_alpha",
-            "title": "岗位匹配报告.md",
-            "status": "ready",
+            "tool": "career_profile_merge",
+            "model_view": "compact",
+            "record_type": "career_profile",
+            "record_id": "career_profile_default",
+            "source_aligned": True,
+            "source_alignment_repairs": [
+                {
+                    "field": "updates",
+                    "from": ["unsupported_tech:cpp", "unsupported_tech:spring"],
+                    "to": "source_aligned_updates",
+                    "reason": "source_drift_repaired",
+                }
+            ],
+            "record": {
+                "career_profile_id": "career_profile_default",
+                "skills": ["Python", "FastAPI", "RAG"],
+            },
         },
         ensure_ascii=False,
     )
 
     window.set_pending_exchange(
         assistant_message=build_assistant_tool_call_message("", [call]),
-        tool_messages=[build_tool_result_message(tool_call_id="call_artifact", content=content)],
+        tool_messages=[build_tool_result_message(tool_call_id="call_profile", content=content)],
         observations=[
             build_tool_observation(
                 tool_call=call,
-                result=ToolExecutionResult(
-                    tool_name="session_create_text_artifact",
-                    success=True,
-                    content=content,
-                ),
+                result=ToolExecutionResult(tool_name="career_profile_merge", success=True, content=content),
                 model_visible_content=content,
             )
         ],
     )
 
-    rendered = window.render_messages()
-    replayed_arguments = json.loads(rendered[1]["tool_calls"][0]["function"]["arguments"])
+    tool_loop_messages = window.render_messages()
+    assert "C++" in json.dumps(tool_loop_messages, ensure_ascii=False)
 
-    assert replayed_arguments["title"] == "岗位匹配报告.md"
-    original_values = {
-        "markdown": markdown,
-        "body": body,
-        "report": report,
-        "resume_content": resume_content,
-    }
-    for field, original_value in original_values.items():
-        assert field not in replayed_arguments
-        assert replayed_arguments[f"{field}_omitted"] == {"chars": len(original_value)}
-        assert replayed_arguments[f"{field}_chars"] == len(original_value)
-        assert str(replayed_arguments[f"{field}_hash"]).startswith("sha256:")
-    assert replayed_arguments["markdown_first_heading"] == "匹配报告"
+    final_messages = sanitize_messages_for_final_answer(tool_loop_messages)
+    final_text = json.dumps(final_messages, ensure_ascii=False)
+
+    assert "C++" not in final_text
+    assert "Spring Boot" not in final_text
+    assert "unsupported_tech:cpp" not in final_text
+    assert "source_alignment_repaired" in final_text
+    assert "Python" in final_text
+    replayed_arguments = json.loads(final_messages[1]["tool_calls"][0]["function"]["arguments"])
+    assert replayed_arguments == {}
+
+    window.consume_pending_exchange()
+    final_state_messages = sanitize_messages_for_final_answer(window.render_messages())
+    final_state_text = json.dumps(final_state_messages, ensure_ascii=False)
+
+    assert "C++" not in final_state_text
+    assert "Spring Boot" not in final_state_text
+    assert "unsupported_tech:cpp" not in final_state_text
+    assert "arguments" not in final_state_text
 
 
 def test_compact_state_tells_model_not_to_duplicate_created_text_artifact() -> None:

@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-__all__ = ["FINAL_ANSWER_RECOVERY_PROMPT"]
+__all__ = ["FINAL_ANSWER_RECOVERY_PROMPT", "FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT"]
+
+FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT = (
+    "你是最终答复生成器，只负责把已经完成的工具结果和产品记录整理成用户可读回复。"
+    "你没有任何可用工具，也绝不能输出伪工具调用、XML/JSON tool call、函数调用参数或内部运行时说明。"
+    "如果输入里有 FINALIZATION_PACKET，只能依据其中的 committed facts、known_refs、product_refs 和 artifact_refs 作答。"
+    "不要编造 packet 外的事实；缺失信息只说明未提供。"
+    "回答要直接、简洁、面向用户，优先说明已经完成什么、保存了哪些产物、下一步可以做什么。"
+)
 
 FINAL_ANSWER_RECOVERY_PROMPT = (
     "你已经拿到了前面对话和工具结果。现在请直接给用户最终答复。"

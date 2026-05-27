@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -17,6 +16,7 @@ __all__ = [
     "ToolObservation",
     "build_tool_observation",
     "normalize_tool_context_window_mode",
+    "sanitize_messages_for_final_answer",
 ]
 
 _VALID_MODES = {"off", "compact"}
@@ -27,8 +27,14 @@ _MAX_REVEALED_TOOL_NAMES = 32
 _TEXT_LIMIT = 180
 _FAILED_CONTENT_PREVIEW_CHARS = 220
 _LONG_CONTENT_ARGUMENT_CHARS = 480
-_CONTENT_ARGUMENT_KEYS = frozenset({"content", "markdown", "body", "report", "resume_content"})
-_MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+_FINAL_ANSWER_OMITTED_KEYS = {
+    "arguments",
+    "content",
+    "content_omitted",
+    "content_preview",
+    "source_alignment_repairs",
+    "updates",
+}
 _STRICT_REQUIRED_TOOL_SUPPORTING_TOOLS = {
     "career_application_merge": {"career_resume_version_create"},
     "career_resume_version_create": {
@@ -295,6 +301,17 @@ def normalize_tool_context_window_mode(value: str) -> str:
     return normalized if normalized in _VALID_MODES else "off"
 
 
+def sanitize_messages_for_final_answer(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove model-attempt facts from messages before final-answer recovery.
+
+    Tool-loop messages intentionally carry compact arguments so the model can
+    repair a failed call. Final answers must instead rely on committed tool
+    results and records, not raw or repaired input arguments.
+    """
+
+    return [_sanitize_final_answer_message(message) for message in messages]
+
+
 def build_tool_observation(
     *,
     tool_call: ToolCall,
@@ -360,6 +377,70 @@ def _summary_for_payload(*, tool_name: str, success: bool, payload: Any, content
         if isinstance(message, str) and message.strip():
             return _truncate(message, _TEXT_LIMIT)
     return _truncate(content, _TEXT_LIMIT)
+
+
+def _sanitize_final_answer_message(message: dict[str, Any]) -> dict[str, Any]:
+    output = dict(message)
+    tool_calls = output.get("tool_calls")
+    if isinstance(tool_calls, list):
+        sanitized_calls: list[Any] = []
+        for raw_call in tool_calls:
+            if not isinstance(raw_call, dict):
+                sanitized_calls.append(raw_call)
+                continue
+            call = dict(raw_call)
+            function = call.get("function")
+            if isinstance(function, dict):
+                function_copy = dict(function)
+                function_copy["arguments"] = "{}"
+                call["function"] = function_copy
+            sanitized_calls.append(call)
+        output["tool_calls"] = sanitized_calls
+    content = output.get("content")
+    if isinstance(content, str):
+        output["content"] = _sanitize_final_answer_content(content)
+    return output
+
+
+def _sanitize_final_answer_content(content: str) -> str:
+    prefix, payload_text = _split_json_payload(content)
+    if payload_text is None:
+        return content
+    payload = _loads_json(payload_text)
+    if payload is None:
+        return content
+    sanitized = _sanitize_final_answer_payload(payload)
+    dumped = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
+    return f"{prefix}{dumped}" if prefix else dumped
+
+
+def _split_json_payload(content: str) -> tuple[str, str | None]:
+    stripped = content.strip()
+    if stripped.startswith(("{", "[")):
+        return "", stripped
+    if "\n" not in content:
+        return content, None
+    prefix, payload = content.split("\n", 1)
+    if payload.strip().startswith(("{", "[")):
+        return f"{prefix}\n", payload.strip()
+    return content, None
+
+
+def _sanitize_final_answer_payload(payload: Any) -> Any:
+    if isinstance(payload, list):
+        return [_sanitize_final_answer_payload(item) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+    output: dict[str, Any] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str):
+            continue
+        if key in _FINAL_ANSWER_OMITTED_KEYS:
+            if key == "source_alignment_repairs":
+                output["source_alignment_repaired"] = True
+            continue
+        output[key] = _sanitize_final_answer_payload(value)
+    return output
 
 
 def _latest_revealed_tool_names(observations: list[ToolObservation]) -> list[str]:
@@ -589,74 +670,22 @@ def _older_observation_summary(observations: list[ToolObservation]) -> dict[str,
 
 def _compact_arguments(arguments: dict[str, Any], *, content_preview_chars: int = 0) -> dict[str, Any]:
     output: dict[str, Any] = {}
-    shown_fields = 0
     for key, value in arguments.items():
         if not isinstance(key, str):
             continue
-        if key in _CONTENT_ARGUMENT_KEYS and isinstance(value, str):
-            _add_compacted_text_argument(
-                output,
-                key=key,
-                value=value,
-                preview_chars=content_preview_chars,
-            )
-            shown_fields += 1
-            if shown_fields >= 12:
-                break
+        if key == "content" and isinstance(value, str):
+            output["content_omitted"] = {"chars": len(value)}
+            if content_preview_chars > 0:
+                output["content_preview"] = _truncate(value, content_preview_chars)
             continue
         output[key] = _compact_value(value, text_chars=120, depth=0)
-        shown_fields += 1
-        if shown_fields >= 12:
+        if len(output) >= 12:
             break
     return output
 
 
-def _add_compacted_text_argument(
-    output: dict[str, Any],
-    *,
-    key: str,
-    value: str,
-    preview_chars: int,
-) -> None:
-    chars = len(value)
-    output[f"{key}_omitted"] = {"chars": chars}
-    output[f"{key}_chars"] = chars
-    output[f"{key}_hash"] = _text_hash(value)
-    heading = _first_markdown_heading(value)
-    if heading:
-        heading_key = "first_heading" if key == "content" else f"{key}_first_heading"
-        output[heading_key] = heading
-    if preview_chars > 0:
-        output[f"{key}_preview"] = _truncate(value, preview_chars)
-
-
-def _text_hash(value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-    return f"sha256:{digest}"
-
-
-def _first_markdown_heading(value: str) -> str | None:
-    fallback: str | None = None
-    for line in value.splitlines()[:40]:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        match = _MARKDOWN_HEADING_RE.match(line)
-        if match:
-            return _truncate(match.group(1), 100)
-        if fallback is None:
-            fallback = stripped
-    return _truncate(fallback, 100) if fallback else None
-
-
 def _has_long_content_argument(arguments: Any) -> bool:
-    if not isinstance(arguments, dict):
-        return False
-    for key in _CONTENT_ARGUMENT_KEYS:
-        value = arguments.get(key)
-        if isinstance(value, str) and len(value) > _LONG_CONTENT_ARGUMENT_CHARS:
-            return True
-    return False
+    return isinstance(arguments, dict) and isinstance(arguments.get("content"), str) and len(arguments["content"]) > _LONG_CONTENT_ARGUMENT_CHARS
 
 
 def _collect_ids(payload: Any) -> dict[str, Any]:

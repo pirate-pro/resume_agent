@@ -16,12 +16,6 @@ _FULL_RESULT_HINT = "完整工具结果已写入事件日志；如需更多细�
 _TOOL_SEARCH_NAME = "tool_search"
 _RETRIEVAL_TOOLS = {"retrieval_search", "retrieval_context_pack"}
 _DELEGATION_TOOLS = {"delegate_agents", "agent_task_status"}
-_DELEGATE_SUMMARY_CHARS = 260
-_DELEGATION_RESULT_HINT = (
-    "Child result is compact. Prefer results[].product_refs, output_artifact_refs, "
-    "extracted_ids, and actionable_snapshot for the next tool call. Do not read child "
-    "artifacts only to reconfirm completed work."
-)
 
 
 def compact_tool_result_for_model(
@@ -245,25 +239,21 @@ def _compact_delegation_payload(*, tool_name: str, payload: Any) -> dict[str, An
             "max_concurrency": data.get("max_concurrency"),
             "message": _text(data.get("message"), 240),
             "results": [_compact_delegate_result(item) for item in results[:8]],
-            "next_input_hint": _DELEGATION_RESULT_HINT,
+            "full_result_hint": _FULL_RESULT_HINT,
         }
     )
 
 
 def _compact_delegate_result(item: Any) -> dict[str, Any]:
     data = item if isinstance(item, dict) else {}
-    summary = data.get("summary")
-    answer = data.get("answer")
     return _drop_none(
         {
             "task_id": data.get("task_id"),
             "target_agent_id": data.get("target_agent_id"),
             "status": data.get("status"),
-            "summary": _compact_delegate_summary(summary or answer),
-            "summary_omitted": _text_omission(summary, visible_chars=_DELEGATE_SUMMARY_CHARS),
-            "answer_omitted": _text_omission(answer, visible_chars=0),
+            "summary": _text(data.get("summary"), 500),
+            "answer_preview": _text(data.get("answer"), 700),
             "extracted_ids": _extract_known_ids(data),
-            "actionable_snapshot": _delegate_actionable_snapshot(data),
             "followup_hints": _delegate_followup_hints(data),
             "child_run_id": data.get("child_run_id"),
             "artifact_refs": _compact_string_list(data.get("artifact_refs"), limit=12, item_chars=120),
@@ -277,185 +267,6 @@ def _compact_delegate_result(item: Any) -> dict[str, Any]:
             "error": _text(data.get("error"), 300),
         }
     )
-
-
-def _delegate_actionable_snapshot(data: dict[str, Any]) -> dict[str, Any] | None:
-    target_agent_id = data.get("target_agent_id")
-    refs = _delegate_refs(data)
-    text = _collect_text({"summary": data.get("summary"), "answer": data.get("answer")})
-    if target_agent_id == "resume_agent":
-        return _drop_none(
-            {
-                "resume_profile_id": _first_ref(refs, prefixes=("resume_profile_",)),
-                "diagnosis_artifact_id": _first_output_ref(data, prefix="artifact_"),
-                "preferred_read_tool_if_facts_missing": "career_resume_profile_get",
-                "career_profile_input_facts": _extract_signal_lines(
-                    text,
-                    keywords=(
-                        "目标方向",
-                        "核心技能",
-                        "技能",
-                        "工作经验",
-                        "教育",
-                        "优势",
-                        "不足",
-                        "改进",
-                        "target",
-                        "skills",
-                        "experience",
-                    ),
-                    limit=6,
-                    line_chars=140,
-                ),
-                "next_input_hint": (
-                    "For career_profile_merge, use resume_profile_id/product_refs. If profile facts are missing, "
-                    "read the product record with career_resume_profile_get; do not read the diagnosis artifact "
-                    "only to reconfirm the completed diagnosis."
-                ),
-            }
-        )
-    if target_agent_id == "job_agent":
-        return _drop_none(
-            {
-                "jd_analysis_id": _first_ref(refs, prefixes=("jd_", "jd_analysis_")),
-                "job_fit_report_id": _first_ref(refs, prefixes=("fit_", "job_fit_report_")),
-                "report_artifact_id": _first_output_ref(data, prefix="artifact_"),
-                "preferred_read_tool_if_score_missing": "career_job_fit_report_get",
-                "fit_summary": _extract_signal_lines(
-                    text,
-                    keywords=(
-                        "匹配",
-                        "分数",
-                        "score",
-                        "recommendation",
-                        "推荐",
-                        "优势",
-                        "差距",
-                        "风险",
-                        "建议",
-                    ),
-                    limit=6,
-                    line_chars=140,
-                ),
-                "next_input_hint": (
-                    "For CareerApplication, use jd_analysis_id/job_fit_report_id/report_artifact_id from refs; "
-                    "if score/recommendation is missing, read career_job_fit_report_get; do not read the report "
-                    "artifact only to reconfirm the completed match report."
-                ),
-            }
-        )
-    return _drop_none(
-        {
-            "refs": refs[:12],
-            "key_facts": _extract_signal_lines(text, keywords=(), limit=4, line_chars=140),
-        }
-    )
-
-
-def _delegate_refs(data: dict[str, Any]) -> list[str]:
-    values: list[Any] = [
-        data.get("product_refs"),
-        data.get("output_artifact_refs"),
-        data.get("artifact_refs"),
-        _extract_known_ids(data),
-    ]
-    output: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        items = value if isinstance(value, list) else [value]
-        for item in items:
-            if not isinstance(item, str) or not item.strip() or item in seen:
-                continue
-            output.append(item.strip())
-            seen.add(item)
-    return output
-
-
-def _first_ref(refs: list[str], *, prefixes: tuple[str, ...]) -> str | None:
-    for ref in refs:
-        if ref.startswith(prefixes):
-            return ref
-    return None
-
-
-def _first_output_ref(data: dict[str, Any], *, prefix: str) -> str | None:
-    values = data.get("output_artifact_refs")
-    if not isinstance(values, list):
-        return None
-    for value in values:
-        if isinstance(value, str) and value.startswith(prefix):
-            return value
-    return None
-
-
-def _extract_signal_lines(
-    text: str,
-    *,
-    keywords: tuple[str, ...],
-    limit: int,
-    line_chars: int,
-) -> list[str] | None:
-    lowered_keywords = tuple(item.casefold() for item in keywords)
-    output: list[str] = []
-    seen: set[str] = set()
-    for raw_line in text.splitlines():
-        line = _strip_markdown_noise(raw_line)
-        if not line or line in seen:
-            continue
-        if lowered_keywords and not any(keyword in line.casefold() for keyword in lowered_keywords):
-            continue
-        compact = _truncate(line, line_chars)
-        output.append(compact)
-        seen.add(line)
-        if len(output) >= limit:
-            break
-    return output or None
-
-
-def _compact_delegate_summary(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return _text(value, _DELEGATE_SUMMARY_CHARS)
-    lines = _signal_text_lines(value, limit=4)
-    if not lines:
-        return _text(value, _DELEGATE_SUMMARY_CHARS)
-    return _text("；".join(lines), _DELEGATE_SUMMARY_CHARS)
-
-
-def _signal_text_lines(value: str, *, limit: int) -> list[str]:
-    output: list[str] = []
-    seen: set[str] = set()
-    for raw_line in value.splitlines():
-        line = _strip_markdown_noise(raw_line)
-        if not line or line in seen:
-            continue
-        output.append(line)
-        seen.add(line)
-        if len(output) >= limit:
-            break
-    return output
-
-
-def _strip_markdown_noise(value: str) -> str:
-    line = value.strip()
-    if not line:
-        return ""
-    if line.strip("-*_`| ") == "":
-        return ""
-    if re.fullmatch(r"\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?", line):
-        return ""
-    line = re.sub(r"^#{1,6}\s*", "", line)
-    line = line.strip("*` ")
-    line = re.sub(r"\s+", " ", line)
-    return line
-
-
-def _text_omission(value: Any, *, visible_chars: int) -> dict[str, int] | None:
-    if not isinstance(value, str):
-        return None
-    chars = len(value)
-    if chars <= visible_chars:
-        return None
-    return {"chars": chars}
 
 
 def _delegate_followup_hints(data: dict[str, Any]) -> list[str] | None:
@@ -527,9 +338,10 @@ def _compact_product_write_payload(*, tool_name: str, payload: Any) -> dict[str,
     ids = _merge_id_fields(_collect_id_fields(data), _collect_id_fields(record_data))
     record_view = (
         _compact_product_record(record, record_type=record_type, include_metadata=True, text_chars=180)
-        if tool_name == "career_resume_profile_save"
+        if tool_name in {"career_resume_profile_save", "career_profile_merge"}
         else None
     )
+    source_alignment_repairs = _compact_mixed_list(data.get("source_alignment_repairs"), limit=5, item_chars=160)
     return _drop_none(
         {
             "tool": tool_name,
@@ -542,6 +354,13 @@ def _compact_product_write_payload(*, tool_name: str, payload: Any) -> dict[str,
             "idempotent_reused": data.get("idempotent_reused"),
             "workflow_runtime_result": data.get("workflow_runtime_result"),
             "policy": data.get("policy"),
+            "source_aligned": data.get("source_aligned"),
+            "source_alignment_repairs": source_alignment_repairs,
+            "source_alignment_guidance": (
+                "Use the committed record fields below; do not summarize repaired or rejected input arguments."
+                if source_alignment_repairs
+                else None
+            ),
             "title": _text(
                 data.get("title")
                 or record_data.get("title")

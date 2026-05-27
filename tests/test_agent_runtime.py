@@ -26,6 +26,7 @@ from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.memory.file_store import FileMemoryStore
+from app.runtime.agent_events import AGENT_TASK_ASSIGNED_EVENT, AgentTaskAssignedPayload
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
@@ -197,6 +198,142 @@ def test_runtime_with_tool_calls_loops_and_finishes(tmp_path: Path) -> None:
     assert any(event.type == "tool_result" for event in events)
     assert any(event.type == "memory_write" for event in events)
     assert any(item.content == "User prefers JSONL" for item in memories)
+
+
+def test_child_resume_diagnosis_executor_runs_closed_tool_chain(tmp_path: Path) -> None:
+    class JsonTool:
+        def __init__(self, name: str) -> None:
+            self._name = name
+            self.calls: list[dict[str, Any]] = []
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name=self._name,
+                description=f"{self._name} test tool.",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            self.calls.append(dict(arguments))
+            if self._name == "session_create_text_artifact":
+                return ToolExecutionResult(
+                    tool_name=self._name,
+                    success=True,
+                    content=json.dumps(
+                        {
+                            "artifact_id": "artifact_resume_diagnosis",
+                            "title": arguments.get("title"),
+                            "kind": "generated_file",
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            return ToolExecutionResult(
+                tool_name=self._name,
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_profile",
+                        "record_id": "resume_profile_alpha",
+                        "record": {
+                            "resume_profile_id": "resume_profile_alpha",
+                            "diagnosis_artifact_id": arguments.get("diagnosis_artifact_id"),
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    payload = {
+        "diagnosis_title": "简历质量诊断报告 - 张三",
+        "diagnosis_markdown": "# 简历质量诊断报告\n\n候选人具备 Python 和 FastAPI 后端经验，建议补充量化成果。",
+        "resume_profile": {
+            "resume_profile_id": "resume_profile_alpha",
+            "basic_info": {"name": "张三", "target_direction": "AI 应用开发 / 后端工程师"},
+            "education": [{"school": "计算机相关专业本科", "degree": "本科"}],
+            "work_experience": [{"position": "后端工程师", "duration": "3年"}],
+            "project_experience": [{"project_name": "简历诊断 Agent"}],
+            "skills": ["Python", "FastAPI", "RAG"],
+            "certificates": [],
+            "awards": [],
+            "self_evaluation": "具备后端和 AI 应用开发经验。",
+            "diagnosis": {"issues": ["缺少量化成果"]},
+        },
+    }
+    model = SequenceModelClient([ModelResponse(content=json.dumps(payload, ensure_ascii=False), tool_calls=[])])
+    artifact_tool = JsonTool("session_create_text_artifact")
+    profile_tool = JsonTool("career_resume_profile_save")
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[artifact_tool, profile_tool],
+        tool_schema_disclosure_mode="search",
+    )
+    session_repo.create_session("sess_resume_executor")
+    session_repo.append_event(
+        "sess_resume_executor",
+        EventRecord(
+            event_id="evt_task_resume",
+            session_id="sess_resume_executor",
+            type=AGENT_TASK_ASSIGNED_EVENT,
+            payload=AgentTaskAssignedPayload(
+                task_id="task_resume",
+                source_agent_id="agent_main",
+                target_agent_id="resume_agent",
+                instruction="请解析简历并保存诊断报告和 ResumeProfile。",
+                artifact_refs=["artifact_resume_alpha"],
+                task_context={
+                    "schema_version": 1,
+                    "phase": "resume_diagnosis",
+                    "provided_inputs_complete": True,
+                    "known_refs": {"resume_source_artifact_id": "artifact_resume_alpha"},
+                    "provided_artifacts": [{"artifact_id": "artifact_resume_alpha", "text_preview": "张三 Python"}],
+                    "required_outputs": ["diagnosis_artifact", "resume_profile"],
+                    "allowed_initial_tools": ["session_create_text_artifact"],
+                },
+                parent_run_id="run_parent",
+                child_run_id="run_child",
+            ).to_payload(),
+            created_at=datetime.now(UTC),
+            agent_id="agent_main",
+            run_id="run_parent",
+        ),
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_resume_executor",
+            user_message="开始执行子任务",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=RunContext(
+                session_id="sess_resume_executor",
+                run_id="run_child",
+                agent_id="resume_agent",
+                turn_id="turn_resume_executor",
+                entry_agent_id="agent_main",
+                parent_run_id="run_parent",
+                task_id="task_resume",
+                trace_flags={},
+            ),
+        )
+    )
+
+    assert [call.name for call in output.tool_calls] == [
+        "session_create_text_artifact",
+        "career_resume_profile_save",
+    ]
+    assert profile_tool.calls[0]["source_artifact_id"] == "artifact_resume_alpha"
+    assert profile_tool.calls[0]["diagnosis_artifact_id"] == "artifact_resume_diagnosis"
+    assert "`resume_profile_alpha`" in output.answer
+    decisions = [
+        event.payload
+        for event in session_repo.list_agent_events("sess_resume_executor", "resume_agent")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert any(item.get("contract_id") == "career.resume_diagnosis.child.v1" for item in decisions)
+    assert any(item.get("reason") == "workflow_executor_completed" for item in decisions)
 
 
 def test_runtime_uses_workflow_guard_result_without_executing_tool(tmp_path: Path) -> None:
@@ -2931,6 +3068,437 @@ def test_runtime_auto_executes_resume_version_safe_fallback_on_premature_answer(
     assert any(item["reason"] == "strict_premature_answer_replaced_with_required_tool" for item in decisions)
 
 
+def test_runtime_executor_runs_resume_version_project_action_without_tool_loop(tmp_path: Path) -> None:
+    class ApplicationGetTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_get",
+                description="Get application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments == {"application_id": "application_alpha"}
+            return ToolExecutionResult(
+                tool_name="career_application_get",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "career_application",
+                        "record_id": "application_alpha",
+                        "record": {
+                            "application_id": "application_alpha",
+                            "resume_profile_id": "resume_profile_alpha",
+                            "jd_analysis_id": "jd_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"content": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments["base_resume_profile_id"] == "resume_profile_alpha"
+            assert arguments["target_jd_analysis_id"] == "jd_alpha"
+            assert arguments["content"] == "# 张三\n\nPython FastAPI RAG 项目经验。"
+            assert arguments["evidence_refs"] == [
+                "application_alpha",
+                "resume_profile_alpha",
+                "jd_alpha",
+                "fit_alpha",
+            ]
+            assert "use_safe_fallback" not in arguments
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments == {
+                "application_id": "application_alpha",
+                "updates": {"resume_version_ids": ["resume_version_alpha"]},
+                "evidence_refs": [
+                    "application_alpha",
+                    "resume_profile_alpha",
+                    "jd_alpha",
+                    "fit_alpha",
+                    "resume_version_alpha",
+                ],
+            }
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class ExecutorDraftModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            if "定制简历正文生成器" not in system_prompt:
+                return ModelResponse(
+                    content=json.dumps(
+                        {
+                            "active_context": [],
+                            "decisions": [],
+                            "progress": [],
+                            "open_questions": [],
+                            "candidate_long_term": [],
+                            "artifact_refs": [],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    tool_calls=[],
+                )
+            assert "定制简历正文生成器" in system_prompt
+            assert tools == []
+            assert "known_refs" in str(messages)
+            self.calls += 1
+            return ModelResponse(
+                content=json.dumps(
+                    {
+                        "title": "AI 应用开发工程师定制简历",
+                        "content": "# 张三\n\nPython FastAPI RAG 项目经验。",
+                        "change_summary": ["强化 AI 应用后端相关表达"],
+                        "keyword_strategy": ["Python", "FastAPI", "RAG"],
+                        "risk_notes": ["缺少量化指标，未写入正文"],
+                    },
+                    ensure_ascii=False,
+                ),
+                tool_calls=[],
+            )
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = ExecutorDraftModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ApplicationGetTool(), ResumeVersionTool(), ApplicationMergeTool()],
+    )
+    session_id = "sess_resume_version_executor"
+    session_repo.create_session(session_id)
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_resume_profile_save",
+        content={"record_type": "resume_profile", "record_id": "resume_profile_alpha"},
+    )
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_jd_analysis_save",
+        content={"record_type": "jd_analysis", "record_id": "jd_alpha"},
+    )
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_job_fit_report_save",
+        content={"record_type": "job_fit_report", "record_id": "fit_alpha"},
+    )
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_application_create",
+        content={"record_type": "career_application", "record_id": "application_alpha"},
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id=session_id,
+            user_message="请基于当前求职项目 application_alpha 生成一版定制简历，并关联回项目。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=5,
+            context=_context(session_id),
+        )
+    )
+
+    assert model.calls == 1
+    assert output.answer.startswith("定制简历版本已生成并关联到当前求职项目。")
+    assert [call.name for call in output.tool_calls] == [
+        "career_resume_version_create",
+        "career_application_merge",
+    ]
+    events = session_repo.list_events(session_id)
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item["reason"] == "workflow_executor_contract_matched" for item in decisions)
+    assert any(item["reason"] == "workflow_executor_completed" for item in decisions)
+    assert not any(event.type == "llm_usage" and event.payload.get("phase") == "tool_loop" for event in events)
+    assert any(event.type == "llm_usage" and event.payload.get("phase") == "workflow_executor" for event in events)
+
+
+def test_runtime_stream_executor_runs_resume_version_project_action_without_tool_loop(tmp_path: Path) -> None:
+    class ResumeVersionTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_resume_version_create",
+                description="Create resume version.",
+                parameters_schema={"type": "object", "properties": {"content": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments["base_resume_profile_id"] == "resume_profile_alpha"
+            assert arguments["target_jd_analysis_id"] == "jd_alpha"
+            assert arguments["content"] == "# 张三\n\nPython FastAPI RAG 项目经验。"
+            assert arguments["evidence_refs"] == [
+                "application_alpha",
+                "resume_profile_alpha",
+                "jd_alpha",
+                "fit_alpha",
+            ]
+            assert "use_safe_fallback" not in arguments
+            return ToolExecutionResult(
+                tool_name="career_resume_version_create",
+                success=True,
+                content=json.dumps(
+                    {
+                        "record_type": "resume_version",
+                        "record_id": "resume_version_alpha",
+                        "record": {
+                            "resume_version_id": "resume_version_alpha",
+                            "artifact_id": "artifact_resume_version_alpha",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={"type": "object", "properties": {"application_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments == {
+                "application_id": "application_alpha",
+                "updates": {"resume_version_ids": ["resume_version_alpha"]},
+                "evidence_refs": [
+                    "application_alpha",
+                    "resume_profile_alpha",
+                    "jd_alpha",
+                    "fit_alpha",
+                    "resume_version_alpha",
+                ],
+            }
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class StreamingExecutorDraftModelClient:
+        def __init__(self) -> None:
+            self.executor_stream_calls = 0
+            self.tool_loop_stream_calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages, tools)
+            return ModelResponse(
+                content=json.dumps(
+                    {
+                        "active_context": [],
+                        "decisions": [],
+                        "progress": [],
+                        "open_questions": [],
+                        "candidate_long_term": [],
+                        "artifact_refs": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                tool_calls=[],
+            )
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            assert tools == []
+            if "定制简历正文生成器" not in system_prompt:
+                self.tool_loop_stream_calls += 1
+                raise AssertionError("streaming executor should not enter the normal tool loop")
+            assert "known_refs" in str(messages)
+            self.executor_stream_calls += 1
+            payload = json.dumps(
+                {
+                    "title": "AI 应用开发工程师定制简历",
+                    "content": "# 张三\n\nPython FastAPI RAG 项目经验。",
+                    "change_summary": ["强化 AI 应用后端相关表达"],
+                    "keyword_strategy": ["Python", "FastAPI", "RAG"],
+                    "risk_notes": ["缺少量化指标，未写入正文"],
+                },
+                ensure_ascii=False,
+            )
+            midpoint = len(payload) // 2
+            yield StreamChunk(delta=payload[:midpoint], finished=False, has_tool_call_delta=False)
+            yield StreamChunk(delta=payload[midpoint:], finished=False, has_tool_call_delta=False)
+            yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+
+    class RecordingEventChannel(EventChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event: str, data: dict[str, Any]) -> None:
+            self.events.append((event, data))
+
+    model = StreamingExecutorDraftModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[ResumeVersionTool(), ApplicationMergeTool()],
+    )
+    session_id = "sess_resume_version_stream_executor"
+    session_repo.create_session(session_id)
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_resume_profile_save",
+        content={"record_type": "resume_profile", "record_id": "resume_profile_alpha"},
+    )
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_jd_analysis_save",
+        content={"record_type": "jd_analysis", "record_id": "jd_alpha"},
+    )
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_job_fit_report_save",
+        content={"record_type": "job_fit_report", "record_id": "fit_alpha"},
+    )
+    _append_success_tool_result(
+        session_repo,
+        session_id=session_id,
+        tool_name="career_application_create",
+        content={"record_type": "career_application", "record_id": "application_alpha"},
+    )
+
+    async def _run() -> tuple[AgentRunOutput, list[tuple[str, dict[str, Any]]]]:
+        channel = RecordingEventChannel()
+        output = await runtime.run_stream(
+            AgentRunInput(
+                session_id=session_id,
+                user_message="请基于当前求职项目 application_alpha 生成一版定制简历，并关联回项目。",
+                skill_names=["base", "tools"],
+                max_tool_rounds=5,
+                context=_context(session_id),
+            ),
+            channel,
+        )
+        return output, channel.events
+
+    output, emitted_events = asyncio.run(_run())
+
+    assert model.executor_stream_calls == 1
+    assert model.tool_loop_stream_calls == 0
+    assert output.answer.startswith("定制简历版本已生成并关联到当前求职项目。")
+    assert [call.name for call in output.tool_calls] == [
+        "career_resume_version_create",
+        "career_application_merge",
+    ]
+    answer_deltas = [data["delta"] for event, data in emitted_events if event == "answer_delta"]
+    assert answer_deltas == [output.answer]
+    assert "change_summary" not in "".join(answer_deltas)
+    assert any(event == "answer_meta" for event, _ in emitted_events)
+    events = session_repo.list_events(session_id)
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item["reason"] == "workflow_executor_contract_matched" for item in decisions)
+    assert any(item["reason"] == "workflow_executor_completed" for item in decisions)
+    assert not any(event.type == "llm_usage" and event.payload.get("phase") == "tool_loop" for event in events)
+    assert any(
+        event.type == "llm_usage"
+        and event.payload.get("phase") == "workflow_executor"
+        and event.payload.get("mode") == "stream"
+        for event in events
+    )
+
+
+def _append_success_tool_result(
+    repository: JsonlSessionRepository,
+    *,
+    session_id: str,
+    tool_name: str,
+    content: dict[str, Any],
+) -> None:
+    event_id = f"evt_seed_{tool_name}_{len(repository.list_agent_events(session_id, 'agent_main'))}"
+    repository.append_agent_event(
+        session_id,
+        "agent_main",
+        EventRecord(
+            event_id=event_id,
+            session_id=session_id,
+            type="tool_result",
+            payload={
+                "tool_name": tool_name,
+                "success": True,
+                "content": json.dumps(content, ensure_ascii=False),
+                "tool_call_id": f"call_seed_{tool_name}",
+            },
+            created_at=datetime.now(UTC),
+            agent_id="agent_main",
+            run_id=f"run_seed_{session_id}",
+        ),
+    )
+
+
 def test_runtime_breaks_repeated_schema_search_after_resume_version_pending_merge(tmp_path: Path) -> None:
     class ToolSearch:
         def definition(self) -> ToolDefinition:
@@ -3214,6 +3782,162 @@ def test_gateway_runtime_allows_one_schema_search_correction_before_stagnation(t
     assert not any(item.get("reason") == "tool_loop_stagnation" for item in decisions)
 
 
+def test_runtime_auto_executes_interview_review_application_merge_after_repeated_schema_search(
+    tmp_path: Path,
+) -> None:
+    class RuntimePlanSearchTool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            self.calls += 1
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "runtime_plan_applied": True,
+                        "runtime_plan_phase": "interview_review_update",
+                        "runtime_final_answer_ready": False,
+                        "runtime_next_action": "面试复盘 Note 已保存；下一步只调用 career_application_merge 更新项目。",
+                        "runtime_next_allowed_tools": ["career_application_merge"],
+                        "runtime_missing_outputs": ["career_application_update"],
+                        "runtime_known_refs": {
+                            "application_id": "application_alpha",
+                            "note_id": "note_alpha",
+                            "resume_profile_id": "resume_profile_alpha",
+                            "career_profile_id": "career_profile_default",
+                            "jd_analysis_id": "jd_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                        },
+                        "revealed_tool_names": ["career_application_merge"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {
+                        "application_id": {"type": "string"},
+                        "updates": {"type": "object"},
+                        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            self.calls.append(arguments)
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps(
+                    {"record_type": "career_application", "record_id": arguments["application_id"]},
+                    ensure_ascii=False,
+                ),
+            )
+
+    class RepeatedSchemaSearchModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = system_prompt
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                assert "tool_search" in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "career_application_merge"})],
+                )
+            if self.calls in {2, 3}:
+                assert tool_names == {"career_application_merge"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "career_application_merge"})],
+                )
+            assert tools == []
+            return ModelResponse(content="面试复盘已保存并更新到求职项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    search_tool = RuntimePlanSearchTool()
+    merge_tool = ApplicationMergeTool()
+    model = RepeatedSchemaSearchModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[search_tool, merge_tool],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=["tool_search", "memory_write"],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_interview_review_schema_search_auto_merge",
+            user_message="继续",
+            skill_names=["base", "tools"],
+            max_tool_rounds=5,
+            context=_context("sess_interview_review_schema_search_auto_merge"),
+        )
+    )
+
+    assert output.answer == "面试复盘已保存并更新到求职项目。"
+    assert search_tool.calls == 1
+    assert len(merge_tool.calls) == 1
+    merge_args = merge_tool.calls[0]
+    assert merge_args["application_id"] == "application_alpha"
+    assert merge_args["updates"]["stage"] == "interviewing"
+    assert "note_alpha" in merge_args["updates"]["notes"]
+    assert "note_alpha" in merge_args["evidence_refs"]
+    assert "application_alpha" in merge_args["evidence_refs"]
+    tool_calls = [
+        event.payload["name"]
+        for event in session_repo.list_events("sess_interview_review_schema_search_auto_merge")
+        if event.type == "tool_call"
+    ]
+    assert tool_calls == ["tool_search", "career_application_merge"]
+    decisions = [
+        event.payload
+        for event in session_repo.list_events("sess_interview_review_schema_search_auto_merge")
+        if event.type == "workflow_runtime_decision"
+    ]
+    assert any(item.get("reason") == "schema_search_suppressed_required_tool_visible" for item in decisions)
+    assert any(item.get("reason") == "strict_schema_search_replaced_with_required_tool" for item in decisions)
+
+
 def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path: Path) -> None:
     class DelegateTool:
         def definition(self) -> ToolDefinition:
@@ -3495,6 +4219,147 @@ def test_runtime_uses_delegate_result_refs_as_application_create_plan(tmp_path: 
         if event.type == "workflow_runtime_decision"
     ]
     assert decisions[0]["reason"] == "premature_final_answer_with_pending_runtime_tools"
+
+
+def test_runtime_replaces_hidden_delegate_with_required_application_create(tmp_path: Path) -> None:
+    class DelegateTool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="delegate_agents",
+                description="Delegate agents.",
+                parameters_schema={"type": "object", "properties": {"tasks": {"type": "array"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            self.calls += 1
+            if self.calls > 1:
+                raise AssertionError("hidden delegate_agents should be replaced with the required tool")
+            return ToolExecutionResult(
+                tool_name="delegate_agents",
+                success=True,
+                content=json.dumps(
+                    {
+                        "status": "completed",
+                        "results": [
+                            {
+                                "target_agent_id": "job_agent",
+                                "status": "completed",
+                                "summary": "JDAnalysis 和 JobFitReport 已完成。",
+                                "output_artifact_refs": ["artifact_fit_report"],
+                                "product_refs": [
+                                    "resume_profile_alpha",
+                                    "career_profile_default",
+                                    "jd_alpha",
+                                    "fit_alpha",
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationCreateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_create",
+                description="Create career application.",
+                parameters_schema={"type": "object", "properties": {"job_fit_report_id": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            assert arguments["job_fit_report_id"] == "fit_alpha"
+            assert arguments["jd_analysis_id"] == "jd_alpha"
+            assert arguments["evidence_refs"] == [
+                "resume_profile_alpha",
+                "career_profile_default",
+                "jd_alpha",
+                "fit_alpha",
+                "artifact_fit_report",
+            ]
+            return ToolExecutionResult(
+                tool_name="career_application_create",
+                success=True,
+                content=json.dumps({"record_type": "career_application", "record_id": "application_alpha"}),
+            )
+
+    class HiddenDelegateModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.tool_names_by_call: list[set[str]] = []
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            self.tool_names_by_call.append(tool_names)
+            if self.calls == 1:
+                assert "delegate_agents" in tool_names
+                assert "career_application_create" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="delegate_agents", arguments={"tasks": []})],
+                )
+            if self.calls == 2:
+                assert "career_application_create" in tool_names
+                assert "delegate_agents" not in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="delegate_agents", arguments={"tasks": []})],
+                )
+            return ModelResponse(content="已创建求职项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = HiddenDelegateModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[DelegateTool(), ApplicationCreateTool()],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=["delegate_agents", "memory_write"],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_hidden_delegate_replaced_application_create",
+            user_message="完成 JD 匹配并创建求职项目",
+            skill_names=["base", "tools"],
+            max_tool_rounds=3,
+            context=_context("sess_hidden_delegate_replaced_application_create"),
+        )
+    )
+
+    assert output.answer == "已创建求职项目。"
+    assert model.calls == 3
+    events = session_repo.list_events("sess_hidden_delegate_replaced_application_create")
+    tool_calls = [event.payload["name"] for event in events if event.type == "tool_call"]
+    assert tool_calls == ["delegate_agents", "delegate_agents", "career_application_create"]
+    assert not any(
+        event.type == "tool_result" and "tool_hidden_by_runtime_plan" in event.payload.get("content", "")
+        for event in events
+    )
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item.get("reason") == "strict_hidden_tool_replaced_with_required_tool" for item in decisions)
 
 
 def test_runtime_terminal_blocks_hidden_tool_search_after_delegate_final_ready(tmp_path: Path) -> None:

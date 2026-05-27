@@ -1014,67 +1014,6 @@ def test_context_assembler_injects_child_result_summary_for_main_agent(tmp_path:
     assert "main agent 决定是否继续实现调度" in bundle.system_prompt
 
 
-def test_context_assembler_compacts_long_child_result_summary_for_main_agent(tmp_path: Path) -> None:
-    session_repo = JsonlSessionRepository(data_dir=tmp_path)
-    session_repo.create_session("sess_child_result_compact")
-    long_summary = (
-        "# 岗位匹配报告\n\n"
-        "| 字段 | 内容 |\n"
-        "|------|------|\n"
-        "| jd_analysis_id | jd_analysis_alpha |\n"
-        "| job_fit_report_id | fit_alpha |\n"
-        "\n"
-        + "child 完整 Markdown 解释。" * 200
-        + "\n报告 artifact_id=artifact_fit_report_alpha"
-    )
-    session_repo.append_event(
-        "sess_child_result_compact",
-        EventRecord(
-            event_id="evt_child_result_compact",
-            session_id="sess_child_result_compact",
-            type=AGENT_RESULT_SUMMARY_EVENT,
-            payload=AgentResultSummaryPayload(
-                task_id="task_job_1",
-                source_agent_id="job_agent",
-                target_agent_id="agent_main",
-                status="completed",
-                summary=long_summary,
-                output_artifact_refs=["artifact_fit_report_alpha"],
-                product_refs=["jd_analysis_alpha", "fit_alpha"],
-                parent_run_id="run_main",
-            ).to_payload(),
-            created_at=datetime.now(UTC),
-            agent_id="job_agent",
-            run_id="run_job",
-            parent_run_id="run_main",
-        ),
-    )
-
-    assembler = ContextAssembler(
-        session_repository=session_repo,
-        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
-        agent_document_repository=_agent_document_repository(),
-        memory_manager=_memory_manager(tmp_path),
-        state_manager=_state_manager(tmp_path),
-        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
-    )
-
-    bundle = assembler.assemble(
-        context=_context("sess_child_result_compact", agent_id="agent_main", entry_agent_id="agent_main"),
-        user_message="继续编排",
-        skill_names=["base"],
-    )
-
-    assert "Child agent result summaries:" in bundle.system_prompt
-    assert "task_id=task_job_1 agent=job_agent status=completed" in bundle.system_prompt
-    assert "output_artifact_refs: artifact_fit_report_alpha" in bundle.system_prompt
-    assert "product_refs: jd_analysis_alpha, fit_alpha" in bundle.system_prompt
-    assert "summary_refs: jd_analysis_alpha, fit_alpha, artifact_fit_report_alpha" in bundle.system_prompt
-    assert "next_hint: use product_refs/output_artifact_refs for CareerApplication" in bundle.system_prompt
-    assert "career_job_fit_report_get" in bundle.system_prompt
-    assert "child 完整 Markdown 解释。" * 20 not in bundle.system_prompt
-
-
 def test_context_assembler_main_agent_excludes_child_raw_messages(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_id = "sess_main_child_raw_filter"

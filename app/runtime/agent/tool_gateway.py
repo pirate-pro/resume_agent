@@ -17,15 +17,13 @@ from app.domain.tool_calls import (
     TOOL_CALL_STATUS_SUCCEEDED,
     ToolCallRecord,
 )
+from app.runtime.agent.tool_gateway_policy import (
+    gateway_state_block_result,
+    resolve_tool_gateway_policy,
+    workflow_event_payload_from_result,
+)
 from app.runtime.agent.tool_runner import ToolExecutionRunner
 from app.runtime.workflow import WorkflowRuntimeGuard
-from app.runtime.workflow.tool_idempotency import tool_idempotency_key
-from app.runtime.workflow.tool_plan import (
-    runtime_plan_completion_tools,
-    runtime_plan_discouraged_tools,
-    runtime_plan_next_allowed_tools,
-)
-from app.runtime.workflow.tool_policy import resolve_tool_execution_policy
 
 __all__ = ["ToolGateway", "ToolGatewayResult"]
 
@@ -58,14 +56,13 @@ class ToolGateway:
         *,
         pending_runtime_plan: dict[str, Any] | None = None,
     ) -> ToolGatewayResult:
-        idempotency_key = tool_idempotency_key(
+        policy = resolve_tool_gateway_policy(
             tool_call,
             context,
             pending_runtime_plan=pending_runtime_plan,
         )
-        policy = resolve_tool_execution_policy(tool_call, context, idempotency_key=idempotency_key)
 
-        state_block = _state_block_result(tool_call, pending_runtime_plan=pending_runtime_plan)
+        state_block = gateway_state_block_result(tool_call, pending_runtime_plan=pending_runtime_plan)
         if state_block is not None:
             record = self._ledger.create_running(
                 session_id=context.session_id,
@@ -87,7 +84,7 @@ class ToolGateway:
             return ToolGatewayResult(
                 tool_call=tool_call,
                 result=state_block,
-                event_payload=_workflow_event_payload_from_result(state_block),
+                event_payload=workflow_event_payload_from_result(state_block),
             )
 
         execution_call = tool_call
@@ -115,12 +112,11 @@ class ToolGateway:
                     event_payload=guard_payload,
                 )
         if execution_call != tool_call:
-            idempotency_key = tool_idempotency_key(
+            policy = resolve_tool_gateway_policy(
                 execution_call,
                 context,
                 pending_runtime_plan=pending_runtime_plan,
             )
-            policy = resolve_tool_execution_policy(execution_call, context, idempotency_key=idempotency_key)
 
         existing = self._find_existing_record(policy=policy, context=context)
         if existing is not None:
@@ -145,7 +141,7 @@ class ToolGateway:
             return ToolGatewayResult(
                 tool_call=tool_call,
                 result=result,
-                event_payload=_workflow_event_payload_from_result(result),
+                event_payload=workflow_event_payload_from_result(result),
             )
 
         record = self._ledger.create_running(
@@ -246,59 +242,6 @@ class ToolGateway:
         )
 
 
-def _state_block_result(
-    tool_call: ToolCall,
-    *,
-    pending_runtime_plan: dict[str, Any] | None,
-) -> ToolExecutionResult | None:
-    if pending_runtime_plan is None:
-        return None
-    if tool_call.name == "memory_write":
-        return None
-    if pending_runtime_plan.get("final_answer_ready") is True:
-        payload = {
-            "workflow_runtime_result": True,
-            "policy": "block",
-            "recoverable": True,
-            "terminal": True,
-            "tool_executed": False,
-            "result_created": False,
-            "reason": "final_answer_ready_no_more_tools",
-            "tool": tool_call.name,
-            "next_action": "当前 workflow 关键产物已完成；不要继续调用工具，直接最终答复。",
-            "missing_outputs": [],
-            "next_allowed_tools": [],
-            "required_tools": [],
-            "blocked_tools": [tool_call.name],
-        }
-        return ToolExecutionResult(tool_name=tool_call.name, success=True, content=json.dumps(payload, ensure_ascii=False))
-
-    completion_tools = set(runtime_plan_completion_tools(pending_runtime_plan))
-    discouraged_tools = set(runtime_plan_discouraged_tools(pending_runtime_plan))
-    if completion_tools and tool_call.name in discouraged_tools and tool_call.name not in completion_tools:
-        next_allowed_tools = runtime_plan_next_allowed_tools(pending_runtime_plan)
-        payload = {
-            "workflow_runtime_result": True,
-            "policy": "block",
-            "recoverable": True,
-            "terminal": False,
-            "tool_executed": False,
-            "result_created": False,
-            "reason": "tool_blocked_by_runtime_state",
-            "tool": tool_call.name,
-            "next_action": pending_runtime_plan.get("next_action"),
-            "missing_outputs": pending_runtime_plan.get("missing_outputs") or [],
-            "next_allowed_tools": next_allowed_tools,
-            "required_tools": list(completion_tools),
-            "blocked_tools": [tool_call.name],
-            "known_refs": pending_runtime_plan.get("known_refs")
-            if isinstance(pending_runtime_plan.get("known_refs"), dict)
-            else {},
-        }
-        return ToolExecutionResult(tool_name=tool_call.name, success=True, content=json.dumps(payload, ensure_ascii=False))
-    return None
-
-
 def _record_can_reuse(record: ToolCallRecord) -> bool:
     if record.result_content is None:
         return False
@@ -343,21 +286,6 @@ def _already_running_result(tool_name: str, idempotency_key: str | None) -> Tool
         "blocked_tools": [tool_name],
     }
     return ToolExecutionResult(tool_name=tool_name, success=True, content=json.dumps(payload, ensure_ascii=False))
-
-
-def _workflow_event_payload_from_result(result: ToolExecutionResult) -> dict[str, Any] | None:
-    payload = _json_object(result.content)
-    if payload is None or payload.get("workflow_runtime_result") is not True:
-        return None
-    return {
-        "workflow_runtime_result": True,
-        "policy": payload.get("policy"),
-        "tool_name": result.tool_name,
-        "reason": payload.get("reason"),
-        "terminal": payload.get("terminal"),
-        "next_allowed_tools": payload.get("next_allowed_tools") if isinstance(payload.get("next_allowed_tools"), list) else [],
-        "blocked_tools": payload.get("blocked_tools") if isinstance(payload.get("blocked_tools"), list) else [],
-    }
 
 
 def _extract_result_refs(content: str) -> dict[str, Any]:

@@ -191,6 +191,56 @@ def test_product_get_model_view_deduplicates_metadata_and_keeps_domain_fields() 
     assert "FULL_DIAGNOSIS_MARKER" not in compact
 
 
+def test_career_profile_merge_compact_view_keeps_repaired_committed_record() -> None:
+    payload = {
+        "record_type": "career_profile",
+        "record_id": "career_profile_default",
+        "found": True,
+        "status": "active",
+        "evidence_refs": ["artifact_resume_alpha", "resume_profile_alpha"],
+        "source_aligned": True,
+        "source_alignment_repairs": [
+            {
+                "field": "updates",
+                "from": ["unsupported_tech:cpp", "unsupported_tech:mysql"],
+                "to": "source_aligned_updates",
+                "reason": "source_drift_repaired",
+            }
+        ],
+        "record": {
+            "career_profile_id": "career_profile_default",
+            "career_goal": "AI 应用开发 / 后端工程师",
+            "target_roles": ["AI 应用开发", "后端工程师"],
+            "skills": ["Python", "FastAPI", "PostgreSQL", "Redis", "RAG", "Agent 工具调用"],
+            "strengths": ["技能覆盖：Python、FastAPI、PostgreSQL、Redis、RAG、Agent 工具调用"],
+        },
+    }
+
+    compact = compact_tool_result_for_model(
+        tool_name="career_profile_merge",
+        success=True,
+        content=json.dumps(payload, ensure_ascii=False),
+    )
+    compact_payload = json.loads(compact)
+
+    assert compact_payload["model_view"] == "compact"
+    assert compact_payload["source_aligned"] is True
+    assert compact_payload["source_alignment_repairs"][0]["reason"] == "source_drift_repaired"
+    assert "committed record" in compact_payload["source_alignment_guidance"]
+    assert compact_payload["record"]["career_goal"] == "AI 应用开发 / 后端工程师"
+    assert compact_payload["record"]["target_roles"] == ["AI 应用开发", "后端工程师"]
+    assert compact_payload["record"]["skills"] == [
+        "Python",
+        "FastAPI",
+        "PostgreSQL",
+        "Redis",
+        "RAG",
+        "Agent 工具调用",
+    ]
+    assert "C++" not in compact
+    assert "MySQL" not in compact
+
+
 def test_retrieval_context_pack_model_view_keeps_refs_and_drops_full_grouped_context() -> None:
     payload = {
         "query": "星河智能 RAG 二面准备",
@@ -301,17 +351,7 @@ def test_delegate_agents_model_view_keeps_task_summaries_and_artifacts() -> None
         "If career tools are not visible yet, call tool_search for the career group first.",
     ]
     assert "子 agent 完整回答。" * 80 not in compact
-    assert "answer_preview" not in compact_payload["results"][0]
-    assert compact_payload["results"][0]["answer_omitted"] == {
-        "chars": len(long_answer + " diagnosis artifact: artifact_resume_diagnosis")
-    }
-    assert len(compact_payload["results"][0]["summary"]) < 260
-    assert compact_payload["results"][0]["actionable_snapshot"]["resume_profile_id"] == "resume_profile_alpha"
-    assert compact_payload["results"][0]["actionable_snapshot"]["diagnosis_artifact_id"] == "artifact_resume_diagnosis"
-    assert compact_payload["results"][0]["actionable_snapshot"]["preferred_read_tool_if_facts_missing"] == "career_resume_profile_get"
-    assert "do not read the diagnosis artifact" in compact_payload["results"][0]["actionable_snapshot"]["next_input_hint"]
-    assert "next_input_hint" in compact_payload
-    assert "full_result_hint" not in compact_payload
+    assert len(compact_payload["results"][0]["answer_preview"]) < len(long_answer)
 
 
 def test_product_list_model_view_keeps_actionable_record_fields() -> None:
@@ -459,12 +499,7 @@ def test_small_delegate_result_still_uses_compact_model_view() -> None:
     assert compact_payload["model_view"] == "compact"
     assert compact_payload["results"][0]["target_agent_id"] == "job_agent"
     assert compact_payload["results"][0]["extracted_ids"] == ["jd_alpha", "fit_alpha"]
-    assert compact_payload["results"][0]["actionable_snapshot"]["jd_analysis_id"] == "jd_alpha"
-    assert compact_payload["results"][0]["actionable_snapshot"]["job_fit_report_id"] == "fit_alpha"
-    assert compact_payload["results"][0]["actionable_snapshot"]["preferred_read_tool_if_score_missing"] == "career_job_fit_report_get"
-    assert "do not read the report artifact" in compact_payload["results"][0]["actionable_snapshot"]["next_input_hint"]
-    assert "next_input_hint" in compact_payload
-    assert "full_result_hint" not in compact_payload
+    assert "full_result_hint" in compact_payload
 
 
 def test_strict_hidden_tool_result_compacts_model_view() -> None:
