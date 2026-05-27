@@ -443,10 +443,11 @@ class FullCareerFlowModel:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
-        _ = system_prompt
         tool_names = _tool_names(tools)
         case_id = _case_id(messages)
         state = self._state.setdefault(case_id, {})
+        if "定制简历正文生成器" in system_prompt:
+            return self._executor_resume_version_draft(case_id=case_id, state=state)
         if "career_resume_profile_save" in tool_names:
             return self._resume_agent_response(messages=messages, case_id=case_id, state=state)
         if "career_job_fit_report_save" in tool_names:
@@ -665,6 +666,24 @@ class FullCareerFlowModel:
                 ],
             )
         return ModelResponse(content=f"{case_id} 已创建简历画像并更新职业画像。", tool_calls=[])
+
+    def _executor_resume_version_draft(self, *, case_id: str, state: dict[str, Any]) -> ModelResponse:
+        ids = _flow_ids(case_id)
+        state["executor_draft_generated"] = True
+        return ModelResponse(
+            content=json.dumps(
+                {
+                    "resume_version_id": ids["resume_version_id"],
+                    "title": f"{case_id} AI 应用开发简历版本",
+                    "content": f"# {case_id} AI 应用开发简历版本\n\n强化 RAG 和 Agent 项目。",
+                    "change_summary": ["强化 RAG 项目"],
+                    "keyword_strategy": ["补充 Agent 和 RAG 关键词"],
+                    "risk_notes": ["不要夸大项目指标"],
+                },
+                ensure_ascii=False,
+            ),
+            tool_calls=[],
+        )
 
     def _resume_agent_response(
         self,
@@ -1146,7 +1165,8 @@ def test_full_career_runtime_chain_single_session(tmp_path: Path) -> None:
 
     assert resume_output.answer == f"{case_id} 已创建简历画像并更新职业画像。"
     assert jd_output.answer == f"{case_id} 已创建 JD 分析、岗位匹配报告和求职项目。"
-    assert version_output.answer == f"{case_id} 已创建定制简历版本并更新求职项目。"
+    assert version_output.answer.startswith("定制简历版本已生成并关联到当前求职项目。")
+    assert ids["resume_version_id"] in version_output.answer
     assert resume_profile is not None
     assert resume_profile.source_artifact_id == ids["resume_artifact_id"]
     assert resume_profile.diagnosis_artifact_id is not None

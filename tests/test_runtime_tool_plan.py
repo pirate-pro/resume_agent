@@ -6,6 +6,7 @@ import json
 
 from app.runtime.agent.tool_reveal import hidden_tool_result
 from app.runtime.context.models import CareerFlowState, CurrentWorkflowState
+from app.runtime.workflow.intent_boundary import build_turn_intent_boundary
 from app.runtime.workflow.phase import WorkflowPhaseSnapshot, WorkflowRequiredOutput
 from app.runtime.workflow.tool_plan import (
     build_runtime_tool_plan,
@@ -837,6 +838,298 @@ def test_successful_delegate_agents_jd_fit_guides_application_create() -> None:
     assert plan["known_refs"]["report_artifact_id"] == "artifact_fit_report"
     assert "delegate_agents" in runtime_plan_discouraged_tools(plan)
     assert "tool_search" in runtime_plan_discouraged_tools(plan)
+
+
+def test_successful_delegate_agents_jd_fit_without_application_requirement_finishes() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "delegate_agents",
+        """
+        {
+          "status": "completed",
+          "results": [
+            {
+              "target_agent_id": "job_agent",
+              "status": "completed",
+              "summary": "已完成 JDAnalysis jd_alpha 和 JobFitReport fit_alpha。",
+              "output_artifact_refs": ["artifact_fit_report"],
+              "product_refs": ["jd_alpha", "fit_alpha"]
+            }
+          ]
+        }
+        """,
+        previous_pending_plan={
+            "phase": "jd_fit",
+            "next_allowed_tools": ["delegate_agents"],
+            "required_tools": ["delegate_agents"],
+            "known_refs": {"resume_profile_id": "resume_profile_alpha"},
+            "missing_outputs": ["jd_analysis", "job_fit_report"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["phase"] == "jd_fit"
+    assert plan["final_answer_ready"] is True
+    assert plan["next_allowed_tools"] == []
+    assert plan["missing_outputs"] == []
+    assert plan["known_refs"]["jd_analysis_id"] == "jd_alpha"
+    assert plan["known_refs"]["job_fit_report_id"] == "fit_alpha"
+
+
+def test_runtime_tool_plan_read_only_retrieval_requires_search_then_context_pack() -> None:
+    search_plan = build_runtime_tool_plan(
+        workflow_phase=WorkflowPhaseSnapshot(
+            phase_name="retrieval_read_only",
+            confidence="medium",
+            required_outputs=[
+                _output("retrieval_search", "retrieval_search"),
+                _output("retrieval_context_pack", "retrieval_context_pack"),
+            ],
+        ),
+        career_flow_state=CareerFlowState(),
+        workflow_state=CurrentWorkflowState(refs={"application_id": "application_alpha"}),
+    )
+
+    assert search_plan.phase == "retrieval_read_only"
+    assert search_plan.next_allowed_tools == ["retrieval_search"]
+    assert search_plan.required_tools == ["retrieval_search"]
+    assert "career_application_merge" in search_plan.discouraged_tools
+    assert "memory_write" in search_plan.discouraged_tools
+
+    context_pack_plan = build_runtime_tool_plan(
+        workflow_phase=WorkflowPhaseSnapshot(
+            phase_name="retrieval_read_only",
+            confidence="medium",
+            required_outputs=[
+                _output("retrieval_search", "retrieval_search", "retrieval_search"),
+                _output("retrieval_context_pack", "retrieval_context_pack"),
+            ],
+        ),
+        career_flow_state=CareerFlowState(do_not_repeat_tools=["retrieval_search"]),
+        workflow_state=CurrentWorkflowState(refs={"application_id": "application_alpha"}),
+    )
+
+    assert context_pack_plan.next_allowed_tools == ["retrieval_context_pack"]
+    assert context_pack_plan.required_tools == ["retrieval_context_pack"]
+    assert "retrieval_search" in context_pack_plan.discouraged_tools
+    assert "career_application_get" in context_pack_plan.discouraged_tools
+
+
+def test_retrieval_search_success_advances_read_only_plan_to_context_pack() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "retrieval_search",
+        '{"query": "二面准备", "count": 2, "hits": []}',
+        previous_pending_plan={
+            "phase": "retrieval_read_only",
+            "next_allowed_tools": ["retrieval_search"],
+            "required_tools": ["retrieval_search"],
+            "known_refs": {},
+            "missing_outputs": ["retrieval_search", "retrieval_context_pack"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["phase"] == "retrieval_read_only"
+    assert plan["next_allowed_tools"] == ["retrieval_context_pack"]
+    assert plan["required_tools"] == ["retrieval_context_pack"]
+    assert plan["missing_outputs"] == ["retrieval_context_pack"]
+    assert "retrieval_search" in runtime_plan_discouraged_tools(plan)
+
+
+def test_retrieval_context_pack_success_finishes_read_only_plan() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "retrieval_context_pack",
+        '{"context_pack": []}',
+        previous_pending_plan={
+            "phase": "retrieval_read_only",
+            "next_allowed_tools": ["retrieval_context_pack"],
+            "required_tools": ["retrieval_context_pack"],
+            "known_refs": {},
+            "missing_outputs": ["retrieval_context_pack"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["final_answer_ready"] is True
+    assert plan["next_allowed_tools"] == []
+    assert plan["missing_outputs"] == []
+
+
+def test_rag_note_write_plan_requires_retrieval_then_note() -> None:
+    search_plan = build_runtime_tool_plan(
+        workflow_phase=WorkflowPhaseSnapshot(
+            phase_name="rag_note_write",
+            confidence="high",
+            required_outputs=[
+                _output("retrieval_search", "retrieval_search"),
+                _output("retrieval_context_pack", "retrieval_context_pack"),
+                _output("note", "note_id"),
+            ],
+        ),
+        career_flow_state=CareerFlowState(),
+        workflow_state=CurrentWorkflowState(refs={"application_id": "application_alpha"}),
+    )
+
+    assert search_plan.phase == "rag_note_write"
+    assert search_plan.next_allowed_tools == ["retrieval_search"]
+    assert search_plan.required_tools == ["retrieval_search"]
+    assert "career_application_merge" in search_plan.discouraged_tools
+
+    context_pack_plan = pending_runtime_plan_from_successful_tool_result(
+        "retrieval_search",
+        '{"query": "复盘", "count": 1}',
+        previous_pending_plan={
+            "phase": "rag_note_write",
+            "next_allowed_tools": ["retrieval_search"],
+            "required_tools": ["retrieval_search"],
+            "known_refs": {"application_id": "application_alpha"},
+            "missing_outputs": ["retrieval_search", "retrieval_context_pack", "note"],
+        },
+    )
+
+    assert context_pack_plan is not None
+    assert context_pack_plan["next_allowed_tools"] == ["retrieval_context_pack"]
+    assert context_pack_plan["missing_outputs"] == ["retrieval_context_pack", "note"]
+
+    note_plan = pending_runtime_plan_from_successful_tool_result(
+        "retrieval_context_pack",
+        '{"context_pack": []}',
+        previous_pending_plan=context_pack_plan,
+    )
+
+    assert note_plan is not None
+    assert note_plan["final_answer_ready"] is not True
+    assert note_plan["next_allowed_tools"] == ["note_create", "note_append"]
+    assert note_plan["required_tools"] == ["note_create", "note_append"]
+    assert note_plan["missing_outputs"] == ["note"]
+
+
+def test_direct_note_write_plan_requires_note_create_only() -> None:
+    plan = build_runtime_tool_plan(
+        workflow_phase=WorkflowPhaseSnapshot(
+            phase_name="note_write",
+            confidence="high",
+            required_outputs=[
+                _output("note", "note_id"),
+            ],
+        ),
+        career_flow_state=CareerFlowState(),
+        workflow_state=CurrentWorkflowState(),
+    )
+
+    assert plan.phase == "note_write"
+    assert plan.next_allowed_tools == ["note_create"]
+    assert plan.required_tools == ["note_create"]
+    assert "retrieval_search" in plan.discouraged_tools
+    assert "memory_write" in plan.discouraged_tools
+
+
+def test_rag_note_write_finalizes_only_after_note_write() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "note_create",
+        '{"record_type": "note", "record_id": "note_alpha", "record": {"note_id": "note_alpha"}}',
+        previous_pending_plan={
+            "phase": "rag_note_write",
+            "next_allowed_tools": ["note_create", "note_append"],
+            "required_tools": ["note_create", "note_append"],
+            "known_refs": {"application_id": "application_alpha"},
+            "missing_outputs": ["note"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["final_answer_ready"] is True
+    assert plan["missing_outputs"] == []
+    assert plan["known_refs"]["note_id"] == "note_alpha"
+
+
+def test_learning_task_action_finalizes_only_after_task_create() -> None:
+    task_plan = pending_runtime_plan_from_successful_tool_result(
+        "retrieval_context_pack",
+        '{"context_pack": []}',
+        previous_pending_plan={
+            "phase": "rag_learning_task_create",
+            "next_allowed_tools": ["retrieval_context_pack"],
+            "required_tools": ["retrieval_context_pack"],
+            "known_refs": {},
+            "missing_outputs": ["retrieval_context_pack", "learning_task"],
+        },
+    )
+
+    assert task_plan is not None
+    assert task_plan["next_allowed_tools"] == ["learning_task_create"]
+    assert task_plan["missing_outputs"] == ["learning_task"]
+
+    final_plan = pending_runtime_plan_from_successful_tool_result(
+        "learning_task_create",
+        (
+            '{"record_type": "learning_task", "record_id": "learning_task_alpha", '
+            '"record": {"learning_task_id": "learning_task_alpha"}}'
+        ),
+        previous_pending_plan=task_plan,
+    )
+
+    assert final_plan is not None
+    assert final_plan["final_answer_ready"] is True
+    assert final_plan["known_refs"]["learning_task_id"] == "learning_task_alpha"
+
+
+def test_interview_review_requires_note_then_application_update() -> None:
+    application_plan = pending_runtime_plan_from_successful_tool_result(
+        "note_create",
+        '{"record_type": "note", "record_id": "note_review", "record": {"note_id": "note_review"}}',
+        previous_pending_plan={
+            "phase": "interview_review_update",
+            "next_allowed_tools": ["note_create", "note_append"],
+            "required_tools": ["note_create", "note_append"],
+            "known_refs": {"application_id": "application_alpha"},
+            "missing_outputs": ["note", "career_application_update"],
+        },
+    )
+
+    assert application_plan is not None
+    assert application_plan["next_allowed_tools"] == ["career_application_merge"]
+    assert application_plan["required_tools"] == ["career_application_merge"]
+    assert application_plan["missing_outputs"] == ["career_application_update"]
+    assert application_plan["known_refs"]["note_id"] == "note_review"
+
+    final_plan = pending_runtime_plan_from_successful_tool_result(
+        "career_application_merge",
+        (
+            '{"record_type": "career_application", "record_id": "application_alpha", '
+            '"record": {"application_id": "application_alpha"}}'
+        ),
+        previous_pending_plan=application_plan,
+    )
+
+    assert final_plan is not None
+    assert final_plan["final_answer_ready"] is True
+    assert final_plan["known_refs"]["application_id"] == "application_alpha"
+
+
+def test_turn_intent_boundary_ignores_artifact_preview_and_fact_rules() -> None:
+    boundary = build_turn_intent_boundary(
+        """
+        你收到一个来自 agent_main 的子任务。
+
+        instruction:
+        请保存结构化 ResumeProfile，并创建诊断报告 artifact。
+        不要创建求职项目，不要生成定制简历。
+        JD 中提到了向量检索，但这只是岗位要求，不代表本轮只读。
+
+        artifact_refs:
+        - artifact_resume
+
+        artifact 事实源规则:
+        - 保存产品记录时，不要写入 artifact 中未出现的信息。
+
+        artifact 内容预览:
+        技能：RAG、Agent 工具调用
+        """
+    )
+
+    assert boundary.read_only is False
+    assert boundary.forbid_career_application_create is True
+    assert boundary.forbid_resume_version_create is True
 
 
 def test_successful_delegate_agents_extracts_refs_from_text_when_structured_refs_are_sparse() -> None:

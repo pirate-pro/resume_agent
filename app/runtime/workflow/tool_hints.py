@@ -12,6 +12,8 @@ def build_required_tool_call_hint(required_tool: str | None, known_refs: dict[st
         return None
     if required_tool == "career_job_fit_report_save":
         return _job_fit_report_save_hint(known_refs)
+    if required_tool == "career_application_create":
+        return _application_create_hint(known_refs)
     if required_tool == "career_resume_version_create":
         return _resume_version_create_hint(known_refs)
     if required_tool == "career_application_merge":
@@ -38,6 +40,67 @@ def _job_fit_report_save_hint(known_refs: dict[str, Any]) -> dict[str, Any]:
         "instruction": (
             "缺失参数若已在 assigned task、用户消息或刚才读取的记录中出现，直接复用；"
             "career_profile_id 缺失时使用 career_profile_default；不要 get/list 只为确认。"
+        ),
+    }
+
+
+def _application_create_hint(known_refs: dict[str, Any]) -> dict[str, Any]:
+    resume_profile_id = _string_or_none(known_refs.get("resume_profile_id"))
+    career_profile_id = _string_or_none(known_refs.get("career_profile_id"))
+    jd_analysis_id = _string_or_none(known_refs.get("jd_analysis_id"))
+    job_fit_report_id = _string_or_none(known_refs.get("job_fit_report_id"))
+    resume_version_id = _string_or_none(known_refs.get("resume_version_id"))
+    jd_source_artifact_id = _string_or_none(known_refs.get("jd_source_artifact_id"))
+    report_artifact_id = _string_or_none(known_refs.get("report_artifact_id"))
+    resume_source_artifact_id = _string_or_none(known_refs.get("resume_source_artifact_id"))
+    resume_version_artifact_id = _string_or_none(known_refs.get("resume_version_artifact_id")) or _string_or_none(
+        known_refs.get("artifact_id")
+    )
+
+    available_args: dict[str, Any] = {"stage": "draft"}
+    if resume_profile_id is not None:
+        available_args["resume_profile_id"] = resume_profile_id
+    if career_profile_id is not None:
+        available_args["career_profile_id"] = career_profile_id
+    if jd_analysis_id is not None:
+        available_args["jd_analysis_id"] = jd_analysis_id
+    if job_fit_report_id is not None:
+        available_args["job_fit_report_id"] = job_fit_report_id
+    if resume_version_id is not None:
+        available_args["resume_version_ids"] = [resume_version_id]
+    if jd_source_artifact_id is not None:
+        available_args["source_artifact_id"] = jd_source_artifact_id
+
+    evidence_refs = _dedupe_strings(
+        [
+            resume_profile_id,
+            career_profile_id,
+            jd_analysis_id,
+            job_fit_report_id,
+            report_artifact_id,
+            jd_source_artifact_id,
+            resume_source_artifact_id,
+            resume_version_id,
+            resume_version_artifact_id,
+        ]
+    )
+    if evidence_refs:
+        available_args["evidence_refs"] = evidence_refs
+
+    missing_args = []
+    if not evidence_refs:
+        missing_args.append("evidence_refs")
+    if job_fit_report_id is None and jd_analysis_id is None and resume_version_id is None:
+        missing_args.append("jd_analysis_id_or_job_fit_report_id_or_resume_version_id")
+
+    return {
+        "tool_name": "career_application_create",
+        "available_args": available_args,
+        "missing_args": missing_args,
+        "retry_tool_call_skeleton": available_args,
+        "instruction": (
+            "只调用 career_application_create；若有 JobFitReport/JDAnalysis，company、position、"
+            "next_actions 和 risks 由产品记录推导。不要重新 delegate、get/list 或 tool_search。"
         ),
     }
 

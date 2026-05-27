@@ -82,6 +82,25 @@ _CAREER_PROFILE_LIST_UPDATE_FIELDS = {
     "resume_issues",
     "interview_weaknesses",
 }
+_CAREER_JD_ANALYSIS_ARGUMENT_FIELDS = {
+    "jd_analysis_id",
+    "source_artifact_id",
+    "evidence_refs",
+    "company",
+    "position",
+    "seniority",
+    "required_skills",
+    "preferred_skills",
+    "responsibilities",
+    "keywords",
+    "risk_signals",
+    "interview_focus",
+}
+_EMBEDDED_PARAMETER_TAG_RE = re.compile(
+    r"<parameter=([A-Za-z_][A-Za-z0-9_]*)>(.*?)(?=(?:</parameter\s*>?|<parameter=|$))",
+    re.DOTALL,
+)
+_EMBEDDED_PARAMETER_BOUNDARY_RE = re.compile(r"</parameter\s*>?|<parameter=", re.DOTALL)
 _CAREER_PROFILE_TEXT_UPDATE_FIELDS = {
     "career_goal",
     "education_summary",
@@ -224,6 +243,7 @@ _EVIDENCE_REF_TYPE_ALIASES = {
 _RESUME_SOURCE_TECH_TERMS: dict[str, tuple[str, ...]] = {
     "agent": ("agent", "智能体"),
     "celery": ("celery",),
+    "cpp": ("c++", "c＋＋", "cpp", "c plus plus"),
     "docker": ("docker",),
     "elasticsearch": ("elasticsearch",),
     "faiss": ("faiss",),
@@ -232,15 +252,21 @@ _RESUME_SOURCE_TECH_TERMS: dict[str, tuple[str, ...]] = {
     "kubernetes": ("kubernetes", "k8s"),
     "langchain": ("langchain",),
     "langgraph": ("langgraph",),
+    "linux": ("linux",),
     "milvus": ("milvus",),
     "mysql": ("mysql",),
     "llm_api": ("llm api", "openai api", "大模型 api", "模型 api"),
     "postgresql": ("postgresql", "postgres"),
     "python": ("python",),
     "pytorch": ("pytorch",),
+    "r_language": ("r语言", "r language"),
     "rag": ("rag", "检索增强"),
     "react": ("react",),
     "redis": ("redis",),
+    "rna_seq": ("rna-seq", "rnaseq", "转录组"),
+    "spark": ("spark",),
+    "hadoop": ("hadoop",),
+    "sql": ("sql",),
     "spring": ("spring", "spring boot", "springboot"),
     "tensorflow": ("tensorflow",),
     "vector_search": ("向量检索", "vector search", "embedding search", "语义检索"),
@@ -250,6 +276,7 @@ _RESUME_SOURCE_TECH_TERMS: dict[str, tuple[str, ...]] = {
 _RESUME_SOURCE_TERM_DISPLAY_NAMES = {
     "agent": "Agent 工具调用",
     "celery": "Celery",
+    "cpp": "C++",
     "docker": "Docker",
     "elasticsearch": "Elasticsearch",
     "faiss": "FAISS",
@@ -258,15 +285,21 @@ _RESUME_SOURCE_TERM_DISPLAY_NAMES = {
     "kubernetes": "Kubernetes",
     "langchain": "LangChain",
     "langgraph": "LangGraph",
+    "linux": "Linux",
     "llm_api": "LLM API",
     "milvus": "Milvus",
     "mysql": "MySQL",
     "postgresql": "PostgreSQL",
     "python": "Python",
     "pytorch": "PyTorch",
+    "r_language": "R 语言",
     "rag": "RAG",
     "react": "React",
     "redis": "Redis",
+    "rna_seq": "RNA-seq",
+    "spark": "Spark",
+    "hadoop": "Hadoop",
+    "sql": "SQL",
     "spring": "Spring",
     "tensorflow": "TensorFlow",
     "vector_search": "向量检索",
@@ -593,6 +626,14 @@ class CareerProfileMergeTool:
                         updated_at=_now(),
                     )
                 )
+            updates, source_alignment_repairs = _align_career_profile_updates_with_resume_evidence(
+                career_store=self._career_store,
+                session_repository=self._session_repository,
+                session_id=run_context.session_id,
+                updates=updates,
+                evidence_refs=evidence_refs,
+                source_artifact_id=source_artifact_id,
+            )
             record = self._career_store.merge_career_profile(
                 record_id,
                 updates=updates,
@@ -601,7 +642,13 @@ class CareerProfileMergeTool:
             )
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        return _record_result("career_profile_merge", "career_profile", record.career_profile_id, record)
+        extra = None
+        if source_alignment_repairs:
+            extra = {
+                "source_aligned": True,
+                "source_alignment_repairs": source_alignment_repairs,
+            }
+        return _record_result("career_profile_merge", "career_profile", record.career_profile_id, record, extra=extra)
 
 
 class CareerJDAnalysisSaveTool:
@@ -638,7 +685,10 @@ class CareerJDAnalysisSaveTool:
     def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
         run_context = validate_context(context)
         try:
-            args = _require_arguments(arguments)
+            args = _normalize_embedded_parameter_arguments(
+                _require_arguments(arguments),
+                allowed_fields=_CAREER_JD_ANALYSIS_ARGUMENT_FIELDS,
+            )
             source_artifact_id = _required_current_artifact(
                 self._session_repository,
                 run_context.session_id,
@@ -1880,6 +1930,68 @@ def _normalize_application_create_raw_arguments(arguments: dict[str, Any]) -> di
     return normalized
 
 
+def _normalize_embedded_parameter_arguments(
+    arguments: dict[str, Any],
+    *,
+    allowed_fields: set[str],
+) -> dict[str, Any]:
+    """Recover parameters accidentally embedded inside another string argument."""
+
+    normalized = dict(arguments)
+    for key, value in list(arguments.items()):
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        if "<parameter=" not in value and "</parameter" not in value:
+            continue
+        head, tail = _split_embedded_parameter_tail(value)
+        if head is not None and _argument_value_present(normalized.get(key)):
+            normalized[key] = head
+        for field_name, raw_field_value in _extract_embedded_parameter_values(tail).items():
+            if field_name not in allowed_fields:
+                continue
+            if _argument_value_present(normalized.get(field_name)):
+                continue
+            normalized[field_name] = raw_field_value
+    return normalized
+
+
+def _split_embedded_parameter_tail(value: str) -> tuple[str | None, str]:
+    match = _EMBEDDED_PARAMETER_BOUNDARY_RE.search(value)
+    if match is None:
+        return None, value
+    if match.group(0).startswith("<parameter="):
+        return value[: match.start()].strip() or None, value[match.start() :]
+    return value[: match.start()].strip(), value[match.end() :]
+
+
+def _extract_embedded_parameter_values(text: str) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for match in _EMBEDDED_PARAMETER_TAG_RE.finditer(text):
+        field_name = match.group(1).strip()
+        raw_value = match.group(2).strip()
+        if not field_name or not raw_value:
+            continue
+        output[field_name] = _decode_embedded_parameter_value(raw_value)
+    return output
+
+
+def _decode_embedded_parameter_value(raw_value: str) -> Any:
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError:
+        return raw_value.strip()
+
+
+def _argument_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list | dict | tuple | set):
+        return bool(value)
+    return True
+
+
 def _normalize_application_stage(value: Any) -> Any:
     if not isinstance(value, str):
         return value
@@ -2437,7 +2549,7 @@ def _infer_jd_required_skills(text: str) -> list[str]:
     for canonical, aliases in _RESUME_SOURCE_TECH_TERMS.items():
         if canonical not in display_names:
             continue
-        if not any(alias.casefold() in lowered for alias in aliases):
+        if not any(_contains_term_alias(lowered, alias.casefold()) for alias in aliases):
             continue
         output.append(display_names[canonical])
     return output
@@ -2982,9 +3094,17 @@ def _extract_resume_source_terms(text: str) -> set[str]:
     lowered = text.casefold()
     terms: set[str] = set()
     for canonical, aliases in _RESUME_SOURCE_TECH_TERMS.items():
-        if any(alias.casefold() in lowered for alias in aliases):
+        if any(_contains_term_alias(lowered, alias.casefold()) for alias in aliases):
             terms.add(canonical)
     return terms
+
+
+def _contains_term_alias(text: str, alias: str) -> bool:
+    if not alias:
+        return False
+    if re.fullmatch(r"[a-z0-9]+", alias):
+        return re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text) is not None
+    return alias in text
 
 
 def _required_dict(raw: Any, *, field_name: str) -> dict[str, Any]:
@@ -3126,6 +3246,340 @@ def _optional_career_profile_text(raw: Any, *, field_name: str) -> str | None:
         values = _optional_string_list(raw, field_name=field_name)
         return "；".join(values) or None
     raise ToolExecutionError(f"'{field_name}' must be a string or list of strings.")
+
+
+_CAREER_PROFILE_DEGREE_MARKERS = (
+    "博士",
+    "硕士",
+    "研究生",
+    "本科",
+    "大专",
+    "专科",
+    "gpa",
+    "绩点",
+    "奖学金",
+    "三好学生",
+    "优秀毕业生",
+)
+_CAREER_PROFILE_SCHOOL_PATTERN = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9（）()·]{2,}(?:大学|学院|学校|University|College|Institute)")
+_CAREER_PROFILE_YEAR_PATTERN = re.compile(r"(?:19|20)\d{2}\s*(?:年|[-/])?")
+
+
+def _align_career_profile_updates_with_resume_evidence(
+    *,
+    career_store: CareerProductStore,
+    session_repository: SessionRepository,
+    session_id: str,
+    updates: dict[str, Any],
+    evidence_refs: list[str],
+    source_artifact_id: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    profile = _current_resume_profile_for_career_profile_alignment(
+        career_store=career_store,
+        session_id=session_id,
+        evidence_refs=evidence_refs,
+        source_artifact_id=source_artifact_id,
+    )
+    if profile is None:
+        return updates, []
+
+    source_text = _resume_profile_source_text(session_repository, session_id=session_id, profile=profile)
+    support_text = "\n".join((source_text, _resume_profile_supported_fact_text(profile)))
+    unsupported = _career_profile_unsupported_source_claims(updates, support_text)
+    if not unsupported:
+        return updates, []
+
+    repaired_updates = _career_profile_updates_from_resume_profile(profile=profile, source_text=source_text)
+    if not repaired_updates:
+        return updates, []
+    return repaired_updates, [
+        {
+            "field": "updates",
+            "from": unsupported,
+            "to": "source_aligned_updates",
+            "reason": "source_drift_repaired",
+        }
+    ]
+
+
+def _current_resume_profile_for_career_profile_alignment(
+    *,
+    career_store: CareerProductStore,
+    session_id: str,
+    evidence_refs: list[str],
+    source_artifact_id: str | None,
+) -> ResumeProfile | None:
+    resume_profile_ids = sorted({ref for ref in evidence_refs if ref.startswith("resume_profile_")})
+    profile = _single_current_resume_profile_by_ids(
+        career_store=career_store,
+        session_id=session_id,
+        resume_profile_ids=resume_profile_ids,
+    )
+    if profile is not None:
+        return profile
+
+    current_profiles = [
+        item
+        for item in career_store.list_resume_profiles()
+        if item.source_session_id == session_id and item.status == CareerRecordStatus.ACTIVE
+    ]
+    if source_artifact_id:
+        source_matches = [item for item in current_profiles if item.source_artifact_id == source_artifact_id]
+        if len(source_matches) == 1:
+            return source_matches[0]
+    if len(current_profiles) == 1:
+        return current_profiles[0]
+    return None
+
+
+def _single_current_resume_profile_by_ids(
+    *,
+    career_store: CareerProductStore,
+    session_id: str,
+    resume_profile_ids: list[str],
+) -> ResumeProfile | None:
+    if len(resume_profile_ids) != 1:
+        return None
+    try:
+        profile = career_store.get_resume_profile(resume_profile_ids[0])
+    except (StorageError, ValidationError):
+        return None
+    if profile is None or profile.source_session_id != session_id:
+        return None
+    return profile
+
+
+def _career_profile_unsupported_source_claims(updates: dict[str, Any], support_text: str) -> list[str]:
+    if not support_text.strip():
+        return []
+    update_text = json.dumps(updates, ensure_ascii=False, sort_keys=True)
+    unsupported: list[str] = []
+    for term in _unsupported_resume_version_tech_terms(update_text, support_text):
+        _append_unique(unsupported, f"unsupported_tech:{term}")
+
+    normalized_update = _normalize_fact_text(update_text)
+    normalized_support = _normalize_fact_text(support_text)
+    for marker in _CAREER_PROFILE_DEGREE_MARKERS:
+        normalized_marker = _normalize_fact_text(marker)
+        if normalized_marker in normalized_update and normalized_marker not in normalized_support:
+            _append_unique(unsupported, marker)
+    for school in _CAREER_PROFILE_SCHOOL_PATTERN.findall(update_text):
+        if _normalize_fact_text(school) not in normalized_support:
+            _append_unique(unsupported, school)
+    for year in _CAREER_PROFILE_YEAR_PATTERN.findall(update_text):
+        if year and _normalize_fact_text(year) not in normalized_support:
+            _append_unique(unsupported, year.strip())
+    return unsupported
+
+
+def _career_profile_updates_from_resume_profile(*, profile: ResumeProfile, source_text: str) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    career_goal = _resume_profile_target_direction(profile)
+    if career_goal:
+        updates["career_goal"] = career_goal
+    target_roles = _career_profile_target_roles_from_resume_profile(profile=profile, career_goal=career_goal)
+    if target_roles:
+        updates["target_roles"] = target_roles
+    skills = _profile_string_list(profile.skills)
+    if not skills:
+        skills = _source_term_display_names(_extract_resume_source_terms(source_text))
+    if skills:
+        updates["skills"] = skills
+    education_summary = _career_profile_education_summary(profile=profile, source_text=source_text)
+    if education_summary:
+        updates["education_summary"] = education_summary
+    experience_summary = _career_profile_experience_summary(profile=profile, source_text=source_text)
+    if experience_summary:
+        updates["experience_summary"] = experience_summary
+    strengths = _career_profile_strengths_from_resume_profile(
+        profile=profile,
+        skills=skills,
+        experience_summary=experience_summary,
+    )
+    if strengths:
+        updates["strengths"] = strengths
+    resume_issues = _career_profile_resume_issues_from_diagnosis(profile.diagnosis)
+    if resume_issues:
+        updates["resume_issues"] = resume_issues
+    return updates
+
+
+def _resume_profile_target_direction(profile: ResumeProfile) -> str:
+    for key in ("target_direction", "目标方向", "target_role", "target_position"):
+        value = profile.basic_info.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _career_profile_target_roles_from_resume_profile(
+    *,
+    profile: ResumeProfile,
+    career_goal: str,
+) -> list[str]:
+    roles: list[str] = []
+    for raw_item in re.split(r"[/／、,，;；|｜]+", career_goal):
+        item = raw_item.strip()
+        if item:
+            _append_unique(roles, item)
+    for item in profile.work_experience:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role") or item.get("position") or item.get("title")
+        if isinstance(role, str) and role.strip():
+            _append_unique(roles, role.strip())
+    return roles
+
+
+def _career_profile_education_summary(*, profile: ResumeProfile, source_text: str) -> str:
+    summary = _profile_section_summary(profile.education)
+    if summary:
+        return summary
+    return _source_labeled_value(source_text, ("教育", "教育背景"))
+
+
+def _career_profile_experience_summary(*, profile: ResumeProfile, source_text: str) -> str:
+    parts: list[str] = []
+    for item in profile.work_experience:
+        text = _profile_section_item_summary(item)
+        if text:
+            parts.append(text)
+    for item in profile.project_experience:
+        text = _profile_section_item_summary(item)
+        if text:
+            parts.append(text)
+    if parts:
+        return "；".join(parts)
+    source_parts = [
+        _source_labeled_value(source_text, ("经历", "工作经历", "工作经验")),
+        _source_labeled_value(source_text, ("项目", "项目经历", "项目经验")),
+    ]
+    return "；".join(item for item in source_parts if item)
+
+
+def _career_profile_strengths_from_resume_profile(
+    *,
+    profile: ResumeProfile,
+    skills: list[str],
+    experience_summary: str,
+) -> list[str]:
+    strengths: list[str] = []
+    if skills:
+        _append_unique(strengths, "技能覆盖：" + "、".join(skills[:8]))
+    if experience_summary:
+        _append_unique(strengths, experience_summary)
+    for item in profile.project_experience:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        description = item.get("description")
+        if isinstance(name, str) and name.strip():
+            detail = description if isinstance(description, str) and description.strip() else "有项目经历支撑。"
+            _append_unique(strengths, f"{name.strip()}：{detail.strip()}")
+    return strengths
+
+
+def _career_profile_resume_issues_from_diagnosis(diagnosis: dict[str, Any]) -> list[str]:
+    output: list[str] = []
+    raw_items = diagnosis.get("missing_items") or diagnosis.get("weaknesses")
+    if isinstance(raw_items, list):
+        for item in raw_items:
+            if isinstance(item, str) and item.strip():
+                _append_unique(output, item.strip())
+    raw_text = diagnosis.get("raw_text")
+    if isinstance(raw_text, str) and raw_text.strip():
+        try:
+            decoded = json.loads(raw_text)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            for key in ("missing_items", "weaknesses"):
+                values = decoded.get(key)
+                if not isinstance(values, list):
+                    continue
+                for item in values:
+                    if isinstance(item, str) and item.strip():
+                        _append_unique(output, item.strip())
+    return output[:8]
+
+
+def _profile_string_list(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    output: list[str] = []
+    for item in raw:
+        text = _profile_section_item_summary(item)
+        if text:
+            _append_unique(output, text)
+    return output
+
+
+def _profile_section_summary(raw: Any) -> str:
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, list):
+        return "；".join(item for item in (_profile_section_item_summary(value) for value in raw) if item)
+    if isinstance(raw, dict):
+        return _profile_section_item_summary(raw)
+    return ""
+
+
+def _profile_section_item_summary(raw: Any) -> str:
+    if isinstance(raw, str):
+        return raw.strip()
+    if not isinstance(raw, dict):
+        return ""
+    parts: list[str] = []
+    for key in (
+        "period",
+        "duration",
+        "level",
+        "degree",
+        "major",
+        "school",
+        "role",
+        "position",
+        "name",
+        "description",
+    ):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip() and not _is_unknown_profile_value(value):
+            parts.append(value.strip())
+    responsibilities = raw.get("responsibilities")
+    if isinstance(responsibilities, list):
+        values = [
+            item.strip()
+            for item in responsibilities
+            if isinstance(item, str) and item.strip() and not _is_unknown_profile_value(item)
+        ]
+        if values:
+            parts.append("、".join(values))
+    skills_used = raw.get("skills_used") or raw.get("technologies")
+    if isinstance(skills_used, list):
+        values = [
+            item.strip()
+            for item in skills_used
+            if isinstance(item, str) and item.strip() and not _is_unknown_profile_value(item)
+        ]
+        if values:
+            parts.append("、".join(values))
+    return " ".join(parts).strip()
+
+
+def _is_unknown_profile_value(value: str) -> bool:
+    normalized = re.sub(r"[\s,，。；;:：/|｜\\-]+", "", value.casefold())
+    return normalized in {
+        "未提及",
+        "未明确",
+        "未提供",
+        "未填写",
+        "未知",
+        "不详",
+        "无",
+        "none",
+        "n/a",
+        "na",
+    }
 
 
 def _optional_job_fit_recommendation(args: dict[str, Any]) -> str:
@@ -3883,7 +4337,7 @@ def _unsupported_resume_version_tech_terms(candidate_claim_text: str, support_te
 def _first_present_alias(normalized_text: str, aliases: tuple[str, ...]) -> str | None:
     for alias in aliases:
         normalized_alias = _normalize_fact_text(alias)
-        if normalized_alias and normalized_alias in normalized_text:
+        if _contains_term_alias(normalized_text, normalized_alias):
             return alias
     return None
 

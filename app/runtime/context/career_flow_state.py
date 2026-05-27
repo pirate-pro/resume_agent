@@ -11,6 +11,7 @@ from app.domain.models import EventRecord, RunContext
 from app.domain.reference_ids import is_reserved_reference_value
 from app.runtime.agent_events import AGENT_RESULT_SUMMARY_EVENT
 from app.runtime.context.models import CareerFlowState, CurrentWorkflowState
+from app.runtime.workflow.intent_boundary import build_turn_intent_boundary
 
 __all__ = [
     "extract_career_flow_state",
@@ -41,6 +42,8 @@ _COMPLETED_STEP_ORDER = [
     "resume_version",
 ]
 _TOOL_REPEAT_ORDER = [
+    "retrieval_search",
+    "retrieval_context_pack",
     "career_application_get",
     "career_resume_profile_get",
     "career_jd_analysis_get",
@@ -58,6 +61,8 @@ _CURRENT_RUN_REPEAT_TOOLS = {
     "career_profile_get",
     "career_resume_version_get",
     "career_application_get",
+    "retrieval_search",
+    "retrieval_context_pack",
 }
 
 
@@ -173,21 +178,31 @@ def _seed_multi_refs_from_workflow_state(
 
 def _career_intent(user_message: str) -> set[str]:
     text = user_message.strip().casefold()
+    boundary = build_turn_intent_boundary(user_message)
     intents: set[str] = set()
+    if boundary.read_only:
+        intents.add("retrieval_read_only")
+        return intents
     application_action = _is_application_action_message(text)
-    if application_action:
+    if application_action and not boundary.forbid_career_application_create:
         intents.add("application_action")
         intents.add("career_application")
         return intents
     if _has_any(text, ("简历", "resume", "画像", "诊断")):
         intents.add("resume_profile")
-    if _has_any(text, ("jd", "岗位", "职位", "岗位描述", "职位描述")):
+    if not boundary.forbid_jd_fit and _has_any(text, ("jd", "岗位", "职位", "岗位描述", "职位描述")):
         intents.add("jd_analysis")
-    if _has_any(text, ("匹配", "适配", "匹配报告", "投递建议")):
+    if not boundary.forbid_jd_fit and _has_any(text, ("匹配", "适配", "匹配报告", "投递建议")):
         intents.add("job_fit_report")
-    if _has_any(text, ("求职项目", "application_", "投递", "申请", "面试准备", "投递前")):
+    if (
+        _has_any(text, ("求职项目", "application_", "投递", "申请", "面试准备", "投递前"))
+        and not boundary.forbid_career_application_create
+    ):
         intents.add("career_application")
-    if _has_any(text, ("定制简历", "简历版本", "生成一版简历", "生成或更新一版定制简历")):
+    if (
+        not boundary.forbid_resume_version_create
+        and _has_any(text, ("定制简历", "简历版本", "生成一版简历", "生成或更新一版定制简历"))
+    ):
         intents.add("resume_version")
         intents.add("career_application")
     return intents
@@ -437,6 +452,10 @@ def _do_not_repeat_tools(accumulator: _CareerFlowAccumulator) -> list[str]:
         tools.append("career_jd_analysis_save")
     if "career_job_fit_report_save" in accumulator.successful_tools:
         tools.append("career_job_fit_report_save")
+    if "retrieval_search" in accumulator.current_run_successful_tools:
+        tools.append("retrieval_search")
+    if "retrieval_context_pack" in accumulator.current_run_successful_tools:
+        tools.append("retrieval_context_pack")
 
     for tool_name in _CURRENT_RUN_REPEAT_TOOLS:
         if tool_name in accumulator.current_run_successful_tools:
@@ -460,6 +479,12 @@ def _next_action_hint(
 ) -> str | None:
     if final_answer_ready:
         return "定制简历已创建并合并进求职项目，应直接给最终答复。"
+    if "retrieval_read_only" in intent:
+        if "retrieval_search" not in accumulator.current_run_successful_tools:
+            return "本轮只读；先调用 retrieval_search 召回相关上下文。"
+        if "retrieval_context_pack" not in accumulator.current_run_successful_tools:
+            return "retrieval_search 已完成；下一步只调用 retrieval_context_pack。"
+        return "只读召回已完成；不要写入任何记录，直接回答用户。"
     if "resume_version" in intent and "career_application" in completed_steps and "resume_version" not in completed_steps:
         return "已确认求职项目和关联记录，下一步只需创建 ResumeVersion 并合并 CareerApplication。"
     if "resume_version" in intent and "resume_version" in completed_steps and "career_application_merge" not in accumulator.current_run_successful_tools:
@@ -504,7 +529,11 @@ def _valid_multi_ref_value(key: str, value: str) -> bool:
 
 
 def _is_career_tool(tool_name: str) -> bool:
-    return tool_name.startswith("career_") or tool_name == "delegate_agents"
+    return tool_name.startswith("career_") or tool_name in {
+        "delegate_agents",
+        "retrieval_search",
+        "retrieval_context_pack",
+    }
 
 
 def _loads_json(content: str) -> Any | None:

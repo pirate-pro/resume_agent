@@ -244,6 +244,90 @@ def test_main_agent_creates_gets_lists_updates_appends_and_archives_note(tmp_pat
     assert not list((tmp_path / "notes").rglob("*.md"))
 
 
+def test_note_create_canonicalizes_object_evidence_refs(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_notes")
+
+    note_payload = _execute(
+        registry,
+        "note_create",
+        {
+            "title": "面试准备",
+            "body_markdown": "## 准备\n复习 RAG chunk 策略。",
+            "evidence_refs": [
+                {"source_type": "career_application", "source_id": "application_alpha"},
+                {"source_type": "job_fit_report", "source_id": "fit_alpha"},
+                "resume_profile_alpha",
+                {"record_id": "artifact_alpha"},
+                {"source_type": "job_fit_report", "source_id": "fit_alpha"},
+            ],
+            "source_refs": [
+                {
+                    "source_type": "career_application",
+                    "source_id": "application_alpha",
+                    "title": "AI 应用开发工程师",
+                }
+            ],
+        },
+        _context(),
+    )
+
+    assert note_payload["record"]["evidence_refs"] == [
+        "application_alpha",
+        "fit_alpha",
+        "resume_profile_alpha",
+        "artifact_alpha",
+    ]
+    assert note_payload["record"]["source_refs"][0]["source_id"] == "application_alpha"
+
+
+def test_note_create_canonicalizes_career_reference_aliases(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_notes")
+
+    note_payload = _execute(
+        registry,
+        "note_create",
+        {
+            "title": "面试准备",
+            "body_markdown": "## 准备\n复习 RAG chunk 策略。",
+            "evidence_refs": [
+                "application:application_alpha",
+                "resume_profile:resume_profile_alpha",
+                "jd_analysis:jd_alpha",
+                "job_fit_report:fit_alpha",
+                "career_profile:career_profile_default",
+                "resume_version:resume_version_alpha",
+            ],
+            "source_refs": [
+                {"source_type": "application", "source_id": "application_alpha"},
+                {"source_type": "jd", "source_id": "jd_alpha"},
+                {"source_type": "fit", "source_id": "fit_alpha"},
+                {"source_type": "career_resume_profile", "source_id": "resume_profile_alpha"},
+                {"source_type": "resume_version", "source_id": "resume_version:resume_version_alpha"},
+            ],
+        },
+        _context(),
+    )
+
+    assert note_payload["record"]["evidence_refs"] == [
+        "application_alpha",
+        "resume_profile_alpha",
+        "jd_alpha",
+        "fit_alpha",
+        "career_profile_default",
+        "resume_version_alpha",
+    ]
+    assert [item["source_type"] for item in note_payload["record"]["source_refs"]] == [
+        "career_application",
+        "jd_analysis",
+        "job_fit_report",
+        "resume_profile",
+        "resume_version",
+    ]
+    assert note_payload["record"]["source_refs"][-1]["source_id"] == "resume_version_alpha"
+
+
 def test_note_collection_tools_update_and_archive(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_notes")

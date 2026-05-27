@@ -1999,6 +1999,31 @@ def test_delegate_agents_jd_fit_task_is_repaired_to_complete_fit_report(tmp_path
     assert decision.event_payload["policy"] == "repair"
 
 
+def test_delegate_agents_moves_top_level_instruction_into_task(tmp_path: Path) -> None:
+    guard, _, repo = _guard(tmp_path)
+    context = _context()
+    _append_user_message(repo, context, "请委派 resume_agent 解析简历。")
+
+    decision = guard.inspect(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "instruction": "请读取 artifact_resume 并生成 ResumeProfile 和诊断报告。",
+                "tasks": [{"target_agent_id": "resume_agent", "artifact_refs": ["artifact_resume"]}],
+            },
+            tool_call_id="call_delegate_top_instruction",
+        ),
+        context,
+    )
+
+    assert decision.result is None
+    task = decision.tool_call.arguments["tasks"][0]
+    assert task["instruction"] == "请读取 artifact_resume 并生成 ResumeProfile 和诊断报告。"
+    assert decision.event_payload is not None
+    assert decision.event_payload["policy"] == "repair"
+    assert decision.event_payload["repair_actions"][0]["reason"] == "delegate_task_requires_non_empty_instruction"
+
+
 def test_delegate_agents_jd_fit_replaces_stale_profile_ids_in_instruction(tmp_path: Path) -> None:
     guard, store, repo = _guard(tmp_path)
     store.save_resume_profile(_resume_profile())
@@ -2178,6 +2203,56 @@ def test_delegate_agents_jd_fit_defers_dependent_application_task_to_main(tmp_pa
     assert decision.event_payload is not None
     assert any(
         item["reason"] == "jd_fit_delegation_defers_application_to_main"
+        for item in decision.event_payload["repair_actions"]
+    )
+
+
+def test_delegate_agents_jd_fit_normalizes_malformed_mixed_task_list(tmp_path: Path) -> None:
+    guard, store, repo = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+    store.save_career_profile(_career_profile())
+    context = _context()
+    _append_user_message(
+        repo,
+        context,
+        "请直接基于这个 JD artifact 分析我和岗位的匹配度，并保存岗位分析和匹配报告。",
+    )
+
+    decision = guard.inspect(
+        ToolCall(
+            name="delegate_agents",
+            arguments={
+                "tasks": [
+                    {
+                        "instruction": (
+                            "基于当前 JD artifact 完成岗位分析与岗位匹配，并创建/复用求职项目。"
+                            "先基于 artifact_jd_live_001 做 JDAnalysis，然后生成 JobFitReport。"
+                        ),
+                        "max_tool_rounds": 24,
+                    },
+                    {
+                        "target_agent_id": "job_agent",
+                        "instruction": "结合 artifact_jd_live_001 对岗位要求进行能力映射，并保存岗位匹配报告。",
+                        "artifact_refs": ["artifact_jd_live_001"],
+                        "max_tool_rounds": 24,
+                    },
+                ],
+                "max_concurrency": 3,
+            },
+            tool_call_id="call_delegate_mixed_malformed",
+        ),
+        context,
+    )
+
+    assert decision.result is None
+    tasks = decision.tool_call.arguments["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["target_agent_id"] == "job_agent"
+    assert tasks[0]["artifact_refs"] == ["artifact_jd_live_001"]
+    assert decision.event_payload is not None
+    assert decision.event_payload["policy"] == "repair"
+    assert any(
+        item["reason"] == "delegate_task_schema_normalized"
         for item in decision.event_payload["repair_actions"]
     )
 
@@ -2697,6 +2772,47 @@ def test_application_merge_drops_non_current_resume_version_ids(tmp_path: Path) 
     assert decision.event_payload["policy"] == "repair"
 
 
+def test_application_merge_for_interview_review_is_not_rewritten_as_resume_version_merge(tmp_path: Path) -> None:
+    guard, store, repo = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+    store.save_jd_analysis(_jd_analysis())
+    store.save_job_fit_report(_fit_report())
+    store.save_career_application(_application())
+    store.save_resume_version(_resume_version())
+    context = _context()
+    _append_user_message(
+        repo,
+        context,
+        (
+            "请把这次面试复盘保存成一条 Note，并更新当前求职项目的阶段、风险、下一步行动和项目备注。"
+            "不要创建学习计划或学习任务，不要重新生成匹配报告或简历版本。"
+        ),
+    )
+    arguments = {
+        "application_id": "application_real",
+        "updates": {
+            "stage": "interviewing",
+            "next_actions": ["补强 RAG 评估回答"],
+            "risks": ["召回评估指标回答不完整"],
+            "notes": "面试复盘已保存为 Note note_review。",
+        },
+        "evidence_refs": ["application_real", "note_review", "fit_real"],
+    }
+
+    decision = guard.inspect(
+        ToolCall(
+            name="career_application_merge",
+            arguments=arguments,
+            tool_call_id="call_interview_review_merge",
+        ),
+        context,
+    )
+
+    assert decision.result is None
+    assert decision.tool_call.arguments == arguments
+    assert decision.event_payload is None
+
+
 def test_career_profile_merge_removes_unsupported_update_fields(tmp_path: Path) -> None:
     guard, _, _ = _guard(tmp_path)
 
@@ -2949,7 +3065,7 @@ def _append_application_get_result(repo: JsonlSessionRepository, context: RunCon
     )
 
 
-def test_main_project_resume_version_blocks_search_until_application_get(tmp_path: Path) -> None:
+def test_main_project_resume_version_leaves_initial_order_to_runtime_plan(tmp_path: Path) -> None:
     guard, store, repo = _guard(tmp_path)
     store.save_resume_profile(_resume_profile())
     store.save_career_profile(_career_profile())
@@ -2977,19 +3093,10 @@ def test_main_project_resume_version_blocks_search_until_application_get(tmp_pat
     )
 
     assert read_decision.result is None
-    assert search_decision.result is not None
-    payload = json.loads(search_decision.result.content)
-    assert payload["policy"] == "block"
-    assert payload["reason"] == "main_project_resume_version_read_application_first"
-    assert payload["next_allowed_tools"] == ["career_application_get"]
-    assert payload["missing_outputs"] == [
-        "career_application_read",
-        "resume_version",
-        "career_application_resume_version_link",
-    ]
+    assert search_decision.result is None
 
 
-def test_main_project_resume_version_blocks_duplicate_application_get_after_read(tmp_path: Path) -> None:
+def test_main_project_resume_version_reuses_duplicate_application_get_after_read(tmp_path: Path) -> None:
     guard, store, repo = _guard(tmp_path)
     store.save_resume_profile(_resume_profile())
     store.save_career_profile(_career_profile())
@@ -3017,16 +3124,14 @@ def test_main_project_resume_version_blocks_duplicate_application_get_after_read
         context,
     )
 
-    for decision in (duplicate_get_decision, search_decision):
-        assert decision.result is not None
-        payload = json.loads(decision.result.content)
-        assert payload["policy"] == "block"
-        assert payload["reason"] == "main_project_resume_version_application_loaded_create_version"
-        assert payload["next_allowed_tools"] == ["career_resume_version_create"]
-        assert payload["missing_outputs"] == ["resume_version", "career_application_resume_version_link"]
+    assert duplicate_get_decision.result is not None
+    payload = json.loads(duplicate_get_decision.result.content)
+    assert payload["policy"] == "reuse"
+    assert payload["reason"] == "product_record_already_read_in_run"
+    assert search_decision.result is None
 
 
-def test_main_project_resume_version_blocks_duplicate_create_until_merge(tmp_path: Path) -> None:
+def test_main_resume_version_stage_blocks_duplicate_create_until_merge(tmp_path: Path) -> None:
     guard, store, repo = _guard(tmp_path)
     store.save_resume_profile(_resume_profile())
     store.save_career_profile(_career_profile())
@@ -3068,9 +3173,9 @@ def test_main_project_resume_version_blocks_duplicate_create_until_merge(tmp_pat
     assert decision.result is not None
     payload = json.loads(decision.result.content)
     assert payload["policy"] == "block"
-    assert payload["reason"] == "main_project_resume_version_ready_merge_application"
+    assert payload["reason"] == "main_resume_version_ready_merge_application"
     assert payload["next_allowed_tools"] == ["career_application_merge"]
-    assert payload["missing_outputs"] == ["career_application_resume_version_link"]
+    assert payload["missing_outputs"] == ["career_application_merge"]
 
 
 def test_main_resume_version_stage_allows_explicit_new_version(tmp_path: Path) -> None:

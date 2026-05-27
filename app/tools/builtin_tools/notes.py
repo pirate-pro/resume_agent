@@ -19,6 +19,7 @@ from app.notes.models import (
     NoteOrigin,
     NoteRecordStatus,
     NoteSourceRef,
+    NoteSourceType,
     NoteType,
 )
 from app.notes.store import NoteStore
@@ -58,6 +59,27 @@ _COLLECTION_UPDATE_FIELDS = {
     "name",
     "tags",
 }
+_SOURCE_TYPE_ALIASES = {
+    "application": NoteSourceType.CAREER_APPLICATION.value,
+    "career_application": NoteSourceType.CAREER_APPLICATION.value,
+    "resume_profile": NoteSourceType.RESUME_PROFILE.value,
+    "career_resume_profile": NoteSourceType.RESUME_PROFILE.value,
+    "career_profile": NoteSourceType.CAREER_PROFILE.value,
+    "jd": NoteSourceType.JD_ANALYSIS.value,
+    "jd_analysis": NoteSourceType.JD_ANALYSIS.value,
+    "career_jd_analysis": NoteSourceType.JD_ANALYSIS.value,
+    "fit": NoteSourceType.JOB_FIT_REPORT.value,
+    "job_fit": NoteSourceType.JOB_FIT_REPORT.value,
+    "job_fit_report": NoteSourceType.JOB_FIT_REPORT.value,
+    "career_job_fit_report": NoteSourceType.JOB_FIT_REPORT.value,
+    "resume_version": NoteSourceType.RESUME_VERSION.value,
+    "career_resume_version": NoteSourceType.RESUME_VERSION.value,
+    "artifact": NoteSourceType.ARTIFACT.value,
+    "chat_message": NoteSourceType.CHAT_MESSAGE.value,
+    "message": NoteSourceType.CHAT_MESSAGE.value,
+    "manual": NoteSourceType.MANUAL.value,
+}
+_TYPED_REF_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$")
 
 
 class NoteCreateTool:
@@ -94,7 +116,13 @@ class NoteCreateTool:
                     "source_refs": {
                         "type": "array",
                         "items": {"type": "object"},
-                        "description": "Structured source refs: source_type, source_id, source_session_id, title, quote.",
+                        "description": (
+                            "Structured source refs: source_type, source_id, source_session_id, title, quote. "
+                            "Supported source_type values are artifact, career_application, resume_profile, "
+                            "career_profile, jd_analysis, job_fit_report, resume_version, chat_message, manual. "
+                            "Common aliases such as application, jd, fit, career_jd_analysis, and "
+                            "career_resume_profile are canonicalized."
+                        ),
                     },
                     "related_application_id": {"type": "string"},
                     "summary": {"type": "string"},
@@ -591,7 +619,56 @@ def _optional_string_list(raw: Any, *, field_name: str) -> list[str]:
 
 
 def _optional_evidence_refs(raw: Any) -> list[str]:
-    return _optional_string_list(raw, field_name="evidence_refs")
+    if raw is None:
+        return []
+    if isinstance(raw, str) and raw.strip():
+        return [_normalize_evidence_ref_string(raw)]
+    if not isinstance(raw, list):
+        raise ToolExecutionError("'evidence_refs' must be a list of strings.")
+    output: list[str] = []
+    for item in raw:
+        if isinstance(item, str) and item.strip():
+            output.append(_normalize_evidence_ref_string(item))
+            continue
+        if isinstance(item, dict):
+            ref = _evidence_ref_from_object(item)
+            if ref is not None:
+                output.append(_normalize_evidence_ref_string(ref))
+                continue
+        raise ToolExecutionError("each 'evidence_refs' item must be a non-empty string or source ref object.")
+    return _append_unique_strings([], output)
+
+
+def _evidence_ref_from_object(raw: dict[str, Any]) -> str | None:
+    for key in (
+        "source_id",
+        "record_id",
+        "id",
+        "artifact_id",
+        "application_id",
+        "resume_profile_id",
+        "career_profile_id",
+        "jd_analysis_id",
+        "job_fit_report_id",
+        "resume_version_id",
+        "note_id",
+        "learning_task_id",
+    ):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _normalize_evidence_ref_string(raw: str) -> str:
+    value = raw.strip().strip("`")
+    match = _TYPED_REF_RE.fullmatch(value)
+    if match is None:
+        return value
+    source_type = _SOURCE_TYPE_ALIASES.get(match.group(1).strip().lower())
+    if source_type is None:
+        return value
+    return match.group(2).strip()
 
 
 def _source_refs(raw: Any) -> list[NoteSourceRef]:
@@ -605,16 +682,41 @@ def _source_refs(raw: Any) -> list[NoteSourceRef]:
     for item in raw:
         if not isinstance(item, dict):
             raise ToolExecutionError("each 'source_refs' item must be an object.")
+        source_type = _canonical_source_type(
+            _required_string(item.get("source_type"), field_name="source_type")
+        )
+        source_id = _normalize_source_ref_id(
+            _optional_string(item.get("source_id")),
+            source_type=source_type,
+        )
         refs.append(
             NoteSourceRef(
-                source_type=_required_string(item.get("source_type"), field_name="source_type"),
-                source_id=_optional_string(item.get("source_id")),
+                source_type=source_type,
+                source_id=source_id,
                 source_session_id=_optional_string(item.get("source_session_id")),
                 title=_optional_string(item.get("title")) or "",
                 quote=_optional_string(item.get("quote")) or "",
             )
         )
     return refs
+
+
+def _canonical_source_type(raw: str) -> str:
+    normalized = raw.strip().lower()
+    return _SOURCE_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _normalize_source_ref_id(raw: str | None, *, source_type: str) -> str | None:
+    if raw is None:
+        return None
+    value = raw.strip().strip("`")
+    match = _TYPED_REF_RE.fullmatch(value)
+    if match is None:
+        return value
+    typed_source_type = _canonical_source_type(match.group(1))
+    if typed_source_type != source_type:
+        return value
+    return match.group(2).strip()
 
 
 def _note_update_payload(raw: Any) -> dict[str, Any]:

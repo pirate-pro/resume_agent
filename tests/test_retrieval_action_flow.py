@@ -44,6 +44,10 @@ from tests.test_retrieval_service import RetrievalStores, _seed_stores
 __all__ = []
 
 
+def _is_final_answer_recovery_call(system_prompt: str, tools: list[dict[str, Any]]) -> bool:
+    return not tools and "最终答复生成器" in system_prompt
+
+
 @dataclass(frozen=True, slots=True)
 class ProductCounts:
     applications: int
@@ -103,15 +107,20 @@ class LearningTaskFromRetrievalModel:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
+        if _is_final_answer_recovery_call(system_prompt, tools):
+            return ModelResponse(content="已加入今天的 RAG 学习任务。", tool_calls=[])
         assert "如果用户明确要求“加入计划 / 创建任务 / 监督我完成”，才调用 learning 工具" in system_prompt
         assert "不要调用 `career_application_merge`" in system_prompt
-        assert "learning_task_create" in _tool_names(tools)
+        tool_names = _tool_names(tools)
 
         if not _assistant_called(messages, "retrieval_search"):
+            assert tool_names == {"retrieval_search"}
             return _search_application_call("星河智能 RAG 今天学习任务")
         if not _assistant_called(messages, "retrieval_context_pack"):
+            assert tool_names == {"retrieval_context_pack"}
             return _context_pack_call(_latest_search_hit_id(messages, source_type="career_application"))
         if not _assistant_called(messages, "learning_task_create"):
+            assert "learning_task_create" in tool_names
             context_pack = _latest_context_pack(messages)
             assert {"learning_plan", "learning_task", "weakness_tracker", "external_resource"} & _source_types(
                 context_pack
@@ -168,14 +177,19 @@ class SavePreparationNoteModel:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
+        if _is_final_answer_recovery_call(system_prompt, tools):
+            return ModelResponse(content="已保存为笔记。", tool_calls=[])
         assert "保存准备内容、答案草稿、复盘或面试题时，先召回依据" in system_prompt
-        assert "note_create" in _tool_names(tools)
+        tool_names = _tool_names(tools)
 
         if not _assistant_called(messages, "retrieval_search"):
+            assert tool_names == {"retrieval_search"}
             return _search_application_call("星河智能二面准备内容保存为笔记")
         if not _assistant_called(messages, "retrieval_context_pack"):
+            assert tool_names == {"retrieval_context_pack"}
             return _context_pack_call(_latest_search_hit_id(messages, source_type="career_application"))
         if not _assistant_called(messages, "note_create"):
+            assert "note_create" in tool_names
             context_pack = _latest_context_pack(messages)
             assert {"career_application", "job_fit_report", "note"} <= _source_types(context_pack)
             return ModelResponse(
@@ -302,21 +316,22 @@ class InterviewReviewModel:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
+        if _is_final_answer_recovery_call(system_prompt, tools):
+            return ModelResponse(content="已记录一面复盘并更新求职项目。", tool_calls=[])
         assert "投递或面试进展" in system_prompt
         assert "先用 `note_create` 或 `note_append` 保存面试复盘" in system_prompt
         assert "不要因为面试复盘暴露短板就自动创建 LearningTask" in system_prompt
         tool_names = _tool_names(tools)
-        assert {"retrieval_search", "retrieval_context_pack", "note_create", "career_application_merge"} <= tool_names
         assert "delegate_agents" not in tool_names
 
         if not _assistant_called(messages, "retrieval_search"):
+            assert tool_names == {"retrieval_search"}
             return _search_application_call("星河智能 一面 复盘 RAG Celery")
         if not _assistant_called(messages, "retrieval_context_pack"):
+            assert tool_names == {"retrieval_context_pack"}
             return _context_pack_call(_latest_search_hit_id(messages, source_type="career_application"))
-        if not _assistant_called(messages, "note_create") or not _assistant_called(
-            messages,
-            "career_application_merge",
-        ):
+        if not _assistant_called(messages, "note_create"):
+            assert "note_create" in tool_names
             context_pack = _latest_context_pack(messages)
             assert {"career_application", "job_fit_report", "note", "learning_task"} <= _source_types(context_pack)
             return ModelResponse(
@@ -359,6 +374,13 @@ class InterviewReviewModel:
                             "summary": "星河智能一面复盘：RAG 评估链路和 Celery 场景表达需要补强。",
                         },
                     ),
+                ],
+            )
+        if not _assistant_called(messages, "career_application_merge"):
+            assert tool_names == {"career_application_merge"}
+            return ModelResponse(
+                content="",
+                tool_calls=[
                     ToolCall(
                         name="career_application_merge",
                         arguments={
@@ -452,19 +474,23 @@ class ReviewAdviceToLearningTaskModel:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
     ) -> ModelResponse:
+        if _is_final_answer_recovery_call(system_prompt, tools):
+            return ModelResponse(content="已把复盘建议转成学习任务。", tool_calls=[])
         assert "用户明确要求把建议加入计划、创建任务或监督完成时，才调用 LearningService" in system_prompt
         assert "系统推荐添加学习任务时，必须先召回或复用本轮已经召回的上下文" in system_prompt
         assert "来源：面试复盘建议" in system_prompt
         assert "不要顺手调用 `career_application_merge` 更新求职项目" in system_prompt
         tool_names = _tool_names(tools)
-        assert "learning_task_create" in tool_names
-        assert "career_application_merge" in tool_names
+        assert "career_application_merge" not in tool_names
 
         if not _assistant_called(messages, "retrieval_search"):
+            assert tool_names == {"retrieval_search"}
             return _search_application_call("星河智能 一面复盘 RAG Celery 学习任务")
         if not _assistant_called(messages, "retrieval_context_pack"):
+            assert tool_names == {"retrieval_context_pack"}
             return _context_pack_call(_latest_search_hit_id(messages, source_type="career_application"))
         if not _assistant_called(messages, "learning_task_create"):
+            assert "learning_task_create" in tool_names
             context_pack = _latest_context_pack(messages)
             assert {"career_application", "job_fit_report", "note", "learning_plan", "weakness_tracker"} <= _source_types(
                 context_pack

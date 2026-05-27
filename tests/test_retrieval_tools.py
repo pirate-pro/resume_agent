@@ -140,8 +140,10 @@ def test_retrieval_tools_accept_common_career_source_aliases(tmp_path: Path) -> 
             "source_types": [
                 "resume",
                 "career_job_fit_report",
+                "career_match_report",
                 "job_fit_reports",
                 "career_jd_analysis",
+                "career_project",
                 "jd",
                 "learning_weakness",
             ],
@@ -157,6 +159,7 @@ def test_retrieval_tools_accept_common_career_source_aliases(tmp_path: Path) -> 
     assert result.success is True
     assert "job_fit_report" in source_types
     assert "jd_analysis" in source_types
+    assert "career_application" in source_types
     assert "weakness_tracker" in source_types
 
 

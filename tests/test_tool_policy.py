@@ -115,6 +115,41 @@ def test_text_artifact_idempotency_scopes_job_fit_report_by_jd_source() -> None:
     )
 
 
+def test_note_create_idempotency_canonicalizes_reference_aliases() -> None:
+    first = ToolCall(
+        name="note_create",
+        arguments={
+            "title": "面试准备",
+            "body_markdown": "复习 RAG chunk 策略。",
+            "related_application_id": "application_alpha",
+            "evidence_refs": [
+                "application:application_alpha",
+                "job_fit_report:fit_alpha",
+            ],
+            "source_refs": [
+                {"source_type": "jd", "source_id": "jd_alpha"},
+            ],
+        },
+    )
+    second = ToolCall(
+        name="note_create",
+        arguments={
+            "title": "面试准备",
+            "body_markdown": "复习 RAG chunk 策略。",
+            "related_application_id": "application_alpha",
+            "evidence_refs": [
+                "application_alpha",
+                "fit_alpha",
+            ],
+            "source_refs": [
+                {"source_type": "jd_analysis", "source_id": "jd_alpha"},
+            ],
+        },
+    )
+
+    assert tool_idempotency_key(first, _context()) == tool_idempotency_key(second, _context())
+
+
 def test_policy_marks_read_only_cacheable() -> None:
     call = ToolCall(name="career_application_get", arguments={"application_id": "application_a"})
     policy = resolve_tool_execution_policy(call, _context())

@@ -10,12 +10,28 @@ from typing import Any
 
 from app.core.errors import ValidationError
 from app.domain.reference_ids import is_reserved_reference_value
+from app.runtime.workflow.action_plan import (
+    action_contract_for_phase,
+    action_contract_plan_payload,
+    pending_action_plan_after_tool_result,
+)
+from app.runtime.workflow.contracts import ActionContract
 from app.runtime.workflow.phase import WorkflowPhaseSnapshot
 from app.runtime.workflow.tool_hints import build_required_tool_call_hint
 
 if TYPE_CHECKING:
     from app.runtime.context.models import CareerFlowState, CurrentWorkflowState
 
+_FINAL_WHEN_NO_MISSING_PHASES = {
+    "resume_diagnosis",
+    "jd_fit",
+    "resume_version",
+    "note_write",
+    "retrieval_read_only",
+    "rag_note_write",
+    "rag_learning_task_create",
+    "interview_review_update",
+}
 __all__ = [
     "RuntimeToolPlan",
     "build_runtime_tool_plan",
@@ -108,15 +124,18 @@ def build_runtime_tool_plan(
     known_refs = _known_refs(workflow_state=workflow_state, career_flow_state=career_flow_state)
     missing_outputs = [item.name for item in workflow_phase.missing_outputs]
     final_answer_ready = workflow_phase.final_answer_ready or (
-        phase in {"resume_diagnosis", "jd_fit", "resume_version"} and not missing_outputs
+        phase in _FINAL_WHEN_NO_MISSING_PHASES and not missing_outputs
     )
     if final_answer_ready:
+        discouraged_tools = _final_discouraged_tools()
+        if phase == "retrieval_read_only":
+            discouraged_tools = _dedupe_strings([*discouraged_tools, *_retrieval_read_only_discouraged_tools()])
         return RuntimeToolPlan(
             phase=phase,
             known_refs=known_refs,
             missing_outputs=missing_outputs,
             next_allowed_tools=[],
-            discouraged_tools=_final_discouraged_tools(),
+            discouraged_tools=discouraged_tools,
             schema_groups=[],
             final_answer_ready=True,
             next_action="关键产物已完成；停止工具调用，直接面向用户总结结果和可预览资产。",
@@ -136,6 +155,18 @@ def build_runtime_tool_plan(
         return _application_action_plan(
             known_refs=known_refs,
             career_flow_state=career_flow_state,
+        )
+    if phase == "retrieval_read_only":
+        return _retrieval_read_only_plan(
+            known_refs=known_refs,
+            missing_outputs=missing_outputs,
+        )
+    action_contract = action_contract_for_phase(phase)
+    if action_contract is not None:
+        return _action_contract_runtime_plan(
+            contract=action_contract,
+            known_refs=known_refs,
+            missing_outputs=missing_outputs,
         )
 
     return RuntimeToolPlan(
@@ -364,6 +395,14 @@ def pending_runtime_plan_from_successful_tool_result(
     if not isinstance(payload, dict):
         return None
 
+    action_plan = _pending_action_plan_after_tool_result(
+        tool_name,
+        payload,
+        previous_pending_plan=previous_pending_plan,
+    )
+    if action_plan is not None:
+        return action_plan
+
     if tool_name == "delegate_agents":
         return _pending_plan_after_delegate_agents(payload, previous_pending_plan=previous_pending_plan)
     runtime_applied_plan = _pending_plan_from_runtime_applied_payload(payload)
@@ -381,6 +420,10 @@ def pending_runtime_plan_from_successful_tool_result(
         return _pending_plan_after_application_get(payload, previous_pending_plan=previous_pending_plan)
     if tool_name == "career_application_merge":
         return _pending_plan_after_application_merge(payload, previous_pending_plan=previous_pending_plan)
+    if tool_name == "retrieval_search":
+        return _pending_plan_after_retrieval_search(previous_pending_plan=previous_pending_plan)
+    if tool_name == "retrieval_context_pack":
+        return _pending_plan_after_retrieval_context_pack(previous_pending_plan=previous_pending_plan)
     if tool_name != "career_resume_version_create":
         return None
     if payload.get("record_type") != "resume_version":
@@ -488,6 +531,50 @@ def _pending_plan_after_application_merge(
             "career_resume_version_list",
         ],
     }
+
+
+def _pending_plan_after_retrieval_search(
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if previous_pending_plan is None or previous_pending_plan.get("phase") != "retrieval_read_only":
+        return None
+    known_refs = _pending_known_refs(previous_pending_plan)
+    missing_outputs = [
+        item
+        for item in _string_items(previous_pending_plan.get("missing_outputs"))
+        if item != "retrieval_search"
+    ]
+    if "retrieval_context_pack" not in missing_outputs:
+        return _retrieval_read_only_final_plan(known_refs=known_refs)
+    return {
+        "phase": "retrieval_read_only",
+        "next_action": "retrieval_search 已完成；下一步只调用 retrieval_context_pack 组装上下文，随后直接回答。",
+        "next_allowed_tools": ["retrieval_context_pack"],
+        "required_tools": ["retrieval_context_pack"],
+        "known_refs": known_refs,
+        "missing_outputs": missing_outputs,
+        "discouraged_tools": _dedupe_strings(
+            [
+                *_retrieval_read_only_discouraged_tools(),
+                "retrieval_search",
+                "career_application_get",
+                "career_resume_profile_get",
+                "career_jd_analysis_get",
+                "career_job_fit_report_get",
+                "note_get",
+            ]
+        ),
+    }
+
+
+def _pending_plan_after_retrieval_context_pack(
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if previous_pending_plan is None or previous_pending_plan.get("phase") != "retrieval_read_only":
+        return None
+    return _retrieval_read_only_final_plan(known_refs=_pending_known_refs(previous_pending_plan))
 
 
 def _pending_plan_after_resume_profile_save(
@@ -947,7 +1034,11 @@ def _pending_plan_after_delegate_agents(
         and "job_fit_report_id" in known_refs
         and "application_id" not in known_refs
     ):
-        return _job_fit_application_create_plan(known_refs=known_refs)
+        if previous_pending_plan is None or "career_application" in _string_items(
+            previous_pending_plan.get("missing_outputs")
+        ):
+            return _job_fit_application_create_plan(known_refs=known_refs)
+        return _job_fit_final_plan(known_refs=known_refs)
 
     if (
         phase == "resume_diagnosis"
@@ -1384,6 +1475,137 @@ def _application_action_plan(
     )
 
 
+def _retrieval_read_only_plan(*, known_refs: dict[str, str], missing_outputs: list[str]) -> RuntimeToolPlan:
+    if "retrieval_search" in missing_outputs:
+        return RuntimeToolPlan(
+            phase="retrieval_read_only",
+            known_refs=known_refs,
+            missing_outputs=missing_outputs,
+            next_allowed_tools=["retrieval_search"],
+            required_tools=["retrieval_search"],
+            discouraged_tools=_retrieval_read_only_discouraged_tools(),
+            schema_groups=["retrieval"],
+            next_action="本轮是只读召回；先调用 retrieval_search，不要执行任何写入或 career 产品更新工具。",
+        )
+    if "retrieval_context_pack" in missing_outputs:
+        return RuntimeToolPlan(
+            phase="retrieval_read_only",
+            known_refs=known_refs,
+            missing_outputs=missing_outputs,
+            next_allowed_tools=["retrieval_context_pack"],
+            required_tools=["retrieval_context_pack"],
+            discouraged_tools=_retrieval_read_only_discouraged_tools()
+            + [
+                "retrieval_search",
+                "career_application_get",
+                "career_resume_profile_get",
+                "career_jd_analysis_get",
+                "career_job_fit_report_get",
+                "note_get",
+            ],
+            schema_groups=["retrieval"],
+            next_action="retrieval_search 已完成；下一步只调用 retrieval_context_pack 组装上下文，随后直接回答。",
+        )
+    return RuntimeToolPlan(
+        phase="retrieval_read_only",
+        known_refs=known_refs,
+        missing_outputs=missing_outputs,
+        next_allowed_tools=[],
+        discouraged_tools=_final_discouraged_tools() + _retrieval_read_only_discouraged_tools(),
+        final_answer_ready=True,
+        next_action="只读召回上下文已完成；停止工具调用并直接回答用户。",
+    )
+
+
+def _retrieval_read_only_final_plan(*, known_refs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "phase": "retrieval_read_only",
+        "next_action": "只读召回上下文已完成；停止工具调用并直接回答用户。",
+        "next_allowed_tools": [],
+        "required_tools": [],
+        "known_refs": known_refs,
+        "missing_outputs": [],
+        "final_answer_ready": True,
+        "discouraged_tools": _dedupe_strings([*_final_discouraged_tools(), *_retrieval_read_only_discouraged_tools()]),
+    }
+
+
+def _action_contract_runtime_plan(
+    *,
+    contract: ActionContract,
+    known_refs: dict[str, Any],
+    missing_outputs: list[str],
+) -> RuntimeToolPlan:
+    payload = action_contract_plan_payload(
+        contract=contract,
+        known_refs=known_refs,
+        missing_outputs=missing_outputs,
+    )
+    payload_phase = payload.get("phase")
+    payload_known_refs = payload.get("known_refs")
+    payload_missing_outputs = payload.get("missing_outputs")
+    payload_next_allowed_tools = payload.get("next_allowed_tools")
+    payload_required_tools = payload.get("required_tools")
+    payload_discouraged_tools = payload.get("discouraged_tools")
+    payload_schema_groups = payload.get("schema_groups")
+    normalized_known_refs: dict[str, str] = {}
+    if isinstance(payload_known_refs, dict):
+        normalized_known_refs = {
+            str(key): str(value)
+            for key, value in payload_known_refs.items()
+            if str(key).strip() and value is not None and str(value).strip()
+        }
+    normalized_missing_outputs = _string_items(payload_missing_outputs)
+    normalized_next_allowed_tools = _string_items(payload_next_allowed_tools)
+    normalized_required_tools = _string_items(payload_required_tools)
+    normalized_discouraged_tools = _string_items(payload_discouraged_tools)
+    normalized_schema_groups = _string_items(payload_schema_groups)
+    return RuntimeToolPlan(
+        phase=payload_phase if isinstance(payload_phase, str) else None,
+        known_refs=normalized_known_refs,
+        missing_outputs=normalized_missing_outputs,
+        next_allowed_tools=normalized_next_allowed_tools,
+        required_tools=normalized_required_tools,
+        discouraged_tools=normalized_discouraged_tools,
+        schema_groups=normalized_schema_groups,
+        final_answer_ready=payload.get("final_answer_ready") is True,
+        next_action=payload.get("next_action") if isinstance(payload.get("next_action"), str) else None,
+    )
+
+
+def _pending_action_plan_after_tool_result(
+    tool_name: str,
+    payload: dict[str, Any],
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    return pending_action_plan_after_tool_result(
+        tool_name,
+        payload_known_refs=_runtime_known_refs_from_payload(payload),
+        record_id=payload.get("record_id"),
+        previous_pending_plan=previous_pending_plan,
+        record_id_ref_key=_TOOL_RECORD_ID_REF_KEYS.get(tool_name),
+    )
+
+
+def _retrieval_read_only_discouraged_tools() -> list[str]:
+    return [
+        "memory_write",
+        "note_create",
+        "note_append",
+        "learning_task_create",
+        "career_application_create",
+        "career_application_merge",
+        "career_resume_version_create",
+        "career_resume_profile_save",
+        "career_profile_merge",
+        "career_jd_analysis_save",
+        "career_job_fit_report_save",
+        "session_create_text_artifact",
+        "delegate_agents",
+    ]
+
+
 def _known_refs(*, workflow_state: CurrentWorkflowState, career_flow_state: CareerFlowState) -> dict[str, str]:
     output = dict(workflow_state.refs)
     output.update(career_flow_state.refs)
@@ -1477,6 +1699,10 @@ def _apply_product_ref(output: dict[str, Any], ref: str) -> None:
         output.setdefault("application_id", ref)
     elif ref.startswith("resume_version_"):
         output.setdefault("resume_version_id", ref)
+    elif ref.startswith("note_"):
+        output.setdefault("note_id", ref)
+    elif ref.startswith("learning_task_"):
+        output.setdefault("learning_task_id", ref)
 
 
 def _apply_artifact_ref(output: dict[str, Any], ref: str) -> None:
@@ -1510,6 +1736,14 @@ def _runtime_plan_required_tools(payload: dict[str, Any]) -> list[str]:
         return []
     missing_outputs = {item.strip() for item in raw_missing_outputs if isinstance(item, str) and item.strip()}
     required: list[str] = []
+    if "retrieval_search" in missing_outputs:
+        required.append("retrieval_search")
+    if "retrieval_context_pack" in missing_outputs:
+        required.append("retrieval_context_pack")
+    if "note" in missing_outputs:
+        required.extend(["note_create", "note_append"])
+    if "learning_task" in missing_outputs:
+        required.append("learning_task_create")
     if "career_profile" in missing_outputs:
         required.append("career_profile_merge")
     if "career_application_read" in missing_outputs:
@@ -1611,6 +1845,8 @@ _REF_KEY_ORDER = [
     "diagnosis_artifact_id",
     "resume_version_id",
     "resume_version_artifact_id",
+    "note_id",
+    "learning_task_id",
 ]
 
 _TOOL_RECORD_ID_REF_KEYS = {
@@ -1627,6 +1863,9 @@ _TOOL_RECORD_ID_REF_KEYS = {
     "career_application_merge": "application_id",
     "career_resume_version_get": "resume_version_id",
     "career_resume_version_create": "resume_version_id",
+    "note_create": "note_id",
+    "note_append": "note_id",
+    "learning_task_create": "learning_task_id",
 }
 
 _CONTROLLED_REF_RE = re.compile(
@@ -1640,6 +1879,8 @@ _CONTROLLED_REF_RE = re.compile(
     r"|fit_[A-Za-z0-9_-]+"
     r"|application_[A-Za-z0-9_-]+"
     r"|resume_version_[A-Za-z0-9_-]+"
+    r"|note_[A-Za-z0-9_-]+"
+    r"|learning_task_[A-Za-z0-9_-]+"
     r"|artifact_[A-Za-z0-9_-]+"
     r")(?![A-Za-z0-9_])"
 )
@@ -1649,6 +1890,8 @@ _CONTROLLED_REF_FIELD_NAMES = {
     "career_profile_id",
     "jd_analysis_id",
     "job_fit_report_id",
+    "learning_task_id",
+    "note_id",
     "resume_profile_id",
     "resume_version_id",
 }

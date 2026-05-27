@@ -11,6 +11,28 @@ from app.domain.models import RunContext, ToolCall
 
 __all__ = ["tool_idempotency_key"]
 
+_NOTE_SOURCE_TYPE_ALIASES = {
+    "application": "career_application",
+    "career_application": "career_application",
+    "resume_profile": "resume_profile",
+    "career_resume_profile": "resume_profile",
+    "career_profile": "career_profile",
+    "jd": "jd_analysis",
+    "jd_analysis": "jd_analysis",
+    "career_jd_analysis": "jd_analysis",
+    "fit": "job_fit_report",
+    "job_fit": "job_fit_report",
+    "job_fit_report": "job_fit_report",
+    "career_job_fit_report": "job_fit_report",
+    "resume_version": "resume_version",
+    "career_resume_version": "resume_version",
+    "artifact": "artifact",
+    "chat_message": "chat_message",
+    "message": "chat_message",
+    "manual": "manual",
+}
+_NOTE_TYPED_REF_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$")
+
 
 def tool_idempotency_key(
     tool_call: ToolCall,
@@ -80,6 +102,37 @@ def tool_idempotency_key(
                 )
         stable_update_hash = _stable_hash(updates if isinstance(updates, dict) else {})
         return f"career_application_merge:{context.session_id}:{application_id}:updates:{stable_update_hash}"
+    if tool_call.name == "note_create":
+        note_id = _string_or_none(args.get("note_id"))
+        if note_id is not None:
+            return f"note_create:{context.session_id}:{note_id}"
+        stable_note_hash = _stable_hash(
+            {
+                "title": _string_or_none(args.get("title")),
+                "body_markdown": _string_or_none(args.get("body_markdown")),
+                "related_application_id": _string_or_none(args.get("related_application_id")),
+                "evidence_refs": _note_reference_list(args),
+            }
+        )
+        return f"note_create:{context.session_id}:{context.run_id}:{stable_note_hash}"
+    if tool_call.name == "note_append":
+        note_id = _string_or_none(args.get("note_id"))
+        if note_id is None:
+            return None
+        stable_append_hash = _stable_hash({"body_markdown": _string_or_none(args.get("body_markdown"))})
+        return f"note_append:{context.session_id}:{note_id}:{stable_append_hash}"
+    if tool_call.name == "learning_task_create":
+        task_id = _string_or_none(args.get("learning_task_id"))
+        if task_id is not None:
+            return f"learning_task_create:{context.session_id}:{task_id}"
+        stable_task_hash = _stable_hash(
+            {
+                "title": _string_or_none(args.get("title")),
+                "learning_plan_id": _string_or_none(args.get("learning_plan_id")),
+                "evidence_refs": _string_list(args.get("evidence_refs")),
+            }
+        )
+        return f"learning_task_create:{context.session_id}:{context.run_id}:{stable_task_hash}"
     return None
 
 
@@ -237,3 +290,78 @@ def _string_or_none(value: Any) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _note_reference_list(args: dict[str, Any]) -> list[str]:
+    refs: list[str] = []
+    refs.extend(_note_evidence_refs(args.get("evidence_refs")))
+    refs.extend(_note_source_ref_ids(args.get("source_refs")))
+    return sorted(dict.fromkeys(refs))
+
+
+def _note_evidence_refs(value: Any) -> list[str]:
+    if isinstance(value, str) and value.strip():
+        return [_normalize_note_ref(value)]
+    if not isinstance(value, list):
+        return []
+    refs: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            refs.append(_normalize_note_ref(item))
+            continue
+        if isinstance(item, dict):
+            ref = _note_ref_from_object(item)
+            if ref is not None:
+                refs.append(_normalize_note_ref(ref))
+    return refs
+
+
+def _note_source_ref_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    refs: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        source_id = _string_or_none(item.get("source_id"))
+        if source_id is not None:
+            refs.append(_normalize_note_ref(source_id))
+    return refs
+
+
+def _note_ref_from_object(item: dict[str, Any]) -> str | None:
+    for key in (
+        "source_id",
+        "record_id",
+        "id",
+        "artifact_id",
+        "application_id",
+        "resume_profile_id",
+        "career_profile_id",
+        "jd_analysis_id",
+        "job_fit_report_id",
+        "resume_version_id",
+        "note_id",
+        "learning_task_id",
+    ):
+        value = _string_or_none(item.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_note_ref(raw: str) -> str:
+    value = raw.strip().strip("`")
+    match = _NOTE_TYPED_REF_RE.fullmatch(value)
+    if match is None:
+        return value
+    source_type = _NOTE_SOURCE_TYPE_ALIASES.get(match.group(1).strip().lower())
+    if source_type is None:
+        return value
+    return match.group(2).strip()

@@ -14,6 +14,17 @@ from app.career.store import CareerProductStore
 from app.core.errors import SessionNotFoundError, StorageError, ValidationError
 from app.domain.models import RunContext, ToolCall, ToolExecutionResult
 from app.domain.protocols import SessionRepository
+from app.runtime.tool_capabilities import READ_ONLY_TURN_WRITE_BLOCK_TOOL_NAMES
+from app.runtime.workflow.intent_boundary import build_turn_intent_boundary
+from app.runtime.workflow.delegation import (
+    delegate_jd_fit_source_key,
+    delegate_semantic_signature,
+    delegate_signature,
+    is_dependent_application_delegate_task,
+    is_jd_fit_delegate_task,
+    mentions_application_record,
+    normalize_delegate_agents_arguments,
+)
 from app.runtime.workflow.tool_hints import build_required_tool_call_hint
 
 __all__ = ["WorkflowGuardDecision", "WorkflowRuntimeGuard"]
@@ -75,15 +86,6 @@ _MAIN_RESUME_VERSION_PARTIAL_BLOCK_TOOLS = {
     "career_resume_version_get",
     "career_resume_version_create",
 }
-_MAIN_PROJECT_RESUME_VERSION_READ_BLOCK_TOOLS = _MAIN_STAGE_FINAL_BLOCK_TOOLS - {
-    "career_application_get",
-}
-_MAIN_PROJECT_RESUME_VERSION_CREATE_BLOCK_TOOLS = _MAIN_STAGE_FINAL_BLOCK_TOOLS - {
-    "career_resume_version_create",
-}
-_MAIN_PROJECT_RESUME_VERSION_MERGE_BLOCK_TOOLS = _MAIN_STAGE_FINAL_BLOCK_TOOLS - {
-    "career_application_merge",
-}
 _MAIN_RESUME_DIAGNOSIS_PARTIAL_BLOCK_TOOLS = {
     "delegate_agents",
     "agent_task_status",
@@ -100,6 +102,7 @@ _MAIN_RESUME_DIAGNOSIS_FINAL_BLOCK_TOOLS = _MAIN_STAGE_FINAL_BLOCK_TOOLS - {
     "career_application_get",
     "career_resume_version_get",
 }
+_READ_ONLY_TURN_BLOCK_TOOLS = set(READ_ONLY_TURN_WRITE_BLOCK_TOOL_NAMES)
 _PRODUCT_GET_ID_FIELDS = {
     "career_resume_profile_get": ("resume_profile", "resume_profile_id"),
     "career_profile_get": ("career_profile", "career_profile_id"),
@@ -189,6 +192,9 @@ class WorkflowRuntimeGuard:
             raise ValidationError("tool_call must be ToolCall.")
         if not isinstance(context, RunContext):
             raise ValidationError("context must be RunContext.")
+        boundary_decision = self._inspect_turn_intent_boundary(tool_call, context)
+        if boundary_decision is not None:
+            return boundary_decision
         main_stage_decision = self._inspect_main_stage_gate(tool_call, context)
         if main_stage_decision is not None:
             return main_stage_decision
@@ -220,6 +226,68 @@ class WorkflowRuntimeGuard:
             return handler(tool_call, context)
         except (StorageError, ValidationError):
             return WorkflowGuardDecision(tool_call=tool_call)
+
+    def _inspect_turn_intent_boundary(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision | None:
+        user_message = self._latest_user_message(context)
+        if not user_message:
+            return None
+        boundary = build_turn_intent_boundary(user_message)
+        if boundary.read_only and tool_call.name in _READ_ONLY_TURN_BLOCK_TOOLS:
+            return _block_decision(
+                tool_call,
+                tool_name=tool_call.name,
+                reason="turn_intent_read_only_blocks_write_tool",
+                next_action="本轮用户明确要求只读；只允许检索和读取上下文，不要执行写入、创建或更新工具。",
+                missing_outputs=[],
+                lock_key=f"turn_read_only:{context.run_id}:{tool_call.name}",
+                extra_payload={"blocked_tools": [tool_call.name]},
+                extra_event_payload={"blocked_tools": [tool_call.name]},
+            )
+        if boundary.forbid_career_application_create and tool_call.name == "career_application_create":
+            return _block_decision(
+                tool_call,
+                tool_name=tool_call.name,
+                reason="turn_intent_blocks_career_application_create",
+                next_action="本轮用户明确禁止创建 CareerApplication；如果 JDAnalysis 和 JobFitReport 已完成，应直接总结这些结果。",
+                missing_outputs=[],
+                lock_key=f"turn_no_application_create:{context.run_id}",
+                extra_payload={"blocked_tools": [tool_call.name]},
+                extra_event_payload={"blocked_tools": [tool_call.name]},
+            )
+        if boundary.forbid_career_application_merge and tool_call.name == "career_application_merge":
+            return _block_decision(
+                tool_call,
+                tool_name=tool_call.name,
+                reason="turn_intent_blocks_career_application_merge",
+                next_action="本轮用户明确禁止更新 CareerApplication；不要写回求职项目，直接基于已读取上下文答复。",
+                missing_outputs=[],
+                lock_key=f"turn_no_application_merge:{context.run_id}",
+                extra_payload={"blocked_tools": [tool_call.name]},
+                extra_event_payload={"blocked_tools": [tool_call.name]},
+            )
+        if boundary.forbid_resume_version_create and tool_call.name == "career_resume_version_create":
+            return _block_decision(
+                tool_call,
+                tool_name=tool_call.name,
+                reason="turn_intent_blocks_resume_version_create",
+                next_action="本轮用户明确禁止生成 ResumeVersion；不要创建定制简历，直接总结当前已完成产物。",
+                missing_outputs=[],
+                lock_key=f"turn_no_resume_version:{context.run_id}",
+                extra_payload={"blocked_tools": [tool_call.name]},
+                extra_event_payload={"blocked_tools": [tool_call.name]},
+            )
+        if boundary.forbid_jd_fit and tool_call.name in {"career_jd_analysis_save", "career_job_fit_report_save"}:
+            return _block_decision(
+                tool_call,
+                tool_name=tool_call.name,
+                reason="turn_intent_blocks_jd_fit_write",
+                next_action="本轮用户明确禁止 JD 分析或匹配报告；不要创建 JDAnalysis 或 JobFitReport。",
+                missing_outputs=[],
+                lock_key=f"turn_no_jd_fit:{context.run_id}:{tool_call.name}",
+                extra_payload={"blocked_tools": [tool_call.name]},
+                extra_event_payload={"blocked_tools": [tool_call.name]},
+            )
+        return None
 
     def _inspect_memory_write(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
         args = _copy_arguments(tool_call.arguments)
@@ -374,77 +442,29 @@ class WorkflowRuntimeGuard:
         )
 
     def _main_stage_gate_for_message(self, context: RunContext, *, user_message: str) -> dict[str, Any] | None:
+        boundary = build_turn_intent_boundary(user_message)
+        if boundary.read_only:
+            return None
         if _is_application_action_intent(user_message):
             return None
         if _is_resume_version_intent(user_message):
-            project_gate = self._project_resume_version_stage_gate(context, user_message=user_message)
-            if project_gate is not None:
-                return project_gate
             if _allows_new_resume_version(user_message):
                 return None
             return self._resume_version_stage_gate(context)
         if _is_jd_fit_only_intent(user_message):
             if _allows_reanalysis(user_message):
                 return None
-            return self._jd_fit_stage_gate(context)
+            return self._jd_fit_stage_gate(
+                context,
+                require_application=not boundary.forbid_career_application_create,
+            )
         if _is_resume_diagnosis_intent(user_message):
             if _allows_reanalysis(user_message):
                 return None
             return self._resume_diagnosis_stage_gate(context)
         return None
 
-    def _project_resume_version_stage_gate(self, context: RunContext, *, user_message: str) -> dict[str, Any] | None:
-        if not _requires_application_read_intent(user_message):
-            return None
-        refs = self._current_project_resume_version_refs(context)
-        if self._current_run_has_successful_tool(context, "career_application_merge"):
-            return {
-                "stage": "resume_version",
-                "status": "completed",
-                "reason": "main_project_resume_version_complete_final_answer",
-                "next_action": "CareerApplication 已读取，ResumeVersion 已创建并已合并；不要继续搜索、读取或重复更新，直接给用户最终答复。",
-                "missing_outputs": [],
-                "completed_refs": refs,
-                "blocked_tools": _MAIN_STAGE_FINAL_BLOCK_TOOLS,
-            }
-        if self._current_run_has_successful_tool(context, "career_resume_version_create"):
-            return {
-                "stage": "resume_version",
-                "status": "project_resume_version_ready_merge_application",
-                "reason": "main_project_resume_version_ready_merge_application",
-                "next_action": "ResumeVersion 已创建；不要继续搜索、读取项目或重复生成，下一步只调用 career_application_merge 把 resume_version_id 合并进当前求职项目。",
-                "missing_outputs": ["career_application_resume_version_link"],
-                "completed_refs": refs,
-                "next_allowed_tools": ["career_application_merge"],
-                "blocked_tools": _MAIN_PROJECT_RESUME_VERSION_MERGE_BLOCK_TOOLS,
-            }
-        if self._current_run_has_successful_tool(context, "career_application_get"):
-            return {
-                "stage": "resume_version",
-                "status": "project_application_loaded_create_version",
-                "reason": "main_project_resume_version_application_loaded_create_version",
-                "next_action": "CareerApplication 已读取；不要继续搜索、重复读取项目或重新读取关联记录，下一步只调用 career_resume_version_create 生成定制简历版本。",
-                "missing_outputs": ["resume_version", "career_application_resume_version_link"],
-                "completed_refs": refs,
-                "next_allowed_tools": ["career_resume_version_create"],
-                "blocked_tools": _MAIN_PROJECT_RESUME_VERSION_CREATE_BLOCK_TOOLS,
-            }
-        return {
-            "stage": "resume_version",
-            "status": "project_application_read_required",
-            "reason": "main_project_resume_version_read_application_first",
-            "next_action": "本次定制简历动作要求先读取当前 CareerApplication；不要搜索、委派或直接生成版本，下一步只调用 career_application_get。",
-            "missing_outputs": [
-                "career_application_read",
-                "resume_version",
-                "career_application_resume_version_link",
-            ],
-            "completed_refs": refs,
-            "next_allowed_tools": ["career_application_get"],
-            "blocked_tools": _MAIN_PROJECT_RESUME_VERSION_READ_BLOCK_TOOLS,
-        }
-
-    def _jd_fit_stage_gate(self, context: RunContext) -> dict[str, Any] | None:
+    def _jd_fit_stage_gate(self, context: RunContext, *, require_application: bool = True) -> dict[str, Any] | None:
         if not self._current_run_has_any_successful_tool(
             context,
             {
@@ -458,12 +478,17 @@ class WorkflowRuntimeGuard:
         refs = self._current_jd_fit_refs(context)
         if refs is None:
             return None
-        if refs.get("application_id"):
+        if refs.get("application_id") or not require_application:
             return {
                 "stage": "jd_fit",
                 "status": "completed",
                 "reason": "main_jd_fit_stage_complete_final_answer",
-                "next_action": "JDAnalysis、JobFitReport 和 CareerApplication 已完成；不要继续读取、委派或重复保存，直接给用户最终答复。",
+                "next_action": (
+                    "JDAnalysis 和 JobFitReport 已完成；本轮不需要创建 CareerApplication，"
+                    "不要继续读取、委派或重复保存，直接给用户最终答复。"
+                    if not require_application
+                    else "JDAnalysis、JobFitReport 和 CareerApplication 已完成；不要继续读取、委派或重复保存，直接给用户最终答复。"
+                ),
                 "missing_outputs": [],
                 "completed_refs": refs,
                 "blocked_tools": _MAIN_STAGE_FINAL_BLOCK_TOOLS,
@@ -1738,36 +1763,6 @@ class WorkflowRuntimeGuard:
             refs["application_merged"] = False
         return refs
 
-    def _current_project_resume_version_refs(self, context: RunContext) -> dict[str, Any]:
-        refs: dict[str, Any] = {}
-        current_jd_fit_refs = self._current_jd_fit_refs(context)
-        if current_jd_fit_refs is not None:
-            refs.update(current_jd_fit_refs)
-
-        application_payload = self._latest_successful_tool_payload(context, "career_application_get")
-        if application_payload is not None:
-            refs.update(_payload_ids(application_payload))
-            application_id = _payload_record_id(application_payload, "application_id")
-            if application_id is not None:
-                refs["application_id"] = application_id
-
-        resume_version_payload = self._latest_successful_tool_payload(context, "career_resume_version_create")
-        if resume_version_payload is not None:
-            refs.update(_payload_ids(resume_version_payload))
-            resume_version_id = _payload_record_id(resume_version_payload, "resume_version_id")
-            if resume_version_id is not None:
-                refs["resume_version_id"] = resume_version_id
-
-        merge_payload = self._latest_successful_tool_payload(context, "career_application_merge")
-        if merge_payload is not None:
-            refs.update(_payload_ids(merge_payload))
-            application_id = _payload_record_id(merge_payload, "application_id")
-            if application_id is not None:
-                refs["application_id"] = application_id
-            if refs.get("resume_version_id"):
-                refs["application_merged"] = True
-        return refs
-
     def _current_resume_diagnosis_refs(self, context: RunContext) -> dict[str, Any] | None:
         resume_profile = _find_one(
             self._career_store.list_resume_profiles(),
@@ -2581,12 +2576,35 @@ class WorkflowRuntimeGuard:
     def _inspect_delegate_agents(self, tool_call: ToolCall, context: RunContext) -> WorkflowGuardDecision:
         args = _copy_arguments(tool_call.arguments)
         repair_actions: list[dict[str, str]] = []
+        args, repair_actions = self._repair_delegate_task_instructions(args, repair_actions)
         args, repair_actions = self._repair_delegate_artifact_refs(args, repair_actions)
         args, repair_actions = self._repair_delegate_jd_fit_task(args, context, repair_actions)
+        normalized = normalize_delegate_agents_arguments(
+            args,
+            phase=_delegate_normalization_phase(self._latest_user_message(context)),
+            valid_artifact_ids=_current_session_artifact_ids(self._session_repository, context.session_id),
+        )
+        if normalized.rejected:
+            return _block_decision(
+                tool_call,
+                tool_name="delegate_agents",
+                reason=normalized.reason or "delegate_tasks_invalid",
+                next_action=(
+                    "delegate_agents 参数没有可执行的 child task；不要执行 malformed task。"
+                    "请按当前 workflow 只保留一个合法的 target_agent_id、instruction 和必要 artifact_refs。"
+                ),
+                missing_outputs=[],
+                lock_key=f"delegate_agents_invalid:{context.run_id}:{tool_call.tool_call_id}",
+                repair_actions=[*repair_actions, *normalized.repair_actions],
+                extra_payload={"normalization_errors": normalized.errors},
+                extra_event_payload={"normalization_errors": normalized.errors},
+            )
+        args = normalized.arguments
+        repair_actions = [*repair_actions, *normalized.repair_actions]
         repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
 
-        signature = _delegate_signature(repaired_call.arguments)
-        semantic_signature = _delegate_semantic_signature(repaired_call.arguments)
+        signature = delegate_signature(repaired_call.arguments)
+        semantic_signature = delegate_semantic_signature(repaired_call.arguments)
         if signature is None:
             return _repair_decision(tool_call, repaired_call, repair_actions)
         previous = self._latest_delegate_result_for_signature(context, signature)
@@ -2629,6 +2647,42 @@ class WorkflowRuntimeGuard:
                 "repair_actions": repair_actions,
             },
         )
+
+    def _repair_delegate_task_instructions(
+        self,
+        args: dict[str, Any],
+        repair_actions: list[dict[str, str]],
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        top_level_instruction = _string_or_none(args.get("instruction"))
+        raw_tasks = args.get("tasks")
+        if top_level_instruction is None or not isinstance(raw_tasks, list):
+            return args, repair_actions
+        changed = False
+        repaired_tasks: list[Any] = []
+        for task in raw_tasks:
+            if not isinstance(task, dict):
+                repaired_tasks.append(task)
+                continue
+            if _string_or_none(task.get("instruction")) is not None:
+                repaired_tasks.append(task)
+                continue
+            repaired_task = dict(task)
+            repaired_task["instruction"] = top_level_instruction
+            repaired_tasks.append(repaired_task)
+            changed = True
+        if not changed:
+            return args, repair_actions
+        repaired_args = dict(args)
+        repaired_args["tasks"] = repaired_tasks
+        repair_actions.append(
+            {
+                "field": "delegate_agents.tasks[].instruction",
+                "from": "top_level_instruction",
+                "to": "task_instruction",
+                "reason": "delegate_task_requires_non_empty_instruction",
+            }
+        )
+        return repaired_args, repair_actions
 
     def _repair_delegate_artifact_refs(
         self,
@@ -2880,18 +2934,18 @@ class WorkflowRuntimeGuard:
                 tasks.append(task)
                 continue
             instruction = _string_or_none(task.get("instruction")) or ""
-            if _is_dependent_application_delegate_task(instruction):
+            if is_dependent_application_delegate_task(instruction):
                 changed = True
                 deferred_application = True
                 continue
-            if _is_jd_fit_delegate_task(task, instruction):
-                source_key = _delegate_jd_fit_source_key(task, instruction)
+            if is_jd_fit_delegate_task(task, instruction):
+                source_key = delegate_jd_fit_source_key(task, instruction)
                 if source_key in seen_jd_fit_sources:
                     changed = True
                     deduped_same_source = True
                     continue
                 seen_jd_fit_sources.add(source_key)
-                if _mentions_application_record(instruction) and not _has_application_defer_notice(instruction):
+                if mentions_application_record(instruction) and not _has_application_defer_notice(instruction):
                     task["instruction"] = (
                         f"{instruction}\n\n"
                         "WorkflowRuntime DAG 边界：CareerApplication 由 main-agent 在 JobFitReport 返回后调用 "
@@ -3038,7 +3092,7 @@ class WorkflowRuntimeGuard:
             if event.payload.get("success") is not True:
                 continue
             call_id = event.payload.get("tool_call_id")
-            if not isinstance(call_id, str) or _delegate_signature(call_args_by_id.get(call_id)) != signature:
+            if not isinstance(call_id, str) or delegate_signature(call_args_by_id.get(call_id)) != signature:
                 continue
             payload = _loads_json_object(event.payload.get("content"))
             if payload is None or payload.get("status") not in {"completed", "skipped"}:
@@ -3065,7 +3119,7 @@ class WorkflowRuntimeGuard:
             call_id = event.payload.get("tool_call_id")
             if not isinstance(call_id, str):
                 continue
-            if _delegate_semantic_signature(call_args_by_id.get(call_id)) != semantic_signature:
+            if delegate_semantic_signature(call_args_by_id.get(call_id)) != semantic_signature:
                 continue
             payload = _loads_json_object(event.payload.get("content"))
             if payload is None or payload.get("status") not in {"completed", "skipped"}:
@@ -3671,180 +3725,8 @@ def _normalize_fact_text(value: str) -> str:
     return re.sub(r"\s+", "", value).casefold()
 
 
-def _append_unique(output: list[str], value: str) -> None:
-    if value not in output:
-        output.append(value)
-
-
 def _truncate_text(value: str, limit: int) -> str:
     return value if len(value) <= limit else f"{value[: max(0, limit - 1)]}…"
-
-
-def _delegate_semantic_signature(arguments: Any) -> str | None:
-    if not isinstance(arguments, dict):
-        return None
-    raw_tasks = arguments.get("tasks")
-    if not isinstance(raw_tasks, list) or not raw_tasks:
-        return None
-    parts: list[str] = []
-    for task in raw_tasks:
-        if not isinstance(task, dict):
-            return None
-        target_agent_id = _string_or_none(task.get("target_agent_id"))
-        if target_agent_id is None:
-            return None
-        instruction = _string_or_none(task.get("instruction")) or ""
-        artifact_refs = _delegate_task_artifact_refs(task, instruction)
-        product_refs = _delegate_task_product_refs(task, instruction)
-        phase = _delegate_task_phase(target_agent_id, instruction, artifact_refs)
-        required_outputs = _delegate_task_required_outputs(target_agent_id, instruction)
-        parts.append(
-            ":".join(
-                [
-                    target_agent_id,
-                    phase,
-                    f"artifacts={','.join(artifact_refs)}",
-                    f"products={','.join(product_refs)}",
-                    f"outputs={','.join(required_outputs)}",
-                ]
-            )
-        )
-    return "|".join(sorted(parts))
-
-
-def _delegate_task_artifact_refs(task: dict[str, Any], instruction: str) -> list[str]:
-    refs: list[str] = []
-    raw_refs = task.get("artifact_refs")
-    if isinstance(raw_refs, list):
-        for raw_ref in raw_refs:
-            ref = _string_or_none(raw_ref)
-            if ref is not None and ref.startswith("artifact_"):
-                _append_unique(refs, ref)
-    for ref in re.findall(r"\bartifact_[A-Za-z0-9_-]+\b", instruction):
-        _append_unique(refs, ref)
-    return sorted(refs)
-
-
-def _delegate_task_product_refs(task: dict[str, Any], instruction: str) -> list[str]:
-    refs: list[str] = []
-    raw_refs = task.get("artifact_refs")
-    texts = [instruction]
-    if isinstance(raw_refs, list):
-        texts.extend(ref for ref in raw_refs if isinstance(ref, str))
-    ignored_field_names = {
-        "resume_profile_id",
-        "career_profile_id",
-        "jd_analysis_id",
-        "job_fit_report_id",
-        "application_id",
-        "resume_version_id",
-    }
-    pattern = re.compile(
-        r"\b(?:resume_profile|career_profile|job_fit_report|resume_version|application|jd|fit)_[A-Za-z0-9_-]+\b"
-    )
-    for text in texts:
-        for ref in pattern.findall(text):
-            if ref in ignored_field_names or ref.startswith("artifact_"):
-                continue
-            _append_unique(refs, ref)
-    return sorted(refs)
-
-
-def _delegate_task_phase(target_agent_id: str, instruction: str, artifact_refs: list[str]) -> str:
-    normalized = instruction.casefold()
-    compact = _normalize_fact_text(instruction)
-    if target_agent_id == "job_agent" and (
-        _task_requires_job_fit_report(instruction)
-        or any(ref.startswith("artifact_jd") for ref in artifact_refs)
-        or _has_any(normalized, ("jd", "job description", "岗位", "职位", "匹配"))
-    ):
-        return "jd_fit"
-    if target_agent_id == "resume_agent" and _has_any(
-        compact,
-        ("简历诊断", "诊断简历", "简历画像", "解析简历", "resumeprofile"),
-    ):
-        return "resume_diagnosis"
-    return "general"
-
-
-def _delegate_task_required_outputs(target_agent_id: str, instruction: str) -> list[str]:
-    normalized = instruction.casefold()
-    compact = _normalize_fact_text(instruction)
-    outputs: list[str] = []
-    if target_agent_id == "job_agent":
-        if _has_any(normalized, ("jdanalysis", "career_jd_analysis_save")) or _has_any(compact, ("jd分析", "岗位分析")):
-            outputs.append("jd_analysis")
-        if _task_requires_job_fit_report(instruction):
-            _append_unique(outputs, "jd_analysis")
-            outputs.append("job_fit_report")
-    elif target_agent_id == "resume_agent":
-        if _has_any(compact, ("简历画像", "resumeprofile")):
-            outputs.append("resume_profile")
-        if _has_any(compact, ("诊断报告", "简历诊断")):
-            outputs.append("diagnosis_artifact")
-    return sorted(outputs)
-
-
-def _is_jd_fit_delegate_task(task: dict[str, Any], instruction: str) -> bool:
-    artifact_refs = _delegate_task_artifact_refs(task, instruction)
-    return _delegate_task_phase("job_agent", instruction, artifact_refs) == "jd_fit" and (
-        _task_requests_jd_fit_generation(instruction)
-        or any(_looks_like_jd_artifact_ref(ref) for ref in artifact_refs)
-    )
-
-
-def _task_requests_jd_fit_generation(text: str) -> bool:
-    normalized = text.strip().casefold()
-    compact = _normalize_fact_text(text)
-    if not normalized:
-        return False
-    return _has_any(
-        normalized,
-        (
-            "jdanalysis",
-            "career_jd_analysis_save",
-            "career_job_fit_report_save",
-            "jobfitreport",
-            "job fit report",
-        ),
-    ) or _has_any(
-        compact,
-        (
-            "分析jd",
-            "解析jd",
-            "jd分析",
-            "岗位分析",
-            "职位分析",
-            "生成岗位匹配报告",
-            "创建岗位匹配报告",
-            "保存岗位匹配报告",
-            "输出岗位匹配报告",
-            "生成匹配报告",
-            "创建匹配报告",
-            "保存匹配报告",
-            "输出匹配报告",
-        ),
-    )
-
-
-def _is_dependent_application_delegate_task(instruction: str) -> bool:
-    if not _mentions_application_record(instruction):
-        return False
-    return not _task_requests_jd_fit_generation(instruction)
-
-
-def _mentions_application_record(text: str) -> bool:
-    normalized = text.strip().casefold()
-    compact = _normalize_fact_text(text)
-    return _has_any(normalized, ("careerapplication", "career_application")) or _has_any(
-        compact,
-        (
-            "求职项目",
-            "求职申请",
-            "投递项目",
-            "申请项目",
-        ),
-    )
 
 
 def _has_application_defer_notice(text: str) -> bool:
@@ -3853,42 +3735,21 @@ def _has_application_defer_notice(text: str) -> bool:
     return "careerapplication 由 main-agent" in normalized or "careerapplication由mainagent" in compact
 
 
-def _delegate_jd_fit_source_key(task: dict[str, Any], instruction: str) -> str:
-    artifact_refs = _delegate_task_artifact_refs(task, instruction)
-    jd_refs = [ref for ref in artifact_refs if _looks_like_jd_artifact_ref(ref)]
-    if jd_refs:
-        return f"jd_artifact:{jd_refs[0]}"
-    if artifact_refs:
-        return f"artifacts:{','.join(artifact_refs)}"
-    product_refs = _delegate_task_product_refs(task, instruction)
-    jd_product_refs = [ref for ref in product_refs if ref.startswith("jd_")]
-    if jd_product_refs:
-        return f"jd_record:{jd_product_refs[0]}"
-    return "current_jd_fit"
+def _delegate_normalization_phase(user_message: str) -> str | None:
+    if _is_jd_fit_only_intent(user_message):
+        return "jd_fit"
+    if _is_resume_diagnosis_intent(user_message):
+        return "resume_diagnosis"
+    return None
 
 
-def _looks_like_jd_artifact_ref(ref: str) -> bool:
-    lowered = ref.casefold()
-    return lowered.startswith("artifact_jd") or "_jd_" in lowered or lowered.endswith("_jd")
-
-
-def _delegate_signature(arguments: Any) -> str | None:
-    if not isinstance(arguments, dict):
+def _current_session_artifact_ids(repository: SessionRepository, session_id: str) -> list[str] | None:
+    try:
+        artifacts = repository.list_session_artifacts(session_id)
+    except (SessionNotFoundError, StorageError):
         return None
-    raw_tasks = arguments.get("tasks")
-    if not isinstance(raw_tasks, list) or not raw_tasks:
-        return None
-    parts: list[str] = []
-    for task in raw_tasks:
-        if not isinstance(task, dict):
-            return None
-        target_agent_id = _string_or_none(task.get("target_agent_id"))
-        if target_agent_id is None:
-            return None
-        refs = task.get("artifact_refs")
-        artifact_refs = sorted(ref for ref in refs if isinstance(ref, str)) if isinstance(refs, list) else []
-        parts.append(f"{target_agent_id}:{','.join(artifact_refs)}")
-    return "|".join(sorted(parts))
+    ids = [artifact.artifact_id for artifact in artifacts if isinstance(artifact.artifact_id, str)]
+    return ids or None
 
 
 def _jd_artifact_ref_from_task(task: dict[str, Any]) -> str | None:
@@ -3934,7 +3795,13 @@ def _is_jd_fit_only_intent(message: str) -> bool:
     text = message.strip().casefold()
     if not text:
         return False
-    if _has_any(text, ("定制简历", "简历版本", "生成一版简历", "改简历", "resumeversion", "resume version")):
+    boundary = build_turn_intent_boundary(text)
+    if boundary.read_only or boundary.forbid_jd_fit:
+        return False
+    if not boundary.forbid_resume_version_create and _has_any(
+        text,
+        ("定制简历", "简历版本", "生成一版简历", "改简历", "resumeversion", "resume version"),
+    ):
         return False
     return _has_any(text, ("jd", "岗位", "职位", "匹配", "适配", "匹配报告", "岗位分析"))
 
@@ -3983,6 +3850,9 @@ def _is_resume_version_intent(message: str) -> bool:
     text = message.strip().casefold()
     if not text:
         return False
+    boundary = build_turn_intent_boundary(text)
+    if boundary.read_only or boundary.forbid_resume_version_create:
+        return False
     if _is_application_action_intent(text):
         return False
     if re.search(r"生成\s*简历\s*画像", text):
@@ -4006,11 +3876,20 @@ def _is_application_action_intent(message: str) -> bool:
     text = message.strip().casefold()
     if not text:
         return False
+    if build_turn_intent_boundary(text).read_only:
+        return False
     return _has_any(
         text,
         (
             "投递前检查",
             "面试准备",
+            "面试复盘",
+            "更新当前求职项目",
+            "更新求职项目",
+            "更新项目",
+            "项目备注",
+            "求职项目的阶段",
+            "求职项目阶段",
             "申请进度",
             "项目动作",
             "pre_apply",
@@ -4018,13 +3897,6 @@ def _is_application_action_intent(message: str) -> bool:
             "interview prep",
         ),
     )
-
-
-def _requires_application_read_intent(message: str) -> bool:
-    text = message.strip().casefold()
-    if not text:
-        return False
-    return "career_application_get" in text or ("先调用" in text and "读取项目" in text)
 
 
 def _is_resume_diagnosis_intent(message: str) -> bool:
