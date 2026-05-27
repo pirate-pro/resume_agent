@@ -1,6 +1,6 @@
 # M38：上下文与最终答复成本收敛方案
 
-> 状态：M38-A / M38-B / M38-D 已实现并完成单测；`data/live_career_smoke_m38_abd_6x3_r1` live smoke 已跑完但成本回归，先暂停进入 M38-C，转为修正 child result compact 的信息边界。本文承接 M37。M37 已把重复工具调用和重复保存收敛到 `duplicate_runs=0/6`；M38 不继续追加工具 guard，转向 token、LLM 轮次和最终答复成本。
+> 状态：M38-A 成本画像保留；application_id 规范化修复保留。M38-B/D 上下文压缩、delegate actionable snapshot、以及后续未提交的 M38-C/C.1 final completion fast path 已决定回退，原因是它们虽然能压 token / recovery，但把主流程继续推向多层 compact / guard / fast-path 分支，代码结构变重，不利于下一步 deterministic workflow executor。本文承接 M37。M37 已把重复工具调用和重复保存收敛到 `duplicate_runs=0/6`；后续优化不再继续追加 guard，而应把确定性 workflow 从模型决策中移出。
 
 ## 1. 当前基线
 
@@ -857,4 +857,58 @@ M38-B/D + delegate actionable snapshot + application_id 修复可以保留：
   3. 只有 required refs 完整、最近无工具失败、无 rejected answer 时走 fast path；
   4. 缺少用户可读摘要时才用轻量 LLM 润色；
   5. 继续用 6x3 live smoke 验证 final_answer_recovery 是否下降，且最终回答质量不退化。
+```
+
+## 12. 回退决定：停止上下文压缩补丁路线
+
+回退边界：
+
+```text
+保留：
+  - M38-A 成本画像能力；
+  - application_id 规范化修复；
+  - M37 的 task graph / ledger / idempotency / workflow guard 基线。
+
+回退：
+  - M38-B child result summary 压缩；
+  - M38-D tool pending message 参数级压缩；
+  - delegate actionable_snapshot / next_input_hint；
+  - 未提交的 M38-C / M38-C.1 final answer completion fast path。
+```
+
+原因：
+
+```text
+M38-B/D/C 的局部指标有改善，尤其 token 和 final answer recovery；
+但整体路线开始偏向“发现一个模型偏差就加一层 compact / suppress / fast path”。
+
+这类逻辑能挡错，也能压一部分 token，但不会减少确定性步骤里的模型参与。
+结果是：
+  - 代码层次变重；
+  - 行为解释成本变高；
+  - live smoke 仍会出现耗时长尾；
+  - 后续 deterministic workflow executor 会被这些分支干扰。
+```
+
+回退后的下一步方向：
+
+```text
+不继续做“让模型少看一点，然后希望它少犯错”。
+改为：
+  - runtime 维护 workflow state；
+  - 固定链路由 deterministic executor 执行；
+  - 模型只负责无法确定的内容生成或质量判断。
+
+优先候选：
+  resume_version project-action
+
+固定链路：
+  career_application_get
+  career_resume_version_create
+  career_application_merge
+
+当 application_id / resume_profile_id / jd_analysis_id / job_fit_report_id 已齐时，
+runtime 不再让模型逐步选择这三个工具；
+只在生成 resume_version content / change_summary / keyword_strategy / risk_notes 时调用模型，
+并由工具 schema / product facts 做事实边界约束。
 ```

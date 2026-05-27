@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -52,6 +53,7 @@ from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_cap
 from app.runtime.agent_registry import load_agent_registry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
+from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
@@ -127,6 +129,13 @@ from app.tools.builtins import (
 )
 from app.tools.registry import ToolRegistry
 from tools.check_career_product_store import check_career_product_store
+from tools.career_live_quality_gate import check_career_live_quality
+
+
+class _DiscardingEventChannel(EventChannel):
+    async def emit(self, event: str, data: dict[str, Any]) -> None:
+        _ = (event, data)
+
 
 _INTERNAL_RUNTIME_ANSWER_MARKERS = (
     "Tool call limit reached",
@@ -404,6 +413,7 @@ def run_live_flow(
     max_tool_rounds: int,
     project_action: str = "none",
     retrieval_action: str = "none",
+    stream: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> FlowReport:
     run_data_dir = _prepare_clean_run_data_dir(root_data_dir, run_index)
@@ -439,6 +449,7 @@ def run_live_flow(
                 ),
                 max_tool_rounds=max_tool_rounds,
                 run_index=run_index,
+                stream=stream,
                 progress=progress,
             )
         )
@@ -458,6 +469,7 @@ def run_live_flow(
                 ),
                 max_tool_rounds=max_tool_rounds,
                 run_index=run_index,
+                stream=stream,
                 progress=progress,
             )
         )
@@ -487,6 +499,7 @@ def run_live_flow(
                     ),
                     max_tool_rounds=max_tool_rounds,
                     run_index=run_index,
+                    stream=stream,
                     progress=progress,
                 )
             )
@@ -503,6 +516,7 @@ def run_live_flow(
                     message=_project_action_message(project_action, application.application_id),
                     max_tool_rounds=max_tool_rounds,
                     run_index=run_index,
+                    stream=stream,
                     progress=progress,
                 )
             )
@@ -519,6 +533,7 @@ def run_live_flow(
                         message=_retrieval_action_message(action),
                         max_tool_rounds=max_tool_rounds,
                         run_index=run_index,
+                        stream=stream,
                         progress=progress,
                     )
                 )
@@ -535,6 +550,7 @@ def run_live_flow(
                     message=_retrieval_action_message(retrieval_action),
                     max_tool_rounds=max_tool_rounds,
                     run_index=run_index,
+                    stream=stream,
                     progress=progress,
                 )
             )
@@ -558,20 +574,23 @@ def run_turn(
     message: str,
     max_tool_rounds: int,
     run_index: int,
+    stream: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> TurnReport:
     before_counts = tool_call_counts(stack.session_repository, session_id)
     started = time.perf_counter()
     _progress(progress, run_index, f"阶段开始：{name}")
-    output = stack.runtime.run(
-        AgentRunInput(
-            session_id=session_id,
-            user_message=message,
-            skill_names=["base", "tools", "file-reader"],
-            max_tool_rounds=max_tool_rounds,
-            context=run_context(session_id),
-        )
+    run_input = AgentRunInput(
+        session_id=session_id,
+        user_message=message,
+        skill_names=["base", "tools", "file-reader"],
+        max_tool_rounds=max_tool_rounds,
+        context=run_context(session_id),
     )
+    if stream:
+        output = asyncio.run(stack.runtime.run_stream(run_input, _DiscardingEventChannel()))
+    else:
+        output = stack.runtime.run(run_input)
     elapsed = time.perf_counter() - started
     after_counts = tool_call_counts(stack.session_repository, session_id)
     tool_calls = diff_tool_calls(before_counts, after_counts)
@@ -703,6 +722,21 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
                 report.quality_error_codes.append(finding.code)
             report.consistency_errors.append(formatted)
             report.errors.append(f"产品数据一致性错误: {formatted}")
+
+    live_quality_report = check_career_live_quality(
+        repository=stack.session_repository,
+        career_store=stack.career_store,
+        session_id=report.session_id,
+    )
+    report.quality_gate_passed = bool(report.quality_gate_passed and live_quality_report.success)
+    for live_finding in live_quality_report.findings:
+        formatted = live_finding.format()
+        report.quality_findings.append(formatted)
+        if live_finding.severity == "error":
+            if live_finding.code not in report.quality_error_codes:
+                report.quality_error_codes.append(live_finding.code)
+            report.consistency_errors.append(formatted)
+            report.errors.append(f"Live 质量门禁错误: {formatted}")
 
     report.success = not report.errors
     if report.errors and report.failed_stage is None:
@@ -1222,6 +1256,8 @@ def infer_failure_stage(report: FlowReport) -> str:
         return "求职项目闭环"
     if report.failed_tools:
         return infer_stage_from_tool(report.failed_tools[0])
+    if any("Live 质量门禁" in error for error in report.errors):
+        return "Live 质量门禁"
     if report.consistency_errors:
         return "产品数据一致性检查"
     if any("最终回答" in error or "assistant_message" in error or "hard safety" in error for error in report.errors):
@@ -1381,6 +1417,9 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
     failed_tool_results: Counter[str] = Counter()
     recovered_or_prevented_call_ids: set[str] = set()
     workflow_decisions: Counter[str] = Counter()
+    finalization_packet_count = 0
+    finalization_packet_used_count = 0
+    finalization_packet_tokens = 0
 
     for event in _all_relevant_events(repository, session_id):
         payload = event.payload if isinstance(event.payload, dict) else {}
@@ -1443,6 +1482,12 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
             reason = payload.get("reason")
             if isinstance(reason, str) and reason:
                 workflow_decisions[reason] += 1
+            continue
+        if event.type == "finalization_packet":
+            finalization_packet_count += 1
+            if payload.get("used_for_recovery") is True:
+                finalization_packet_used_count += 1
+            finalization_packet_tokens += _int_value(payload.get("packet_estimate_tokens")) or 0
 
     duplicate_tool_calls = {
         key: count for key, count in sorted(tool_fingerprints.items()) if count > 1
@@ -1482,6 +1527,9 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
         "total_completion_tokens": total_completion_tokens,
         "final_answer_recovery_calls": llm_calls_by_phase.get("final_answer_recovery", 0),
         "final_answer_recovery_tokens": llm_tokens_by_phase.get("final_answer_recovery", 0),
+        "finalization_packet_count": finalization_packet_count,
+        "finalization_packet_used_count": finalization_packet_used_count,
+        "finalization_packet_estimate_tokens": finalization_packet_tokens,
         "duplicate_tool_call_count": sum(count - 1 for count in duplicate_tool_calls.values()),
         "harmful_duplicate_tool_call_count": sum(count - 1 for count in harmful_duplicate_tool_calls.values()),
         "recovery_duplicate_tool_call_count": sum(count - 1 for count in recovery_duplicate_tool_calls.values()),
@@ -1552,6 +1600,10 @@ def _duplicate_is_recovered_or_prevented(
 
 def _stable_tool_call_fingerprint(tool_name: str, arguments: dict[str, Any]) -> str:
     stable = {key: arguments[key] for key in _STABLE_TOOL_ARG_KEYS if key in arguments}
+    if tool_name == "career_application_merge":
+        updates = arguments.get("updates")
+        if isinstance(updates, dict):
+            stable["updates_hash"] = _stable_value_hash(updates)
     if tool_name == "delegate_agents":
         tasks = _delegate_task_fingerprint(arguments.get("tasks"))
         if tasks:
@@ -1559,6 +1611,14 @@ def _stable_tool_call_fingerprint(tool_name: str, arguments: dict[str, Any]) -> 
     if not stable:
         stable = {"_keys": sorted(str(key) for key in arguments.keys())}
     return _compact_json(stable)
+
+
+def _stable_value_hash(value: Any) -> str:
+    try:
+        payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        payload = str(value)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def _delegate_task_fingerprint(value: Any) -> list[dict[str, Any]]:
@@ -1800,12 +1860,9 @@ def latest_event_summaries(repository: JsonlSessionRepository, session_id: str, 
 
 
 def _all_relevant_events(repository: JsonlSessionRepository, session_id: str) -> list[Any]:
-    events = (
-        repository.list_events(session_id)
-        + repository.list_agent_events(session_id, "agent_main")
-        + repository.list_agent_events(session_id, "resume_agent")
-        + repository.list_agent_events(session_id, "job_agent")
-    )
+    events = repository.list_orchestration_events(session_id)
+    for agent_id in _session_agent_ids(repository, session_id):
+        events.extend(repository.list_agent_events(session_id, agent_id))
     output: list[Any] = []
     seen_event_ids: set[str] = set()
     for event in events:
@@ -1815,6 +1872,20 @@ def _all_relevant_events(repository: JsonlSessionRepository, session_id: str) ->
         seen_event_ids.add(event_id)
         output.append(event)
     return output
+
+
+def _session_agent_ids(repository: JsonlSessionRepository, session_id: str) -> list[str]:
+    root = repository.get_session_root_path(session_id)
+    agent_ids = {"agent_main"}
+    agents_dir = root / "agents"
+    if agents_dir.exists():
+        for child in agents_dir.iterdir():
+            if child.is_dir() and (child / "events.jsonl").exists():
+                agent_ids.add(child.name)
+    meta = repository.get_session(session_id)
+    if meta is not None and meta.entry_agent_id:
+        agent_ids.add(meta.entry_agent_id)
+    return sorted(agent_ids)
 
 
 def _compact_json(value: Any) -> str:
@@ -1901,6 +1972,9 @@ def _efficiency_text(value: dict[str, Any]) -> str:
         f"recovery_duplicates={value.get('recovery_duplicate_tool_call_count', 0)} "
         f"hidden={value.get('hidden_tool_result_count', 0)} "
         f"failed_tools={value.get('failed_tool_result_count', 0)} "
+        f"finalization_packet={value.get('finalization_packet_used_count', 0)}/"
+        f"{value.get('finalization_packet_count', 0)} "
+        f"packet_tokens={value.get('finalization_packet_estimate_tokens', 0)} "
         f"stagnation={decision_counts.get('tool_loop_stagnation', 0)} "
         f"hard_safety={decision_counts.get('hard_model_round_limit_reached', 0)}"
     )
@@ -2009,6 +2083,7 @@ async def run_all(args: argparse.Namespace) -> list[FlowReport]:
                 max_tool_rounds=args.max_tool_rounds,
                 project_action=args.project_action,
                 retrieval_action=args.retrieval_action,
+                stream=getattr(args, "stream", False),
                 progress=progress,
             )
 
@@ -2134,6 +2209,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--verbose", action="store_true", help="打开应用日志。")
     parser.add_argument("--quiet", action="store_true", help="关闭逐 run / 逐阶段进度输出，只打印最终报告。")
+    parser.add_argument("--stream", action="store_true", help="通过 AgentRuntime.run_stream 验证真实流式入口。")
     args = parser.parse_args()
     if args.runs <= 0:
         parser.error("--runs must be positive")
@@ -2154,7 +2230,7 @@ def main() -> None:
     logging.getLogger().setLevel(logging.INFO if args.verbose else logging.CRITICAL)
     started = app_now()
     print("Live smoke started:", to_app_iso(started))
-    print(f"runs={args.runs} concurrency={args.concurrency} data_dir={args.data_dir}")
+    print(f"runs={args.runs} concurrency={args.concurrency} stream={args.stream} data_dir={args.data_dir}")
     reports = asyncio.run(run_all(args))
     print_report(reports)
     ended = app_now()

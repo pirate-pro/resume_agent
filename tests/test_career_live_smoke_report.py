@@ -167,6 +167,27 @@ def test_live_smoke_report_prints_efficiency_summary(
     assert "hidden_tools:" in output
 
 
+def test_live_smoke_efficiency_summary_reads_future_agent_event_files(tmp_path: Path) -> None:
+    session_id = "sess_live_future_agent"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _append_llm_usage(
+        repository,
+        session_id=session_id,
+        agent_id="research_agent",
+        event_id="evt_future_agent_usage",
+        total_tokens=321,
+        prompt_tokens=300,
+        completion_tokens=21,
+        phase="tool_loop",
+    )
+
+    summary = efficiency_summary(repository, session_id)
+
+    assert summary["llm_calls_by_agent"] == {"research_agent": 1}
+    assert summary["llm_tokens_by_agent"] == {"research_agent": 321}
+
+
 def test_infer_failure_stage_from_missing_records(tmp_path: Path) -> None:
     report = FlowReport(
         run_index=1,
@@ -752,6 +773,45 @@ def test_efficiency_summary_treats_replaced_hidden_duplicate_as_recovery_duplica
 
     assert summary["duplicate_tool_call_count"] == 1
     assert summary["recovery_duplicate_tool_call_count"] == 1
+    assert summary["harmful_duplicate_tool_call_count"] == 0
+
+
+def test_efficiency_summary_does_not_treat_distinct_application_merge_updates_as_duplicate(
+    tmp_path: Path,
+) -> None:
+    session_id = "sess_live_distinct_application_merge_updates"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_merge_resume_version",
+        tool_name="career_application_merge",
+        arguments={
+            "application_id": "application_alpha",
+            "updates": {"resume_version_ids": ["resume_version_alpha"]},
+        },
+        tool_call_id="call_merge_resume_version",
+    )
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_merge_interview_review",
+        tool_name="career_application_merge",
+        arguments={
+            "application_id": "application_alpha",
+            "updates": {
+                "stage": "interviewing",
+                "notes": "面试复盘已保存。",
+                "next_actions": ["复习 RAG 评估"],
+            },
+        },
+        tool_call_id="call_merge_interview_review",
+    )
+
+    summary = efficiency_summary(repository, session_id)
+
+    assert summary["duplicate_tool_call_count"] == 0
     assert summary["harmful_duplicate_tool_call_count"] == 0
 
 
