@@ -152,6 +152,26 @@ def test_learning_task_create_normalizes_typed_evidence_refs(tmp_path: Path) -> 
     ]
 
 
+def test_learning_task_create_treats_blank_optional_artifact_refs_as_absent(tmp_path: Path) -> None:
+    registry, session_repository, _ = _registry(tmp_path)
+    session_repository.create_session("sess_learning")
+
+    payload = _execute(
+        registry,
+        "learning_task_create",
+        {
+            "title": "补齐 RAG 证据表达",
+            "evidence_refs": ["application_alpha", "fit_alpha"],
+            "source_artifact_id": "",
+            "output_artifact_id": "",
+        },
+        _context(),
+    )
+
+    assert payload["record"]["source_artifact_id"] is None
+    assert payload["record"]["output_artifact_id"] is None
+
+
 def test_main_agent_creates_reads_lists_checkins_and_updates_learning_records(tmp_path: Path) -> None:
     registry, session_repository, learning_store = _registry(tmp_path)
     session_repository.create_session("sess_learning")

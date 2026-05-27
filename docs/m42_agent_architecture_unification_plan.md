@@ -1,6 +1,6 @@
 # M42：Agent 架构统一与解耦方案
 
-> 状态：M42-A 架构文档已落地；M42-B `ActionPayloadBuilder` 初版已落地；M42-C `ToolCallController` skeleton 已落地；M42-D `action_plan.py` 已拆出；M42-E delegation guard 收缩已落地；M42-F Tool Gateway policy boundary 已落地；M42-G Tool Capability Registry 已落地；M42-H/I live regression 与工具参数 canonicalization 已验证。本文承接 M41：P0 `career_full` 已通过两批 `6x3` live smoke 停止线，下一阶段不继续为 harmless duplicate 或偶发长尾追加 guard，而是统一 runtime / workflow / state machine / skill / contract / gateway 的职责边界。
+> 状态：M42-A 架构文档已落地；M42-B `ActionPayloadBuilder` 初版已落地；M42-C `ToolCallController` skeleton 已落地；M42-D `action_plan.py` 已拆出；M42-E delegation guard 收缩已落地；M42-F Tool Gateway policy boundary 已落地；M42-G Tool Capability Registry 已落地；M42-H/I/J live regression 与工具参数 canonicalization 已验证。本文承接 M41：P0 `career_full` 已通过两批 `6x3` live smoke 停止线，下一阶段不继续为 harmless duplicate 或偶发长尾追加 guard，而是统一 runtime / workflow / state machine / skill / contract / gateway 的职责边界。
 
 ## 1. 背景
 
@@ -1003,6 +1003,121 @@ harmful_duplicate_tool_call_count=0
 hidden_tool_result_count=0
 failed_tool_result_count=0
 ```
+
+### M42-J：LearningTask optional artifact normalization
+
+触发点：
+
+```text
+full matrix: data/live_smoke_matrix_m42_final_matrix_c6_r1/report.json
+passed=10/11
+failed=1/11
+failed scenario=rag_to_learning_task
+error=learning_task_create -> 'output_artifact_id' must be a non-empty string.
+```
+
+根因：
+
+```text
+rag.learning_task.create.v1 的业务终点是创建 LearningTask。
+LearningTask 数据模型允许 output_artifact_id=None。
+learning_task_create schema 也只要求 title + evidence_refs。
+
+失败来自工具输入 canonicalization：
+  模型传入 output_artifact_id=""；
+  learning 工具把 optional artifact 字段交给 _required_string；
+  空字符串被当成硬错误；
+  workflow 已经调用了正确工具，但工具层拒绝了可省略字段。
+```
+
+修复：
+
+```text
+在 app/tools/builtin_tools/learning.py 中让 _optional_current_artifact 先走 _optional_string。
+
+边界：
+  None / "" / whitespace -> None；
+  非空 artifact_id 仍必须属于当前 session；
+  不新增 workflow step；
+  不让模型先创建无必要 artifact；
+  不改变 LearningTask required fields。
+```
+
+验证：
+
+```text
+uv run pytest \
+  tests/test_learning_tools.py \
+  tests/test_retrieval_action_flow.py::test_m12_learning_schedule_retrieves_then_creates_task_without_memory
+
+uv run python tools/smoke_live_matrix.py \
+  --scenario rag_to_learning_task \
+  --runs 1 \
+  --concurrency 1 \
+  --stream \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m42_learning_task_optional_artifact_fix_c1_r1 \
+  --json-report data/live_smoke_matrix_m42_learning_task_optional_artifact_fix_c1_r1/report.json \
+  --quiet
+```
+
+focused live 结果：
+
+```text
+passed=1/1
+failed=0/1
+elapsed=224.99s
+llm_calls=17
+tokens=83513
+learning_tasks=1
+duplicates=0
+harmful_duplicates=0
+hidden=0
+```
+
+复跑全量矩阵：
+
+```text
+data/live_smoke_matrix_m42_optional_artifact_fix_full_c6_r1/report.json
+passed=10/11
+failed=1/11
+avg_elapsed=123.92s
+avg_llm_calls=9.6
+avg_tokens=47869
+harmful_duplicate_runs=0/11
+hidden_runs=1/11
+```
+
+`rag_to_learning_task` 已通过，剩余失败变成 `interview_review` 的 hidden 工具结果：
+
+```text
+business outputs completed:
+  retrieval_search
+  retrieval_context_pack
+  note_create
+  career_application_merge
+
+failure signal:
+  agent_main:tool_search:tool_hidden_by_runtime_plan = 1
+```
+
+这个不是副作用错误，也不是工具幂等问题。它暴露的是 contract 表达边界：
+
+```text
+当前步骤只允许 note_create/note_append；
+模型知道后面还要更新 CareerApplication，但看不到后续工具；
+于是试图 tool_search("career_application_update stage risk next_actions")；
+runtime 正确拦截了 tool_search，但 smoke 将 hidden 计为失败。
+```
+
+下一步不应该加 “禁止 tool_search” 这种 guard，而是把 action contract 的工具可见性拆成两类：
+
+```text
+current_allowed_tools: 当前可执行，顺序受 barrier 约束。
+upcoming_required_tools: 后续会执行，只作为 planning hint，不可提前调用。
+```
+
+这样模型知道 note 写完后会进入 `career_application_merge`，无需搜索 schema；runtime 仍能保持顺序 barrier。
 
 ## 9. 成功标准
 

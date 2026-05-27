@@ -774,9 +774,9 @@ def _optional_current_artifact(
     *,
     field_name: str,
 ) -> str | None:
-    if raw is None:
+    artifact_id = _optional_string(raw)
+    if artifact_id is None:
         return None
-    artifact_id = _required_string(raw, field_name=field_name)
     try:
         artifact = require_session_artifact(session_repository, session_id, artifact_id)
     except ToolExecutionError as exc:
