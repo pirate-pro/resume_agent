@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../../core/models/api_models.dart';
 import '../../core/providers/career_assets_provider.dart';
 import '../../core/providers/chat_provider.dart';
 import '../theme/app_theme.dart';
+import '../theme/product_tokens.dart';
 import '../utils/download_stub.dart'
     if (dart.library.html) '../utils/download_web.dart';
 import 'career_report.dart';
@@ -16,6 +18,8 @@ import 'run_progress_panel.dart';
 
 const double _bubbleMaxWidth = 780;
 const double _userBubbleMaxWidth = 560;
+const double _agentBubbleMaxWidth = 720;
+const double _agentUserBubbleMaxWidth = 460;
 const int _richMarkdownMaxChars = 6000;
 const int _richMarkdownMaxLines = 160;
 const int _streamStructuredMaxChars = 3200;
@@ -35,6 +39,11 @@ enum _MessageRenderMode {
   largePreview,
 }
 
+enum ChatBubbleStyle {
+  standard,
+  agentWorkspace,
+}
+
 class _ResolvedMessageContent {
   final String content;
   final _MessageRenderMode mode;
@@ -48,8 +57,12 @@ class _ResolvedMessageContent {
 class ChatBubble extends StatefulWidget {
   final ChatMessage message;
   final bool isStreaming;
+  final ChatBubbleStyle style;
   const ChatBubble(
-      {super.key, required this.message, this.isStreaming = false});
+      {super.key,
+      required this.message,
+      this.isStreaming = false,
+      this.style = ChatBubbleStyle.standard});
 
   @override
   State<ChatBubble> createState() => _ChatBubbleState();
@@ -61,8 +74,13 @@ class _ChatBubbleState extends State<ChatBubble> {
   @override
   Widget build(BuildContext context) {
     final isUser = widget.message.isUser;
-    final maxBubbleWidth = isUser ? _userBubbleMaxWidth : _bubbleMaxWidth;
-    final presentation = isUser
+    final agentWorkspace = widget.style == ChatBubbleStyle.agentWorkspace;
+    final maxBubbleWidth = isUser
+        ? (agentWorkspace ? _agentUserBubbleMaxWidth : _userBubbleMaxWidth)
+        : (agentWorkspace ? _agentBubbleMaxWidth : _bubbleMaxWidth);
+    final useCareerPresentation =
+        _shouldUseCareerPresentation(widget.message, widget.style);
+    final presentation = !useCareerPresentation
         ? null
         : _CareerMessagePresentation.fromContent(widget.message.content);
     final visibleContent = presentation?.content ?? widget.message.content;
@@ -75,7 +93,64 @@ class _ChatBubbleState extends State<ChatBubble> {
                 !attachedArtifactIds.contains(asset.id))
             .toList();
     final showLearningAction = !isUser &&
+        useCareerPresentation &&
         _shouldOfferLearningTaskAction(widget.message, visibleContent);
+    final showProgress = !isUser &&
+        _shouldShowRunProgress(widget.message.progressEvents, widget.style);
+    final bubble = ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: isUser ? 16 : (agentWorkspace ? 18 : 18),
+          vertical: isUser ? 12 : (agentWorkspace ? 16 : 14),
+        ),
+        decoration: _bubbleDecoration(
+          isUser: isUser,
+          style: widget.style,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showProgress) ...[
+              RunProgressPanel(
+                events: _workflowProgressEvents(
+                  widget.message.progressEvents,
+                  widget.style,
+                ),
+              ),
+              if (widget.message.content.isNotEmpty) const SizedBox(height: 2),
+            ],
+            if (visibleContent.isNotEmpty)
+              RepaintBoundary(
+                child: _MessageBody(
+                  content: visibleContent,
+                  isUser: isUser,
+                  isStreaming: false,
+                  answerFormat: widget.message.answerFormat,
+                  renderHint: widget.message.renderHint,
+                  layoutHint: widget.message.layoutHint,
+                ),
+              ),
+            if (detectedAssets.isNotEmpty) ...[
+              SizedBox(height: visibleContent.isEmpty ? 0 : 12),
+              _CareerAssetReferenceStrip(assets: detectedAssets),
+            ],
+            if (widget.message.artifacts.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _ArtifactList(artifacts: widget.message.artifacts),
+            ],
+            if (showLearningAction) ...[
+              const SizedBox(height: 10),
+              _LearningTaskSuggestionActionStrip(
+                suggestionText: visibleContent,
+              ),
+            ],
+            if (widget.isStreaming) const _Cursor(),
+          ],
+        ),
+      ),
+    );
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: MouseRegion(
@@ -84,10 +159,10 @@ class _ChatBubbleState extends State<ChatBubble> {
         child: Container(
           constraints: BoxConstraints(maxWidth: maxBubbleWidth),
           margin: EdgeInsets.only(
-            left: isUser ? 160 : 0,
-            right: isUser ? 8 : 60,
-            top: isUser ? 12 : 8,
-            bottom: isUser ? 16 : 10,
+            left: isUser ? (agentWorkspace ? 260 : 160) : 0,
+            right: isUser ? 8 : (agentWorkspace ? 130 : 60),
+            top: isUser ? 14 : 8,
+            bottom: isUser ? 18 : 12,
           ),
           child: Column(
             crossAxisAlignment:
@@ -102,12 +177,23 @@ class _ChatBubbleState extends State<ChatBubble> {
                       const _Avatar(isUser: false),
                       const SizedBox(width: 8),
                       Text(
-                        "Assistant",
+                        agentWorkspace ? "Agent 助手" : "Assistant",
                         style: AppTheme.ts(
                             fontSize: 12.5,
                             fontWeight: FontWeight.w600,
                             color: AppTheme.textSecondary),
                       ),
+                      if (agentWorkspace) ...[
+                        const SizedBox(width: 8),
+                        Text(
+                          DateFormat('HH:mm').format(widget.message.timestamp),
+                          style: AppTheme.ts(
+                            fontSize: 11.2,
+                            fontWeight: FontWeight.w600,
+                            color: ProductColors.textMuted,
+                          ),
+                        ),
+                      ],
                       if (_hovering) ...[
                         const SizedBox(width: 8),
                         _CopyButton(text: widget.message.content),
@@ -115,60 +201,18 @@ class _ChatBubbleState extends State<ChatBubble> {
                     ],
                   ),
                 ),
-              ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxBubbleWidth),
-                child: Container(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: isUser ? 16 : 18,
-                    vertical: isUser ? 12 : 14,
-                  ),
-                  decoration: isUser
-                      ? AppTheme.userBubbleDecoration
-                      : AppTheme.assistantBubbleDecoration,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (!isUser &&
-                          RunProgressPanel.hasProgress(
-                            widget.message.progressEvents,
-                          )) ...[
-                        RunProgressPanel(
-                          events: widget.message.progressEvents,
-                        ),
-                        if (widget.message.content.isNotEmpty)
-                          const SizedBox(height: 2),
-                      ],
-                      if (visibleContent.isNotEmpty)
-                        RepaintBoundary(
-                          child: _MessageBody(
-                            content: visibleContent,
-                            isUser: isUser,
-                            isStreaming: false,
-                            answerFormat: widget.message.answerFormat,
-                            renderHint: widget.message.renderHint,
-                            layoutHint: widget.message.layoutHint,
-                          ),
-                        ),
-                      if (detectedAssets.isNotEmpty) ...[
-                        SizedBox(height: visibleContent.isEmpty ? 0 : 12),
-                        _CareerAssetReferenceStrip(assets: detectedAssets),
-                      ],
-                      if (widget.message.artifacts.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        _ArtifactList(artifacts: widget.message.artifacts),
-                      ],
-                      if (showLearningAction) ...[
-                        const SizedBox(height: 10),
-                        _LearningTaskSuggestionActionStrip(
-                          suggestionText: visibleContent,
-                        ),
-                      ],
-                      if (widget.isStreaming) const _Cursor(),
-                    ],
-                  ),
-                ),
-              ),
+              if (isUser && agentWorkspace)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Flexible(child: bubble),
+                    const SizedBox(width: 10),
+                    const _WorkspaceUserAvatar(),
+                  ],
+                )
+              else
+                bubble,
             ],
           ),
         ),
@@ -185,6 +229,7 @@ class StreamingBubble extends StatelessWidget {
   final List<AnswerArtifactView> artifacts;
   final List<String> thinkingLines;
   final List<EventView> progressEvents;
+  final ChatBubbleStyle style;
   const StreamingBubble(
       {super.key,
       required this.buffer,
@@ -193,14 +238,21 @@ class StreamingBubble extends StatelessWidget {
       this.layoutHint,
       this.artifacts = const [],
       this.thinkingLines = const [],
-      this.progressEvents = const []});
+      this.progressEvents = const [],
+      this.style = ChatBubbleStyle.standard});
 
   @override
   Widget build(BuildContext context) {
+    final agentWorkspace = style == ChatBubbleStyle.agentWorkspace;
+    final progress = _workflowProgressEvents(progressEvents, style);
+    final showProgress = RunProgressPanel.hasProgress(progress);
+    final showThinking = !agentWorkspace && thinkingLines.isNotEmpty;
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+        constraints: BoxConstraints(
+          maxWidth: agentWorkspace ? _agentBubbleMaxWidth : _bubbleMaxWidth,
+        ),
         margin: const EdgeInsets.only(top: 6, bottom: 6),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -230,18 +282,24 @@ class StreamingBubble extends StatelessWidget {
               ),
             ),
             // Progress section (collapsible)
-            if (RunProgressPanel.hasProgress(progressEvents))
-              RunProgressPanel(events: progressEvents)
-            else if (thinkingLines.isNotEmpty)
+            if (showProgress)
+              RunProgressPanel(events: progress)
+            else if (showThinking)
               _ThinkingBlock(lines: thinkingLines),
             // Content
             if (buffer.isNotEmpty)
               ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: _bubbleMaxWidth),
+                constraints: BoxConstraints(
+                  maxWidth:
+                      agentWorkspace ? _agentBubbleMaxWidth : _bubbleMaxWidth,
+                ),
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                  decoration: AppTheme.assistantBubbleDecoration,
+                  decoration: _bubbleDecoration(
+                    isUser: false,
+                    style: style,
+                  ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -278,6 +336,133 @@ class StreamingBubble extends StatelessWidget {
       ),
     );
   }
+}
+
+BoxDecoration _bubbleDecoration({
+  required bool isUser,
+  required ChatBubbleStyle style,
+}) {
+  if (style != ChatBubbleStyle.agentWorkspace) {
+    return isUser
+        ? AppTheme.userBubbleDecoration
+        : AppTheme.assistantBubbleDecoration;
+  }
+
+  if (isUser) {
+    return BoxDecoration(
+      color: const Color(0xFFE5F6F1),
+      borderRadius: const BorderRadius.only(
+        topLeft: Radius.circular(16),
+        topRight: Radius.circular(16),
+        bottomLeft: Radius.circular(16),
+        bottomRight: Radius.circular(6),
+      ),
+      border: Border.all(color: ProductColors.primary.withValues(alpha: 0.16)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.08),
+          blurRadius: 18,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    );
+  }
+
+  return BoxDecoration(
+    color: ProductColors.surface,
+    borderRadius: const BorderRadius.only(
+      topLeft: Radius.circular(6),
+      topRight: Radius.circular(16),
+      bottomLeft: Radius.circular(16),
+      bottomRight: Radius.circular(16),
+    ),
+    border: Border.all(color: ProductColors.border),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.08),
+        blurRadius: 22,
+        offset: const Offset(0, 10),
+      ),
+    ],
+  );
+}
+
+bool _shouldUseCareerPresentation(
+  ChatMessage message,
+  ChatBubbleStyle style,
+) {
+  if (message.isUser) {
+    return false;
+  }
+  if (style == ChatBubbleStyle.standard) {
+    return true;
+  }
+  if (message.artifacts.isNotEmpty) {
+    return true;
+  }
+  if (message.sourceKind != 'direct_answer') {
+    return true;
+  }
+  if (message.toolCalls.any((call) => _isWorkflowToolName(call.name))) {
+    return true;
+  }
+  if (_hasWorkflowProgress(message.progressEvents)) {
+    return true;
+  }
+  return _extractCareerAssets(message.content).isNotEmpty;
+}
+
+bool _shouldShowRunProgress(
+  List<EventView> events,
+  ChatBubbleStyle style,
+) {
+  if (style == ChatBubbleStyle.standard) {
+    return RunProgressPanel.hasProgress(events);
+  }
+  return _hasWorkflowProgress(events);
+}
+
+List<EventView> _workflowProgressEvents(
+  List<EventView> events,
+  ChatBubbleStyle style,
+) {
+  if (style == ChatBubbleStyle.standard) {
+    return events;
+  }
+  return events.where(_isWorkflowProgressEvent).toList();
+}
+
+bool _hasWorkflowProgress(List<EventView> events) {
+  return events.any(_isWorkflowProgressEvent);
+}
+
+bool _isWorkflowProgressEvent(EventView event) {
+  if (event.type.startsWith('agent_task_')) {
+    return true;
+  }
+  if (event.type == 'tool_call') {
+    return _isWorkflowToolName((event.payload['name'] ?? '').toString());
+  }
+  if (event.type == 'tool_result') {
+    return _isWorkflowToolName((event.payload['tool_name'] ?? '').toString());
+  }
+  return false;
+}
+
+bool _isWorkflowToolName(String name) {
+  final normalized = name.trim();
+  if (normalized.isEmpty) {
+    return false;
+  }
+  if (normalized == 'delegate_agents' || normalized == 'agent_task_status') {
+    return true;
+  }
+  return normalized.startsWith('career_') ||
+      normalized.startsWith('retrieval_') ||
+      normalized.startsWith('note_') ||
+      normalized.startsWith('learning_') ||
+      normalized.startsWith('workspace_') ||
+      normalized.startsWith('session_');
 }
 
 // ── Thinking block (collapsible) ────────────────────────────────────────
@@ -833,6 +1018,37 @@ class _Avatar extends StatelessWidget {
           isUser ? Icons.person_rounded : Icons.auto_awesome_rounded,
           size: 15,
           color: Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceUserAvatar extends StatelessWidget {
+  const _WorkspaceUserAvatar();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: ProductColors.infoSoft,
+        shape: BoxShape.circle,
+        border: Border.all(color: ProductColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 14,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Icon(
+          Icons.person_rounded,
+          size: 17,
+          color: ProductColors.info,
         ),
       ),
     );

@@ -8,6 +8,72 @@ import 'package:resume_agent_app/shared/widgets/career_report.dart';
 import 'package:resume_agent_app/shared/widgets/chat_bubble.dart';
 
 void main() {
+  testWidgets('Agent 工作区普通聊天不展示执行进度卡片', (tester) async {
+    final message = ChatMessage(
+      role: 'assistant',
+      content: '你好，张明。',
+      sourceKind: 'direct_answer',
+      progressEvents: [
+        _event('run_started'),
+        _event('run_finished'),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ChatBubble(
+              message: message,
+              style: ChatBubbleStyle.agentWorkspace,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('你好，张明'), findsOneWidget);
+    expect(find.textContaining('多 Agent'), findsNothing);
+    expect(find.text('执行阶段'), findsNothing);
+    expect(find.text('执行动态'), findsNothing);
+  });
+
+  testWidgets('Agent 工作区只有真实 workflow 事件才展示执行卡片', (tester) async {
+    final message = ChatMessage(
+      role: 'assistant',
+      content: '投递前检查已完成。',
+      sourceKind: 'direct_answer',
+      progressEvents: [
+        _event('run_started'),
+        _event('tool_call', payload: {'name': 'career_application_get'}),
+        _event('tool_result', payload: {
+          'tool_name': 'career_application_get',
+          'success': true,
+        }),
+        _event('run_finished'),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ChatBubble(
+              message: message,
+              style: ChatBubbleStyle.agentWorkspace,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('投递前检查已完成'), findsOneWidget);
+    expect(find.textContaining('多 Agent'), findsOneWidget);
+    expect(find.text('执行阶段'), findsOneWidget);
+  });
+
   testWidgets('流式兜底执行过程渲染为业务动态卡片', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
@@ -443,6 +509,19 @@ JD 分析 ID：jd_b8e6607b59a6
     expect(api.sentMessages.single, contains('不要自动写 Note'));
     expect(api.sentMessages.single, contains('不要重复创建'));
   });
+}
+
+EventView _event(String type, {Map<String, dynamic> payload = const {}}) {
+  return EventView(
+    eventId: 'evt_$type',
+    sessionId: 'sess_chat_bubble',
+    agentId: 'agent_main',
+    runId: 'run_chat_bubble',
+    eventVersion: 1,
+    type: type,
+    payload: payload,
+    createdAt: DateTime(2026, 5, 28, 10, 30),
+  );
 }
 
 class _FakeChatBubbleApiService extends ApiService {

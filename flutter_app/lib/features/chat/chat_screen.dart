@@ -29,6 +29,7 @@ class ChatScreen extends ConsumerStatefulWidget {
   final bool showDebugToggle;
   final bool isDebugPanelOpen;
   final VoidCallback? onDebugToggle;
+  final ChatBubbleStyle messageStyle;
 
   const ChatScreen({
     super.key,
@@ -43,6 +44,7 @@ class ChatScreen extends ConsumerStatefulWidget {
     this.showDebugToggle = false,
     this.isDebugPanelOpen = false,
     this.onDebugToggle,
+    this.messageStyle = ChatBubbleStyle.standard,
   });
 
   @override
@@ -120,7 +122,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             top: 0,
             bottom: 0,
             child: _MessageBottomFade(
-              child: _ChatMessageLayer(scrollCtrl: _scrollCtrl),
+              child: _ChatMessageLayer(
+                scrollCtrl: _scrollCtrl,
+                messageStyle: widget.messageStyle,
+              ),
             ),
           )
         else
@@ -355,8 +360,12 @@ class _ChatHeaderLayer extends ConsumerWidget {
 
 class _ChatMessageLayer extends ConsumerWidget {
   final ScrollController scrollCtrl;
+  final ChatBubbleStyle messageStyle;
 
-  const _ChatMessageLayer({required this.scrollCtrl});
+  const _ChatMessageLayer({
+    required this.scrollCtrl,
+    required this.messageStyle,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -373,6 +382,7 @@ class _ChatMessageLayer extends ConsumerWidget {
       streamEvents: provider.streamEvents,
       error: provider.error,
       onClearError: provider.clearError,
+      messageStyle: messageStyle,
     );
   }
 }
@@ -919,6 +929,7 @@ class _MessageList extends StatefulWidget {
   final List<EventView> streamEvents;
   final String? error;
   final VoidCallback onClearError;
+  final ChatBubbleStyle messageStyle;
 
   const _MessageList({
     required this.messages,
@@ -932,6 +943,7 @@ class _MessageList extends StatefulWidget {
     required this.streamEvents,
     required this.error,
     required this.onClearError,
+    required this.messageStyle,
   });
 
   @override
@@ -975,10 +987,14 @@ class _MessageListState extends State<_MessageList> {
               artifacts: widget.streamArtifacts,
               progressEvents: _buildProgressEvents(widget.streamEvents),
               thinkingLines: _buildThinkingLines(widget.streamEvents),
+              style: widget.messageStyle,
             );
           } else if (msgIdx < widget.messages.length) {
             // Regular messages
-            child = ChatBubble(message: widget.messages[msgIdx]);
+            child = ChatBubble(
+              message: widget.messages[msgIdx],
+              style: widget.messageStyle,
+            );
           } else {
             child = const SizedBox.shrink();
           }

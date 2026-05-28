@@ -9,6 +9,7 @@ import '../../core/models/api_models.dart';
 import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/theme/product_tokens.dart';
+import '../../shared/widgets/chat_bubble.dart';
 import '../career_ui/career_ui_helpers.dart';
 import '../career_workbench/career_workbench_provider.dart';
 import '../chat/chat_screen.dart';
@@ -128,6 +129,7 @@ class _AgentChatWorkspaceState extends ConsumerState<AgentChatWorkspace> {
                   children: [
                     Positioned.fill(
                       child: ChatScreen(
+                        messageStyle: ChatBubbleStyle.agentWorkspace,
                         showSidebarToggle: !desktop,
                         onSidebarToggle: () => _openSessionDrawer(context),
                         showWorkbenchToggle: tablet,
