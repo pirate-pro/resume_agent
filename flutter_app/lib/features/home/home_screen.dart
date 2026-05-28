@@ -10,6 +10,7 @@ import '../../core/models/api_models.dart';
 import '../../core/providers/career_assets_provider.dart';
 import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
+import '../../shared/theme/product_tokens.dart';
 import '../../shared/widgets/session_sidebar.dart';
 import '../career/career_assets_panel.dart';
 import '../career_workbench/career_workbench_provider.dart';
@@ -106,6 +107,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _openSessionHistory(BuildContext context) {
     unawaited(ref.read(chatProvider).refreshSessions());
+    if (MediaQuery.sizeOf(context).width >= ProductBreakpoints.shellDesktop) {
+      _openChat();
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,

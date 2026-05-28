@@ -124,7 +124,7 @@ void main() {
     expect(find.text('知识沉淀'), findsWidgets);
   });
 
-  testWidgets('产品壳顶部入口可以打开会话历史', (tester) async {
+  testWidgets('桌面端会话历史入口直接进入 Agent 对话工作区', (tester) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -146,8 +146,9 @@ void main() {
     await tester.tap(find.byTooltip('会话历史'));
     await tester.pumpAndSettle();
 
-    expect(find.text('会话与求职资产'), findsOneWidget);
+    expect(find.text('最近会话'), findsOneWidget);
     expect(find.text('历史会话样例'), findsOneWidget);
+    expect(find.text('当前任务上下文'), findsOneWidget);
   });
 
   testWidgets('Agent 助手使用独立对话工作区并保留会话历史入口', (tester) async {
