@@ -10,15 +10,13 @@ import '../../core/models/api_models.dart';
 import '../../core/providers/career_assets_provider.dart';
 import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
-import '../../shared/widgets/session_sidebar.dart';
 import '../career/career_assets_panel.dart';
 import '../career_workbench/career_workbench_page.dart';
 import '../career_workbench/career_workbench_provider.dart';
 import '../chat/chat_screen.dart';
-
-enum _RightPanelMode { career, debug }
-
-enum _PrimaryViewMode { chat, careerWorkbench }
+import '../dashboard/dashboard_page.dart';
+import '../workspace/workspace_models.dart';
+import '../workspace/workspace_shell.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -28,45 +26,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  bool _sidebarCollapsed = false;
-  bool _rightPanelOpen = true;
-  _RightPanelMode _rightPanelMode = _RightPanelMode.career;
-  _PrimaryViewMode _primaryViewMode = _PrimaryViewMode.chat;
-
-  void _openCompactSidebar(BuildContext context, ChatProvider provider) {
-    showModalBottomSheet<void>(
-      context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        final height = MediaQuery.of(sheetContext).size.height;
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          child: SizedBox(
-            height: math.min(height * 0.82, 720.0),
-            child: SessionSidebar(
-              sessions: provider.sessions,
-              activeSessionId: provider.sessionId,
-              collapsed: false,
-              onToggleCollapse: () => Navigator.of(context).pop(),
-              onNewSession: () {
-                Navigator.of(context).pop();
-                provider.createNewSession();
-              },
-              onSessionTap: (id) {
-                Navigator.of(context).pop();
-                provider.switchSession(id);
-              },
-              onSessionDelete: provider.deleteSession,
-              onSessionRename: provider.renameSession,
-              onSessionPinToggle: provider.setSessionPinned,
-            ),
-          ),
-        );
-      },
-    );
-  }
+  WorkspacePage _activePage = WorkspacePage.dashboard;
 
   void _openCompactDebugPanel(BuildContext context, ChatProvider provider) {
     showModalBottomSheet<void>(
@@ -107,7 +67,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               compact: true,
               onOpenWorkbench: () {
                 Navigator.of(sheetContext).pop();
-                _openCareerWorkbench();
+                _setWorkspacePage(WorkspacePage.projects);
               },
               onClose: () => Navigator.of(sheetContext).pop(),
             ),
@@ -117,18 +77,40 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  void _openCareerWorkbench() {
+  void _setWorkspacePage(WorkspacePage page) {
     setState(() {
-      _primaryViewMode = _PrimaryViewMode.careerWorkbench;
-      _rightPanelOpen = false;
+      _activePage = page;
     });
-    unawaited(ref.read(careerWorkbenchProvider).refresh());
+    final workbench = ref.read(careerWorkbenchProvider);
+    if (getWorkspacePageNeedsWorkbench(page)) {
+      unawaited(workbench.ensureLoaded());
+    }
+    switch (page) {
+      case WorkspacePage.projects:
+        workbench.setTab(CareerWorkbenchTab.projects);
+      case WorkspacePage.resumes:
+        workbench.setTab(CareerWorkbenchTab.resumes);
+      case WorkspacePage.jdMatch:
+        workbench.setTab(CareerWorkbenchTab.jobs);
+      case WorkspacePage.learning:
+        workbench.setTab(CareerWorkbenchTab.learning);
+      case WorkspacePage.notes:
+        workbench.setTab(CareerWorkbenchTab.notes);
+      case WorkspacePage.dashboard:
+      case WorkspacePage.chat:
+        break;
+    }
   }
 
-  void _backToChat() {
-    setState(() {
-      _primaryViewMode = _PrimaryViewMode.chat;
-    });
+  void _openProject(String applicationId) {
+    _setWorkspacePage(WorkspacePage.projects);
+    unawaited(
+      ref.read(careerWorkbenchProvider).selectApplication(applicationId),
+    );
+  }
+
+  void _openChat() {
+    _setWorkspacePage(WorkspacePage.chat);
   }
 
   Future<void> _sendWorkbenchPrompt(
@@ -136,7 +118,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     CareerWorkbenchActionRequest? action,
   }) async {
     setState(() {
-      _primaryViewMode = _PrimaryViewMode.chat;
+      _activePage = WorkspacePage.chat;
     });
     final workbench = ref.read(careerWorkbenchProvider);
     final chat = ref.read(chatProvider);
@@ -156,201 +138,83 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  void _toggleDesktopPanel(_RightPanelMode mode) {
-    setState(() {
-      _primaryViewMode = _PrimaryViewMode.chat;
-      if (_rightPanelMode == mode) {
-        _rightPanelOpen = !_rightPanelOpen;
-        return;
-      }
-      _rightPanelMode = mode;
-      _rightPanelOpen = true;
-    });
+  void _handleWorkspaceCommand(String command) {
+    _openChat();
+    unawaited(ref.read(chatProvider).sendMessage(command));
+  }
+
+  WorkspaceBadges _workspaceBadges(CareerWorkbenchProvider workbench) {
+    final counts = workbench.workbench?.counts;
+    final jdCount = workbench.jobMatchLibraryCount > 0
+        ? workbench.jobMatchLibraryCount
+        : workbench.applications
+            .where((item) =>
+                (item.application.jdAnalysisId?.trim().isNotEmpty ?? false) ||
+                (item.application.jobFitReportId?.trim().isNotEmpty ?? false))
+            .length;
+    return WorkspaceBadges(
+      applications: counts?.applications ?? workbench.applications.length,
+      resumes: counts?.resumeVersions == 0
+          ? workbench.resumeLibraryCount
+          : (counts?.resumeVersions ?? workbench.resumeLibraryCount),
+      jdMatches: jdCount,
+      learningTasks: counts?.learningTasks ?? 0,
+      notes: counts?.notes ?? 0,
+    );
+  }
+
+  Widget _buildWorkspaceChild(
+    BuildContext context,
+    ChatProvider chat,
+    CareerWorkbenchProvider workbench,
+  ) {
+    return switch (_activePage) {
+      WorkspacePage.dashboard => DashboardPage(
+          onOpenProject: _openProject,
+          onOpenProjects: () => _setWorkspacePage(WorkspacePage.projects),
+          onOpenResumes: () => _setWorkspacePage(WorkspacePage.resumes),
+          onOpenLearning: () => _setWorkspacePage(WorkspacePage.learning),
+          onOpenNotes: () => _setWorkspacePage(WorkspacePage.notes),
+          onSendPrompt: _sendWorkbenchPrompt,
+        ),
+      WorkspacePage.chat => ChatScreen(
+          showWorkbenchToggle: true,
+          onWorkbenchToggle: () => _setWorkspacePage(WorkspacePage.projects),
+          showCareerAssetsToggle: true,
+          onCareerAssetsToggle: () => _openCompactCareerAssetsPanel(context),
+          showDebugToggle: true,
+          onDebugToggle: () => _openCompactDebugPanel(context, chat),
+        ),
+      WorkspacePage.projects ||
+      WorkspacePage.resumes ||
+      WorkspacePage.jdMatch ||
+      WorkspacePage.learning ||
+      WorkspacePage.notes =>
+        CareerWorkbenchPage(
+          onBackToChat: _openChat,
+          onSendPrompt: _sendWorkbenchPrompt,
+        ),
+    };
   }
 
   @override
   Widget build(BuildContext context) {
-    final provider = ref.watch(chatProvider);
+    final chat = ref.watch(chatProvider);
+    final workbench = ref.watch(careerWorkbenchProvider);
 
     return Scaffold(
-      body: Container(
-        decoration: AppTheme.appShellDecoration,
-        child: Stack(
-          children: [
-            const _AmbientBackground(),
-            SafeArea(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final width = constraints.maxWidth;
-                  final isCompact = width < 1260;
-                  final useCompactSidebar = width < 980;
-                  final edgePadding = width < 900 ? 12.0 : 18.0;
-                  final gap = width < 900 ? 12.0 : 18.0;
-                  final sidebarWidth =
-                      (width * 0.19).clamp(272.0, 308.0).toDouble();
-                  final panelWidth =
-                      (width * 0.22).clamp(296.0, 336.0).toDouble();
-                  final showDesktopRightPanel =
-                      _primaryViewMode == _PrimaryViewMode.chat &&
-                          _rightPanelOpen &&
-                          !isCompact;
-                  final showDesktopCareer = showDesktopRightPanel &&
-                      _rightPanelMode == _RightPanelMode.career;
-                  final showDesktopDebug = showDesktopRightPanel &&
-                      _rightPanelMode == _RightPanelMode.debug;
-
-                  return Padding(
-                    padding: EdgeInsets.all(edgePadding),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (!useCompactSidebar) ...[
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 220),
-                            width: _sidebarCollapsed ? 78 : sidebarWidth,
-                            child: SessionSidebar(
-                              sessions: provider.sessions,
-                              activeSessionId: provider.sessionId,
-                              collapsed: _sidebarCollapsed,
-                              onToggleCollapse: () => setState(
-                                () => _sidebarCollapsed = !_sidebarCollapsed,
-                              ),
-                              onNewSession: provider.createNewSession,
-                              onSessionTap: provider.switchSession,
-                              onSessionDelete: provider.deleteSession,
-                              onSessionRename: provider.renameSession,
-                              onSessionPinToggle: provider.setSessionPinned,
-                            ),
-                          ),
-                          SizedBox(width: gap),
-                        ],
-                        Expanded(
-                          child: _primaryViewMode ==
-                                  _PrimaryViewMode.careerWorkbench
-                              ? CareerWorkbenchPage(
-                                  onBackToChat: _backToChat,
-                                  onSendPrompt: _sendWorkbenchPrompt,
-                                )
-                              : ChatScreen(
-                                  showSidebarToggle: useCompactSidebar,
-                                  onSidebarToggle: useCompactSidebar
-                                      ? () => _openCompactSidebar(
-                                            context,
-                                            provider,
-                                          )
-                                      : null,
-                                  showWorkbenchToggle: true,
-                                  onWorkbenchToggle: _openCareerWorkbench,
-                                  showCareerAssetsToggle: true,
-                                  isCareerAssetsPanelOpen: showDesktopCareer,
-                                  onCareerAssetsToggle: isCompact
-                                      ? () => _openCompactCareerAssetsPanel(
-                                            context,
-                                          )
-                                      : () => _toggleDesktopPanel(
-                                            _RightPanelMode.career,
-                                          ),
-                                  showDebugToggle: true,
-                                  isDebugPanelOpen: showDesktopDebug,
-                                  onDebugToggle: isCompact
-                                      ? () => _openCompactDebugPanel(
-                                            context,
-                                            provider,
-                                          )
-                                      : () => _toggleDesktopPanel(
-                                            _RightPanelMode.debug,
-                                          ),
-                                ),
-                        ),
-                        if (showDesktopRightPanel) ...[
-                          SizedBox(width: gap),
-                          SizedBox(
-                            width: panelWidth,
-                            child: showDesktopCareer
-                                ? CareerAssetsPanel(
-                                    onOpenWorkbench: _openCareerWorkbench,
-                                    onClose: () =>
-                                        setState(() => _rightPanelOpen = false),
-                                  )
-                                : _DebugPanel(
-                                    provider: provider,
-                                    onClose: () => setState(
-                                      () => _rightPanelOpen = false,
-                                    ),
-                                  ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AmbientBackground extends StatelessWidget {
-  const _AmbientBackground();
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Stack(
-        children: [
-          Positioned(
-            top: -180,
-            left: -120,
-            child: _GlowBlob(
-              size: 420,
-              color: AppTheme.accent.withValues(alpha: 0.12),
-            ),
-          ),
-          Positioned(
-            bottom: -220,
-            right: -140,
-            child: _GlowBlob(
-              size: 480,
-              color: const Color(0xFF2563EB).withValues(alpha: 0.08),
-            ),
-          ),
-          Positioned(
-            top: 160,
-            right: 240,
-            child: _GlowBlob(
-              size: 220,
-              color: Colors.white.withValues(alpha: 0.02),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _GlowBlob extends StatelessWidget {
-  final double size;
-  final Color color;
-
-  const _GlowBlob({required this.size, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: RadialGradient(
-          colors: [
-            color,
-            color.withValues(alpha: color.a * 0.45),
-            Colors.transparent,
-          ],
-        ),
+      body: ProductWorkspaceShell(
+        activePage: _activePage,
+        badges: _workspaceBadges(workbench),
+        serverReachable: chat.serverReachable,
+        onPageChanged: _setWorkspacePage,
+        onNewSession: () {
+          chat.createNewSession();
+          _openChat();
+        },
+        onOpenChat: _openChat,
+        onCommandSubmitted: _handleWorkspaceCommand,
+        child: _buildWorkspaceChild(context, chat, workbench),
       ),
     );
   }
