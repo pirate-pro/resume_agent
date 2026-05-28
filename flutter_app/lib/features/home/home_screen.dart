@@ -89,21 +89,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (getWorkspacePageNeedsWorkbench(page)) {
       unawaited(workbench.ensureLoaded());
     }
-    switch (page) {
-      case WorkspacePage.projects:
-        workbench.setTab(CareerWorkbenchTab.projects);
-      case WorkspacePage.resumes:
-        workbench.setTab(CareerWorkbenchTab.resumes);
-      case WorkspacePage.jdMatch:
-        workbench.setTab(CareerWorkbenchTab.jobs);
-      case WorkspacePage.learning:
-        workbench.setTab(CareerWorkbenchTab.learning);
-      case WorkspacePage.notes:
-        workbench.setTab(CareerWorkbenchTab.notes);
-      case WorkspacePage.dashboard:
-      case WorkspacePage.chat:
-        break;
-    }
   }
 
   void _openProject(String applicationId) {

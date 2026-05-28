@@ -79,6 +79,50 @@ void main() {
     expect(find.text('执行失败：生成定制简历'), findsOneWidget);
     expect(find.textContaining('模拟聊天失败'), findsOneWidget);
   });
+
+  testWidgets('产品一级导航不再嵌套旧求职工作台', (tester) async {
+    tester.view.physicalSize = const Size(1440, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+
+    final api = _FakeHomeApiService();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiServiceProvider.overrideWithValue(api),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Future<void> openProductPage(String label) async {
+      await tester.tap(find.text(label).first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('求职工作台'), findsNothing);
+      expect(find.text('工作台模式'), findsNothing);
+      expect(find.text('JD 与匹配'), findsNothing);
+    }
+
+    await openProductPage('求职项目');
+    expect(find.text('岗位工作台'), findsWidgets);
+
+    await openProductPage('简历资料');
+    expect(find.text('版本管理'), findsWidgets);
+
+    await openProductPage('JD 匹配');
+    expect(find.text('智能分析'), findsWidgets);
+
+    await openProductPage('学习计划');
+    expect(find.text('补短板'), findsWidgets);
+
+    await openProductPage('笔记');
+    expect(find.text('知识沉淀'), findsWidgets);
+  });
 }
 
 class _FakeHomeApiService extends ApiService {
@@ -273,6 +317,14 @@ class _FakeHomeApiService extends ApiService {
   @override
   Future<List<ResumeVersionView>> listCareerResumeVersions({
     bool includeArchived = false,
+  }) async =>
+      const [];
+
+  @override
+  Future<List<NoteView>> listNotes({
+    bool includeArchived = false,
+    String? collectionId,
+    String? relatedApplicationId,
   }) async =>
       const [];
 
