@@ -17,6 +17,7 @@ import '../chat/chat_screen.dart';
 import '../dashboard/dashboard_page.dart';
 import '../jd_match/jd_match_page.dart';
 import '../projects/career_projects_page.dart';
+import '../resumes/resume_library_page.dart';
 import '../workspace/workspace_models.dart';
 import '../workspace/workspace_shell.dart';
 
@@ -200,10 +201,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           onOpenLearning: () => _setWorkspacePage(WorkspacePage.learning),
           onSendPrompt: _sendWorkbenchPrompt,
         ),
-      WorkspacePage.resumes ||
-      WorkspacePage.learning ||
-      WorkspacePage.notes =>
-        CareerWorkbenchPage(
+      WorkspacePage.resumes => ResumeLibraryPage(
+          onOpenProjects: () => _setWorkspacePage(WorkspacePage.projects),
+          onOpenJDMatch: () => _setWorkspacePage(WorkspacePage.jdMatch),
+          onSendPrompt: _sendWorkbenchPrompt,
+        ),
+      WorkspacePage.learning || WorkspacePage.notes => CareerWorkbenchPage(
           onBackToChat: _openChat,
           onSendPrompt: _sendWorkbenchPrompt,
         ),
