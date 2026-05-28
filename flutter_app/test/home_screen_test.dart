@@ -123,6 +123,32 @@ void main() {
     await openProductPage('笔记');
     expect(find.text('知识沉淀'), findsWidgets);
   });
+
+  testWidgets('产品壳顶部入口可以打开会话历史', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+
+    final api = _FakeHomeApiService();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiServiceProvider.overrideWithValue(api),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('会话历史'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('会话与求职资产'), findsOneWidget);
+    expect(find.text('历史会话样例'), findsOneWidget);
+  });
 }
 
 class _FakeHomeApiService extends ApiService {
@@ -183,7 +209,17 @@ class _FakeHomeApiService extends ApiService {
   Future<List<SkillOption>> listSkills() async => const [];
 
   @override
-  Future<List<SessionMeta>> listSessions() async => const [];
+  Future<List<SessionMeta>> listSessions() async => [
+        SessionMeta(
+          id: 'sess_history_sample',
+          title: '历史会话样例',
+          createdAt: now.subtract(const Duration(days: 1)),
+          updatedAt: now,
+          isPinned: false,
+          pinnedAt: null,
+          messageCount: 4,
+        ),
+      ];
 
   @override
   Stream<StreamEvent> chatStream({

@@ -10,6 +10,7 @@ import '../../core/models/api_models.dart';
 import '../../core/providers/career_assets_provider.dart';
 import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
+import '../../shared/widgets/session_sidebar.dart';
 import '../career/career_assets_panel.dart';
 import '../career_workbench/career_workbench_provider.dart';
 import '../chat/chat_screen.dart';
@@ -102,6 +103,68 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _setWorkspacePage(WorkspacePage.chat);
   }
 
+  void _openSessionHistory(BuildContext context) {
+    unawaited(ref.read(chatProvider).refreshSessions());
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final height = MediaQuery.sizeOf(sheetContext).height;
+        final width = MediaQuery.sizeOf(sheetContext).width;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: Align(
+            alignment: Alignment.bottomLeft,
+            child: SizedBox(
+              width: width < 620 ? double.infinity : 380,
+              height: math.min(height * 0.86, 760.0),
+              child: Consumer(
+                builder: (context, ref, _) {
+                  final chat = ref.watch(chatProvider);
+                  return SessionSidebar(
+                    sessions: chat.sessions,
+                    activeSessionId: chat.sessionId,
+                    collapsed: false,
+                    onToggleCollapse: () => Navigator.of(sheetContext).pop(),
+                    onNewSession: () {
+                      Navigator.of(sheetContext).pop();
+                      ref.read(chatProvider).createNewSession();
+                      _openChat();
+                    },
+                    onSessionTap: (sessionId) {
+                      Navigator.of(sheetContext).pop();
+                      _openChat();
+                      unawaited(
+                        ref.read(chatProvider).switchSession(sessionId),
+                      );
+                    },
+                    onSessionDelete: (sessionId) {
+                      unawaited(
+                        ref.read(chatProvider).deleteSession(sessionId),
+                      );
+                    },
+                    onSessionRename: (sessionId, title) {
+                      return ref
+                          .read(chatProvider)
+                          .renameSession(sessionId, title);
+                    },
+                    onSessionPinToggle: (sessionId, isPinned) {
+                      return ref
+                          .read(chatProvider)
+                          .setSessionPinned(sessionId, isPinned);
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _sendWorkbenchPrompt(
     String prompt, {
     CareerWorkbenchActionRequest? action,
@@ -167,6 +230,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           onSendPrompt: _sendWorkbenchPrompt,
         ),
       WorkspacePage.chat => ChatScreen(
+          showSidebarToggle: true,
+          onSidebarToggle: () => _openSessionHistory(context),
           showWorkbenchToggle: true,
           onWorkbenchToggle: () => _setWorkspacePage(WorkspacePage.projects),
           showCareerAssetsToggle: true,
@@ -222,6 +287,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           _openChat();
         },
         onOpenChat: _openChat,
+        onOpenSessionHistory: () => _openSessionHistory(context),
         onCommandSubmitted: _handleWorkspaceCommand,
         child: _buildWorkspaceChild(context, chat, workbench),
       ),

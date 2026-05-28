@@ -8,7 +8,7 @@ import 'package:resume_agent_app/features/learning/learning_plan_page.dart';
 
 void main() {
   testWidgets('学习计划页展示路线、任务、短板并发送推荐动作', (tester) async {
-    tester.view.physicalSize = const Size(900, 1000);
+    tester.view.physicalSize = const Size(900, 2200);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -53,34 +53,91 @@ void main() {
     expect(sentAction?.origin, 'learning_plan');
     expect(sentAction?.actionType, 'learning_recommend');
 
-    await tester.scrollUntilVisible(
-      find.text('多 Agent 后端工程化补强路线'),
-      320,
-      scrollable: find.byType(Scrollable).first,
-    );
     expect(find.text('学习路线'), findsWidgets);
     expect(find.text('多 Agent 后端工程化补强路线'), findsWidgets);
 
-    await tester.scrollUntilVisible(
-      find.text('补齐任务编排状态机实践'),
-      320,
-      scrollable: find.byType(Scrollable).first,
-    );
     expect(find.text('补齐任务编排状态机实践'), findsWidgets);
 
-    await tester.scrollUntilVisible(
-      find.text('短板与证据缺口'),
-      320,
-      scrollable: find.byType(Scrollable).first,
-    );
     expect(find.text('生产级任务编排经验不足'), findsWidgets);
 
-    await tester.scrollUntilVisible(
-      find.text('复盘安排'),
-      320,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.drag(find.byType(ListView).first, const Offset(0, -900));
+    await tester.pumpAndSettle();
+
     expect(find.text('系统设计复盘'), findsOneWidget);
+  });
+
+  testWidgets('学习任务记录进度先收集打卡内容再发送结构化动作', (tester) async {
+    tester.view.physicalSize = const Size(900, 2200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = _FakeLearningPlanApi();
+    String? sentPrompt;
+    CareerWorkbenchActionRequest? sentAction;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          careerWorkbenchProvider.overrideWith(
+            (ref) => CareerWorkbenchProvider(api),
+          ),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: LearningPlanPage(
+              onOpenProjects: () {},
+              onOpenNotes: () {},
+              onSendPrompt: (prompt, {action}) async {
+                sentPrompt = prompt;
+                sentAction = action;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(OutlinedButton, '记录进度'), findsWidgets);
+    await tester.tap(find.widgetWithText(OutlinedButton, '记录进度').first);
+    await tester.pumpAndSettle();
+
+    expect(sentPrompt, isNull);
+    expect(find.text('记录学习进度'), findsOneWidget);
+    expect(find.textContaining('Agent 只负责按内容写入'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('learning_checkin_summary_field')),
+      '完成了任务状态机复盘，补充了工具幂等案例。',
+    );
+    await tester.enterText(
+      find.byKey(const Key('learning_checkin_blockers_field')),
+      'RAG 压测场景的证据还不够完整。',
+    );
+    await tester.enterText(
+      find.byKey(const Key('learning_checkin_next_action_field')),
+      '明天整理成一页系统设计说明。',
+    );
+    await tester.enterText(
+      find.byKey(const Key('learning_checkin_minutes_field')),
+      '45',
+    );
+    await tester.tap(find.text('进行中').last);
+    await tester.pump();
+    await tester.tap(find.text('交给 Agent 写入'));
+    await tester.pumpAndSettle();
+
+    expect(sentAction?.origin, 'learning_plan');
+    expect(sentAction?.actionType, 'learning_checkin');
+    expect(sentPrompt, contains('learning_task_orchestration'));
+    expect(sentPrompt, contains('调用 learning_checkin_create'));
+    expect(sentPrompt, contains('summary: 完成了任务状态机复盘'));
+    expect(sentPrompt, contains('blockers: RAG 压测场景'));
+    expect(sentPrompt, contains('next_action: 明天整理成一页系统设计说明'));
+    expect(sentPrompt, contains('minutes_spent: 45'));
+    expect(sentPrompt, contains('state_change: doing'));
   });
 }
 

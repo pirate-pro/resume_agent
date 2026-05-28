@@ -13,6 +13,7 @@ class ProductWorkspaceShell extends StatefulWidget {
   final ValueChanged<WorkspacePage> onPageChanged;
   final VoidCallback onNewSession;
   final VoidCallback onOpenChat;
+  final VoidCallback onOpenSessionHistory;
   final ValueChanged<String> onCommandSubmitted;
 
   const ProductWorkspaceShell({
@@ -24,6 +25,7 @@ class ProductWorkspaceShell extends StatefulWidget {
     required this.onPageChanged,
     required this.onNewSession,
     required this.onOpenChat,
+    required this.onOpenSessionHistory,
     required this.onCommandSubmitted,
   });
 
@@ -98,6 +100,7 @@ class _ProductWorkspaceShellState extends State<ProductWorkspaceShell> {
                       serverReachable: widget.serverReachable,
                       onMenuTap: () => _openMobileNav(context),
                       onNewSession: widget.onNewSession,
+                      onOpenSessionHistory: widget.onOpenSessionHistory,
                       onOpenWorkbench: () =>
                           widget.onPageChanged(WorkspacePage.projects),
                       onCommandSubmitted: widget.onCommandSubmitted,

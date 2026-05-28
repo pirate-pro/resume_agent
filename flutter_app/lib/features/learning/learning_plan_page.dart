@@ -10,6 +10,7 @@ import '../../shared/theme/product_tokens.dart';
 import '../../shared/widgets/product_components.dart';
 import '../career_ui/career_ui_helpers.dart';
 import '../career_workbench/career_workbench_provider.dart';
+import 'widgets/learning_checkin_sheet.dart';
 
 class LearningPlanPage extends ConsumerStatefulWidget {
   final VoidCallback onOpenProjects;
@@ -100,7 +101,7 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
             const SizedBox(height: 14),
             _LearningTaskBoard(
               tasks: tasks,
-              onCheckIn: (task) => _sendCheckIn(app, task),
+              onCheckIn: (task) => _showCheckInSheet(app, task),
               onCreateTask: () => _sendCreateTask(app),
             ),
             const SizedBox(height: 14),
@@ -142,7 +143,7 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
               const SizedBox(height: 14),
               _LearningTaskBoard(
                 tasks: tasks,
-                onCheckIn: (task) => _sendCheckIn(app, task),
+                onCheckIn: (task) => _showCheckInSheet(app, task),
                 onCreateTask: () => _sendCreateTask(app),
               ),
               const SizedBox(height: 14),
@@ -194,18 +195,32 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
     );
   }
 
-  void _sendCheckIn(
+  Future<void> _showCheckInSheet(
     CareerApplicationView? app,
     CareerWorkbenchLearningTaskView task,
-  ) {
+  ) async {
+    if (app == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text('请先选择一个求职项目'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+      return;
+    }
+    final detail = await showLearningCheckinSheet(context, task: task);
+    if (!mounted || detail == null) return;
+    _sendCheckInIntent(app, detail);
+  }
+
+  void _sendCheckInIntent(CareerApplicationView app, String detail) {
     sendCareerPromptAction(
       sender: widget.onSendPrompt,
       application: app,
       label: '记录学习进度',
       actionType: 'learning_checkin',
       origin: 'learning_plan',
-      detail:
-          '请读取 learning_task_id=${task.learningTaskId}，基于用户当前进展记录一次 check-in；如果用户没有提供进展内容，先询问而不是直接更新状态。',
+      detail: detail,
     );
   }
 }

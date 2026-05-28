@@ -10,6 +10,7 @@ class WorkspaceTopBar extends StatefulWidget {
   final bool serverReachable;
   final VoidCallback? onMenuTap;
   final VoidCallback onNewSession;
+  final VoidCallback onOpenSessionHistory;
   final VoidCallback onOpenWorkbench;
   final ValueChanged<String> onCommandSubmitted;
 
@@ -18,6 +19,7 @@ class WorkspaceTopBar extends StatefulWidget {
     required this.activePage,
     required this.serverReachable,
     required this.onNewSession,
+    required this.onOpenSessionHistory,
     required this.onOpenWorkbench,
     required this.onCommandSubmitted,
     this.showMenu = false,
@@ -58,6 +60,7 @@ class _WorkspaceTopBarState extends State<WorkspaceTopBar> {
           serverReachable: widget.serverReachable,
           compact: compact,
           onNewSession: widget.onNewSession,
+          onOpenSessionHistory: widget.onOpenSessionHistory,
           onOpenWorkbench: widget.onOpenWorkbench,
           showWorkbenchShortcut: widget.activePage != WorkspacePage.chat,
         );
@@ -234,6 +237,7 @@ class _TopActions extends StatelessWidget {
   final bool serverReachable;
   final bool compact;
   final VoidCallback onNewSession;
+  final VoidCallback onOpenSessionHistory;
   final VoidCallback onOpenWorkbench;
   final bool showWorkbenchShortcut;
 
@@ -241,6 +245,7 @@ class _TopActions extends StatelessWidget {
     required this.serverReachable,
     required this.compact,
     required this.onNewSession,
+    required this.onOpenSessionHistory,
     required this.onOpenWorkbench,
     required this.showWorkbenchShortcut,
   });
@@ -260,6 +265,12 @@ class _TopActions extends StatelessWidget {
           ),
           const SizedBox(width: 8),
         ],
+        _TopIconButton(
+          tooltip: '会话历史',
+          icon: Icons.history_rounded,
+          onTap: onOpenSessionHistory,
+        ),
+        const SizedBox(width: 8),
         SizedBox(
           height: 40,
           child: ElevatedButton.icon(

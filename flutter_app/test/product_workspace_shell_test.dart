@@ -11,6 +11,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     var activePage = WorkspacePage.dashboard;
+    var openedHistory = false;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -29,6 +30,7 @@ void main() {
               onPageChanged: (page) => setState(() => activePage = page),
               onNewSession: () {},
               onOpenChat: () => setState(() => activePage = WorkspacePage.chat),
+              onOpenSessionHistory: () => openedHistory = true,
               onCommandSubmitted: (_) {},
               child: const Center(child: Text('workspace content')),
             );
@@ -43,6 +45,11 @@ void main() {
     expect(find.text('求职项目'), findsOneWidget);
     expect(find.text('workspace content'), findsOneWidget);
     expect(find.text('搜索项目、岗位、笔记，或输入命令（如：分析 JD 匹配度）'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('会话历史'));
+    await tester.pump();
+
+    expect(openedHistory, isTrue);
 
     await tester.tap(find.text('JD 匹配'));
     await tester.pumpAndSettle();
