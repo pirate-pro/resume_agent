@@ -62,7 +62,7 @@ class _ResumeLibraryPageState extends ConsumerState<ResumeLibraryPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final desktop = constraints.maxWidth >= 1180;
+        final desktop = constraints.maxWidth >= ProductBreakpoints.contentRail;
         final header = _ResumeHeader(
           provider: provider,
           onRefresh: () => unawaited(_refresh(provider)),

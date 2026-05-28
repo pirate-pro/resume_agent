@@ -61,7 +61,7 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final desktop = constraints.maxWidth >= 1180;
+        final desktop = constraints.maxWidth >= ProductBreakpoints.contentRail;
         final header = _LearningHeader(
           provider: provider,
           onRefresh: () => unawaited(provider.refresh()),

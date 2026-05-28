@@ -48,7 +48,7 @@ class _WorkspaceTopBarState extends State<WorkspaceTopBar> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final compact = constraints.maxWidth < 760;
+        final compact = constraints.maxWidth < ProductBreakpoints.compact;
         final search = _GlobalSearchBox(
           controller: _controller,
           compact: compact,
@@ -56,6 +56,7 @@ class _WorkspaceTopBarState extends State<WorkspaceTopBar> {
         );
         final actions = _TopActions(
           serverReachable: widget.serverReachable,
+          compact: compact,
           onNewSession: widget.onNewSession,
           onOpenWorkbench: widget.onOpenWorkbench,
           showWorkbenchShortcut: widget.activePage != WorkspacePage.chat,
@@ -231,12 +232,14 @@ class _GlobalSearchBox extends StatelessWidget {
 
 class _TopActions extends StatelessWidget {
   final bool serverReachable;
+  final bool compact;
   final VoidCallback onNewSession;
   final VoidCallback onOpenWorkbench;
   final bool showWorkbenchShortcut;
 
   const _TopActions({
     required this.serverReachable,
+    required this.compact,
     required this.onNewSession,
     required this.onOpenWorkbench,
     required this.showWorkbenchShortcut,
@@ -247,7 +250,7 @@ class _TopActions extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (showWorkbenchShortcut) ...[
+        if (!compact && showWorkbenchShortcut) ...[
           Tooltip(
             message: '求职工作台',
             child: _TopIconButton(
@@ -281,21 +284,23 @@ class _TopActions extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(width: 8),
-        _TopIconButton(
-          tooltip: serverReachable ? '后端在线' : '后端离线',
-          icon: serverReachable
-              ? Icons.notifications_none_rounded
-              : Icons.cloud_off_outlined,
-          badge: serverReachable ? null : '!',
-          onTap: () {},
-        ),
-        const SizedBox(width: 8),
-        _TopIconButton(
-          tooltip: '设置',
-          icon: Icons.settings_outlined,
-          onTap: () {},
-        ),
+        if (!compact) ...[
+          const SizedBox(width: 8),
+          _TopIconButton(
+            tooltip: serverReachable ? '后端在线' : '后端离线',
+            icon: serverReachable
+                ? Icons.notifications_none_rounded
+                : Icons.cloud_off_outlined,
+            badge: serverReachable ? null : '!',
+            onTap: () {},
+          ),
+          const SizedBox(width: 8),
+          _TopIconButton(
+            tooltip: '设置',
+            icon: Icons.settings_outlined,
+            onTap: () {},
+          ),
+        ],
         const SizedBox(width: 8),
         Container(
           width: 38,

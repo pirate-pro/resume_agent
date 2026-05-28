@@ -9,6 +9,7 @@ import '../../core/models/api_models.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/theme/product_tokens.dart';
 import '../../shared/widgets/product_components.dart';
+import '../career_ui/career_ui_helpers.dart';
 import '../career_workbench/career_workbench_provider.dart';
 
 typedef DashboardPromptSender = Future<void> Function(
@@ -63,7 +64,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
     final apps = provider.applications.take(3).toList();
     return LayoutBuilder(
       builder: (context, constraints) {
-        final desktop = constraints.maxWidth >= 1180;
+        final desktop = constraints.maxWidth >= ProductBreakpoints.contentRail;
         final main = ListView(
           padding: EdgeInsets.zero,
           children: [
@@ -163,7 +164,7 @@ class _StatusHeroCard extends StatelessWidget {
     final readiness = detail?.readiness ?? summary?.readiness;
     final score = readiness?.score;
     final title = app == null ? '当前求职状态' : '当前求职状态';
-    final description = _firstNonEmpty([
+    final rawDescription = _firstNonEmpty([
       readiness?.summary,
       app?.summary,
       app == null
@@ -177,6 +178,10 @@ class _StatusHeroCard extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 720;
+          final description = careerDisplaySummary(
+            rawDescription,
+            maxChars: compact ? 94 : 132,
+          );
           final content = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -276,9 +281,18 @@ class _StatusHeroCard extends StatelessWidget {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                content,
-                const SizedBox(height: 20),
-                Align(alignment: Alignment.centerLeft, child: ring),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: content),
+                    const SizedBox(width: 14),
+                    Transform.scale(
+                      scale: 0.84,
+                      alignment: Alignment.topCenter,
+                      child: ring,
+                    ),
+                  ],
+                ),
               ],
             );
           }
@@ -352,7 +366,11 @@ class _MetricStrip extends StatelessWidget {
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = (constraints.maxWidth / 230).floor().clamp(1, 4);
+        final columns = constraints.maxWidth >= 960
+            ? 4
+            : constraints.maxWidth >= 620
+                ? 2
+                : 1;
         final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
         return Wrap(
           spacing: 12,
@@ -679,7 +697,9 @@ class _CurrentJudgmentCard extends StatelessWidget {
         children: [
           if (readiness?.summary.trim().isNotEmpty == true)
             Text(
-              readiness!.summary.trim(),
+              careerDisplaySummary(readiness!.summary, maxChars: 130),
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
               style: AppTheme.ts(
                 fontSize: 12.4,
                 height: 1.52,

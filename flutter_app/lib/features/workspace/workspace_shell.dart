@@ -75,7 +75,7 @@ class _ProductWorkspaceShellState extends State<ProductWorkspaceShell> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final desktop = width >= 980;
+        final desktop = width >= ProductBreakpoints.shellDesktop;
         return Material(
           color: ProductColors.canvas,
           child: Row(

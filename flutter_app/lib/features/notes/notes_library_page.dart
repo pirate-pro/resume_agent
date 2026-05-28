@@ -57,7 +57,7 @@ class _NotesLibraryPageState extends ConsumerState<NotesLibraryPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final desktop = constraints.maxWidth >= 1180;
+        final desktop = constraints.maxWidth >= ProductBreakpoints.contentRail;
         final header = _NotesHeader(
           provider: provider,
           onRefresh: () => unawaited(provider.loadNotes(force: true)),

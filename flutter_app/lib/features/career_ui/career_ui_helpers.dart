@@ -20,6 +20,26 @@ String careerFirstNonEmpty(List<String?> values, {String fallback = ''}) {
   return fallback;
 }
 
+String careerDisplaySummary(
+  String? value, {
+  String fallback = '',
+  int maxChars = 140,
+}) {
+  var text = (value?.trim().isNotEmpty == true ? value!.trim() : fallback)
+      .replaceAll(RegExp(r'\s+'), ' ');
+  text = text.replaceAll(
+    RegExp(
+      r'\b(?:application|artifact|career_profile|jd_analysis|job_fit_report|resume_profile|resume_version|session|sess)_[A-Za-z0-9_-]+\b',
+    ),
+    '相关资料',
+  );
+  text = text.replaceAll(RegExp(r'(相关资料[，、\s]*){2,}'), '相关资料');
+  if (maxChars > 0 && text.length > maxChars) {
+    return '${text.substring(0, maxChars).trimRight()}…';
+  }
+  return text;
+}
+
 String careerShortLabel(String? value, {String fallback = '待补充'}) {
   final text = value?.trim() ?? '';
   return text.isEmpty ? fallback : text;

@@ -59,7 +59,7 @@ class _CareerProjectsPageState extends ConsumerState<CareerProjectsPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final desktop = constraints.maxWidth >= 1180;
+        final desktop = constraints.maxWidth >= ProductBreakpoints.contentRail;
         final main = ListView(
           padding: EdgeInsets.zero,
           children: [
@@ -174,7 +174,7 @@ class _ProjectHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 760;
+          final compact = constraints.maxWidth < ProductBreakpoints.compact;
           final title = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -496,7 +496,7 @@ class _ProjectHeroCard extends StatelessWidget {
       decoration: ProductSurface.hero(),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 760;
+          final compact = constraints.maxWidth < 620;
           final leading = Row(
             children: [
               _CompanyAvatar(label: app.company),
@@ -598,9 +598,12 @@ class _ProjectHeroCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 7),
                 Text(
-                  careerFirstNonEmpty(
-                    [readiness?.summary, app.summary],
-                    fallback: '完成 JD 匹配后会在这里展示岗位判断、核心风险和推进建议。',
+                  careerDisplaySummary(
+                    careerFirstNonEmpty(
+                      [readiness?.summary, app.summary],
+                      fallback: '完成 JD 匹配后会在这里展示岗位判断、核心风险和推进建议。',
+                    ),
+                    maxChars: compact ? 118 : 142,
                   ),
                   maxLines: compact ? 5 : 3,
                   overflow: TextOverflow.ellipsis,
@@ -1193,10 +1196,15 @@ class _ProjectJudgmentCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            careerFirstNonEmpty(
-              [readiness?.summary],
-              fallback: '完成匹配后这里会展示 AI 判断。',
+            careerDisplaySummary(
+              careerFirstNonEmpty(
+                [readiness?.summary],
+                fallback: '完成匹配后这里会展示 AI 判断。',
+              ),
+              maxChars: 132,
             ),
+            maxLines: 5,
+            overflow: TextOverflow.ellipsis,
             style: AppTheme.ts(
               fontSize: 12.2,
               height: 1.48,

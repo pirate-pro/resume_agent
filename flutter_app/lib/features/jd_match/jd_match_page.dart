@@ -68,7 +68,7 @@ class _JDMatchPageState extends ConsumerState<JDMatchPage> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final desktop = constraints.maxWidth >= 1180;
+        final desktop = constraints.maxWidth >= ProductBreakpoints.contentRail;
         final main = ListView(
           padding: EdgeInsets.zero,
           children: [
@@ -212,7 +212,7 @@ class _JDMatchHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 760;
+          final compact = constraints.maxWidth < ProductBreakpoints.compact;
           final title = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -411,7 +411,7 @@ class _JDHeroCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 760;
+          final compact = constraints.maxWidth < 620;
           final identity = Row(
             children: [
               _CompanyLogo(label: application?.company ?? jd?.company ?? ''),
@@ -523,12 +523,15 @@ class _JDHeroCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  careerFirstNonEmpty(
-                    [
-                      readiness?.summary,
-                      report?.recommendation,
-                      '完成 JD 分析后，这里会展示匹配结论和建议。',
-                    ],
+                  careerDisplaySummary(
+                    careerFirstNonEmpty(
+                      [
+                        readiness?.summary,
+                        report?.recommendation,
+                        '完成 JD 分析后，这里会展示匹配结论和建议。',
+                      ],
+                    ),
+                    maxChars: compact ? 116 : 140,
                   ),
                   maxLines: compact ? 5 : 3,
                   overflow: TextOverflow.ellipsis,
@@ -756,7 +759,7 @@ class _MatchAnalysisView extends StatelessWidget {
       tone: careerScoreTone(score),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 760;
+          final compact = constraints.maxWidth < 620;
           final scorePanel = Container(
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
             decoration: ProductSurface.softCard(
@@ -780,9 +783,12 @@ class _MatchAnalysisView extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  careerFirstNonEmpty(
-                    [readiness?.summary, application?.summary],
-                    fallback: '暂无匹配结论。',
+                  careerDisplaySummary(
+                    careerFirstNonEmpty(
+                      [readiness?.summary, application?.summary],
+                      fallback: '暂无匹配结论。',
+                    ),
+                    maxChars: compact ? 110 : 126,
                   ),
                   textAlign: TextAlign.center,
                   maxLines: 4,
@@ -1202,10 +1208,15 @@ class _CurrentDecisionCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            careerFirstNonEmpty(
-              [readiness?.summary],
-              fallback: '暂无当前判断。',
+            careerDisplaySummary(
+              careerFirstNonEmpty(
+                [readiness?.summary],
+                fallback: '暂无当前判断。',
+              ),
+              maxChars: 132,
             ),
+            maxLines: 5,
+            overflow: TextOverflow.ellipsis,
             style: AppTheme.ts(
               fontSize: 12.2,
               height: 1.48,
@@ -2043,7 +2054,7 @@ List<_ScoreDimension> _scoreCards(
   final cards = [
     for (final entry in entries)
       _ScoreDimension(
-        label: entry.key,
+        label: _scoreLabel(entry.key),
         score: entry.value.clamp(0, 100),
         icon: _scoreIcon(entry.key),
         note: _scoreNote(entry.value),
@@ -2239,6 +2250,31 @@ IconData _scoreIcon(String label) {
   if (value.contains('面试')) return Icons.forum_outlined;
   if (value.contains('风险')) return Icons.report_problem_outlined;
   return Icons.analytics_outlined;
+}
+
+String _scoreLabel(String label) {
+  final value = label.trim();
+  final lower = value.toLowerCase();
+  if (lower.contains('engineering')) return '工程能力';
+  if (lower.contains('interview')) return '面试准备度';
+  if (lower.contains('langchain')) return 'LangChain 经验';
+  if (lower.contains('project')) return '项目经历';
+  if (lower.contains('rag')) return 'RAG 经验';
+  if (lower.contains('agent') || lower.contains('llm')) return 'Agent / LLM 经验';
+  if (lower.contains('skill')) return '技术栈匹配';
+  if (!value.contains('_')) return value;
+  return value
+      .split('_')
+      .where((part) => part.trim().isNotEmpty)
+      .map((part) => switch (part.toLowerCase()) {
+            'match' => '匹配',
+            'gap' => '差距',
+            'capability' => '能力',
+            'experience' => '经验',
+            'readiness' => '准备度',
+            _ => part,
+          })
+      .join(' ');
 }
 
 String _scoreNote(int score) {

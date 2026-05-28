@@ -4,6 +4,14 @@ import 'app_theme.dart';
 
 enum ProductTone { primary, info, warning, danger, purple, neutral }
 
+class ProductBreakpoints {
+  static const shellDesktop = 1100.0;
+  static const contentRail = 1040.0;
+  static const compact = 760.0;
+
+  const ProductBreakpoints._();
+}
+
 class ProductColors {
   static const canvas = Color(0xFFF7FAF9);
   static const surface = Color(0xFFFFFFFF);
