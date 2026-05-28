@@ -149,6 +149,36 @@ void main() {
     expect(find.text('会话与求职资产'), findsOneWidget);
     expect(find.text('历史会话样例'), findsOneWidget);
   });
+
+  testWidgets('Agent 助手使用独立对话工作区并保留会话历史入口', (tester) async {
+    tester.view.physicalSize = const Size(1440, 960);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+
+    final api = _FakeHomeApiService();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiServiceProvider.overrideWithValue(api),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Agent 助手').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('最近会话'), findsOneWidget);
+    expect(find.text('历史会话样例'), findsOneWidget);
+    expect(find.text('当前任务上下文'), findsOneWidget);
+    expect(find.text('推荐操作'), findsOneWidget);
+    expect(find.text('关联资产'), findsOneWidget);
+    expect(find.text('生成定制简历'), findsWidgets);
+  });
 }
 
 class _FakeHomeApiService extends ApiService {

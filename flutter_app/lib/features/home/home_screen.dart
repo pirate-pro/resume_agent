@@ -13,6 +13,7 @@ import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/session_sidebar.dart';
 import '../career/career_assets_panel.dart';
 import '../career_workbench/career_workbench_provider.dart';
+import '../chat_workspace/agent_chat_workspace.dart';
 import '../chat/chat_screen.dart';
 import '../dashboard/dashboard_page.dart';
 import '../jd_match/jd_match_page.dart';
@@ -275,11 +276,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget build(BuildContext context) {
     final chat = ref.watch(chatProvider);
     final workbench = ref.watch(careerWorkbenchProvider);
+    final badges = _workspaceBadges(workbench);
+
+    if (_activePage == WorkspacePage.chat) {
+      return Scaffold(
+        body: AgentChatWorkspace(
+          badges: badges,
+          onPageChanged: _setWorkspacePage,
+          onNewSession: () {
+            chat.createNewSession();
+            _openChat();
+          },
+          onSendPrompt: _sendWorkbenchPrompt,
+        ),
+      );
+    }
 
     return Scaffold(
       body: ProductWorkspaceShell(
         activePage: _activePage,
-        badges: _workspaceBadges(workbench),
+        badges: badges,
         serverReachable: chat.serverReachable,
         onPageChanged: _setWorkspacePage,
         onNewSession: () {
