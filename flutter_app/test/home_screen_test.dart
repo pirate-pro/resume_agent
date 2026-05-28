@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   testWidgets('从工作台动作回到聊天后刷新求职工作台数据', (tester) async {
-    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.physicalSize = const Size(1180, 1180);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -27,10 +27,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('求职工作台'));
+    await tester.tap(find.text('求职项目').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('求职工作台'), findsWidgets);
+    expect(find.text('求职项目'), findsWidgets);
+    expect(find.text('岗位工作台'), findsWidgets);
     expect(api.workbenchListCalls, greaterThanOrEqualTo(1));
     final callsAfterOpen = api.workbenchListCalls;
 
@@ -40,7 +41,7 @@ void main() {
     expect(api.sentMessages.last, contains('application_home_staragent'));
     expect(api.workbenchListCalls, greaterThan(callsAfterOpen));
 
-    await tester.tap(find.byTooltip('求职工作台'));
+    await tester.tap(find.text('求职项目').first);
     await tester.pumpAndSettle();
 
     expect(find.text('已完成：生成定制简历'), findsOneWidget);
@@ -48,7 +49,7 @@ void main() {
   });
 
   testWidgets('工作台动作失败时保留失败提示', (tester) async {
-    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.physicalSize = const Size(1180, 1180);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -66,13 +67,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('求职工作台'));
+    await tester.tap(find.text('求职项目').first);
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('生成定制简历').first);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('求职工作台'));
+    await tester.tap(find.text('求职项目').first);
     await tester.pumpAndSettle();
 
     expect(find.text('执行失败：生成定制简历'), findsOneWidget);
