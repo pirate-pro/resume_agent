@@ -179,6 +179,11 @@ void main() {
     expect(find.text('推荐操作'), findsOneWidget);
     expect(find.text('关联资产'), findsOneWidget);
     expect(find.text('生成定制简历'), findsWidgets);
+
+    expect(find.text('更多 >'), findsOneWidget);
+    await tester.tap(find.text('更多 >'));
+    await tester.pumpAndSettle();
+    expect(find.text('收起'), findsOneWidget);
   });
 }
 
@@ -250,6 +255,16 @@ class _FakeHomeApiService extends ApiService {
           pinnedAt: null,
           messageCount: 4,
         ),
+        for (var index = 1; index <= 7; index++)
+          SessionMeta(
+            id: 'sess_history_extra_$index',
+            title: '历史会话 $index',
+            createdAt: now.subtract(Duration(days: index + 1)),
+            updatedAt: now.subtract(Duration(hours: index)),
+            isPinned: false,
+            pinnedAt: null,
+            messageCount: index,
+          ),
       ];
 
   @override

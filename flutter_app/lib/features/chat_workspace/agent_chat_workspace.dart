@@ -196,7 +196,7 @@ class _SidebarHost extends ConsumerWidget {
   }
 }
 
-class _AgentChatSidebar extends StatelessWidget {
+class _AgentChatSidebar extends StatefulWidget {
   final List<SessionMeta> sessions;
   final String? activeSessionId;
   final WorkspaceBadges badges;
@@ -224,6 +224,15 @@ class _AgentChatSidebar extends StatelessWidget {
   });
 
   @override
+  State<_AgentChatSidebar> createState() => _AgentChatSidebarState();
+}
+
+class _AgentChatSidebarState extends State<_AgentChatSidebar> {
+  static const _collapsedSessionCount = 6;
+
+  bool _showAllSessions = false;
+
+  @override
   Widget build(BuildContext context) {
     final pages = [
       WorkspacePage.dashboard,
@@ -233,7 +242,15 @@ class _AgentChatSidebar extends StatelessWidget {
       WorkspacePage.learning,
       WorkspacePage.notes,
     ];
-    final recentSessions = sessions.take(6).toList();
+    final hasMoreSessions = widget.sessions.length > _collapsedSessionCount;
+    final recentSessions = _showAllSessions
+        ? widget.sessions
+        : widget.sessions.take(_collapsedSessionCount).toList();
+    final sessionTrailing = widget.sessions.isEmpty
+        ? '暂无'
+        : hasMoreSessions
+            ? (_showAllSessions ? '收起' : '更多 >')
+            : '${widget.sessions.length} 个';
     return Container(
       decoration: const BoxDecoration(
         color: ProductColors.surface,
@@ -246,11 +263,11 @@ class _AgentChatSidebar extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 18, 16, 10),
-              child: _BrandHeader(serverReachable: serverReachable),
+              child: _BrandHeader(serverReachable: widget.serverReachable),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
-              child: _NewSessionButton(onTap: onNewSession),
+              child: _NewSessionButton(onTap: widget.onNewSession),
             ),
             Expanded(
               child: ListView(
@@ -260,22 +277,29 @@ class _AgentChatSidebar extends StatelessWidget {
                     ProductNavItem(
                       page: page,
                       selected: false,
-                      count: workspacePageBadge(page, badges),
-                      onTap: () => onPageChanged(page),
+                      count: workspacePageBadge(page, widget.badges),
+                      onTap: () => widget.onPageChanged(page),
                     ),
                     const SizedBox(height: 7),
                   ],
                   const SizedBox(height: 16),
                   _SidebarSectionHeader(
                     title: '快捷入口',
-                    trailing: '${applications.length} 个项目',
+                    trailing: '${widget.applications.length} 个项目',
                   ),
                   const SizedBox(height: 10),
-                  _QuickGrid(onPageChanged: onPageChanged),
+                  _QuickGrid(onPageChanged: widget.onPageChanged),
                   const SizedBox(height: 18),
                   _SidebarSectionHeader(
                     title: '最近会话',
-                    trailing: sessions.isEmpty ? '暂无' : '更多 >',
+                    trailing: sessionTrailing,
+                    onTrailingTap: hasMoreSessions
+                        ? () {
+                            setState(() {
+                              _showAllSessions = !_showAllSessions;
+                            });
+                          }
+                        : null,
                   ),
                   const SizedBox(height: 8),
                   if (recentSessions.isEmpty)
@@ -284,12 +308,13 @@ class _AgentChatSidebar extends StatelessWidget {
                     for (final session in recentSessions) ...[
                       _RecentSessionTile(
                         session: session,
-                        active: session.id == activeSessionId,
-                        onTap: () => onSessionTap(session.id),
-                        onDelete: () => onSessionDelete(session.id),
-                        onRename: (title) => onSessionRename(session.id, title),
+                        active: session.id == widget.activeSessionId,
+                        onTap: () => widget.onSessionTap(session.id),
+                        onDelete: () => widget.onSessionDelete(session.id),
+                        onRename: (title) =>
+                            widget.onSessionRename(session.id, title),
                         onPinToggle: (isPinned) =>
-                            onSessionPinToggle(session.id, isPinned),
+                            widget.onSessionPinToggle(session.id, isPinned),
                       ),
                       const SizedBox(height: 6),
                     ],
@@ -298,7 +323,7 @@ class _AgentChatSidebar extends StatelessWidget {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: _AssistantStatus(serverReachable: serverReachable),
+              child: _AssistantStatus(serverReachable: widget.serverReachable),
             ),
           ],
         ),
@@ -1388,10 +1413,12 @@ class _FloatingContextButton extends StatelessWidget {
 class _SidebarSectionHeader extends StatelessWidget {
   final String title;
   final String? trailing;
+  final VoidCallback? onTrailingTap;
 
   const _SidebarSectionHeader({
     required this.title,
     this.trailing,
+    this.onTrailingTap,
   });
 
   @override
@@ -1409,12 +1436,24 @@ class _SidebarSectionHeader extends StatelessWidget {
           ),
         ),
         if (trailing != null)
-          Text(
-            trailing!,
-            style: AppTheme.ts(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w800,
-              color: ProductColors.textMuted,
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: onTrailingTap,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                child: Text(
+                  trailing!,
+                  style: AppTheme.ts(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    color: onTrailingTap == null
+                        ? ProductColors.textMuted
+                        : ProductColors.primary,
+                  ),
+                ),
+              ),
             ),
           ),
       ],
