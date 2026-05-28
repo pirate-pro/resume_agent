@@ -26,6 +26,7 @@ class ProductSidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     final pages = [
       WorkspacePage.dashboard,
+      WorkspacePage.chat,
       WorkspacePage.projects,
       WorkspacePage.resumes,
       WorkspacePage.jdMatch,

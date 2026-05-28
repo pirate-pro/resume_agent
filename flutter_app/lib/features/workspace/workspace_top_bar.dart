@@ -265,11 +265,18 @@ class _TopActions extends StatelessWidget {
           ),
           const SizedBox(width: 8),
         ],
-        _TopIconButton(
-          tooltip: '会话历史',
-          icon: Icons.history_rounded,
-          onTap: onOpenSessionHistory,
-        ),
+        if (compact)
+          _TopIconButton(
+            tooltip: '会话历史',
+            icon: Icons.history_rounded,
+            onTap: onOpenSessionHistory,
+          )
+        else
+          _TopTextButton(
+            icon: Icons.history_rounded,
+            label: '会话历史',
+            onTap: onOpenSessionHistory,
+          ),
         const SizedBox(width: 8),
         SizedBox(
           height: 40,
@@ -332,6 +339,46 @@ class _TopActions extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _TopTextButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _TopTextButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 17),
+        label: Text(
+          label,
+          style: AppTheme.ts(
+            fontSize: 12.3,
+            fontWeight: FontWeight.w900,
+            color: ProductColors.textSecondary,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: ProductColors.textSecondary,
+          side: const BorderSide(color: ProductColors.border),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          backgroundColor: ProductColors.surface,
+        ),
+      ),
     );
   }
 }

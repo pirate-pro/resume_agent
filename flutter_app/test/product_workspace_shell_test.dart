@@ -42,11 +42,12 @@ void main() {
     expect(find.text('求职 Agent'), findsOneWidget);
     expect(find.text('你的智能求职伙伴'), findsOneWidget);
     expect(find.text('总览'), findsWidgets);
+    expect(find.text('Agent 助手'), findsWidgets);
     expect(find.text('求职项目'), findsOneWidget);
     expect(find.text('workspace content'), findsOneWidget);
     expect(find.text('搜索项目、岗位、笔记，或输入命令（如：分析 JD 匹配度）'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('会话历史'));
+    await tester.tap(find.text('会话历史'));
     await tester.pump();
 
     expect(openedHistory, isTrue);

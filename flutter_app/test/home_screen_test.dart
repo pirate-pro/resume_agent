@@ -143,7 +143,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('会话历史'));
+    await tester.tap(find.text('会话历史'));
     await tester.pumpAndSettle();
 
     expect(find.text('最近会话'), findsOneWidget);
