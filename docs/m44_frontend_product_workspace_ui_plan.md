@@ -10,7 +10,8 @@ M44-C：求职项目页已从旧 CareerWorkbenchPage 中拆出为独立产品页
 M44-D：JD 匹配页已从旧 CareerWorkbenchPage 中拆出为独立产品页。
 M44-E：简历资料页已从旧 CareerWorkbenchPage 中拆出为独立产品页。
 M44-F：学习计划页已从旧 CareerWorkbenchPage 中拆出为独立产品页。
-待继续：笔记页继续替换旧工作台 UI。
+M44-G：笔记页已从旧 CareerWorkbenchPage 中拆出为独立产品页。
+待继续：整体视觉、响应式和真实数据走查。
 ```
 
 ## 1. 背景与目标

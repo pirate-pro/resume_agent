@@ -11,12 +11,12 @@ import '../../core/providers/career_assets_provider.dart';
 import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../career/career_assets_panel.dart';
-import '../career_workbench/career_workbench_page.dart';
 import '../career_workbench/career_workbench_provider.dart';
 import '../chat/chat_screen.dart';
 import '../dashboard/dashboard_page.dart';
 import '../jd_match/jd_match_page.dart';
 import '../learning/learning_plan_page.dart';
+import '../notes/notes_library_page.dart';
 import '../projects/career_projects_page.dart';
 import '../resumes/resume_library_page.dart';
 import '../workspace/workspace_models.dart';
@@ -212,8 +212,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           onOpenNotes: () => _setWorkspacePage(WorkspacePage.notes),
           onSendPrompt: _sendWorkbenchPrompt,
         ),
-      WorkspacePage.notes => CareerWorkbenchPage(
-          onBackToChat: _openChat,
+      WorkspacePage.notes => NotesLibraryPage(
+          currentSessionId: chat.sessionId,
+          onOpenProjects: () => _setWorkspacePage(WorkspacePage.projects),
+          onOpenLearning: () => _setWorkspacePage(WorkspacePage.learning),
           onSendPrompt: _sendWorkbenchPrompt,
         ),
     };
