@@ -152,7 +152,9 @@ def _apply_runtime_plan(
     output["runtime_plan_applied"] = True
     output["runtime_plan_phase"] = runtime_plan.phase
     output["runtime_next_action"] = runtime_plan.next_action
+    output["runtime_current_allowed_tools"] = runtime_plan.next_allowed_tools
     output["runtime_next_allowed_tools"] = runtime_plan.next_allowed_tools
+    output["runtime_upcoming_required_tools"] = runtime_plan.upcoming_required_tools
     output["runtime_discouraged_tools"] = runtime_plan.discouraged_tools
     output["runtime_final_answer_ready"] = runtime_plan.final_answer_ready
     if runtime_plan.known_refs:

@@ -46,6 +46,7 @@ __all__ = [
     "runtime_plan_completion_tools",
     "runtime_plan_discouraged_tools",
     "runtime_plan_next_allowed_tools",
+    "runtime_plan_upcoming_required_tools",
     "workflow_incomplete_answer",
     "runtime_plan_notice",
 ]
@@ -60,6 +61,7 @@ class RuntimeToolPlan:
     missing_outputs: list[str] = field(default_factory=list)
     next_allowed_tools: list[str] = field(default_factory=list)
     required_tools: list[str] = field(default_factory=list)
+    upcoming_required_tools: list[str] = field(default_factory=list)
     discouraged_tools: list[str] = field(default_factory=list)
     schema_groups: list[str] = field(default_factory=list)
     final_answer_ready: bool = False
@@ -85,6 +87,10 @@ class RuntimeToolPlan:
             "runtime tool plan required_tools",
             self.required_tools,
         )
+        self.upcoming_required_tools = _normalize_string_list(
+            "runtime tool plan upcoming_required_tools",
+            self.upcoming_required_tools,
+        )
         self.discouraged_tools = _normalize_string_list(
             "runtime tool plan discouraged_tools",
             self.discouraged_tools,
@@ -102,6 +108,7 @@ class RuntimeToolPlan:
             and not self.missing_outputs
             and not self.next_allowed_tools
             and not self.required_tools
+            and not self.upcoming_required_tools
             and not self.discouraged_tools
             and not self.schema_groups
             and not self.final_answer_ready
@@ -192,9 +199,13 @@ def format_runtime_tool_plan_lines(plan: RuntimeToolPlan) -> list[str]:
     if plan.missing_outputs:
         lines.append(f"- missing_outputs={','.join(plan.missing_outputs)}")
     if plan.next_allowed_tools:
+        lines.append(f"- current_allowed_tools={','.join(plan.next_allowed_tools)}")
         lines.append(f"- next_allowed_tools={','.join(plan.next_allowed_tools)}")
     if plan.required_tools:
         lines.append(f"- required_tools={','.join(plan.required_tools)}")
+    if plan.upcoming_required_tools:
+        lines.append(f"- upcoming_required_tools={','.join(plan.upcoming_required_tools)}")
+        lines.append("- upcoming_tool_policy=plan_only; do_not_call_or_search_until_current_output_done")
     if plan.discouraged_tools:
         lines.append(f"- discouraged_tools={','.join(plan.discouraged_tools)}")
     if plan.schema_groups:
@@ -227,6 +238,7 @@ def _pending_plan_from_runtime_applied_payload(payload: Any) -> dict[str, Any] |
         "phase": payload.get("runtime_plan_phase"),
         "next_action": payload.get("runtime_next_action"),
         "next_allowed_tools": next_allowed_tools,
+        "current_allowed_tools": next_allowed_tools,
         "required_tools": _runtime_plan_required_tools(
             {
                 "required_tools": payload.get("required_tools"),
@@ -234,6 +246,7 @@ def _pending_plan_from_runtime_applied_payload(payload: Any) -> dict[str, Any] |
                 "next_allowed_tools": next_allowed_tools,
             }
         ),
+        "upcoming_required_tools": _runtime_plan_upcoming_required_tools(payload),
         "known_refs": payload.get("runtime_known_refs") if isinstance(payload.get("runtime_known_refs"), dict) else {},
         "missing_outputs": payload.get("runtime_missing_outputs")
         if isinstance(payload.get("runtime_missing_outputs"), list)
@@ -266,6 +279,12 @@ def merge_pending_runtime_plan(
         if not merged.get("phase") and current.get("phase"):
             merged["phase"] = current.get("phase")
         merged["required_tools"] = _dedupe_strings([*current_required, *incoming_required])
+        merged["upcoming_required_tools"] = _dedupe_strings(
+            [
+                *_runtime_plan_upcoming_required_tools(current),
+                *_runtime_plan_upcoming_required_tools(incoming),
+            ]
+        )
         merged["missing_outputs"] = _dedupe_strings(
             [
                 *[str(item) for item in current.get("missing_outputs", []) if str(item).strip()],
@@ -316,6 +335,8 @@ def pending_runtime_plan_from_context_bundle(payload: dict[str, Any]) -> dict[st
             "next_action": payload.get("next_action"),
             "next_allowed_tools": [],
             "required_tools": [],
+            "upcoming_required_tools": [],
+            "current_allowed_tools": [],
             "known_refs": payload.get("known_refs") if isinstance(payload.get("known_refs"), dict) else {},
             "missing_outputs": [],
             "discouraged_tools": runtime_plan_discouraged_tools(payload),
@@ -329,7 +350,9 @@ def pending_runtime_plan_from_context_bundle(payload: dict[str, Any]) -> dict[st
         "phase": payload.get("phase"),
         "next_action": payload.get("next_action"),
         "next_allowed_tools": next_allowed_tools,
+        "current_allowed_tools": next_allowed_tools,
         "required_tools": required_tools,
+        "upcoming_required_tools": _runtime_plan_upcoming_required_tools(payload),
         "known_refs": payload.get("known_refs") if isinstance(payload.get("known_refs"), dict) else {},
         "missing_outputs": payload.get("missing_outputs") if isinstance(payload.get("missing_outputs"), list) else [],
         "discouraged_tools": runtime_plan_discouraged_tools(payload),
@@ -355,6 +378,8 @@ def pending_runtime_plan_from_workflow_result(content: str) -> dict[str, Any] | 
             "next_action": payload.get("next_action"),
             "next_allowed_tools": [],
             "required_tools": [],
+            "upcoming_required_tools": [],
+            "current_allowed_tools": [],
             "known_refs": raw_known_refs,
             "missing_outputs": [],
             "discouraged_tools": runtime_plan_discouraged_tools(payload),
@@ -369,7 +394,9 @@ def pending_runtime_plan_from_workflow_result(content: str) -> dict[str, Any] | 
         "phase": payload.get("stage") or payload.get("phase"),
         "next_action": payload.get("next_action"),
         "next_allowed_tools": next_allowed_tools,
+        "current_allowed_tools": next_allowed_tools,
         "required_tools": _runtime_plan_required_tools(payload),
+        "upcoming_required_tools": _runtime_plan_upcoming_required_tools(payload),
         "known_refs": raw_known_refs,
         "missing_outputs": raw_missing_outputs,
         "discouraged_tools": runtime_plan_discouraged_tools(payload),
@@ -1064,6 +1091,10 @@ def runtime_plan_completion_tools(payload: dict[str, Any]) -> list[str]:
     return required_tools or runtime_plan_next_allowed_tools(payload)
 
 
+def runtime_plan_upcoming_required_tools(payload: dict[str, Any]) -> list[str]:
+    return _runtime_plan_upcoming_required_tools(payload)
+
+
 def runtime_plan_discouraged_tools(payload: dict[str, Any]) -> list[str]:
     raw_tools = (
         payload.get("runtime_discouraged_tools")
@@ -1121,6 +1152,9 @@ def runtime_plan_notice(pending_runtime_plan: dict[str, Any] | None) -> str:
     ]
     if required_tools and required_tools != next_allowed_tools:
         lines.append(f"必须完成的产物工具：{required_tools}。")
+    upcoming_tools = ", ".join(_runtime_plan_upcoming_required_tools(pending_runtime_plan))
+    if upcoming_tools:
+        lines.append(f"后续必需工具：{upcoming_tools}；当前不要提前调用或搜索 schema，完成当前产物后 runtime 会揭示。")
     if discouraged_tools:
         lines.append(f"不要再调用这些工具：{discouraged_tools}。")
     if missing_outputs:
@@ -1558,6 +1592,7 @@ def _action_contract_runtime_plan(
     normalized_missing_outputs = _string_items(payload_missing_outputs)
     normalized_next_allowed_tools = _string_items(payload_next_allowed_tools)
     normalized_required_tools = _string_items(payload_required_tools)
+    normalized_upcoming_required_tools = _runtime_plan_upcoming_required_tools(payload)
     normalized_discouraged_tools = _string_items(payload_discouraged_tools)
     normalized_schema_groups = _string_items(payload_schema_groups)
     return RuntimeToolPlan(
@@ -1566,6 +1601,7 @@ def _action_contract_runtime_plan(
         missing_outputs=normalized_missing_outputs,
         next_allowed_tools=normalized_next_allowed_tools,
         required_tools=normalized_required_tools,
+        upcoming_required_tools=normalized_upcoming_required_tools,
         discouraged_tools=normalized_discouraged_tools,
         schema_groups=normalized_schema_groups,
         final_answer_ready=payload.get("final_answer_ready") is True,
@@ -1766,6 +1802,13 @@ def _runtime_plan_required_tools(payload: dict[str, Any]) -> list[str]:
     if next_allowed:
         required = [tool for tool in required if tool in next_allowed]
     return required
+
+
+def _runtime_plan_upcoming_required_tools(payload: dict[str, Any]) -> list[str]:
+    raw_tools = payload.get("runtime_upcoming_required_tools") or payload.get("upcoming_required_tools")
+    if not isinstance(raw_tools, list):
+        return []
+    return _dedupe_strings([item for item in raw_tools if isinstance(item, str)])
 
 
 def _looks_like_resume_diagnosis_artifact(title: str) -> bool:

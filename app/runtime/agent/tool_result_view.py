@@ -85,6 +85,7 @@ def _compact_hidden_tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "required_tool": payload.get("required_tool"),
                 "next_allowed_tools": payload.get("next_allowed_tools"),
                 "required_tools": payload.get("required_tools"),
+                "upcoming_required_tools": payload.get("upcoming_required_tools"),
                 "missing_outputs": payload.get("missing_outputs"),
                 "required_tool_call_hint": payload.get("required_tool_call_hint"),
                 "correction": payload.get("correction"),

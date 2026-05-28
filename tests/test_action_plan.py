@@ -19,8 +19,10 @@ def test_action_plan_payload_requires_rag_note_search_first() -> None:
 
     assert payload["phase"] == "rag_note_write"
     assert payload["contract_id"] == "rag.note.write.v1"
+    assert payload["current_allowed_tools"] == ["retrieval_search"]
     assert payload["next_allowed_tools"] == ["retrieval_search"]
     assert payload["required_tools"] == ["retrieval_search"]
+    assert payload["upcoming_required_tools"] == ["retrieval_context_pack", "note_create", "note_append"]
     assert payload["schema_groups"] == ["retrieval"]
     assert payload["final_answer_ready"] is False
     assert "career_application_merge" in payload["discouraged_tools"]
@@ -36,8 +38,10 @@ def test_action_plan_payload_groups_same_missing_output_tools() -> None:
         missing_outputs=["note", "career_application_update"],
     )
 
+    assert payload["current_allowed_tools"] == ["note_create", "note_append"]
     assert payload["next_allowed_tools"] == ["note_create", "note_append"]
     assert payload["required_tools"] == ["note_create", "note_append"]
+    assert payload["upcoming_required_tools"] == ["career_application_merge"]
     assert payload["schema_groups"] == ["notes"]
     assert "learning_task_create" in payload["discouraged_tools"]
 
@@ -62,6 +66,7 @@ def test_pending_action_plan_after_tool_result_advances_refs_and_missing_outputs
     assert plan["missing_outputs"] == ["career_application_update"]
     assert plan["next_allowed_tools"] == ["career_application_merge"]
     assert plan["required_tools"] == ["career_application_merge"]
+    assert plan["upcoming_required_tools"] == []
 
 
 def test_pending_action_plan_finalizes_when_all_outputs_done() -> None:
@@ -80,5 +85,6 @@ def test_pending_action_plan_finalizes_when_all_outputs_done() -> None:
     assert plan is not None
     assert plan["final_answer_ready"] is True
     assert plan["missing_outputs"] == []
+    assert plan["upcoming_required_tools"] == []
     assert plan["known_refs"]["learning_task_id"] == "learning_task_alpha"
     assert "career_application_merge" in plan["discouraged_tools"]

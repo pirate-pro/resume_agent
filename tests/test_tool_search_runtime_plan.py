@@ -43,6 +43,7 @@ def test_tool_search_prefers_runtime_plan_next_allowed_tools_for_career_query() 
             known_refs={"application_id": "application_alpha"},
             missing_outputs=["resume_version"],
             next_allowed_tools=["career_resume_version_create"],
+            upcoming_required_tools=["career_application_merge"],
             discouraged_tools=["session_read_artifact", "delegate_agents"],
             schema_groups=["career_resume_version"],
             next_action="只生成定制简历版本。",
@@ -56,7 +57,9 @@ def test_tool_search_prefers_runtime_plan_next_allowed_tools_for_career_query() 
     payload = json.loads(result.content)
 
     assert payload["runtime_plan_applied"] is True
+    assert payload["runtime_current_allowed_tools"] == ["career_resume_version_create"]
     assert payload["runtime_next_allowed_tools"] == ["career_resume_version_create"]
+    assert payload["runtime_upcoming_required_tools"] == ["career_application_merge"]
     assert payload["revealed_tool_names"] == ["career_resume_version_create"]
     assert "session_read_artifact" in payload["runtime_discouraged_tools"]
     assert "不要为同一步继续 tool_search" in payload["next_step"]

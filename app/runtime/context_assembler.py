@@ -615,6 +615,7 @@ def _runtime_tool_plan_payload(plan: RuntimeToolPlan) -> dict[str, object]:
         "phase": plan.phase,
         "known_refs": dict(plan.known_refs),
         "missing_outputs": list(plan.missing_outputs),
+        "current_allowed_tools": list(plan.next_allowed_tools),
         "next_allowed_tools": list(plan.next_allowed_tools),
         "discouraged_tools": list(plan.discouraged_tools),
         "final_answer_ready": plan.final_answer_ready,
@@ -622,6 +623,8 @@ def _runtime_tool_plan_payload(plan: RuntimeToolPlan) -> dict[str, object]:
     }
     if plan.required_tools:
         payload["required_tools"] = list(plan.required_tools)
+    if plan.upcoming_required_tools:
+        payload["upcoming_required_tools"] = list(plan.upcoming_required_tools)
     return payload
 
 

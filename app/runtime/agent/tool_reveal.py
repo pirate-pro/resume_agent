@@ -8,6 +8,7 @@ from typing import Any
 
 from app.domain.models import ToolDefinition, ToolExecutionResult
 from app.runtime.workflow.tool_hints import build_required_tool_call_hint
+from app.runtime.workflow.tool_plan import runtime_plan_upcoming_required_tools
 
 __all__ = [
     "ToolRevealState",
@@ -128,6 +129,7 @@ def hidden_tool_result(
     if runtime_plan is not None:
         next_allowed_tools = _string_list(runtime_plan.get("next_allowed_tools"))
         required_tools = _string_list(runtime_plan.get("required_tools")) or next_allowed_tools
+        upcoming_required_tools = runtime_plan_upcoming_required_tools(runtime_plan)
         final_answer_ready = runtime_plan.get("final_answer_ready") is True
         raw_known_refs = runtime_plan.get("known_refs")
         known_refs: dict[str, Any] = raw_known_refs if isinstance(raw_known_refs, dict) else {}
@@ -147,6 +149,8 @@ def hidden_tool_result(
                     if final_answer_ready
                     else "当前 workflow 已锁定唯一下一步工具；不要继续调用隐藏工具，直接调用 required_tool。"
                     if strict_runtime_plan
+                    else "该工具本轮未揭示；后续必需工具已在 upcoming_required_tools 中说明，当前不要为后续步骤搜索 schema。"
+                    if upcoming_required_tools
                     else "该工具本轮未揭示，因为当前 workflow 已收敛到确定下一步；不要继续调用隐藏工具。"
                 ),
                 "terminal": final_answer_ready,
@@ -155,6 +159,7 @@ def hidden_tool_result(
                 "next_action": runtime_plan.get("next_action"),
                 "next_allowed_tools": next_allowed_tools,
                 "required_tools": required_tools,
+                "upcoming_required_tools": upcoming_required_tools,
                 "known_refs": known_refs,
                 "required_tool": required_tool,
                 "required_tool_call_hint": build_required_tool_call_hint(required_tool, known_refs),

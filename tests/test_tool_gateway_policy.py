@@ -102,5 +102,6 @@ def test_workflow_event_payload_from_result_projects_runtime_payload() -> None:
         "reason": "tool_blocked_by_runtime_state",
         "terminal": False,
         "next_allowed_tools": ["career_resume_version_create"],
+        "upcoming_required_tools": [],
         "blocked_tools": ["tool_search"],
     }

@@ -11,6 +11,7 @@ from app.runtime.workflow.tool_plan import (
     runtime_plan_completion_tools,
     runtime_plan_discouraged_tools,
     runtime_plan_next_allowed_tools,
+    runtime_plan_upcoming_required_tools,
 )
 from app.runtime.workflow.tool_policy import ToolExecutionPolicy, resolve_tool_execution_policy
 
@@ -58,6 +59,7 @@ def gateway_state_block_result(
             "missing_outputs": [],
             "next_allowed_tools": [],
             "required_tools": [],
+            "upcoming_required_tools": [],
             "blocked_tools": [tool_call.name],
         }
         return ToolExecutionResult(tool_name=tool_call.name, success=True, content=json.dumps(payload, ensure_ascii=False))
@@ -79,6 +81,7 @@ def gateway_state_block_result(
             "missing_outputs": pending_runtime_plan.get("missing_outputs") or [],
             "next_allowed_tools": next_allowed_tools,
             "required_tools": list(completion_tools),
+            "upcoming_required_tools": runtime_plan_upcoming_required_tools(pending_runtime_plan),
             "blocked_tools": [tool_call.name],
             "known_refs": pending_runtime_plan.get("known_refs")
             if isinstance(pending_runtime_plan.get("known_refs"), dict)
@@ -99,6 +102,9 @@ def workflow_event_payload_from_result(result: ToolExecutionResult) -> dict[str,
         "reason": payload.get("reason"),
         "terminal": payload.get("terminal"),
         "next_allowed_tools": payload.get("next_allowed_tools") if isinstance(payload.get("next_allowed_tools"), list) else [],
+        "upcoming_required_tools": payload.get("upcoming_required_tools")
+        if isinstance(payload.get("upcoming_required_tools"), list)
+        else [],
         "blocked_tools": payload.get("blocked_tools") if isinstance(payload.get("blocked_tools"), list) else [],
     }
 

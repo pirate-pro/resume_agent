@@ -68,6 +68,31 @@ def test_runtime_tool_plan_guides_resume_version_create_when_refs_are_ready() ->
     assert any("career_resume_version_create" in line for line in format_runtime_tool_plan_lines(plan))
 
 
+def test_action_runtime_plan_exposes_upcoming_tools_without_changing_current_allowed_tools() -> None:
+    plan = build_runtime_tool_plan(
+        workflow_phase=WorkflowPhaseSnapshot(
+            phase_name="interview_review_update",
+            confidence="high",
+            required_outputs=[
+                _output("retrieval_search", "retrieval_search", "done"),
+                _output("retrieval_context_pack", "retrieval_context_pack", "done"),
+                _output("note", "note_id"),
+                _output("career_application_update", "application_id"),
+            ],
+        ),
+        career_flow_state=CareerFlowState(),
+        workflow_state=CurrentWorkflowState(refs={"application_id": "application_alpha"}),
+    )
+
+    lines = format_runtime_tool_plan_lines(plan)
+
+    assert plan.next_allowed_tools == ["note_create", "note_append"]
+    assert plan.required_tools == ["note_create", "note_append"]
+    assert plan.upcoming_required_tools == ["career_application_merge"]
+    assert "- current_allowed_tools=note_create,note_append" in lines
+    assert "- upcoming_required_tools=career_application_merge" in lines
+
+
 def test_runtime_plan_notice_includes_required_tool_hint() -> None:
     notice = runtime_plan_notice(
         {
@@ -90,6 +115,22 @@ def test_runtime_plan_notice_includes_required_tool_hint() -> None:
     assert "career_resume_version_create" in notice
     assert "base_resume_profile_id" in notice
     assert "content_or_artifact_id" in notice
+
+
+def test_runtime_plan_notice_warns_not_to_search_upcoming_tool_schema() -> None:
+    notice = runtime_plan_notice(
+        {
+            "phase": "interview_review_update",
+            "next_allowed_tools": ["note_create", "note_append"],
+            "required_tools": ["note_create", "note_append"],
+            "upcoming_required_tools": ["career_application_merge"],
+            "missing_outputs": ["note", "career_application_update"],
+            "next_action": "先保存面试复盘 Note，之后再更新求职项目。",
+        }
+    )
+
+    assert "后续必需工具：career_application_merge" in notice
+    assert "当前不要提前调用或搜索 schema" in notice
 
 
 def test_terminal_workflow_result_becomes_final_answer_ready_plan() -> None:

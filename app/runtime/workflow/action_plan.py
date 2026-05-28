@@ -96,12 +96,20 @@ def action_contract_plan_payload(
     if not steps:
         return action_contract_final_plan_payload(contract=contract, known_refs=known_refs)
     tool_names = _dedupe_strings([step.tool_name for step in steps])
+    current_missing_output = _step_missing_output(steps[0])
+    upcoming_required_tools = _upcoming_required_tools(
+        contract=contract,
+        missing_outputs=missing,
+        current_missing_output=current_missing_output,
+    )
     return {
         "phase": contract.trigger_phases[0],
         "contract_id": contract.contract_id,
-        "next_action": _action_next_action(contract=contract, missing_output=_step_missing_output(steps[0])),
+        "next_action": _action_next_action(contract=contract, missing_output=current_missing_output),
+        "current_allowed_tools": tool_names,
         "next_allowed_tools": tool_names,
         "required_tools": tool_names,
+        "upcoming_required_tools": upcoming_required_tools,
         "known_refs": dict(known_refs),
         "missing_outputs": missing,
         "final_answer_ready": False,
@@ -115,8 +123,10 @@ def action_contract_final_plan_payload(*, contract: ActionContract, known_refs: 
         "phase": contract.trigger_phases[0],
         "contract_id": contract.contract_id,
         "next_action": _action_final_next_action(contract),
+        "current_allowed_tools": [],
         "next_allowed_tools": [],
         "required_tools": [],
+        "upcoming_required_tools": [],
         "known_refs": dict(known_refs),
         "missing_outputs": [],
         "final_answer_ready": True,
@@ -137,6 +147,26 @@ def _next_action_steps(*, contract: ActionContract, missing_outputs: list[str]) 
     if target_output is None:
         return []
     return [step for step in contract.steps if _step_missing_output(step) == target_output]
+
+
+def _upcoming_required_tools(
+    *,
+    contract: ActionContract,
+    missing_outputs: list[str],
+    current_missing_output: str,
+) -> list[str]:
+    current_seen = False
+    tools: list[str] = []
+    missing = set(missing_outputs)
+    for step in contract.steps:
+        output = _step_missing_output(step)
+        if output == current_missing_output:
+            current_seen = True
+            continue
+        if not current_seen or output not in missing:
+            continue
+        tools.append(step.tool_name)
+    return _dedupe_strings(tools)
 
 
 def _step_missing_output(step: ToolStep) -> str:

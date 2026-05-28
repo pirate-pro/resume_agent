@@ -280,6 +280,9 @@ class ToolContextWindow:
                 if strict_mode and len(observations) != len(self._observations)
                 else None,
                 "required_tools": strict_required_tools,
+                "upcoming_required_tools": _runtime_plan_tool_names(
+                    (runtime_plan or {}).get("upcoming_required_tools")
+                ),
                 "known_refs": plan_known_refs,
                 "missing_outputs": _runtime_plan_tool_names((runtime_plan or {}).get("missing_outputs")),
                 "discouraged_tools": _strict_discouraged_tools(runtime_plan) if strict_mode else [],

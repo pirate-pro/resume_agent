@@ -1,6 +1,6 @@
 # M42：Agent 架构统一与解耦方案
 
-> 状态：M42-A 架构文档已落地；M42-B `ActionPayloadBuilder` 初版已落地；M42-C `ToolCallController` skeleton 已落地；M42-D `action_plan.py` 已拆出；M42-E delegation guard 收缩已落地；M42-F Tool Gateway policy boundary 已落地；M42-G Tool Capability Registry 已落地；M42-H/I/J live regression 与工具参数 canonicalization 已验证。本文承接 M41：P0 `career_full` 已通过两批 `6x3` live smoke 停止线，下一阶段不继续为 harmless duplicate 或偶发长尾追加 guard，而是统一 runtime / workflow / state machine / skill / contract / gateway 的职责边界。
+> 状态：M42-A 架构文档已落地；M42-B `ActionPayloadBuilder` 初版已落地；M42-C `ToolCallController` skeleton 已落地；M42-D `action_plan.py` 已拆出；M42-E delegation guard 收缩已落地；M42-F Tool Gateway policy boundary 已落地；M42-G Tool Capability Registry 已落地；M42-H/I/J/K live regression 与工具参数 canonicalization 已验证。本文承接 M41：P0 `career_full` 已通过两批 `6x3` live smoke 停止线，下一阶段不继续为 harmless duplicate 或偶发长尾追加 guard，而是统一 runtime / workflow / state machine / skill / contract / gateway 的职责边界。
 
 ## 1. 背景
 
@@ -1118,6 +1118,99 @@ upcoming_required_tools: 后续会执行，只作为 planning hint，不可提�
 ```
 
 这样模型知道 note 写完后会进入 `career_application_merge`，无需搜索 schema；runtime 仍能保持顺序 barrier。
+
+### M42-K：Action contract current/upcoming tool boundary
+
+目标：
+
+```text
+解决 interview_review 中 “当前要写 Note，但后面还要更新 CareerApplication” 的工具边界表达问题。
+
+不是禁止 tool_search；
+不是把 career_application_merge 提前放进当前 required_tools；
+不是扩大当前可执行工具面。
+```
+
+实现：
+
+```text
+ActionContract plan payload 新增：
+  current_allowed_tools
+  upcoming_required_tools
+
+RuntimeToolPlan 新增：
+  upcoming_required_tools
+
+context / tool_search / hidden result / gateway block result 均携带 upcoming_required_tools。
+```
+
+语义边界：
+
+```text
+next_allowed_tools / required_tools:
+  当前 barrier 可执行、可完成的工具。
+
+upcoming_required_tools:
+  后续 barrier 会需要的工具，只作为 planning hint。
+  当前不要调用，也不要为了它搜索 schema。
+  当前产物完成后，runtime 会自动揭示下一步工具。
+```
+
+这解决的是结构耦合，而不是 case guard：
+
+```text
+interview_review 只是暴露点。
+所有多阶段 action 都可以复用这个表达：
+  retrieval_search -> retrieval_context_pack -> note_create -> career_application_merge
+  retrieval_search -> retrieval_context_pack -> learning_task_create
+  retrieval_search -> retrieval_context_pack -> note_create
+```
+
+验证：
+
+```text
+uv run pytest \
+  tests/test_action_plan.py \
+  tests/test_tool_gateway_policy.py \
+  tests/test_runtime_tool_plan.py \
+  tests/test_tool_search_runtime_plan.py \
+  tests/test_tool_reveal.py \
+  tests/test_tool_result_view.py \
+  tests/test_tool_context_window.py \
+  tests/test_context_assembler.py \
+  tests/test_agent_runtime.py::test_runtime_does_not_execute_extra_tool_search_when_required_tool_is_visible \
+  tests/test_agent_runtime.py::test_runtime_auto_executes_interview_review_application_merge_after_repeated_schema_search \
+  tests/test_agent_runtime.py::test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan
+```
+
+focused live：
+
+```text
+data/live_smoke_matrix_m42_upcoming_tools_interview_review_c1_r1/report.json
+passed=1/1
+failed=0/1
+elapsed=274.76s
+llm_calls=19
+tokens=98091
+harmful_duplicates=0
+hidden=0
+```
+
+full matrix：
+
+```text
+data/live_smoke_matrix_m42_upcoming_tools_full_c6_r1/report.json
+passed=11/11
+failed=0/11
+avg_elapsed=112.17s
+max_elapsed=247.53s
+avg_llm_calls=9.5
+max_llm_calls=20
+avg_tokens=46286
+max_tokens=102145
+harmful_duplicate_runs=0/11
+hidden_runs=0/11
+```
 
 ## 9. 成功标准
 
