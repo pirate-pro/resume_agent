@@ -1586,3 +1586,975 @@ M44-E Resume Library
 ```text
 这两页细节多，依赖更多字段和资产预览，适合在 shell 和项目页稳定后推进。
 ```
+
+## 19. UI 逐块规格附录
+
+本附录按用户提供的 4 张 UI 图拆块，供实现时逐块对照。块编号只用于开发沟通，不要求在代码里保留。
+
+通用约束：
+
+```text
+1. 结构和信息层级对齐设计图，不复制固定坐标。
+2. 所有块使用 LayoutBuilder / Wrap / Sliver / Flexible 自适应。
+3. 所有真实数值来自 API / provider；缺数据时隐藏、显示待补充或显示空状态。
+4. 卡片最大圆角 16，按钮和 tag 可用 999 pill。
+5. 页面主间距 desktop 20-24，tablet 16-20，mobile 12-16。
+6. 字体不随 viewport 缩放；只按组件层级选择固定字号。
+7. 移动端顺序优先：判断、下一步、当前项目、风险、资产。
+```
+
+### 19.1 全局 Shell 规格
+
+#### S-01 Brand 区
+
+```text
+组件：ProductSidebarBrand
+位置：左侧导航顶部。
+desktop 尺寸：sidebar width 260；brand row height 52。
+mobile：在 drawer 顶部，padding 16。
+
+元素：
+- logo：40x40，圆角 16，绿色渐变，bolt icon。
+- 主标题：求职 Agent，15-16px，fontWeight 800。
+- 副标题：你的智能求职伙伴，11-12px，textMuted。
+
+色块：
+- logo gradient: #0F9B78 -> #059669。
+- sidebar background: #FFFFFF。
+- sidebar border-right: #DDE8E4。
+
+交互：
+- 点击 brand 回到总览页。
+```
+
+#### S-02 新建会话 CTA
+
+```text
+组件：ProductPrimaryCreateButton
+位置：Brand 下方。
+desktop：height 44，width fill。
+mobile：drawer 中 width fill；顶部栏另有 compact 新建按钮。
+
+元素：
+- left icon: add。
+- label: 新建会话。
+- right icon: auto_awesome 或 sparkles。
+
+色块：
+- background: #0F9B78。
+- hover/pressed: #0B7E62。
+- text/icon: white。
+
+行为：
+- 调用 chatProvider.createNewSession。
+- 切换 workspace page 到 chat。
+```
+
+#### S-03 主导航
+
+```text
+组件：ProductNavList / ProductNavItem
+位置：左侧导航中部。
+
+导航项：
+- 总览：Icons.home_outlined。
+- 求职项目：Icons.business_center_outlined，badge applications。
+- 简历资料：Icons.badge_outlined，badge resumeLibraryCount。
+- JD 匹配：Icons.analytics_outlined，badge jobMatchLibraryCount。
+- 学习计划：Icons.school_outlined，badge learningTasks。
+- 笔记：Icons.sticky_note_2_outlined，badge notes。
+
+desktop item：
+- height 44。
+- padding horizontal 12。
+- icon 18。
+- label 13。
+- badge minWidth 22，height 22。
+
+selected：
+- background: #E5F6F1。
+- icon/text: #0F9B78。
+- border: primary alpha 0.12。
+
+mobile：
+- drawer item height 48。
+- label 不省略。
+- badge 右对齐。
+```
+
+#### S-04 工作台快捷入口
+
+```text
+组件：WorkspaceQuickEntryGrid
+位置：左侧导航下部。
+desktop：2x2 grid，每项 minHeight 42。
+mobile：drawer 中 2x2。
+
+入口：
+- 生成简历：description icon。
+- JD 分析：link/search icon。
+- 面试准备：chat/message icon。
+- Agent 助手：auto_awesome icon。
+
+行为：
+- 生成简历/JD 分析/面试准备：切到 chat 并填充或发送对应 prompt。
+- Agent 助手：切到 chat。
+
+色块：
+- card background: #FFFFFF。
+- border: #DDE8E4。
+- icon: primary / info / purple / primary。
+```
+
+#### S-05 AI 助理状态卡
+
+```text
+组件：AssistantStatusCard
+位置：左侧导航底部。
+desktop：height 64。
+mobile：drawer 底部。
+
+元素：
+- avatar：36x36，primary circle，group/assistant icon。
+- title：AI 助理。
+- status：绿色 dot + 在线。
+- expand/collapse chevron。
+
+行为：
+- 点击切到 chat。
+- 后续可展开显示最近 agent 任务，M44 第一版只保留入口。
+```
+
+#### S-06 顶部栏
+
+```text
+组件：WorkspaceTopBar
+位置：主内容顶部，sticky 不强制，desktop 保持页面顶部可见。
+desktop height：64。
+mobile：两行，第一行 title/actions，第二行 search。
+
+元素：
+- mobile menu button。
+- breadcrumb 或 page title。
+- GlobalSearchBox。
+- 新建 split button。
+- notification icon + badge。
+- settings icon。
+- AI avatar。
+
+GlobalSearchBox：
+- maxWidth desktop 620。
+- height 44。
+- icon search。
+- placeholder：搜索项目、岗位、笔记，或输入命令（如：分析 JD 匹配度）。
+- trailing badge：⌘ K。
+
+行为：
+- Enter 命令类文本：切到 chat 并 sendMessage。
+- 普通文本：第一版只做当前页面本地过滤。
+```
+
+### 19.2 总览页，图 3
+
+#### D-01 当前求职状态 Hero
+
+```text
+组件：StatusHeroCard
+位置：DashboardPage 主列第一块。
+desktop：height 220-260，自适应内容；右侧 score ring。
+mobile：单列，score ring 放在标题下或右上角，不使用横向硬排。
+
+元素：
+- title：当前求职状态。
+- sparkle icon：primary。
+- summary：readiness.summary 或聚合提示。
+- chips：
+  - 目标岗位：active application title / target role。
+  - 意向城市：careerProfile target city，缺失显示待补充。
+  - 当前阶段：stage label。
+- primary button：继续推进岗位，带 arrow icon。
+- ProductScoreRing：score，label 综合进度。
+- status pill：良好 / 谨慎 / 高风险。
+
+色块：
+- background gradient: #EAF8F3 -> #F8FCFA -> #EEF7FF。
+- border: #0F9B78 alpha 0.18。
+- button: #0F9B78。
+
+数据：
+- provider.selectedApplicationSummary。
+- provider.selectedApplicationDetail?.readiness。
+
+空状态：
+- title：开始建立你的求职工作台。
+- button：上传简历 / 新建会话。
+```
+
+#### D-02 指标卡条
+
+```text
+组件：DashboardMetricStrip
+位置：Hero 下方。
+desktop：4 columns。
+tablet：2 columns。
+mobile：1 或 2 columns，按 min item width 156 wrap。
+
+卡片：
+1. 已投递岗位
+   value: applications.length 或 activeApplications。
+   trend: 较上周，第一版无历史则隐藏。
+   icon: near_me_outlined，tone info。
+
+2. 匹配度均值
+   value: readiness score average。
+   suffix: %。
+   icon: track_changes，tone primary。
+
+3. 待办任务
+   value: learningTasks + suggestedActions count。
+   warning text: 其中紧急 N 个。
+   icon: checklist，tone warning。
+
+4. 本周学习进度
+   value: completed / total 或 readiness learning proxy。
+   progress bar。
+   icon: menu_book，tone purple。
+
+卡片结构：
+- icon tile 52x52。
+- value 24px。
+- label 12px。
+- trend 11px。
+```
+
+#### D-03 最近推进中的岗位
+
+```text
+组件：RecentApplicationsSection / RecentApplicationCard
+位置：Dashboard 主列中部。
+desktop：section header + 3 card wrap。
+mobile：单列。
+
+section header：
+- title：最近推进中的岗位。
+- trailing：查看全部。
+
+卡片元素：
+- company avatar：48x48，首字/品牌 icon。
+- title：岗位名。
+- company/location。
+- score ring：右上或右侧。
+- tags：stage / recommendation / match level。
+- latest progress：timeline 最新项或 application updatedAt。
+- main advantage：strengths top 1。
+- needs improvement：risks top 1。
+- primary action：继续跟进 / 准备面试 / 优化简历。
+- secondary action：查看详情。
+
+行为：
+- 卡片点击：切到求职项目页并 select application。
+- primary action：onSendPrompt。
+```
+
+#### D-04 今日推荐动作
+
+```text
+组件：TodayRecommendedActionsSection
+位置：Dashboard 主列底部。
+desktop：横向 3 card 或 List。
+mobile：单列 action tile。
+
+动作来源：
+- selected detail.suggestedActions。
+- learning.tasks 中 due today / high priority。
+- risks 派生动作。
+
+每项元素：
+- icon tile。
+- title。
+- subtitle。
+- CTA：去生成 / 去准备 / 去创建。
+
+行为：
+- onSendPrompt + CareerWorkbenchActionRequest。
+```
+
+#### D-05 右侧当前判断
+
+```text
+组件：DashboardCurrentJudgmentCard
+位置：desktop right rail 第一块；mobile 在 Hero 后下沉。
+
+元素：
+- title 当前判断。
+- updatedAt。
+- summary。
+- 优势领域：strengths top 2，primary/info tone。
+- 待提升领域：risks/weaknesses top 2，warning tone。
+- 风险提示：high risk top 1，danger/warning tone。
+
+空状态：
+- 暂无项目判断，上传简历和 JD 后生成。
+```
+
+#### D-06 推荐下一步
+
+```text
+组件：DashboardNextStepCard
+位置：right rail 第二块。
+
+元素：
+- 1/2/3 index badge。
+- action title。
+- priority chip：内推优先/提升匹配度/降低风险。
+- trailing chevron。
+- footer button：查看全部待办。
+
+行为：
+- 点击 action 执行 onSendPrompt。
+- footer 切到学习计划或项目详情。
+```
+
+#### D-07 关联资产摘要
+
+```text
+组件：DashboardAssetSummaryCard
+位置：right rail 第三块。
+
+元素：
+- asset count grid：
+  - 简历模板/简历版本。
+  - 笔记文档。
+  - 面试题库/面试准备。
+  - 学习资料/学习任务。
+- 最近更新列表 top 3：
+  icon + title + type chip + date。
+
+行为：
+- 点击 asset 切到对应页面或打开 preview。
+```
+
+### 19.3 求职项目页，图 1
+
+#### P-01 页面标题与操作栏
+
+```text
+组件：ProjectsPageHeader
+位置：WorkspaceTopBar 下方，项目页内容顶部。
+
+元素：
+- breadcrumb：求职项目 > 岗位工作台。
+- title：求职项目。
+- actions：分享 / 导出报告 / 更多操作。
+
+mobile：
+- breadcrumb 隐藏，只显示 title。
+- actions 收敛到 overflow menu。
+```
+
+#### P-02 项目总览 Hero
+
+```text
+组件：ProjectOverviewHeader
+位置：ProjectsPage 第一块。
+desktop：横向 4 区：company/title、score、status、AI summary。
+mobile：纵向：title -> score/status -> summary。
+
+元素：
+- company logo/avatar 64x64。
+- company name。
+- official/source badge，有 URL 才显示。
+- job title。
+- meta：city / degree / years / employment。
+- score ring 78 匹配度。
+- status block：当前状态、最近更新。
+- AI 总结：readiness.summary。
+- button：查看完整分析报告。
+
+色块：
+- background：#EAF8F3 低饱和渐变。
+- border：primary alpha 0.18。
+- section divider：#DDE8E4。
+
+数据：
+- CareerApplicationWorkbenchView.application。
+- jdAnalysis。
+- readiness。
+```
+
+#### P-03 岗位总览事实条
+
+```text
+组件：JobFactStrip
+位置：ProjectOverviewHeader 下方。
+desktop：6 equal columns。
+mobile：horizontal scroll，item minWidth 148。
+
+FactItem：
+- 投递时间。
+- 岗位来源。
+- 招聘类型。
+- 岗位热度。
+- 竞争人数。
+- 期望薪资。
+
+每项元素：
+- icon tile 34x34。
+- label 11。
+- value 13 bold。
+
+缺数据：
+- 显示 待补充，不显示假的薪资和人数。
+```
+
+#### P-04 面试流程时间线
+
+```text
+组件：ProjectStageTimeline
+位置：desktop 左中列；mobile 在事实条后。
+
+阶段：
+- 简历投递。
+- 简历筛选。
+- 技术面试。
+- 综合面试。
+- HR 面试。
+- Offer。
+
+元素：
+- vertical line。
+- circle state marker。
+- stage label。
+- time。
+- status chip。
+- footer button：查看全部流程。
+
+状态色：
+- completed: primary。
+- active: primarySoft + primary border。
+- pending: neutral。
+- blocked: warning/danger。
+```
+
+#### P-05 多 Agent 执行进度
+
+```text
+组件：AgentExecutionBoard
+位置：desktop 中间主区域。
+desktop：横向 StepCard + connector line。
+mobile：horizontal scroll cards。
+
+AgentStepCard：
+- icon tile。
+- agent name：
+  - 简历解析 Agent。
+  - JD 分析 Agent。
+  - 匹配评估 Agent。
+  - 简历改写 Agent。
+  - 面试准备 Agent。
+- status：已完成/进行中/待执行。
+- input summary。
+- output summary。
+- CTA：查看详情 / 继续执行。
+
+数据：
+- 优先从 events agent_task_*。
+- 第一版可以按产品记录推断完成态。
+
+约束：
+- 不展示内部 tool 名。
+- 不展示 raw runtime hidden/block。
+- 只显示业务阶段。
+```
+
+#### P-06 项目右侧判定与进度
+
+```text
+组件：ProjectRightRail
+位置：desktop 右侧 rail；mobile 下沉。
+
+包含：
+1. CurrentProjectJudgmentCard
+   - score。
+   - recommendation。
+   - AI 评价。
+   - updatedAt。
+
+2. ProjectProgressChecklistCard
+   - completion 3/6。
+   - stage checklist。
+   - active row highlighted。
+   - button 查看全部流程。
+
+3. ProjectLinkedAssetsCompactCard
+   - tabs：简历 / 项目 / 笔记 / 资料。
+   - top 3 assets。
+   - button 查看全部资产。
+```
+
+#### P-07 风险与差距
+
+```text
+组件：RiskGapPanel
+位置：项目页下方左侧。
+
+元素：
+- title 风险与差距。
+- risk rows top 3。
+- 每行：
+  - icon tone danger/warning/info。
+  - title。
+  - description。
+  - severity chip：高风险/中风险/低风险。
+- footer：查看差距详情与改进建议。
+
+数据：
+- readiness.risks。
+- learning.weaknesses。
+- jobFitReport gaps。
+```
+
+#### P-08 推荐动作
+
+```text
+组件：RecommendedActionPanel
+位置：项目页下方中间。
+
+元素：
+- title 推荐动作。
+- action rows top 3。
+- 每行：
+  - icon。
+  - title。
+  - subtitle。
+  - CTA button。
+- footer：查看全部推荐动作。
+
+行为：
+- action CTA -> onSendPrompt。
+```
+
+#### P-09 关联资产
+
+```text
+组件：ProjectLinkedAssetPanel
+位置：desktop 下方右侧或 right rail；mobile 最后。
+
+元素：
+- title 关联资产。
+- tabs/chips：简历 / 项目 / 笔记 / 资料。
+- asset rows：
+  - icon。
+  - title。
+  - type chip。
+  - updatedAt。
+- button 查看全部资产。
+
+行为：
+- 可预览 artifact 的资产点击打开 preview sheet。
+- note 点击打开 note editor。
+```
+
+### 19.4 JD 匹配页，图 2
+
+#### J-01 JD 匹配页头
+
+```text
+组件：JDMatchHeader
+位置：JDMatchPage 第一块。
+
+元素：
+- company logo/avatar。
+- company name + verified/source marker。
+- job title。
+- meta：city / district / employment / years。
+- one-line jd summary。
+- score ring。
+- trend：较上次 +N，缺历史隐藏。
+- updatedAt。
+
+mobile：
+- score ring 放标题下方右对齐或独立行。
+- meta chips 横向滚动。
+```
+
+#### J-02 分析 Tab 与对比控制
+
+```text
+组件：JDMatchControlBar
+位置：header 下方。
+
+元素：
+- tabs：匹配分析 / 差距分析 / 证据依据 / 面试准备。
+- compare dropdown：对比简历。
+- refresh button：重新分析。
+
+行为：
+- tabs 本地切换。
+- compare dropdown 第一版可只显示当前简历。
+- 重新分析 -> onSendPrompt。
+```
+
+#### J-03 匹配总览
+
+```text
+组件：MatchScoreOverview
+位置：Tab 下方第一块。
+
+元素：
+- large score ring：78%。
+- label：匹配度。
+- trend。
+- optional summary。
+
+色块：
+- score >= 80 primary。
+- 60-79 warning。
+- <60 danger。
+```
+
+#### J-04 维度卡网格
+
+```text
+组件：MatchDimensionGrid
+位置：匹配总览右侧或下方。
+desktop：6 cards horizontal。
+tablet：3x2。
+mobile：2 columns or single column by width。
+
+维度：
+- 技术栈匹配。
+- 项目经历匹配。
+- Agent/LLM 经验。
+- 工程化能力。
+- 面试准备度。
+- 风险项。
+
+每卡元素：
+- icon。
+- title。
+- value：百分比/等级/数量。
+- trend：有历史才显示。
+- supporting text。
+
+严禁：
+- 没有真实结构化分数时硬写 85%、72%。
+```
+
+#### J-05 差距分析
+
+```text
+组件：GapAnalysisPanel
+位置：主区域中部左侧。
+
+元素：
+- title 差距分析。
+- subtitle 与岗位要求对比。
+- gap rows：
+  - title。
+  - priority chip。
+  - left requirement。
+  - right suggestion。
+  - chevron。
+- footer：查看全部 N 项差距。
+
+数据：
+- readiness.risks。
+- learning.weaknesses。
+- jobFitReport gaps。
+```
+
+#### J-06 证据依据
+
+```text
+组件：EvidencePanel
+位置：主区域中部右侧。
+
+元素：
+- title 证据依据。
+- subtitle 来自你的简历。
+- mini tabs：匹配证据 / 缺失证据。
+- evidence rows：
+  - check icon。
+  - evidence title。
+  - source chip：项目经历/简历画像/匹配报告。
+  - explanation。
+- footer：查看全部证据。
+
+数据：
+- jobFitReport.evidence_refs。
+- resumeProfile.projectExperience。
+- linkedAssets。
+```
+
+#### J-07 推荐面试题
+
+```text
+组件：InterviewQuestionStrip
+位置：页面底部主区域。
+
+元素：
+- filter chips：全部 / 高频问答 / 技术深挖 / 项目追问 / 系统设计。
+- question card：
+  - category tag。
+  - question。
+  - focus points。
+  - difficulty。
+  - button 查看参考答案。
+
+数据：
+- 第一版从 risks + suggestedActions 派生。
+- 文案标注“建议准备方向”，不伪装成题库真实数据。
+```
+
+#### J-08 右侧当前判断
+
+```text
+组件：JDMatchJudgmentRailCard
+位置：desktop right rail 第一块。
+
+元素：
+- title 当前判断。
+- status pill 良好/谨慎/风险。
+- summary。
+- 优势 box。
+- 风险 box。
+```
+
+#### J-09 推荐下一步
+
+```text
+组件：JDMatchNextStepCard
+位置：right rail 第二块。
+
+元素：
+- action index 1/2/3。
+- title。
+- impact chip。
+- footer 查看全部行动项。
+
+行为：
+- 点击 action -> onSendPrompt。
+```
+
+#### J-10 相关简历与笔记
+
+```text
+组件：JDMatchRelatedRail
+位置：right rail 下方。
+
+块：
+- 相关简历：当前对比版本 + 选择其他简历对比。
+- 相关笔记：top 3 note rows + 新建笔记。
+
+行为：
+- 简历点击切到简历资料页并选中版本。
+- 笔记点击打开 Note。
+```
+
+### 19.5 简历资料页，图 4
+
+#### R-01 简历资料页头与指标
+
+```text
+组件：ResumeStatsStrip
+位置：ResumeLibraryPage 顶部。
+
+四个指标：
+- 简历版本。
+- 已优化次数。
+- 针对岗位版本。
+- 最近更新。
+
+desktop：4 columns。
+mobile：2 columns / 1 column。
+
+数据：
+- resumeVersions.length。
+- version history count。
+- target_jd_analysis_id count。
+- latest updatedAt。
+```
+
+#### R-02 版本列表
+
+```text
+组件：ResumeVersionList
+位置：desktop 左侧。
+desktop width：300。
+mobile：作为 tab page 或第一 section。
+
+元素：
+- title 版本列表。
+- button 生成新版本。
+- filter icon。
+- version item：
+  - title。
+  - version label。
+  - purpose/target job。
+  - updatedAt。
+  - score ring/match score if available。
+  - current using chip。
+- recycle bin card。
+
+行为：
+- 点击 item -> select version。
+- 生成新版本 -> onSendPrompt。
+```
+
+#### R-03 简历预览面板
+
+```text
+组件：ResumePreviewPanel
+位置：desktop 中央主区域。
+
+元素：
+- header：
+  - selected version title。
+  - version chip。
+  - current using chip。
+  - updatedAt。
+- preview body：
+  - candidate name。
+  - target role。
+  - contact row。
+  - personal summary。
+  - work experience。
+  - project experience。
+  - skills。
+- footer actions：
+  - 预览简历。
+  - 优化此版本。
+  - 对比版本。
+  - 生成新版本。
+
+视觉：
+- preview body 是白底文档感，但不要再套一层大卡中卡。
+- 内容区域 maxWidth 720，居中或 left aligned。
+
+数据：
+- selected ResumeVersion artifact content。
+- fallback ResumeProfile structured fields。
+```
+
+#### R-04 AI 洞察面板
+
+```text
+组件：ResumeAIInsightPanel
+位置：desktop 预览右侧；tablet/mobile 下沉。
+
+tabs：
+- AI 洞察。
+- 匹配分析。
+
+元素：
+- score card。
+- 亮点 list。
+- 缺失项 list。
+- 推荐改写 block。
+- 可复用经历 tags。
+
+行为：
+- 推荐改写 block 的应用按钮第一版可以填充 prompt，不直接改写记录。
+```
+
+#### R-05 当前判断右栏
+
+```text
+组件：ResumeCurrentJudgmentCard
+位置：right rail 第一块。
+
+元素：
+- title 当前判断。
+- updatedAt。
+- status：匹配度较高/需补齐。
+- summary。
+- skill tags。
+
+数据：
+- selected application readiness。
+- selected resume version linked report。
+```
+
+#### R-06 推荐动作右栏
+
+```text
+组件：ResumeRecommendedActionsCard
+位置：right rail 第二块。
+
+动作：
+- 优化项目描述，突出业务价值。
+- 补充开源项目与技术博客链接。
+- 生成针对该岗位的求职信。
+
+每项：
+- icon。
+- title。
+- estimated time。
+- click -> onSendPrompt。
+```
+
+#### R-07 关联岗位
+
+```text
+组件：ResumeRelatedJobsCard
+位置：right rail 第三块。
+
+元素：
+- job rows top 3。
+- title。
+- match score chip。
+- chevron。
+
+行为：
+- 点击切到对应求职项目或 JD 匹配页。
+```
+
+#### R-08 关联资产
+
+```text
+组件：ResumeRelatedAssetsCard
+位置：right rail 第四块。
+
+元素：
+- asset rows：
+  - icon。
+  - title。
+  - updatedAt。
+- button 查看全部。
+```
+
+#### R-09 版本历史
+
+```text
+组件：ResumeVersionHistory
+位置：desktop 页面底部横向时间线；mobile 折叠 section。
+
+元素：
+- version card：
+  - version label。
+  - change type：优化/针对岗位/当前。
+  - date。
+  - chevron。
+- compare button。
+
+行为：
+- 点击 version 选中。
+- 对比版本第一版可打开占位 dialog，后续实现 diff。
+```
+
+## 20. 实现检查清单
+
+每实现一个页面，都按下面清单自查：
+
+```text
+1. 1440x900 无 overflow。
+2. 390x844 无横向 overflow。
+3. 主 CTA 可点击并进入聊天或目标页面。
+4. 缺数据时没有假数字、假公司、假薪资。
+5. 所有卡片标题不超过 2 行，超出省略。
+6. 所有长列表都有滚动边界。
+7. right rail 在 mobile 正确下沉。
+8. flutter analyze 通过。
+9. 对应 widget test 至少覆盖有数据和空状态。
+```
