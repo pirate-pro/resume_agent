@@ -305,6 +305,49 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     }
   }
 
+  Future<ResumeVersionDraftView> generateResumeVersionDraft({
+    String? applicationId,
+    String? resumeProfileId,
+    String? baseResumeVersionId,
+    String? targetJdAnalysisId,
+    String? jobFitReportId,
+    String? title,
+    List<String> strategy = const [],
+  }) async {
+    final response = await _api.generateResumeVersionDraft(
+      applicationId: applicationId,
+      resumeProfileId: resumeProfileId,
+      baseResumeVersionId: baseResumeVersionId,
+      targetJdAnalysisId: targetJdAnalysisId,
+      jobFitReportId: jobFitReportId,
+      title: title,
+      strategy: strategy,
+    );
+    return response.draft;
+  }
+
+  Future<ResumeVersionView> acceptResumeVersionDraft({
+    required String resumeVersionDraftId,
+    String? title,
+    String? markdown,
+    bool linkApplication = true,
+  }) async {
+    final response = await _api.acceptResumeVersionDraft(
+      resumeVersionDraftId: resumeVersionDraftId,
+      title: title,
+      markdown: markdown,
+      linkApplication: linkApplication,
+    );
+    _upsertResumeVersion(response.resumeVersion);
+    await loadAssetLibrary(force: true);
+    final selectedId = _selectedApplicationId;
+    if (selectedId != null && selectedId.isNotEmpty) {
+      await loadApplicationDetail(selectedId, force: true);
+    }
+    notifyListeners();
+    return response.resumeVersion;
+  }
+
   void setProjectFilter(CareerProjectFilter filter) {
     if (_projectFilter == filter) return;
     _projectFilter = filter;
@@ -552,6 +595,50 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     return note;
   }
 
+  Future<NoteView> appendNote({
+    required String noteId,
+    required String bodyMarkdown,
+    List<String> evidenceRefs = const [],
+    List<Map<String, dynamic>> sourceRefs = const [],
+  }) async {
+    final normalized = noteId.trim();
+    final note = await _api.appendNote(
+      noteId: normalized,
+      bodyMarkdown: bodyMarkdown.trim(),
+      evidenceRefs: evidenceRefs,
+      sourceRefs: sourceRefs,
+    );
+    _notes[normalized] = note;
+    _selectedNoteId = normalized;
+    await loadNotes(force: true);
+    final selectedId = _selectedApplicationId;
+    if (selectedId != null && selectedId.isNotEmpty) {
+      await loadApplicationDetail(selectedId, force: true);
+    } else {
+      notifyListeners();
+    }
+    return note;
+  }
+
+  Future<NoteView> archiveNote({
+    required String noteId,
+  }) async {
+    final normalized = noteId.trim();
+    final note = await _api.archiveNote(noteId: normalized);
+    _notes[normalized] = note;
+    if (_selectedNoteId == normalized) {
+      _selectedNoteId = null;
+    }
+    await loadNotes(force: true);
+    final selectedId = _selectedApplicationId;
+    if (selectedId != null && selectedId.isNotEmpty) {
+      await loadApplicationDetail(selectedId, force: true);
+    } else {
+      notifyListeners();
+    }
+    return note;
+  }
+
   void _syncSelectedApplication() {
     final records = applications;
     if (records.isEmpty) {
@@ -570,6 +657,19 @@ class CareerWorkbenchProvider extends ChangeNotifier {
       return;
     }
     _selectedApplicationId = records.first.application.applicationId;
+  }
+
+  void _upsertResumeVersion(ResumeVersionView resumeVersion) {
+    final records = [..._resumeVersions];
+    final index = records.indexWhere(
+      (item) => item.resumeVersionId == resumeVersion.resumeVersionId,
+    );
+    if (index >= 0) {
+      records[index] = resumeVersion;
+    } else {
+      records.add(resumeVersion);
+    }
+    _resumeVersions = records;
   }
 
   List<String> _actionResultHints(

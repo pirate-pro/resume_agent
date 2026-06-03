@@ -6,13 +6,14 @@ from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import get_career_product_store
+from app.api.deps import get_career_product_store, get_session_repository
 from app.api.presenters import (
     career_application_view,
     career_profile_view,
     jd_analysis_view,
     job_fit_report_view,
     resume_profile_view,
+    resume_version_draft_view,
     resume_version_view,
 )
 from app.api.responses import ok
@@ -24,9 +25,11 @@ from app.career.models import (
     JobFitReport,
     ResumeProfile,
     ResumeVersion,
+    ResumeVersionDraft,
 )
 from app.career.store import CareerProductStore
 from app.core.errors import ValidationError
+from app.domain.protocols import SessionRepository
 from app.schemas.career import (
     CareerApplicationUpdateRequest,
     CareerApplicationView,
@@ -34,9 +37,15 @@ from app.schemas.career import (
     JDAnalysisView,
     JobFitReportView,
     ResumeProfileView,
+    ResumeVersionDraftAcceptRequest,
+    ResumeVersionDraftAcceptResponse,
+    ResumeVersionDraftGenerateRequest,
+    ResumeVersionDraftGenerateResponse,
+    ResumeVersionDraftView,
     ResumeVersionView,
 )
 from app.schemas.common import StandardResponse
+from app.services.resume_version_draft_service import ResumeVersionDraftService
 
 __all__ = ["router"]
 
@@ -48,6 +57,7 @@ _RecordT = TypeVar(
     JDAnalysis,
     JobFitReport,
     ResumeVersion,
+    ResumeVersionDraft,
     CareerApplication,
 )
 
@@ -194,6 +204,63 @@ def get_resume_version(
         record_id=resume_version_id,
     )
     return ok(resume_version_view(record))
+
+
+@router.get("/resume-version-drafts", response_model=StandardResponse[list[ResumeVersionDraftView]])
+def list_resume_version_drafts(
+    include_archived: bool = Query(default=False),
+    store: CareerProductStore = Depends(get_career_product_store),
+) -> StandardResponse[list[ResumeVersionDraftView]]:
+    return ok([
+        resume_version_draft_view(item)
+        for item in store.list_resume_version_drafts(include_archived=include_archived)
+    ])
+
+
+@router.get(
+    "/resume-version-drafts/{resume_version_draft_id}",
+    response_model=StandardResponse[ResumeVersionDraftView],
+)
+def get_resume_version_draft(
+    resume_version_draft_id: str,
+    include_archived: bool = Query(default=False),
+    store: CareerProductStore = Depends(get_career_product_store),
+) -> StandardResponse[ResumeVersionDraftView]:
+    record = _require_visible(
+        store.get_resume_version_draft(resume_version_draft_id),
+        include_archived=include_archived,
+        record_type="ResumeVersionDraft",
+        record_id=resume_version_draft_id,
+    )
+    return ok(resume_version_draft_view(record))
+
+
+@router.post(
+    "/resume-version-drafts/generate",
+    response_model=StandardResponse[ResumeVersionDraftGenerateResponse],
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_resume_version_draft(
+    request: ResumeVersionDraftGenerateRequest,
+    store: CareerProductStore = Depends(get_career_product_store),
+    session_repository: SessionRepository = Depends(get_session_repository),
+) -> StandardResponse[ResumeVersionDraftGenerateResponse]:
+    service = ResumeVersionDraftService(career_store=store, session_repository=session_repository)
+    return ok(service.generate(request))
+
+
+@router.post(
+    "/resume-version-drafts/{resume_version_draft_id}/accept",
+    response_model=StandardResponse[ResumeVersionDraftAcceptResponse],
+)
+def accept_resume_version_draft(
+    resume_version_draft_id: str,
+    request: ResumeVersionDraftAcceptRequest,
+    store: CareerProductStore = Depends(get_career_product_store),
+    session_repository: SessionRepository = Depends(get_session_repository),
+) -> StandardResponse[ResumeVersionDraftAcceptResponse]:
+    service = ResumeVersionDraftService(career_store=store, session_repository=session_repository)
+    return ok(service.accept(resume_version_draft_id, request))
 
 
 @router.get("/applications", response_model=StandardResponse[list[CareerApplicationView]])

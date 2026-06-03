@@ -5,6 +5,7 @@ class ChatMessage {
   final String renderHint;
   final String layoutHint;
   final String sourceKind;
+  final String presentationKind;
   final List<AnswerArtifactView> artifacts;
   final List<ToolCallView> toolCalls;
   final List<EventView> progressEvents;
@@ -17,6 +18,7 @@ class ChatMessage {
     this.renderHint = "plain",
     this.layoutHint = "paragraph",
     this.sourceKind = "direct_answer",
+    this.presentationKind = "chat_text",
     this.artifacts = const [],
     this.toolCalls = const [],
     this.progressEvents = const [],
@@ -413,6 +415,7 @@ class ChatResponse {
   final String renderHint;
   final String layoutHint;
   final String sourceKind;
+  final String presentationKind;
   final List<AnswerArtifactView> artifacts;
   final List<ToolCallView> toolCalls;
   final List<MemoryView> memoryHits;
@@ -425,6 +428,7 @@ class ChatResponse {
     this.renderHint = "plain",
     this.layoutHint = "paragraph",
     this.sourceKind = "direct_answer",
+    this.presentationKind = "chat_text",
     this.artifacts = const [],
     required this.toolCalls,
     required this.memoryHits,
@@ -439,6 +443,7 @@ class ChatResponse {
       renderHint: json["render_hint"] ?? "plain",
       layoutHint: json["layout_hint"] ?? "paragraph",
       sourceKind: json["source_kind"] ?? "direct_answer",
+      presentationKind: json["presentation_kind"] ?? "chat_text",
       artifacts: (json["artifacts"] as List?)
               ?.map((e) =>
                   AnswerArtifactView.fromJson(Map<String, dynamic>.from(e)))
@@ -953,6 +958,99 @@ class ResumeVersionView {
   }
 }
 
+class ResumeVersionDraftView {
+  final CareerRecordMetaView meta;
+  final String resumeVersionDraftId;
+  final String baseResumeProfileId;
+  final String? targetJdAnalysisId;
+  final String? applicationId;
+  final String? jobFitReportId;
+  final String title;
+  final String format;
+  final String markdown;
+  final List<String> changeSummary;
+  final List<String> keywordStrategy;
+  final List<String> riskNotes;
+  final String draftSource;
+  final String? acceptedResumeVersionId;
+
+  ResumeVersionDraftView({
+    required this.meta,
+    required this.resumeVersionDraftId,
+    required this.baseResumeProfileId,
+    required this.targetJdAnalysisId,
+    required this.applicationId,
+    required this.jobFitReportId,
+    required this.title,
+    required this.format,
+    required this.markdown,
+    required this.changeSummary,
+    required this.keywordStrategy,
+    required this.riskNotes,
+    required this.draftSource,
+    required this.acceptedResumeVersionId,
+  });
+
+  factory ResumeVersionDraftView.fromJson(Map<String, dynamic> json) {
+    return ResumeVersionDraftView(
+      meta: CareerRecordMetaView.fromJson(json),
+      resumeVersionDraftId: (json["resume_version_draft_id"] ?? "").toString(),
+      baseResumeProfileId: (json["base_resume_profile_id"] ?? "").toString(),
+      targetJdAnalysisId: _readOptionalString(json["target_jd_analysis_id"]),
+      applicationId: _readOptionalString(json["application_id"]),
+      jobFitReportId: _readOptionalString(json["job_fit_report_id"]),
+      title: (json["title"] ?? "").toString(),
+      format: (json["format"] ?? "").toString(),
+      markdown: (json["markdown"] ?? "").toString(),
+      changeSummary: _readStringList(json["change_summary"]),
+      keywordStrategy: _readStringList(json["keyword_strategy"]),
+      riskNotes: _readStringList(json["risk_notes"]),
+      draftSource: (json["draft_source"] ?? "").toString(),
+      acceptedResumeVersionId:
+          _readOptionalString(json["accepted_resume_version_id"]),
+    );
+  }
+}
+
+class ResumeVersionDraftGenerateResponse {
+  final ResumeVersionDraftView draft;
+
+  ResumeVersionDraftGenerateResponse({required this.draft});
+
+  factory ResumeVersionDraftGenerateResponse.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return ResumeVersionDraftGenerateResponse(
+      draft: ResumeVersionDraftView.fromJson(
+        Map<String, dynamic>.from(json["draft"] as Map),
+      ),
+    );
+  }
+}
+
+class ResumeVersionDraftAcceptResponse {
+  final ResumeVersionDraftView draft;
+  final ResumeVersionView resumeVersion;
+
+  ResumeVersionDraftAcceptResponse({
+    required this.draft,
+    required this.resumeVersion,
+  });
+
+  factory ResumeVersionDraftAcceptResponse.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return ResumeVersionDraftAcceptResponse(
+      draft: ResumeVersionDraftView.fromJson(
+        Map<String, dynamic>.from(json["draft"] as Map),
+      ),
+      resumeVersion: ResumeVersionView.fromJson(
+        Map<String, dynamic>.from(json["resume_version"] as Map),
+      ),
+    );
+  }
+}
+
 class CareerApplicationView {
   final CareerRecordMetaView meta;
   final String applicationId;
@@ -1409,6 +1507,64 @@ class CareerWorkbenchLearningTaskView {
       successCriteria: _readStringList(json["success_criteria"]),
       progressNotes: (json["progress_notes"] ?? "").toString(),
       updatedAt: _readDateTime(json["updated_at"]),
+    );
+  }
+}
+
+class LearningTaskDraftView {
+  final String draftId;
+  final String title;
+  final String description;
+  final String taskType;
+  final String priority;
+  final int estimatedMinutes;
+  final List<String> skillTags;
+  final List<String> successCriteria;
+  final String reason;
+  final List<String> sourceRefs;
+
+  LearningTaskDraftView({
+    required this.draftId,
+    required this.title,
+    required this.description,
+    required this.taskType,
+    required this.priority,
+    required this.estimatedMinutes,
+    required this.skillTags,
+    required this.successCriteria,
+    required this.reason,
+    required this.sourceRefs,
+  });
+
+  factory LearningTaskDraftView.fromJson(Map<String, dynamic> json) {
+    return LearningTaskDraftView(
+      draftId: (json["draft_id"] ?? "").toString(),
+      title: (json["title"] ?? "").toString(),
+      description: (json["description"] ?? "").toString(),
+      taskType: (json["task_type"] ?? "custom").toString(),
+      priority: (json["priority"] ?? "medium").toString(),
+      estimatedMinutes: _readInt(json["estimated_minutes"]),
+      skillTags: _readStringList(json["skill_tags"]),
+      successCriteria: _readStringList(json["success_criteria"]),
+      reason: (json["reason"] ?? "").toString(),
+      sourceRefs: _readStringList(json["source_refs"]),
+    );
+  }
+}
+
+class LearningTaskDraftGenerateResponse {
+  final List<LearningTaskDraftView> drafts;
+
+  LearningTaskDraftGenerateResponse({required this.drafts});
+
+  factory LearningTaskDraftGenerateResponse.fromJson(
+    Map<String, dynamic> json,
+  ) {
+    return LearningTaskDraftGenerateResponse(
+      drafts: (json["drafts"] as List? ?? const [])
+          .map((item) =>
+              LearningTaskDraftView.fromJson(Map<String, dynamic>.from(item)))
+          .toList(),
     );
   }
 }

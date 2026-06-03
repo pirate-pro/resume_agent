@@ -14,6 +14,11 @@ __all__ = [
     "JDAnalysisView",
     "JobFitReportView",
     "ResumeProfileView",
+    "ResumeVersionDraftAcceptRequest",
+    "ResumeVersionDraftAcceptResponse",
+    "ResumeVersionDraftGenerateRequest",
+    "ResumeVersionDraftGenerateResponse",
+    "ResumeVersionDraftView",
     "ResumeVersionView",
 ]
 
@@ -96,6 +101,47 @@ class ResumeVersionView(CareerRecordMetaView):
     change_summary: list[str] = Field(default_factory=list)
     keyword_strategy: list[str] = Field(default_factory=list)
     risk_notes: list[str] = Field(default_factory=list)
+
+
+class ResumeVersionDraftView(CareerRecordMetaView):
+    resume_version_draft_id: str
+    base_resume_profile_id: str
+    target_jd_analysis_id: str | None = None
+    application_id: str | None = None
+    job_fit_report_id: str | None = None
+    title: str
+    format: str
+    markdown: str
+    change_summary: list[str] = Field(default_factory=list)
+    keyword_strategy: list[str] = Field(default_factory=list)
+    risk_notes: list[str] = Field(default_factory=list)
+    draft_source: str = "deterministic"
+    accepted_resume_version_id: str | None = None
+
+
+class ResumeVersionDraftGenerateRequest(BaseModel):
+    application_id: str | None = None
+    resume_profile_id: str | None = None
+    base_resume_version_id: str | None = None
+    target_jd_analysis_id: str | None = None
+    job_fit_report_id: str | None = None
+    title: str | None = None
+    strategy: list[str] = Field(default_factory=list)
+
+
+class ResumeVersionDraftGenerateResponse(BaseModel):
+    draft: ResumeVersionDraftView
+
+
+class ResumeVersionDraftAcceptRequest(BaseModel):
+    title: str | None = None
+    markdown: str | None = None
+    link_application: bool = True
+
+
+class ResumeVersionDraftAcceptResponse(BaseModel):
+    draft: ResumeVersionDraftView
+    resume_version: ResumeVersionView
 
 
 class CareerApplicationView(CareerRecordMetaView):

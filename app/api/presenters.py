@@ -7,7 +7,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol, cast
 
-from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import (
+    CareerApplication,
+    CareerProfile,
+    JDAnalysis,
+    JobFitReport,
+    ResumeProfile,
+    ResumeVersion,
+    ResumeVersionDraft,
+)
 from app.career.workbench import (
     CareerApplicationSummary,
     CareerApplicationWorkbench,
@@ -45,6 +53,7 @@ from app.schemas.career import (
     JDAnalysisView,
     JobFitReportView,
     ResumeProfileView,
+    ResumeVersionDraftView,
     ResumeVersionView,
 )
 from app.schemas.career_workbench import (
@@ -74,7 +83,7 @@ from app.schemas.learning import (
     WeaknessTrackerView,
 )
 from app.schemas.notes import NoteCollectionView, NoteSourceRefPayload, NoteView
-from app.services.answer_normalizer import AnswerFormat, LayoutHint, RenderHint, SourceKind
+from app.services.answer_normalizer import AnswerFormat, LayoutHint, PresentationKind, RenderHint, SourceKind
 
 __all__ = [
     "career_application_view",
@@ -104,6 +113,7 @@ __all__ = [
     "progress_checkin_view",
     "review_schedule_view",
     "resume_profile_view",
+    "resume_version_draft_view",
     "resume_version_view",
     "session_item_view",
     "session_message_view",
@@ -116,6 +126,7 @@ _ANSWER_FORMATS = {"plain_text", "markdown", "code", "markdown_source"}
 _RENDER_HINTS = {"plain", "markdown_document", "markdown_source", "code_block", "large_document"}
 _LAYOUT_HINTS = {"brief", "paragraph", "bullets", "steps"}
 _SOURCE_KINDS = {"direct_answer", "generated_document", "file_content", "summary"}
+_PRESENTATION_KINDS = {"chat_text", "workflow_trace", "career_report", "document_preview", "artifact_card"}
 
 
 class SkillSummaryLike(Protocol):
@@ -239,6 +250,25 @@ def resume_version_view(item: ResumeVersion) -> ResumeVersionView:
         change_summary=item.change_summary,
         keyword_strategy=item.keyword_strategy,
         risk_notes=item.risk_notes,
+    )
+
+
+def resume_version_draft_view(item: ResumeVersionDraft) -> ResumeVersionDraftView:
+    return ResumeVersionDraftView(
+        resume_version_draft_id=item.resume_version_draft_id,
+        **_career_meta(item),
+        base_resume_profile_id=item.base_resume_profile_id,
+        target_jd_analysis_id=item.target_jd_analysis_id,
+        application_id=item.application_id,
+        job_fit_report_id=item.job_fit_report_id,
+        title=item.title,
+        format=item.format,
+        markdown=item.markdown,
+        change_summary=item.change_summary,
+        keyword_strategy=item.keyword_strategy,
+        risk_notes=item.risk_notes,
+        draft_source=item.draft_source,
+        accepted_resume_version_id=item.accepted_resume_version_id,
     )
 
 
@@ -640,6 +670,10 @@ def session_message_view(raw: Mapping[str, object]) -> SessionMessage:
         render_hint=cast(RenderHint, _enum_text(raw.get("render_hint"), _RENDER_HINTS, "plain")),
         layout_hint=cast(LayoutHint, _enum_text(raw.get("layout_hint"), _LAYOUT_HINTS, "paragraph")),
         source_kind=cast(SourceKind, _enum_text(raw.get("source_kind"), _SOURCE_KINDS, "direct_answer")),
+        presentation_kind=cast(
+            PresentationKind,
+            _enum_text(raw.get("presentation_kind"), _PRESENTATION_KINDS, "chat_text"),
+        ),
         artifacts=_artifact_views(raw.get("artifacts")),
         tool_calls=_tool_call_views(raw.get("tool_calls")),
         created_at=_optional_datetime(raw.get("created_at")),
@@ -676,7 +710,7 @@ def _dict_value(raw: object) -> dict[str, Any]:
 
 
 def _career_meta(
-    item: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication,
+    item: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | ResumeVersionDraft | CareerApplication,
 ) -> dict[str, Any]:
     return {
         "status": item.status.value,

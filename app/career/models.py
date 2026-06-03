@@ -21,6 +21,7 @@ __all__ = [
     "JobFitReport",
     "ResumeProfile",
     "ResumeVersion",
+    "ResumeVersionDraft",
     "validate_application_id",
     "validate_artifact_id",
     "validate_career_profile_id",
@@ -28,6 +29,7 @@ __all__ = [
     "validate_fit_id",
     "validate_jd_id",
     "validate_resume_profile_id",
+    "validate_resume_version_draft_id",
     "validate_resume_version_id",
     "validate_session_id",
 ]
@@ -48,6 +50,7 @@ _ID_PATTERNS = {
     "jd_id": re.compile(r"^jd_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     "note_id": re.compile(r"^note_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     "resume_profile_id": re.compile(r"^resume_profile_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
+    "resume_version_draft_id": re.compile(r"^resume_version_draft_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     "resume_version_id": re.compile(r"^resume_version_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     "session_ref": re.compile(r"^sess_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
 }
@@ -59,6 +62,7 @@ _EVIDENCE_REF_PATTERNS = (
     _ID_PATTERNS["jd_id"],
     _ID_PATTERNS["note_id"],
     _ID_PATTERNS["resume_profile_id"],
+    _ID_PATTERNS["resume_version_draft_id"],
     _ID_PATTERNS["resume_version_id"],
     _ID_PATTERNS["session_ref"],
 )
@@ -385,6 +389,80 @@ class ResumeVersion:
 
 
 @dataclass(slots=True)
+class ResumeVersionDraft:
+    """A user-confirmable resume version draft before creating a final version."""
+
+    resume_version_draft_id: str
+    status: CareerRecordStatus
+    source_session_id: str
+    source_artifact_id: str | None
+    evidence_refs: list[str]
+    created_at: datetime
+    updated_at: datetime
+    base_resume_profile_id: str
+    target_jd_analysis_id: str | None
+    application_id: str | None
+    job_fit_report_id: str | None
+    title: str
+    format: str
+    markdown: str
+    change_summary: list[str] = field(default_factory=list)
+    keyword_strategy: list[str] = field(default_factory=list)
+    risk_notes: list[str] = field(default_factory=list)
+    draft_source: str = "deterministic"
+    accepted_resume_version_id: str | None = None
+
+    def __post_init__(self) -> None:
+        self.resume_version_draft_id = validate_resume_version_draft_id(self.resume_version_draft_id)
+        _normalize_record_metadata(self)
+        self.base_resume_profile_id = validate_resume_profile_id(self.base_resume_profile_id)
+        self.target_jd_analysis_id = _normalize_optional_id(
+            "target_jd_analysis_id",
+            self.target_jd_analysis_id,
+            "jd_id",
+        )
+        self.application_id = _normalize_optional_id("application_id", self.application_id, "application_id")
+        self.job_fit_report_id = _normalize_optional_id("job_fit_report_id", self.job_fit_report_id, "fit_id")
+        self.title = _require_non_empty("title", self.title)
+        self.format = _require_non_empty("format", self.format).lower()
+        if self.format not in {"markdown"}:
+            raise ValidationError("format must be markdown.")
+        self.markdown = _require_non_empty("markdown", self.markdown)
+        self.change_summary = _normalize_string_list("change_summary", self.change_summary)
+        self.keyword_strategy = _normalize_string_list("keyword_strategy", self.keyword_strategy)
+        self.risk_notes = _normalize_string_list("risk_notes", self.risk_notes)
+        self.draft_source = _require_non_empty("draft_source", self.draft_source)
+        self.accepted_resume_version_id = _normalize_optional_id(
+            "accepted_resume_version_id",
+            self.accepted_resume_version_id,
+            "resume_version_id",
+        )
+
+    def copy(self) -> Self:
+        return type(self)(
+            resume_version_draft_id=self.resume_version_draft_id,
+            status=self.status,
+            source_session_id=self.source_session_id,
+            source_artifact_id=self.source_artifact_id,
+            evidence_refs=list(self.evidence_refs),
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            base_resume_profile_id=self.base_resume_profile_id,
+            target_jd_analysis_id=self.target_jd_analysis_id,
+            application_id=self.application_id,
+            job_fit_report_id=self.job_fit_report_id,
+            title=self.title,
+            format=self.format,
+            markdown=self.markdown,
+            change_summary=list(self.change_summary),
+            keyword_strategy=list(self.keyword_strategy),
+            risk_notes=list(self.risk_notes),
+            draft_source=self.draft_source,
+            accepted_resume_version_id=self.accepted_resume_version_id,
+        )
+
+
+@dataclass(slots=True)
 class CareerApplication:
     """A user-visible project for one target job application."""
 
@@ -526,6 +604,10 @@ def validate_jd_id(value: str) -> str:
 
 def validate_resume_profile_id(value: str) -> str:
     return _validate_id("resume_profile_id", value, "resume_profile_id")
+
+
+def validate_resume_version_draft_id(value: str) -> str:
+    return _validate_id("resume_version_draft_id", value, "resume_version_draft_id")
 
 
 def validate_resume_version_id(value: str) -> str:

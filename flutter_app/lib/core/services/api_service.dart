@@ -185,6 +185,125 @@ class ApiService {
     return list.map((e) => SkillOption.fromJson(e)).toList();
   }
 
+  // ── Learning records ─────────────────────────────────────────────────
+
+  Future<CareerWorkbenchLearningTaskView> createLearningTask({
+    required String sourceSessionId,
+    required String title,
+    String description = "",
+    String taskType = "custom",
+    String priority = "medium",
+    String state = "todo",
+    int estimatedMinutes = 0,
+    List<String> evidenceRefs = const [],
+    List<String> skillTags = const [],
+    List<String> successCriteria = const [],
+    String progressNotes = "",
+  }) async {
+    final resp = await http.post(
+      _uri("/api/learning-admin/tasks"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "source_session_id": sourceSessionId,
+        "evidence_refs": evidenceRefs,
+        "title": title,
+        "description": description,
+        "task_type": taskType,
+        "priority": priority,
+        "state": state,
+        "skill_tags": skillTags,
+        "estimated_minutes": estimatedMinutes,
+        "success_criteria": successCriteria,
+        "progress_notes": progressNotes,
+      }),
+    );
+    return CareerWorkbenchLearningTaskView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
+  Future<List<LearningTaskDraftView>> generateLearningTaskDrafts({
+    required String applicationId,
+    int maxDrafts = 3,
+    String focus = "general",
+    bool excludeExisting = true,
+  }) async {
+    final resp = await http.post(
+      _uri("/api/learning-admin/task-drafts/generate"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "application_id": applicationId,
+        "max_drafts": maxDrafts,
+        "focus": focus,
+        "exclude_existing": excludeExisting,
+      }),
+    );
+    final data = Map<String, dynamic>.from(_decodeResponseData(resp));
+    return LearningTaskDraftGenerateResponse.fromJson(data).drafts;
+  }
+
+  Future<Map<String, dynamic>> createLearningCheckin({
+    required String sourceSessionId,
+    required String learningTaskId,
+    String? learningPlanId,
+    int minutesSpent = 0,
+    String progressState = "in_progress",
+    String summary = "",
+    List<String> blockers = const [],
+    String nextAction = "",
+    List<String> evidenceRefs = const [],
+  }) async {
+    final resp = await http.post(
+      _uri("/api/learning-admin/checkins"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "source_session_id": sourceSessionId,
+        "evidence_refs": evidenceRefs,
+        "learning_plan_id": learningPlanId,
+        "learning_task_id": learningTaskId,
+        "minutes_spent": minutesSpent,
+        "progress_state": progressState,
+        "summary": summary,
+        "blockers": blockers,
+        "next_action": nextAction,
+      }),
+    );
+    return Map<String, dynamic>.from(_decodeResponseData(resp));
+  }
+
+  Future<CareerWorkbenchLearningTaskView> updateLearningTaskState({
+    required String learningTaskId,
+    required String state,
+    DateTime? completedAt,
+  }) async {
+    final body = <String, dynamic>{"state": state};
+    if (completedAt != null) {
+      body["completed_at"] = completedAt.toIso8601String();
+    }
+    final resp = await http.post(
+      _uri(
+          "/api/learning-admin/tasks/${Uri.encodeComponent(learningTaskId)}/state"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    return CareerWorkbenchLearningTaskView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
+  Future<CareerWorkbenchLearningTaskView> archiveLearningTask({
+    required String learningTaskId,
+  }) async {
+    final resp = await http.post(
+      _uri(
+          "/api/learning-admin/tasks/${Uri.encodeComponent(learningTaskId)}/archive"),
+      headers: {"Content-Type": "application/json"},
+    );
+    return CareerWorkbenchLearningTaskView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
   // ── Session Artifacts ─────────────────────────────────────────────────────
 
   Future<SessionArtifactsResponse> listSessionArtifacts(
@@ -330,6 +449,72 @@ class ApiService {
     return list
         .map((e) => ResumeVersionView.fromJson(Map<String, dynamic>.from(e)))
         .toList();
+  }
+
+  Future<ResumeVersionDraftGenerateResponse> generateResumeVersionDraft({
+    String? applicationId,
+    String? resumeProfileId,
+    String? baseResumeVersionId,
+    String? targetJdAnalysisId,
+    String? jobFitReportId,
+    String? title,
+    List<String> strategy = const [],
+  }) async {
+    final body = <String, dynamic>{
+      "strategy": strategy,
+    };
+    if (applicationId != null && applicationId.trim().isNotEmpty) {
+      body["application_id"] = applicationId.trim();
+    }
+    if (resumeProfileId != null && resumeProfileId.trim().isNotEmpty) {
+      body["resume_profile_id"] = resumeProfileId.trim();
+    }
+    if (baseResumeVersionId != null && baseResumeVersionId.trim().isNotEmpty) {
+      body["base_resume_version_id"] = baseResumeVersionId.trim();
+    }
+    if (targetJdAnalysisId != null && targetJdAnalysisId.trim().isNotEmpty) {
+      body["target_jd_analysis_id"] = targetJdAnalysisId.trim();
+    }
+    if (jobFitReportId != null && jobFitReportId.trim().isNotEmpty) {
+      body["job_fit_report_id"] = jobFitReportId.trim();
+    }
+    if (title != null && title.trim().isNotEmpty) {
+      body["title"] = title.trim();
+    }
+    final resp = await http.post(
+      _uri("/api/career/resume-version-drafts/generate"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    return ResumeVersionDraftGenerateResponse.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
+  Future<ResumeVersionDraftAcceptResponse> acceptResumeVersionDraft({
+    required String resumeVersionDraftId,
+    String? title,
+    String? markdown,
+    bool linkApplication = true,
+  }) async {
+    final body = <String, dynamic>{"link_application": linkApplication};
+    if (title != null && title.trim().isNotEmpty) {
+      body["title"] = title.trim();
+    }
+    if (markdown != null && markdown.trim().isNotEmpty) {
+      body["markdown"] = markdown.trim();
+    }
+    final resp = await http.post(
+      _uri(
+        "/api/career/resume-version-drafts/"
+        "${Uri.encodeComponent(resumeVersionDraftId)}/accept",
+      ),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    return ResumeVersionDraftAcceptResponse.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
   }
 
   Future<List<CareerApplicationView>> listCareerApplications({
@@ -528,6 +713,38 @@ class ApiService {
     );
   }
 
+  Future<NoteView> appendNote({
+    required String noteId,
+    required String bodyMarkdown,
+    List<String> evidenceRefs = const [],
+    List<Map<String, dynamic>> sourceRefs = const [],
+  }) async {
+    final resp = await http.post(
+      _uri("/api/notes/${Uri.encodeComponent(noteId)}/append"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "body_markdown": bodyMarkdown,
+        "evidence_refs": evidenceRefs,
+        "source_refs": sourceRefs,
+      }),
+    );
+    return NoteView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
+  Future<NoteView> archiveNote({
+    required String noteId,
+  }) async {
+    final resp = await http.post(
+      _uri("/api/notes/${Uri.encodeComponent(noteId)}/archive"),
+      headers: {"Content-Type": "application/json"},
+    );
+    return NoteView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
   Uri _careerUri(String path, bool includeArchived) {
     return _uri("/api/career$path").replace(
       queryParameters: {"include_archived": includeArchived.toString()},
@@ -604,6 +821,7 @@ class ApiService {
             renderHint: e["render_hint"] ?? "plain",
             layoutHint: e["layout_hint"] ?? "paragraph",
             sourceKind: e["source_kind"] ?? "direct_answer",
+            presentationKind: e["presentation_kind"] ?? "chat_text",
             artifacts: (e["artifacts"] as List?)
                     ?.map((item) => AnswerArtifactView.fromJson(
                         Map<String, dynamic>.from(item)))

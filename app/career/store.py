@@ -18,6 +18,7 @@ from app.career.models import (
     JobFitReport,
     ResumeProfile,
     ResumeVersion,
+    ResumeVersionDraft,
     validate_application_id,
     validate_artifact_id,
     validate_career_profile_id,
@@ -25,6 +26,7 @@ from app.career.models import (
     validate_fit_id,
     validate_jd_id,
     validate_resume_profile_id,
+    validate_resume_version_draft_id,
     validate_resume_version_id,
 )
 from app.core.errors import StorageError, ValidationError
@@ -38,6 +40,7 @@ _RecordT = TypeVar(
     JDAnalysis,
     JobFitReport,
     ResumeVersion,
+    ResumeVersionDraft,
     CareerApplication,
 )
 
@@ -86,12 +89,14 @@ class CareerProductStore:
         self._resumes_dir = self._root_dir / "resumes"
         self._jobs_dir = self._root_dir / "jobs"
         self._versions_dir = self._root_dir / "versions"
+        self._version_drafts_dir = self._root_dir / "version_drafts"
         self._applications_dir = self._root_dir / "applications"
         for path in (
             self._profiles_dir,
             self._resumes_dir,
             self._jobs_dir,
             self._versions_dir,
+            self._version_drafts_dir,
             self._applications_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
@@ -295,6 +300,34 @@ class CareerProductStore:
             return None
         return self.save_resume_version(replace(record, status=CareerRecordStatus.ARCHIVED))
 
+    def save_resume_version_draft(self, record: ResumeVersionDraft) -> ResumeVersionDraft:
+        if not isinstance(record, ResumeVersionDraft):
+            raise ValidationError("record must be ResumeVersionDraft.")
+        validated = record.copy()
+        path = self._resume_version_draft_path(validated.resume_version_draft_id)
+        stamped = _stamp_record(validated, _read_record(path, _resume_version_draft_from_payload), self._now())
+        _write_json_payload(path, _resume_version_draft_to_payload(stamped))
+        return stamped.copy()
+
+    def get_resume_version_draft(self, resume_version_draft_id: str) -> ResumeVersionDraft | None:
+        return _read_record(
+            self._resume_version_draft_path(validate_resume_version_draft_id(resume_version_draft_id)),
+            _resume_version_draft_from_payload,
+        )
+
+    def list_resume_version_drafts(self, *, include_archived: bool = False) -> list[ResumeVersionDraft]:
+        records = [
+            _read_record_required(path, _resume_version_draft_from_payload)
+            for path in sorted(self._version_drafts_dir.glob("*.json"))
+        ]
+        return _filter_and_sort(records, include_archived=include_archived)
+
+    def archive_resume_version_draft(self, resume_version_draft_id: str) -> ResumeVersionDraft | None:
+        record = self.get_resume_version_draft(resume_version_draft_id)
+        if record is None:
+            return None
+        return self.save_resume_version_draft(replace(record, status=CareerRecordStatus.ARCHIVED))
+
     def save_career_application(self, record: CareerApplication) -> CareerApplication:
         if not isinstance(record, CareerApplication):
             raise ValidationError("record must be CareerApplication.")
@@ -384,6 +417,9 @@ class CareerProductStore:
 
     def _resume_version_path(self, resume_version_id: str) -> Path:
         return self._versions_dir / f"{resume_version_id}.json"
+
+    def _resume_version_draft_path(self, resume_version_draft_id: str) -> Path:
+        return self._version_drafts_dir / f"{resume_version_draft_id}.json"
 
     def _career_application_path(self, application_id: str) -> Path:
         return self._applications_dir / f"{application_id}.json"
@@ -576,6 +612,47 @@ def _resume_version_from_payload(payload: dict[str, Any]) -> ResumeVersion:
     )
 
 
+def _resume_version_draft_to_payload(record: ResumeVersionDraft) -> dict[str, Any]:
+    payload = _base_payload(record)
+    payload.update(
+        {
+            "resume_version_draft_id": record.resume_version_draft_id,
+            "base_resume_profile_id": record.base_resume_profile_id,
+            "target_jd_analysis_id": record.target_jd_analysis_id,
+            "application_id": record.application_id,
+            "job_fit_report_id": record.job_fit_report_id,
+            "title": record.title,
+            "format": record.format,
+            "markdown": record.markdown,
+            "change_summary": record.change_summary,
+            "keyword_strategy": record.keyword_strategy,
+            "risk_notes": record.risk_notes,
+            "draft_source": record.draft_source,
+            "accepted_resume_version_id": record.accepted_resume_version_id,
+        }
+    )
+    return payload
+
+
+def _resume_version_draft_from_payload(payload: dict[str, Any]) -> ResumeVersionDraft:
+    return ResumeVersionDraft(
+        resume_version_draft_id=payload["resume_version_draft_id"],
+        **_base_kwargs(payload),
+        base_resume_profile_id=payload["base_resume_profile_id"],
+        target_jd_analysis_id=payload.get("target_jd_analysis_id"),
+        application_id=payload.get("application_id"),
+        job_fit_report_id=payload.get("job_fit_report_id"),
+        title=payload["title"],
+        format=payload["format"],
+        markdown=payload["markdown"],
+        change_summary=payload.get("change_summary", []),
+        keyword_strategy=payload.get("keyword_strategy", []),
+        risk_notes=payload.get("risk_notes", []),
+        draft_source=payload.get("draft_source", "deterministic"),
+        accepted_resume_version_id=payload.get("accepted_resume_version_id"),
+    )
+
+
 def _career_application_to_payload(record: CareerApplication) -> dict[str, Any]:
     payload = _base_payload(record)
     payload.update(
@@ -624,7 +701,7 @@ def _career_application_from_payload(payload: dict[str, Any]) -> CareerApplicati
 
 
 def _base_payload(
-    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | CareerApplication,
+    record: ResumeProfile | CareerProfile | JDAnalysis | JobFitReport | ResumeVersion | ResumeVersionDraft | CareerApplication,
 ) -> dict[str, Any]:
     return {
         "status": record.status.value,

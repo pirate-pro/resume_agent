@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_career_product_store
+from app.api.deps import get_career_product_store, get_session_repository
 from app.career.models import (
     CareerApplication,
     CareerProfile,
@@ -20,6 +20,7 @@ from app.career.models import (
     ResumeVersion,
 )
 from app.career.store import CareerProductStore
+from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.main import app
 
 __all__ = []
@@ -224,6 +225,67 @@ def test_career_api_rejects_empty_application_update(tmp_path: Path) -> None:
         payload = response.json()
         assert payload["code"] == 400
         assert "at least one editable field" in payload["msg"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_career_api_generates_and_accepts_resume_version_draft(tmp_path: Path) -> None:
+    store = CareerProductStore(root_dir=tmp_path / "career", clock=_TickingClock())
+    session_repository = JsonlSessionRepository(tmp_path / "sessions")
+    _seed_active_records(store)
+    _override_career_store(store)
+    app.dependency_overrides[get_session_repository] = lambda: session_repository
+
+    try:
+        with TestClient(app) as client:
+            generate_resp = client.post(
+                "/api/career/resume-version-drafts/generate",
+                json={
+                    "application_id": "application_alpha",
+                    "resume_profile_id": "resume_profile_alpha",
+                    "target_jd_analysis_id": "jd_alpha",
+                    "job_fit_report_id": "fit_alpha",
+                    "title": "Example Co 定制版草案",
+                    "strategy": ["突出 Agent 项目", "补强量化成果"],
+                },
+            )
+            assert generate_resp.status_code == 201
+            draft = _data(generate_resp)["draft"]
+            draft_id = draft["resume_version_draft_id"]
+            assert draft_id.startswith("resume_version_draft_")
+            assert draft["application_id"] == "application_alpha"
+            assert draft["markdown"].startswith("# 候选人")
+            assert "AI 应用开发工程师" in draft["markdown"]
+            assert "补强量化成果" in draft["change_summary"]
+
+            accept_resp = client.post(
+                f"/api/career/resume-version-drafts/{draft_id}/accept",
+                json={"link_application": True},
+            )
+            assert accept_resp.status_code == 200
+            accepted = _data(accept_resp)
+            version = accepted["resume_version"]
+            assert version["resume_version_id"].startswith("resume_version_")
+            assert version["artifact_id"].startswith("artifact_resume_version_")
+            assert accepted["draft"]["accepted_resume_version_id"] == version["resume_version_id"]
+
+            application = store.get_career_application("application_alpha")
+            assert application is not None
+            assert version["resume_version_id"] in application.resume_version_ids
+            artifact_text = session_repository.read_session_artifact_text(
+                version["source_session_id"],
+                version["artifact_id"],
+            )
+            assert "Example Co 定制版草案" in version["title"]
+            assert "AI 应用开发工程师" in artifact_text
+
+            repeat_resp = client.post(
+                f"/api/career/resume-version-drafts/{draft_id}/accept",
+                json={"link_application": True},
+            )
+            assert repeat_resp.status_code == 200
+            repeat = _data(repeat_resp)
+            assert repeat["resume_version"]["resume_version_id"] == version["resume_version_id"]
     finally:
         app.dependency_overrides.clear()
 
