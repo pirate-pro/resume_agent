@@ -138,12 +138,67 @@ void main() {
     expect(api.lastCheckin?['minutes_spent'], 45);
     expect(api.lastUpdatedTaskState, 'doing');
   });
+
+  testWidgets('学习复盘完成按钮打开确认弹窗并更新复盘状态', (tester) async {
+    tester.view.physicalSize = const Size(900, 2200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final api = _FakeLearningPlanApi();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          careerWorkbenchProvider.overrideWith(
+            (ref) => CareerWorkbenchProvider(api),
+          ),
+          apiServiceProvider.overrideWithValue(api),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: LearningPlanPage(
+              onOpenProjects: () {},
+              onOpenNotes: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    final startReviewButton = find.widgetWithText(OutlinedButton, '开始复盘');
+    await tester.ensureVisible(startReviewButton);
+    await tester.pumpAndSettle();
+    await tester.tap(startReviewButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('完成复盘'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('learning_review_summary_field')),
+      '确认任务编排复盘已经完成，后续补充到面试表达。',
+    );
+    await tester.tap(find.byKey(const Key('learning_review_complete_button')));
+    await tester.pumpAndSettle();
+
+    expect(api.lastUpdatedReviewId, 'review_system_design');
+    expect(api.lastUpdatedReviewState, 'done');
+    expect(api.lastUpdatedReviewSummary, contains('任务编排复盘已经完成'));
+    expect(api.lastReviewedAt, isNotNull);
+    expect(find.text('复盘已完成，学习状态已刷新。'), findsOneWidget);
+  });
 }
 
 class _FakeLearningPlanApi extends ApiService {
   final now = DateTime(2026, 5, 16, 10, 49);
   Map<String, dynamic>? lastCheckin;
   String? lastUpdatedTaskState;
+  String _reviewState = 'scheduled';
+  String? lastUpdatedReviewId;
+  String? lastUpdatedReviewState;
+  String? lastUpdatedReviewSummary;
+  DateTime? lastReviewedAt;
 
   _FakeLearningPlanApi() : super(baseUrl: 'http://localhost');
 
@@ -311,6 +366,22 @@ class _FakeLearningPlanApi extends ApiService {
     return learningTaskId == _doingTask.learningTaskId ? _doingTask : _todoTask;
   }
 
+  @override
+  Future<CareerWorkbenchReviewView> updateLearningReviewSchedule({
+    required String reviewScheduleId,
+    String? state,
+    DateTime? lastReviewedAt,
+    DateTime? nextReviewAt,
+    String? summary,
+  }) async {
+    lastUpdatedReviewId = reviewScheduleId;
+    lastUpdatedReviewState = state;
+    lastUpdatedReviewSummary = summary;
+    this.lastReviewedAt = lastReviewedAt;
+    _reviewState = state ?? _reviewState;
+    return _review;
+  }
+
   CareerWorkbenchWeaknessView get _weakness => CareerWorkbenchWeaknessView(
         status: 'active',
         sourceSessionId: 'sess_learning_plan',
@@ -333,7 +404,7 @@ class _FakeLearningPlanApi extends ApiService {
         reviewScheduleId: 'review_system_design',
         title: '系统设计复盘',
         reviewType: 'weekly',
-        state: 'scheduled',
+        state: _reviewState,
         reviewAt: now.add(const Duration(days: 3)),
         nextReviewAt: now.add(const Duration(days: 3)),
         summary: '复盘任务编排和 RAG 写入场景的架构边界。',

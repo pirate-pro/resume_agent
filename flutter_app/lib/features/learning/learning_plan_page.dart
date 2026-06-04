@@ -140,6 +140,7 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
               onReviewRecommend: () => unawaited(
                 _sendRecommend(learning, app, surface: 'review'),
               ),
+              onStartReview: (review) => unawaited(_completeReview(review)),
               weaknessAction: _inlineActionState('weakness'),
               reviewAction: _inlineActionState('review'),
             ),
@@ -206,6 +207,7 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
                 onReviewRecommend: () => unawaited(
                   _sendRecommend(learning, app, surface: 'review'),
                 ),
+                onStartReview: (review) => unawaited(_completeReview(review)),
                 weaknessAction: _inlineActionState('weakness'),
                 reviewAction: _inlineActionState('review'),
               ),
@@ -559,6 +561,35 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
     final draft = await showLearningCheckinSheet(context, task: task);
     if (!mounted || draft == null) return;
     await _saveCheckIn(app, task, draft);
+  }
+
+  Future<void> _completeReview(CareerWorkbenchReviewView review) async {
+    final summary = await showDialog<String>(
+      context: context,
+      builder: (context) => _CompleteReviewDialog(review: review),
+    );
+    if (!mounted || summary == null) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref.read(careerWorkbenchProvider).completeLearningReview(
+            reviewScheduleId: review.reviewScheduleId,
+            summary: summary,
+          );
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('复盘已完成，学习状态已刷新。'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('完成复盘失败：$error'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _saveCheckIn(
@@ -3859,12 +3890,14 @@ class _LearningReviewSection extends StatelessWidget {
   final List<CareerWorkbenchReviewView> reviews;
   final List<CareerWorkbenchLearningTaskView> tasks;
   final VoidCallback onRecommend;
+  final ValueChanged<CareerWorkbenchReviewView> onStartReview;
   final _InlineLearningActionState action;
 
   const _LearningReviewSection({
     required this.reviews,
     required this.tasks,
     required this.onRecommend,
+    required this.onStartReview,
     required this.action,
   });
 
@@ -3894,7 +3927,7 @@ class _LearningReviewSection extends StatelessWidget {
         : Column(
             children: [
               for (final review in visible.take(4)) ...[
-                _ReviewRow(review: review),
+                _ReviewRow(review: review, onStart: onStartReview),
                 if (review != visible.take(4).last)
                   const Divider(height: 16, color: ProductColors.border),
               ],
@@ -3931,6 +3964,7 @@ class _LearningBottomInsightGrid extends StatelessWidget {
   final VoidCallback onOpenNotes;
   final VoidCallback onWeaknessRecommend;
   final VoidCallback onReviewRecommend;
+  final ValueChanged<CareerWorkbenchReviewView> onStartReview;
   final _InlineLearningActionState weaknessAction;
   final _InlineLearningActionState reviewAction;
 
@@ -3942,6 +3976,7 @@ class _LearningBottomInsightGrid extends StatelessWidget {
     required this.onOpenNotes,
     required this.onWeaknessRecommend,
     required this.onReviewRecommend,
+    required this.onStartReview,
     required this.weaknessAction,
     required this.reviewAction,
   });
@@ -3963,6 +3998,7 @@ class _LearningBottomInsightGrid extends StatelessWidget {
           reviews: reviews,
           tasks: tasks,
           onRecommend: onReviewRecommend,
+          onStartReview: onStartReview,
           action: reviewAction,
         );
         if (!wide) {
@@ -4237,8 +4273,9 @@ class _WeaknessMiniRow extends StatelessWidget {
 
 class _ReviewRow extends StatelessWidget {
   final CareerWorkbenchReviewView review;
+  final ValueChanged<CareerWorkbenchReviewView> onStart;
 
-  const _ReviewRow({required this.review});
+  const _ReviewRow({required this.review, required this.onStart});
 
   @override
   Widget build(BuildContext context) {
@@ -4302,13 +4339,7 @@ class _ReviewRow extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         OutlinedButton(
-          onPressed: () {
-            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-              const SnackBar(
-                content: Text('复盘记录流程还未接入；当前只能查看复盘安排。'),
-              ),
-            );
-          },
+          onPressed: () => onStart(review),
           style: OutlinedButton.styleFrom(
             foregroundColor: ProductColors.primary,
             side: const BorderSide(color: ProductColors.border),
@@ -4322,6 +4353,192 @@ class _ReviewRow extends StatelessWidget {
           child: const Text('开始复盘'),
         ),
       ],
+    );
+  }
+}
+
+class _CompleteReviewDialog extends StatefulWidget {
+  final CareerWorkbenchReviewView review;
+
+  const _CompleteReviewDialog({required this.review});
+
+  @override
+  State<_CompleteReviewDialog> createState() => _CompleteReviewDialogState();
+}
+
+class _CompleteReviewDialogState extends State<_CompleteReviewDialog> {
+  late final TextEditingController _summaryController;
+
+  @override
+  void initState() {
+    super.initState();
+    _summaryController = TextEditingController(text: widget.review.summary);
+  }
+
+  @override
+  void dispose() {
+    _summaryController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final review = widget.review;
+    return Dialog(
+      insetPadding: const EdgeInsets.all(24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const ProductIconTile(
+                    icon: Icons.event_repeat_outlined,
+                    tone: ProductTone.primary,
+                    size: 38,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '完成复盘',
+                          style: AppTheme.ts(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: ProductColors.text,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '确认后会把当前复盘安排标记完成，并刷新学习计划状态。',
+                          style: AppTheme.ts(
+                            fontSize: 12.5,
+                            height: 1.45,
+                            color: ProductColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: ProductColors.surfaceSoft,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: ProductColors.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      review.title.trim().isEmpty
+                          ? '学习复盘'
+                          : review.title.trim(),
+                      style: AppTheme.ts(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        ProductTag(
+                          label: _reviewDueLabel(review),
+                          tone: _reviewDisplayTone(review),
+                        ),
+                        ProductTag(
+                          label: _reviewTypeLabel(review.reviewType),
+                          tone: ProductTone.neutral,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                key: const Key('learning_review_summary_field'),
+                controller: _summaryController,
+                maxLines: 4,
+                minLines: 3,
+                decoration: InputDecoration(
+                  labelText: '复盘总结（可选）',
+                  hintText: '记录这次复盘确认了什么、还需要继续补什么...',
+                  alignLabelWithHint: true,
+                  filled: true,
+                  fillColor: ProductColors.surfaceSoft,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: ProductColors.border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: ProductColors.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: ProductColors.primary),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(96, 38),
+                      foregroundColor: ProductColors.textSecondary,
+                      side: const BorderSide(color: ProductColors.border),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: const Text('取消'),
+                  ),
+                  const SizedBox(width: 10),
+                  ElevatedButton(
+                    key: const Key('learning_review_complete_button'),
+                    onPressed: () {
+                      Navigator.of(context).pop(_summaryController.text);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(112, 38),
+                      backgroundColor: ProductColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: const Text('标记完成'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

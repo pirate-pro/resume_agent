@@ -416,6 +416,25 @@ class CareerWorkbenchProvider extends ChangeNotifier {
     );
   }
 
+  Future<CareerWorkbenchReviewView> completeLearningReview({
+    required String reviewScheduleId,
+    String? summary,
+  }) async {
+    final review = await _api.updateLearningReviewSchedule(
+      reviewScheduleId: reviewScheduleId.trim(),
+      state: "done",
+      lastReviewedAt: DateTime.now().toUtc(),
+      summary: summary?.trim().isEmpty == true ? null : summary?.trim(),
+    );
+    final selectedId = _selectedApplicationId;
+    if (selectedId != null && selectedId.isNotEmpty) {
+      await loadApplicationDetail(selectedId, force: true);
+    } else {
+      notifyListeners();
+    }
+    return review;
+  }
+
   String artifactDownloadUrl({
     required String sourceSessionId,
     required String artifactId,

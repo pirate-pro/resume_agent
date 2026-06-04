@@ -304,6 +304,35 @@ class ApiService {
     );
   }
 
+  Future<CareerWorkbenchReviewView> updateLearningReviewSchedule({
+    required String reviewScheduleId,
+    String? state,
+    DateTime? lastReviewedAt,
+    DateTime? nextReviewAt,
+    String? summary,
+  }) async {
+    final body = <String, dynamic>{};
+    if (state != null) body["state"] = state;
+    if (lastReviewedAt != null) {
+      body["last_reviewed_at"] = lastReviewedAt.toIso8601String();
+    }
+    if (nextReviewAt != null) {
+      body["next_review_at"] = nextReviewAt.toIso8601String();
+    }
+    if (summary != null) body["summary"] = summary;
+
+    final resp = await http.patch(
+      _uri(
+        "/api/learning-admin/reviews/${Uri.encodeComponent(reviewScheduleId)}",
+      ),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode(body),
+    );
+    return CareerWorkbenchReviewView.fromJson(
+      Map<String, dynamic>.from(_decodeResponseData(resp)),
+    );
+  }
+
   // ── Session Artifacts ─────────────────────────────────────────────────────
 
   Future<SessionArtifactsResponse> listSessionArtifacts(
