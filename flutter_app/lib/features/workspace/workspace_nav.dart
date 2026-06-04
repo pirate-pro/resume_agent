@@ -34,7 +34,7 @@ class ProductSidebar extends StatelessWidget {
       WorkspacePage.notes,
     ];
     return Container(
-      width: compact ? null : 260,
+      width: compact ? null : 228,
       decoration: const BoxDecoration(
         color: ProductColors.surface,
         border: Border(
@@ -51,12 +51,12 @@ class ProductSidebar extends StatelessWidget {
                   onPageChanged(WorkspacePage.dashboard);
                 }),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
               child: _PrimaryCreateButton(onTap: onNewSession),
             ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
                 children: [
                   for (final page in pages) ...[
                     ProductNavItem(
@@ -82,7 +82,7 @@ class ProductSidebar extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
               child: _AssistantStatusCard(onTap: onOpenChat),
             ),
           ],
@@ -115,15 +115,15 @@ class ProductNavItem extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(10),
           onTap: onTap,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
-            height: 44,
+            height: 40,
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               color: selected ? ProductColors.primarySoft : Colors.transparent,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: selected
                     ? ProductColors.primary.withValues(alpha: 0.14)
@@ -141,7 +141,7 @@ class ProductNavItem extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: AppTheme.ts(
                       fontSize: 13,
-                      fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                       color: selected
                           ? ProductColors.primary
                           : ProductColors.textSecondary,

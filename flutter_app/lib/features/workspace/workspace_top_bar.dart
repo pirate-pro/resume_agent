@@ -310,13 +310,23 @@ class _TopActions extends StatelessWidget {
                 ? Icons.notifications_none_rounded
                 : Icons.cloud_off_outlined,
             badge: serverReachable ? null : '!',
-            onTap: () {},
+            onTap: () {
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                SnackBar(
+                  content: Text(serverReachable ? '后端连接正常。' : '后端当前不可达，请检查服务。'),
+                ),
+              );
+            },
           ),
           const SizedBox(width: 8),
           _TopIconButton(
             tooltip: '设置',
             icon: Icons.settings_outlined,
-            onTap: () {},
+            onTap: () {
+              ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                const SnackBar(content: Text('设置页尚未接入，后续会独立补齐。')),
+              );
+            },
           ),
         ],
         const SizedBox(width: 8),

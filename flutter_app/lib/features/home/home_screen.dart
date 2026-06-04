@@ -175,9 +175,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     String prompt, {
     CareerWorkbenchActionRequest? action,
   }) async {
-    setState(() {
-      _activePage = WorkspacePage.chat;
-    });
     final workbench = ref.read(careerWorkbenchProvider);
     final chat = ref.read(chatProvider);
     if (action != null) {
@@ -250,12 +247,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           onOpenResumes: () => _setWorkspacePage(WorkspacePage.resumes),
           onOpenJDMatch: () => _setWorkspacePage(WorkspacePage.jdMatch),
           onOpenLearning: () => _setWorkspacePage(WorkspacePage.learning),
+          onOpenNotes: () => _setWorkspacePage(WorkspacePage.notes),
           onSendPrompt: _sendWorkbenchPrompt,
         ),
       WorkspacePage.jdMatch => JDMatchPage(
           onOpenProjects: () => _setWorkspacePage(WorkspacePage.projects),
           onOpenResumes: () => _setWorkspacePage(WorkspacePage.resumes),
           onOpenLearning: () => _setWorkspacePage(WorkspacePage.learning),
+          onOpenNotes: () => _setWorkspacePage(WorkspacePage.notes),
           onSendPrompt: _sendWorkbenchPrompt,
         ),
       WorkspacePage.resumes => ResumeLibraryPage(

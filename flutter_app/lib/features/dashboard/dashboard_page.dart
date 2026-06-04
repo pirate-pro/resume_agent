@@ -622,8 +622,18 @@ class _TodayActionsSection extends StatelessWidget {
                     icon: action.icon,
                     tone: action.tone,
                     badge: action.badge,
-                    actionLabel: action.actionLabel,
-                    onTap: () => _sendDashboardAction(action, onSendPrompt),
+                    actionLabel: action.actionType == 'learning_task'
+                        ? '去创建'
+                        : action.actionLabel,
+                    secondaryActionLabel: action.actionType == 'learning_task'
+                        ? 'Agent 生成'
+                        : null,
+                    onSecondaryTap: action.actionType == 'learning_task'
+                        ? () => _sendDashboardAction(action, onSendPrompt)
+                        : null,
+                    onTap: action.actionType == 'learning_task'
+                        ? onOpenLearning
+                        : () => _sendDashboardAction(action, onSendPrompt),
                   ),
                   if (action != actions.last) const SizedBox(height: 9),
                 ],
@@ -666,6 +676,7 @@ class _DashboardRightRail extends StatelessWidget {
         _AssetSummaryCard(
           provider: provider,
           onOpenResumes: onOpenResumes,
+          onOpenLearning: onOpenLearning,
           onOpenNotes: onOpenNotes,
         ),
       ],
@@ -766,8 +777,18 @@ class _NextStepCard extends StatelessWidget {
                     icon: actions[i].icon,
                     tone: actions[i].tone,
                     badge: '${i + 1}',
-                    actionLabel: '执行',
-                    onTap: () => _sendDashboardAction(actions[i], onSendPrompt),
+                    actionLabel:
+                        actions[i].actionType == 'learning_task' ? '去创建' : '执行',
+                    secondaryActionLabel:
+                        actions[i].actionType == 'learning_task'
+                            ? 'Agent 生成'
+                            : null,
+                    onSecondaryTap: actions[i].actionType == 'learning_task'
+                        ? () => _sendDashboardAction(actions[i], onSendPrompt)
+                        : null,
+                    onTap: actions[i].actionType == 'learning_task'
+                        ? onOpenLearning
+                        : () => _sendDashboardAction(actions[i], onSendPrompt),
                   ),
                   if (i != actions.length - 1) const SizedBox(height: 8),
                 ],
@@ -780,11 +801,13 @@ class _NextStepCard extends StatelessWidget {
 class _AssetSummaryCard extends StatelessWidget {
   final CareerWorkbenchProvider provider;
   final VoidCallback onOpenResumes;
+  final VoidCallback onOpenLearning;
   final VoidCallback onOpenNotes;
 
   const _AssetSummaryCard({
     required this.provider,
     required this.onOpenResumes,
+    required this.onOpenLearning,
     required this.onOpenNotes,
   });
 
@@ -833,7 +856,7 @@ class _AssetSummaryCard extends StatelessWidget {
                       label: '学习任务',
                       value: counts?.learningTasks ?? 0,
                       icon: Icons.school_outlined,
-                      onTap: null,
+                      onTap: onOpenLearning,
                     ),
                   ),
                   SizedBox(
@@ -842,7 +865,13 @@ class _AssetSummaryCard extends StatelessWidget {
                       label: '项目资料',
                       value: detail?.linkedAssets.length ?? 0,
                       icon: Icons.inventory_2_outlined,
-                      onTap: null,
+                      onTap: () {
+                        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                          const SnackBar(
+                            content: Text('项目资料暂时汇总在当前项目和关联资产中，独立资料页后续再接入。'),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],

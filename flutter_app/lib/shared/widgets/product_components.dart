@@ -181,12 +181,14 @@ class ProductScoreRing extends StatelessWidget {
   final int? score;
   final double size;
   final String label;
+  final String suffix;
 
   const ProductScoreRing({
     super.key,
     required this.score,
     this.size = 84,
     this.label = '匹配度',
+    this.suffix = '',
   });
 
   @override
@@ -200,23 +202,41 @@ class ProductScoreRing extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          CircularProgressIndicator(
-            value: value?.toDouble(),
-            strokeWidth: size >= 80 ? 7 : 5,
-            strokeCap: StrokeCap.round,
-            color: color,
-            backgroundColor: color.withValues(alpha: 0.12),
+          SizedBox.expand(
+            child: CircularProgressIndicator(
+              value: value?.toDouble(),
+              strokeWidth: size >= 80 ? 7 : 5,
+              strokeCap: StrokeCap.round,
+              color: color,
+              backgroundColor: color.withValues(alpha: 0.12),
+            ),
           ),
           Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                safeScore?.toString() ?? '-',
-                style: AppTheme.ts(
-                  fontSize: size >= 80 ? 25 : 17,
-                  height: 1,
-                  fontWeight: FontWeight.w900,
-                  color: ProductColors.text,
+              RichText(
+                text: TextSpan(
+                  children: [
+                    TextSpan(
+                      text: safeScore?.toString() ?? '-',
+                      style: AppTheme.ts(
+                        fontSize: size >= 80 ? 25 : 17,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.text,
+                      ),
+                    ),
+                    if (suffix.isNotEmpty)
+                      TextSpan(
+                        text: suffix,
+                        style: AppTheme.ts(
+                          fontSize: size >= 80 ? 13 : 10,
+                          height: 1,
+                          fontWeight: FontWeight.w900,
+                          color: ProductColors.text,
+                        ),
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(height: 3),
@@ -256,11 +276,11 @@ class ProductMetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ProductCard(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
       child: Row(
         children: [
-          ProductIconTile(icon: icon, tone: tone, size: 48),
-          const SizedBox(width: 12),
+          ProductIconTile(icon: icon, tone: tone, size: 36),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -270,25 +290,25 @@ class ProductMetricCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTheme.ts(
-                    fontSize: 23,
+                    fontSize: 21,
                     height: 1,
                     fontWeight: FontWeight.w900,
                     color: ProductColors.text,
                   ),
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 3),
                 Text(
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTheme.ts(
-                    fontSize: 12,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w700,
                     color: ProductColors.textSecondary,
                   ),
                 ),
                 if (trend?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 5),
+                  const SizedBox(height: 3),
                   Text(
                     trend!.trim(),
                     maxLines: 1,
@@ -317,6 +337,8 @@ class ProductActionTile extends StatelessWidget {
   final String? badge;
   final VoidCallback? onTap;
   final String? actionLabel;
+  final VoidCallback? onSecondaryTap;
+  final String? secondaryActionLabel;
 
   const ProductActionTile({
     super.key,
@@ -327,6 +349,8 @@ class ProductActionTile extends StatelessWidget {
     this.badge,
     this.onTap,
     this.actionLabel,
+    this.onSecondaryTap,
+    this.secondaryActionLabel,
   });
 
   @override
@@ -389,18 +413,62 @@ class ProductActionTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                actionLabel?.trim().isNotEmpty == true
-                    ? actionLabel!.trim()
-                    : '进入',
-                style: AppTheme.ts(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  color: style.color,
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        actionLabel?.trim().isNotEmpty == true
+                            ? actionLabel!.trim()
+                            : '进入',
+                        style: AppTheme.ts(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: style.color,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 15,
+                        color: style.color,
+                      ),
+                    ],
+                  ),
+                  if (onSecondaryTap != null &&
+                      secondaryActionLabel?.trim().isNotEmpty == true) ...[
+                    const SizedBox(height: 5),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(999),
+                      onTap: onSecondaryTap,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: ProductColors.surface,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: style.color.withValues(alpha: 0.18),
+                          ),
+                        ),
+                        child: Text(
+                          secondaryActionLabel!.trim(),
+                          style: AppTheme.ts(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w900,
+                            color: style.color,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
-              const SizedBox(width: 4),
-              Icon(Icons.arrow_forward_rounded, size: 15, color: style.color),
             ],
           ),
         ),

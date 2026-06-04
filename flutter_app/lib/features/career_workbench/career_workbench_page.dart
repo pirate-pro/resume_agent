@@ -100,7 +100,7 @@ class _WorkbenchActionBanner extends StatelessWidget {
       CareerWorkbenchActionState.failed => "执行失败：${action.request.label}",
     };
     final subtitle = switch (state) {
-      CareerWorkbenchActionState.running => "已回到聊天处理，完成后会同步刷新工作台。",
+      CareerWorkbenchActionState.running => "Agent 正在当前工作台后台执行，完成后会同步刷新。",
       CareerWorkbenchActionState.completed => action.resultHints.isEmpty
           ? "工作台和求职资产已同步刷新。"
           : action.resultHints.join(" · "),
@@ -7210,7 +7210,6 @@ Future<void> _sendLearningPrompt(
     );
     return;
   }
-  onBackToChat();
   await sender(
     _learningActionPrompt(application, intent),
     action: application == null
