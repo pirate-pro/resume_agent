@@ -9,7 +9,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_learning_store
+from app.api.deps import get_career_product_store, get_learning_store, get_model_client
+from app.career.models import CareerApplication, CareerRecordStatus
+from app.career.store import CareerProductStore
+from app.domain.protocols import ModelResponse
 from app.learning.models import LearningPlan, LearningRecordStatus, LearningTask, WeaknessTracker
 from app.learning.store import LearningStore
 from app.main import app
@@ -328,6 +331,96 @@ def test_learning_public_api_is_read_only(tmp_path: Path) -> None:
         app.dependency_overrides.clear()
 
 
+def test_learning_api_generates_ai_task_drafts_without_persisting(tmp_path: Path) -> None:
+    learning_store = LearningStore(root_dir=tmp_path / "learning")
+    career_store = CareerProductStore(root_dir=tmp_path / "career")
+    career_store.save_career_application(_application("application_alpha"))
+    learning_store.save_learning_plan(_plan("learning_plan_alpha", target_application_id="application_alpha"))
+    learning_store.save_learning_task(_task("learning_task_existing", learning_plan_id="learning_plan_alpha"))
+    model = _DraftModel(
+        {
+            "drafts": [
+                {
+                    "title": "RAG 召回评估实战",
+                    "description": "补齐召回指标、失败样例和优化复盘，形成可面试表达的项目证据。",
+                    "task_type": "write_answer",
+                    "priority": "high",
+                    "estimated_minutes": 120,
+                    "skill_tags": ["RAG", "召回评估", "重排"],
+                    "success_criteria": ["完成评估指标表", "输出一份复盘笔记"],
+                    "reason": "匹配报告暴露 RAG 深度不足，需要补齐工程化证据。",
+                    "source_refs": ["application_alpha", "invalid_ref"],
+                }
+            ]
+        }
+    )
+    _override_learning_store(learning_store)
+    _override_career_store(career_store)
+    _override_model_client(model)
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/learning-admin/task-drafts/generate",
+                json={"application_id": "application_alpha", "max_drafts": 3},
+            )
+            assert response.status_code == 200
+            data = _data(response)
+            assert len(data["drafts"]) == 1
+            draft = data["drafts"][0]
+            assert draft["title"] == "RAG 召回评估实战"
+            assert draft["task_type"] == "write_answer"
+            assert draft["priority"] == "high"
+            assert draft["estimated_minutes"] == 120
+            assert draft["source_refs"] == ["application_alpha"]
+            assert [task.learning_task_id for task in learning_store.list_learning_tasks()] == [
+                "learning_task_existing"
+            ]
+            assert model.calls
+            assert "application_alpha" in model.calls[0]["messages"][0]["content"]
+            assert "learning_task_existing 任务" in model.calls[0]["messages"][0]["content"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_learning_api_filters_duplicate_ai_task_drafts(tmp_path: Path) -> None:
+    learning_store = LearningStore(root_dir=tmp_path / "learning")
+    career_store = CareerProductStore(root_dir=tmp_path / "career")
+    career_store.save_career_application(_application("application_alpha"))
+    learning_store.save_learning_plan(_plan("learning_plan_alpha", target_application_id="application_alpha"))
+    learning_store.save_learning_task(_task("learning_task_existing", learning_plan_id="learning_plan_alpha"))
+    model = _DraftModel(
+        {
+            "drafts": [
+                {
+                    "title": "learning_task_existing 任务",
+                    "description": "重复任务，应该被过滤。",
+                    "priority": "high",
+                    "estimated_minutes": 60,
+                    "source_refs": ["application_alpha"],
+                }
+            ]
+        }
+    )
+    _override_learning_store(learning_store)
+    _override_career_store(career_store)
+    _override_model_client(model)
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/learning-admin/task-drafts/generate",
+                json={"application_id": "application_alpha", "max_drafts": 3},
+            )
+            assert response.status_code == 200
+            assert _data(response)["drafts"] == []
+            assert [task.learning_task_id for task in learning_store.list_learning_tasks()] == [
+                "learning_task_existing"
+            ]
+    finally:
+        app.dependency_overrides.clear()
+
+
 def _plan(record_id: str, *, target_application_id: str) -> LearningPlan:
     return LearningPlan(
         learning_plan_id=record_id,
@@ -344,6 +437,25 @@ def _plan(record_id: str, *, target_application_id: str) -> LearningPlan:
         task_ids=[],
         weakness_ids=[],
         review_schedule_ids=[],
+    )
+
+
+def _application(record_id: str) -> CareerApplication:
+    return CareerApplication(
+        application_id=record_id,
+        status=CareerRecordStatus.ACTIVE,
+        source_session_id="sess_alpha",
+        source_artifact_id="artifact_application",
+        evidence_refs=["artifact_application"],
+        created_at=_seed_time(),
+        updated_at=_seed_time(),
+        company="星河智能",
+        position="AI Agent 后端工程师",
+        stage="interviewing",
+        priority="high",
+        summary="候选人需要补齐 RAG 与 Agent 工程化证据。",
+        next_actions=["准备 RAG 评估回答", "补充 Agent 状态管理案例"],
+        risks=["RAG 生产经验不足"],
     )
 
 
@@ -392,6 +504,29 @@ def _override_learning_store(store: LearningStore) -> None:
     app.dependency_overrides[get_learning_store] = lambda: store
 
 
+def _override_career_store(store: CareerProductStore) -> None:
+    app.dependency_overrides[get_career_product_store] = lambda: store
+
+
+def _override_model_client(model: "_DraftModel") -> None:
+    app.dependency_overrides[get_model_client] = lambda: model
+
+
+class _DraftModel:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.calls: list[dict[str, Any]] = []
+
+    def generate(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> ModelResponse:
+        self.calls.append({"system_prompt": system_prompt, "messages": messages, "tools": tools})
+        return ModelResponse(content=json.dumps(self.payload, ensure_ascii=False), tool_calls=[])
+
+
 def _data(response: Any) -> Any:
     payload = response.json()
     assert payload["code"] == 0
@@ -415,4 +550,3 @@ def _assert_no_path_key(value: Any) -> None:
     if isinstance(value, list):
         for item in value:
             _assert_no_path_key(item)
-

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/api_models.dart';
+import '../../core/providers/chat_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/theme/product_tokens.dart';
 import '../../shared/widgets/product_components.dart';
@@ -29,6 +30,13 @@ class LearningPlanPage extends ConsumerStatefulWidget {
 }
 
 class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
+  String? _runningInlineAction;
+  String? _completedInlineAction;
+  String? _failedInlineAction;
+  String _inlineActionMessage = '';
+  final GlobalKey _taskBoardKey = GlobalKey();
+  final GlobalKey _roadmapKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
@@ -63,18 +71,17 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final desktop = constraints.maxWidth >= ProductBreakpoints.contentRail;
-        final header = _LearningHeader(
-          provider: provider,
-          onRefresh: () => unawaited(provider.refresh()),
-          onCreateTask: () => _sendCreateTask(app),
-          onRecommend: () => _sendRecommend(learning, app),
-        );
         final hero = _LearningHero(
           app: app,
           learning: learning,
           progress: progress,
           loading: loadingSelected,
-          onPrimary: () => _sendRecommend(learning, app),
+          onPrimary: () => _handleHeroPrimaryAction(
+            app: app,
+            learning: learning,
+            openTaskCount: openTasks.length,
+          ),
+          onRoadmap: _scrollToRoadmap,
         );
         final projects = _LearningProjectStrip(
           provider: provider,
@@ -87,31 +94,55 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
           progress: progress,
         );
         final main = ListView(
-          padding: EdgeInsets.zero,
+          padding: const EdgeInsets.only(bottom: 28),
           children: [
-            header,
-            const SizedBox(height: 14),
             hero,
-            const SizedBox(height: 14),
+            const SizedBox(height: 8),
             projects,
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             metrics,
-            const SizedBox(height: 14),
-            _LearningPlanSection(plans: learning.plans),
-            const SizedBox(height: 14),
-            _LearningTaskBoard(
-              tasks: tasks,
-              onCheckIn: (task) => _showCheckInSheet(app, task),
-              onCreateTask: () => _sendCreateTask(app),
+            const SizedBox(height: 12),
+            KeyedSubtree(
+              key: _roadmapKey,
+              child: _LearningPlanSection(
+                learning: learning,
+                overallProgress: progress,
+              ),
+            ),
+            const SizedBox(height: 12),
+            KeyedSubtree(
+              key: _taskBoardKey,
+              child: _LearningTaskBoard(
+                tasks: tasks,
+                action: _inlineActionState('tasks'),
+                onOpenDetails: (task) => _showTaskDetailSheet(
+                  app: app,
+                  learning: learning,
+                  task: task,
+                ),
+                onCheckIn: (task) => _showCheckInSheet(app, task),
+                onCreateTask: () => unawaited(_sendCreateTask(app)),
+                onGenerateTaskDrafts: () =>
+                    unawaited(_openTaskDrafts(learning, app)),
+                onMoveTask: _moveLearningTaskState,
+              ),
             ),
             const SizedBox(height: 14),
-            _LearningWeaknessSection(
+            _LearningBottomInsightGrid(
               weaknesses: learning.weaknesses,
               tasks: tasks,
-              onCreateTask: () => _sendCreateTask(app),
+              reviews: learning.reviews,
+              onCreateTask: () => unawaited(_sendCreateTask(app)),
+              onOpenNotes: widget.onOpenNotes,
+              onWeaknessRecommend: () => unawaited(
+                _sendRecommend(learning, app, surface: 'weakness'),
+              ),
+              onReviewRecommend: () => unawaited(
+                _sendRecommend(learning, app, surface: 'review'),
+              ),
+              weaknessAction: _inlineActionState('weakness'),
+              reviewAction: _inlineActionState('review'),
             ),
-            const SizedBox(height: 14),
-            _LearningReviewSection(reviews: learning.reviews),
           ],
         );
         final rail = _LearningRightRail(
@@ -121,39 +152,63 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
           openTasks: openTasks,
           onOpenProjects: widget.onOpenProjects,
           onOpenNotes: widget.onOpenNotes,
-          onCreateTask: () => _sendCreateTask(app),
-          onRecommend: () => _sendRecommend(learning, app),
+          onCheckIn: (task) => _showCheckInSheet(app, task),
         );
 
         if (!desktop) {
           return ListView(
             padding: EdgeInsets.zero,
             children: [
-              header,
-              const SizedBox(height: 14),
               hero,
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               projects,
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               rail,
               const SizedBox(height: 14),
               metrics,
-              const SizedBox(height: 14),
-              _LearningPlanSection(plans: learning.plans),
-              const SizedBox(height: 14),
-              _LearningTaskBoard(
-                tasks: tasks,
-                onCheckIn: (task) => _showCheckInSheet(app, task),
-                onCreateTask: () => _sendCreateTask(app),
+              const SizedBox(height: 12),
+              KeyedSubtree(
+                key: _roadmapKey,
+                child: _LearningPlanSection(
+                  learning: learning,
+                  overallProgress: progress,
+                ),
+              ),
+              const SizedBox(height: 12),
+              KeyedSubtree(
+                key: _taskBoardKey,
+                child: _LearningTaskBoard(
+                  tasks: tasks,
+                  action: _inlineActionState('tasks'),
+                  onOpenDetails: (task) => _showTaskDetailSheet(
+                    app: app,
+                    learning: learning,
+                    task: task,
+                  ),
+                  onCheckIn: (task) => _showCheckInSheet(app, task),
+                  onCreateTask: () => unawaited(_sendCreateTask(app)),
+                  onGenerateTaskDrafts: () => unawaited(
+                    _openTaskDrafts(learning, app),
+                  ),
+                  onMoveTask: _moveLearningTaskState,
+                ),
               ),
               const SizedBox(height: 14),
-              _LearningWeaknessSection(
+              _LearningBottomInsightGrid(
                 weaknesses: learning.weaknesses,
                 tasks: tasks,
-                onCreateTask: () => _sendCreateTask(app),
+                reviews: learning.reviews,
+                onCreateTask: () => unawaited(_sendCreateTask(app)),
+                onOpenNotes: widget.onOpenNotes,
+                onWeaknessRecommend: () => unawaited(
+                  _sendRecommend(learning, app, surface: 'weakness'),
+                ),
+                onReviewRecommend: () => unawaited(
+                  _sendRecommend(learning, app, surface: 'review'),
+                ),
+                weaknessAction: _inlineActionState('weakness'),
+                reviewAction: _inlineActionState('review'),
               ),
-              const SizedBox(height: 14),
-              _LearningReviewSection(reviews: learning.reviews),
             ],
           );
         }
@@ -161,38 +216,331 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(child: main),
-            const SizedBox(width: 18),
-            SizedBox(width: 350, child: ListView(children: [rail])),
+            const SizedBox(width: 16),
+            SizedBox(width: 340, child: ListView(children: [rail])),
           ],
         );
       },
     );
   }
 
-  void _sendRecommend(
+  Future<void> _sendRecommend(
     CareerLearningSummaryView learning,
-    CareerApplicationView? app,
-  ) {
-    sendCareerPromptAction(
-      sender: widget.onSendPrompt,
-      application: app,
-      label: '生成学习任务建议',
-      actionType: 'learning_recommend',
-      origin: 'learning_plan',
-      detail:
-          '请复用当前匹配报告、短板、复盘和已有任务，推荐 1 到 3 个最值得推进的学习任务。当前已有计划 ${learning.plans.length} 个、任务 ${learning.tasks.length} 个、短板 ${learning.weaknesses.length} 个。',
+    CareerApplicationView? app, {
+    required String surface,
+  }) async {
+    final sender = widget.onSendPrompt;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (sender == null || app == null) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('请先选择一个求职项目'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    if (_runningInlineAction != null) return;
+    setState(() {
+      _runningInlineAction = surface;
+      _completedInlineAction = null;
+      _failedInlineAction = null;
+      _inlineActionMessage = _inlineActionRunningMessage(surface);
+    });
+    final beforeTasks = learning.tasks.length;
+    final beforeWeaknesses = learning.weaknesses.length;
+    final beforeReviews = learning.reviews.length;
+    final prompt = _learningRecommendPrompt(
+      learning: learning,
+      app: app,
+      surface: surface,
+    );
+    try {
+      // 这里故意不传 CareerWorkbenchActionRequest，避免触发全局顶部动作横幅。
+      await sender(prompt);
+      final error = ref.read(chatProvider).error;
+      if (error != null && error.trim().isNotEmpty) {
+        throw Exception(error);
+      }
+      await ref.read(careerWorkbenchProvider).refresh();
+      if (!mounted) return;
+      final updatedLearning =
+          ref.read(careerWorkbenchProvider).selectedApplicationDetail?.learning;
+      setState(() {
+        _runningInlineAction = null;
+        _completedInlineAction = surface;
+        _failedInlineAction = null;
+        _inlineActionMessage = _inlineActionCompletedMessage(
+          updatedLearning,
+          beforeTasks: beforeTasks,
+          beforeWeaknesses: beforeWeaknesses,
+          beforeReviews: beforeReviews,
+        );
+      });
+      _clearInlineActionLater(surface);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _runningInlineAction = null;
+        _completedInlineAction = null;
+        _failedInlineAction = surface;
+        _inlineActionMessage = '生成失败：$error';
+      });
+      _clearInlineActionLater(surface);
+    }
+  }
+
+  void _handleHeroPrimaryAction({
+    required CareerApplicationView? app,
+    required CareerLearningSummaryView learning,
+    required int openTaskCount,
+  }) {
+    if (app == null) {
+      widget.onOpenProjects();
+      return;
+    }
+    if (openTaskCount > 0) {
+      _scrollToTaskBoard();
+      return;
+    }
+    unawaited(_openTaskDrafts(learning, app));
+  }
+
+  void _scrollToTaskBoard() {
+    final context = _taskBoardKey.currentContext;
+    if (context == null) return;
+    Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+      alignment: 0.04,
     );
   }
 
-  void _sendCreateTask(CareerApplicationView? app) {
-    sendCareerPromptAction(
-      sender: widget.onSendPrompt,
-      application: app,
-      label: '创建学习任务',
-      actionType: 'learning_task',
-      origin: 'learning_plan',
-      detail: '请基于当前岗位要求和最高优先级短板创建一个可执行的学习任务，不要重复创建已有相似任务。',
+  void _scrollToRoadmap() {
+    final context = _roadmapKey.currentContext;
+    if (context == null) return;
+    Scrollable.ensureVisible(
+      context,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+      alignment: 0.04,
     );
+  }
+
+  Future<void> _openTaskDrafts(
+    CareerLearningSummaryView learning,
+    CareerApplicationView? app,
+  ) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (app == null) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('请先选择一个求职项目'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    if (_runningInlineAction != null) return;
+    setState(() {
+      _runningInlineAction = 'tasks';
+      _completedInlineAction = null;
+      _failedInlineAction = null;
+      _inlineActionMessage = 'AI 正在分析当前岗位、匹配差距、短板和已有任务，生成可采纳的任务草案。';
+    });
+    late final List<_LearningTaskDraft> drafts;
+    try {
+      final generated =
+          await ref.read(apiServiceProvider).generateLearningTaskDrafts(
+                applicationId: app.applicationId,
+                maxDrafts: 3,
+              );
+      drafts = generated.map(_LearningTaskDraft.fromApi).toList();
+      if (!mounted) return;
+      setState(() {
+        _runningInlineAction = null;
+        _failedInlineAction = null;
+        _completedInlineAction = 'tasks';
+        _inlineActionMessage = drafts.isEmpty
+            ? 'AI 没有生成新的任务草案，可能是现有任务已经覆盖当前短板。'
+            : 'AI 已生成 ${drafts.length} 个任务草案，请确认是否采纳。';
+      });
+      _clearInlineActionLater('tasks');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _runningInlineAction = null;
+        _completedInlineAction = null;
+        _failedInlineAction = 'tasks';
+        _inlineActionMessage = '生成任务草案失败：$error';
+      });
+      _clearInlineActionLater('tasks');
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('生成任务草案失败：$error'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    if (drafts.isEmpty) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('暂时没有新的学习任务草案'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    final accepted = await _showLearningTaskDraftDialog(context, drafts);
+    if (!mounted || accepted == null || accepted.isEmpty) return;
+    try {
+      for (final draft in accepted) {
+        await ref.read(apiServiceProvider).createLearningTask(
+              sourceSessionId: _learningSourceSessionId(),
+              title: draft.title,
+              description: draft.description,
+              taskType: draft.taskType,
+              priority: draft.priority,
+              estimatedMinutes: draft.estimatedMinutes,
+              evidenceRefs: draft.sourceRefs.isEmpty
+                  ? _learningEvidenceRefs(app)
+                  : draft.sourceRefs,
+              skillTags: draft.skillTags,
+              successCriteria: draft.successCriteria,
+              progressNotes: '来源：AI 任务草案；${draft.reason}',
+            );
+      }
+      await ref.read(careerWorkbenchProvider).refresh();
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('已采纳 ${accepted.length} 个学习任务草案'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('采纳任务草案失败：$error'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  String _inlineActionRunningMessage(String surface) {
+    return switch (surface) {
+      'review' => '正在安排复盘，完成后会刷新复盘安排和学习资产。',
+      'weakness' => '正在从匹配报告生成短板，完成后会刷新短板和任务。',
+      _ => '正在生成学习任务草案，完成后会刷新学习任务和相关资产。',
+    };
+  }
+
+  String _inlineActionCompletedMessage(
+    CareerLearningSummaryView? updated, {
+    required int beforeTasks,
+    required int beforeWeaknesses,
+    required int beforeReviews,
+  }) {
+    if (updated == null) {
+      return '已完成，但暂时没有读取到刷新后的学习资产。可以稍后刷新本页确认。';
+    }
+    final taskDelta = math.max(0, updated.tasks.length - beforeTasks);
+    final weaknessDelta =
+        math.max(0, updated.weaknesses.length - beforeWeaknesses);
+    final reviewDelta = math.max(0, updated.reviews.length - beforeReviews);
+    final changes = <String>[
+      if (taskDelta > 0) '$taskDelta 个学习任务',
+      if (weaknessDelta > 0) '$weaknessDelta 个短板',
+      if (reviewDelta > 0) '$reviewDelta 条复盘',
+    ];
+    if (changes.isEmpty) {
+      return '已完成，本页已刷新，但没有检测到新增学习资产。可以查看会话结果，或用“新建任务”手动保存。';
+    }
+    return '已完成，已同步新增 ${changes.join('、')}。';
+  }
+
+  String _learningRecommendPrompt({
+    required CareerLearningSummaryView learning,
+    required CareerApplicationView app,
+    required String surface,
+  }) {
+    final base =
+        '求职项目 ${app.applicationId}；当前已有计划 ${learning.plans.length} 个、任务 ${learning.tasks.length} 个、短板 ${learning.weaknesses.length} 个、复盘 ${learning.reviews.length} 个。';
+    if (surface == 'review') {
+      return '请基于$base 为已完成或接近完成的学习任务安排一次复盘。优先创建可在学习计划页展示的复盘安排；如果缺少依据，请给出需要用户补充的信息。';
+    }
+    if (surface == 'weakness') {
+      return '请基于$base 从当前 JD 匹配、简历诊断、面试复盘和已有任务中识别待处理短板。优先创建可在学习计划页展示的短板记录；如果短板已经明确，再给出可转成学习任务的依据。';
+    }
+    return '请基于$base 生成学习任务草案。请复用当前匹配报告、短板、复盘和已有任务，推荐 1 到 3 个最值得推进的学习任务，并尽量落到可展示的学习任务。';
+  }
+
+  _InlineLearningActionState _inlineActionState(String surface) {
+    if (_runningInlineAction == surface) {
+      return _InlineLearningActionState.running(_inlineActionMessage);
+    }
+    if (_failedInlineAction == surface) {
+      return _InlineLearningActionState.failed(_inlineActionMessage);
+    }
+    if (_completedInlineAction == surface) {
+      return _InlineLearningActionState.completed(_inlineActionMessage);
+    }
+    return const _InlineLearningActionState.idle();
+  }
+
+  void _clearInlineActionLater(String surface) {
+    Future<void>.delayed(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      if (_runningInlineAction == surface) return;
+      if (_completedInlineAction != surface && _failedInlineAction != surface) {
+        return;
+      }
+      setState(() {
+        if (_completedInlineAction == surface) _completedInlineAction = null;
+        if (_failedInlineAction == surface) _failedInlineAction = null;
+        if (_completedInlineAction == null && _failedInlineAction == null) {
+          _inlineActionMessage = '';
+        }
+      });
+    });
+  }
+
+  Future<void> _sendCreateTask(CareerApplicationView? app) async {
+    final draft = await _showLearningTaskCreateSheet(context);
+    if (!mounted || draft == null) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref.read(apiServiceProvider).createLearningTask(
+            sourceSessionId: _learningSourceSessionId(),
+            title: draft.title,
+            description: draft.description,
+            taskType: draft.taskType,
+            priority: draft.priority,
+            estimatedMinutes: draft.estimatedMinutes,
+            evidenceRefs: draft.sourceRefs.isEmpty
+                ? _learningEvidenceRefs(app)
+                : draft.sourceRefs,
+            skillTags: draft.skillTags,
+            successCriteria: draft.successCriteria,
+            progressNotes: '来源：用户主动添加',
+          );
+      await ref.read(careerWorkbenchProvider).refresh();
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('学习任务已创建'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('创建学习任务失败：$error'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _showCheckInSheet(
@@ -208,154 +556,928 @@ class _LearningPlanPageState extends ConsumerState<LearningPlanPage> {
       );
       return;
     }
-    final detail = await showLearningCheckinSheet(context, task: task);
-    if (!mounted || detail == null) return;
-    _sendCheckInIntent(app, detail);
+    final draft = await showLearningCheckinSheet(context, task: task);
+    if (!mounted || draft == null) return;
+    await _saveCheckIn(app, task, draft);
   }
 
-  void _sendCheckInIntent(CareerApplicationView app, String detail) {
-    sendCareerPromptAction(
-      sender: widget.onSendPrompt,
-      application: app,
-      label: '记录学习进度',
-      actionType: 'learning_checkin',
-      origin: 'learning_plan',
-      detail: detail,
+  Future<void> _saveCheckIn(
+    CareerApplicationView app,
+    CareerWorkbenchLearningTaskView task,
+    LearningCheckinDraft draft,
+  ) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref.read(apiServiceProvider).createLearningCheckin(
+            sourceSessionId: _learningSourceSessionId(),
+            learningTaskId: task.learningTaskId,
+            learningPlanId: task.learningPlanId,
+            minutesSpent: draft.minutes,
+            progressState: _checkinProgressState(draft.nextState),
+            summary: draft.summary,
+            blockers: _splitBlockers(draft.blockers),
+            nextAction: draft.nextAction,
+            evidenceRefs: _learningEvidenceRefs(app, extra: [
+              task.learningTaskId,
+            ]),
+          );
+      final nextState = draft.nextState.trim();
+      if (nextState.isNotEmpty) {
+        await ref.read(apiServiceProvider).updateLearningTaskState(
+              learningTaskId: task.learningTaskId,
+              state: nextState,
+              completedAt: nextState == 'done' ? DateTime.now() : null,
+            );
+      }
+      await ref.read(careerWorkbenchProvider).refresh();
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('学习进度已保存'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('保存学习进度失败：$error'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _moveLearningTaskState(
+    CareerWorkbenchLearningTaskView task,
+    String targetState,
+  ) async {
+    if (_taskLaneState(task.state) == targetState) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref.read(apiServiceProvider).updateLearningTaskState(
+            learningTaskId: task.learningTaskId,
+            state: targetState,
+            completedAt: targetState == 'done' ? DateTime.now() : null,
+          );
+      await ref.read(careerWorkbenchProvider).refresh();
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('已移动到${_taskLaneTitle(targetState)}'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('更新任务状态失败：$error'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _showTaskDetailSheet({
+    required CareerApplicationView? app,
+    required CareerLearningSummaryView learning,
+    required CareerWorkbenchLearningTaskView task,
+  }) async {
+    final action = await _showLearningTaskDetailSheet(
+      context,
+      task,
+      onAiDecompose: () => _sendTaskAgentAdvice(learning, app, task),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _LearningTaskDetailAction.checkIn:
+        await _showCheckInSheet(app, task);
+      case _LearningTaskDetailAction.archive:
+        await _archiveLearningTask(task);
+    }
+  }
+
+  Future<void> _archiveLearningTask(
+    CareerWorkbenchLearningTaskView task,
+  ) async {
+    final confirmed = await _confirmArchiveLearningTask(context, task);
+    if (!mounted || confirmed != true) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref
+          .read(apiServiceProvider)
+          .archiveLearningTask(learningTaskId: task.learningTaskId);
+      await ref.read(careerWorkbenchProvider).refresh();
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('学习任务已移除'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('移除学习任务失败：$error'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<String?> _sendTaskAgentAdvice(
+    CareerLearningSummaryView learning,
+    CareerApplicationView? app,
+    CareerWorkbenchLearningTaskView task,
+  ) async {
+    final sender = widget.onSendPrompt;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (sender == null || app == null) {
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('请先选择一个求职项目'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return null;
+    }
+    if (_runningInlineAction != null) return null;
+    final messageCountBefore = ref.read(chatProvider).messages.length;
+    final prompt =
+        '请基于求职项目 ${app.applicationId}，只针对学习任务 ${task.learningTaskId} 做任务拆解。'
+        '任务标题：${task.title}。任务说明：${task.description}。成功标准：${task.successCriteria.join('；')}。'
+        '当前状态：${_taskStateLabel(task.state)}。当前学习路线 ${learning.plans.length} 条、任务 ${learning.tasks.length} 个。'
+        '请输出下一步行动、子步骤、练习方式、预计耗时和验收标准；如果需要保存，请尽量更新或创建可在学习计划页展示的学习资产。';
+    try {
+      await sender(prompt);
+      final error = ref.read(chatProvider).error;
+      if (error != null && error.trim().isNotEmpty) {
+        throw Exception(error);
+      }
+      await ref.read(careerWorkbenchProvider).refresh();
+      if (!mounted) return null;
+      final answer = _latestAssistantAnswerAfter(messageCountBefore);
+      return answer?.trim().isNotEmpty == true
+          ? answer!.trim()
+          : '任务拆解已完成，本页已刷新。';
+    } catch (error) {
+      if (!mounted) return null;
+      rethrow;
+    }
+  }
+
+  String? _latestAssistantAnswerAfter(int messageCountBefore) {
+    final messages = ref.read(chatProvider).messages;
+    final start = messageCountBefore.clamp(0, messages.length);
+    for (final message in messages.skip(start).toList().reversed) {
+      if (!message.isUser && message.content.trim().isNotEmpty) {
+        return message.content;
+      }
+    }
+    for (final message in messages.reversed) {
+      if (!message.isUser && message.content.trim().isNotEmpty) {
+        return message.content;
+      }
+    }
+    return null;
+  }
+
+  String _learningSourceSessionId() {
+    final current = ref.read(chatProvider).sessionId?.trim();
+    if (current != null && current.isNotEmpty) return current;
+    return 'sess_ui_learning_${DateTime.now().millisecondsSinceEpoch}';
+  }
+
+  List<String> _learningEvidenceRefs(
+    CareerApplicationView? app, {
+    List<String> extra = const [],
+  }) {
+    return [
+      if (app?.applicationId.trim().isNotEmpty == true)
+        app!.applicationId.trim(),
+      ...extra
+          .where((item) => item.trim().isNotEmpty)
+          .map((item) => item.trim()),
+    ];
+  }
+}
+
+class _LearningTaskDraft {
+  final String title;
+  final String description;
+  final String taskType;
+  final String priority;
+  final int estimatedMinutes;
+  final List<String> skillTags;
+  final List<String> successCriteria;
+  final String reason;
+  final List<String> sourceRefs;
+
+  const _LearningTaskDraft({
+    required this.title,
+    required this.description,
+    this.taskType = 'custom',
+    required this.priority,
+    required this.estimatedMinutes,
+    this.skillTags = const [],
+    this.successCriteria = const [],
+    this.reason = '',
+    this.sourceRefs = const [],
+  });
+
+  factory _LearningTaskDraft.fromApi(LearningTaskDraftView view) {
+    return _LearningTaskDraft(
+      title: view.title,
+      description: view.description,
+      taskType: view.taskType,
+      priority: view.priority,
+      estimatedMinutes: view.estimatedMinutes,
+      skillTags: view.skillTags,
+      successCriteria: view.successCriteria,
+      reason: view.reason,
+      sourceRefs: view.sourceRefs,
+    );
+  }
+
+  _LearningTaskDraft copyWith({
+    String? title,
+    String? description,
+    String? taskType,
+    String? priority,
+    int? estimatedMinutes,
+    List<String>? skillTags,
+    List<String>? successCriteria,
+    String? reason,
+    List<String>? sourceRefs,
+  }) {
+    return _LearningTaskDraft(
+      title: title ?? this.title,
+      description: description ?? this.description,
+      taskType: taskType ?? this.taskType,
+      priority: priority ?? this.priority,
+      estimatedMinutes: estimatedMinutes ?? this.estimatedMinutes,
+      skillTags: skillTags ?? this.skillTags,
+      successCriteria: successCriteria ?? this.successCriteria,
+      reason: reason ?? this.reason,
+      sourceRefs: sourceRefs ?? this.sourceRefs,
     );
   }
 }
 
-class _LearningHeader extends StatelessWidget {
-  final CareerWorkbenchProvider provider;
-  final VoidCallback onRefresh;
-  final VoidCallback onCreateTask;
-  final VoidCallback onRecommend;
+Future<List<_LearningTaskDraft>?> _showLearningTaskDraftDialog(
+  BuildContext context,
+  List<_LearningTaskDraft> initialDrafts,
+) {
+  var drafts = [...initialDrafts];
+  var accepted = List<bool>.filled(drafts.length, false);
+  var ignored = List<bool>.filled(drafts.length, false);
+  return showDialog<List<_LearningTaskDraft>>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) {
+      return StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final selectable = [
+            for (var i = 0; i < drafts.length; i++)
+              if (!ignored[i]) i,
+          ];
+          final selected = [
+            for (final i in selectable)
+              if (accepted[i]) drafts[i],
+          ];
+          final canSubmit = selectable.isNotEmpty;
+          Future<void> editDraft(int index) async {
+            final edited = await _showLearningTaskCreateSheet(
+              dialogContext,
+              initialDraft: drafts[index],
+              title: '编辑任务草案',
+              subtitle: '调整标题、说明、优先级和预计耗时后，回到草案列表继续采纳。',
+              submitLabel: '保存草案',
+            );
+            if (edited == null || !dialogContext.mounted) return;
+            setDialogState(() {
+              drafts[index] = edited;
+              ignored[index] = false;
+              accepted[index] = true;
+            });
+          }
 
-  const _LearningHeader({
-    required this.provider,
-    required this.onRefresh,
-    required this.onCreateTask,
-    required this.onRecommend,
+          return Dialog(
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            backgroundColor: Colors.transparent,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 900, maxHeight: 760),
+              child: ProductCard(
+                padding: const EdgeInsets.fromLTRB(24, 22, 24, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.auto_awesome_rounded,
+                          size: 20,
+                          color: ProductColors.purple,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'AI 生成任务草案',
+                                style: AppTheme.ts(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                  color: ProductColors.text,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                '基于你的目标岗位、当前学习路线、能力短板与已有任务，AI 为你生成以下优先建议任务草案，你可以采纳、编辑或忽略这些任务。',
+                                style: AppTheme.ts(
+                                  fontSize: 12.8,
+                                  height: 1.55,
+                                  color: ProductColors.textSecondary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '关闭',
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                          color: ProductColors.textSecondary,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: drafts.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
+                        itemBuilder: (context, index) {
+                          return _LearningTaskDraftCard(
+                            index: index + 1,
+                            draft: drafts[index],
+                            accepted: accepted[index],
+                            ignored: ignored[index],
+                            onAccept: () => setDialogState(() {
+                              accepted[index] = !accepted[index];
+                              ignored[index] = false;
+                            }),
+                            onEdit: () => unawaited(editDraft(index)),
+                            onIgnore: () => setDialogState(() {
+                              ignored[index] = !ignored[index];
+                              if (ignored[index]) accepted[index] = false;
+                            }),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        const Spacer(),
+                        SizedBox(
+                          width: 220,
+                          height: 44,
+                          child: ElevatedButton.icon(
+                            onPressed: canSubmit
+                                ? () => Navigator.of(dialogContext).pop(
+                                      selected.isNotEmpty
+                                          ? selected
+                                          : selectable
+                                              .map((index) => drafts[index])
+                                              .toList(),
+                                    )
+                                : null,
+                            icon: const Icon(
+                              Icons.check_circle_outline_rounded,
+                              size: 17,
+                            ),
+                            label: Text(
+                              selected.isNotEmpty ? '采纳选中' : '采纳全部',
+                            ),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: ProductColors.primary,
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              textStyle: AppTheme.ts(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        SizedBox(
+                          width: 220,
+                          height: 44,
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                            style: _outlineButtonStyle(),
+                            child: const Text('关闭'),
+                          ),
+                        ),
+                        const Spacer(),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
+class _LearningTaskDraftCard extends StatelessWidget {
+  final int index;
+  final _LearningTaskDraft draft;
+  final bool accepted;
+  final bool ignored;
+  final VoidCallback onAccept;
+  final VoidCallback onEdit;
+  final VoidCallback onIgnore;
+
+  const _LearningTaskDraftCard({
+    required this.index,
+    required this.draft,
+    required this.accepted,
+    required this.ignored,
+    required this.onAccept,
+    required this.onEdit,
+    required this.onIgnore,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ProductCard(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 760;
-          final title = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    '学习计划',
-                    style: AppTheme.ts(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      color: ProductColors.text,
-                    ),
-                  ),
-                  const ProductTag(
-                    label: '补短板',
-                    tone: ProductTone.purple,
-                    icon: Icons.school_outlined,
-                  ),
-                  if (provider.isRefreshing)
-                    const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: ProductColors.primary,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 5),
-              Text(
-                '把岗位差距拆成今天能推进的学习任务，持续提升面试准备度。',
-                maxLines: compact ? 2 : 1,
-                overflow: TextOverflow.ellipsis,
-                style: AppTheme.ts(
-                  fontSize: 12.5,
-                  color: ProductColors.textSecondary,
-                ),
-              ),
-            ],
-          );
-          final controls = Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            alignment: WrapAlignment.end,
-            children: [
-              SizedBox(
-                height: 38,
-                child: OutlinedButton.icon(
-                  onPressed: onRefresh,
-                  icon: const Icon(Icons.refresh_rounded, size: 16),
-                  label: const Text('刷新'),
-                  style: _outlineButtonStyle(),
-                ),
-              ),
-              SizedBox(
-                height: 38,
-                child: OutlinedButton.icon(
-                  onPressed: onRecommend,
-                  icon: const Icon(Icons.auto_awesome_rounded, size: 16),
-                  label: const Text('生成建议'),
-                  style: _outlineButtonStyle(),
-                ),
-              ),
-              SizedBox(
-                height: 38,
-                child: ElevatedButton.icon(
-                  onPressed: onCreateTask,
-                  icon: const Icon(Icons.add_task_rounded, size: 17),
-                  label: const Text('新建任务'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: ProductColors.primary,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    textStyle: AppTheme.ts(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-          if (compact) {
-            return Column(
+    final priorityTone = careerPriorityTone(draft.priority);
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 140),
+      opacity: ignored ? 0.48 : 1,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(18, 16, 16, 16),
+        decoration: BoxDecoration(
+          color: ProductColors.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: accepted
+                ? ProductColors.primary.withValues(alpha: 0.32)
+                : ProductColors.border,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.025),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 640;
+            final body = Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                title,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ProductTag(
+                      label: index.toString().padLeft(2, '0'),
+                      tone: ProductTone.purple,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        draft.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: 15.5,
+                          height: 1.28,
+                          fontWeight: FontWeight.w900,
+                          color: ProductColors.text,
+                        ),
+                      ),
+                    ),
+                    ProductTag(
+                      label: '${careerPriorityLabel(draft.priority)}优先级',
+                      tone: priorityTone,
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
-                controls,
+                Text(
+                  '为什么推荐',
+                  style: AppTheme.ts(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.text,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  draft.reason.isEmpty ? draft.description : draft.reason,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 12.2,
+                    height: 1.48,
+                    color: ProductColors.textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ProductTag(
+                      label: '预计 ${draft.estimatedMinutes} 分钟',
+                      tone: ProductTone.neutral,
+                    ),
+                    const ProductTag(label: '相关技能', tone: ProductTone.neutral),
+                    for (final tag in draft.skillTags.take(5))
+                      ProductTag(label: tag, tone: ProductTone.neutral),
+                  ],
+                ),
               ],
             );
-          }
-          return Row(
-            children: [
-              Expanded(child: title),
-              const SizedBox(width: 14),
-              controls,
-            ],
-          );
-        },
+            final actions = SizedBox(
+              width: compact ? double.infinity : 148,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    height: 38,
+                    child: ElevatedButton.icon(
+                      onPressed: ignored ? null : onAccept,
+                      icon: Icon(
+                        accepted
+                            ? Icons.check_circle_rounded
+                            : Icons.check_circle_outline_rounded,
+                        size: 16,
+                      ),
+                      label: Text(accepted ? '已采纳' : '采纳'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: ProductColors.primary,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor:
+                            ProductColors.textMuted.withValues(alpha: 0.18),
+                        disabledForegroundColor: ProductColors.textMuted,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        textStyle: AppTheme.ts(
+                          fontSize: 12.2,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 9),
+                  SizedBox(
+                    height: 36,
+                    child: OutlinedButton.icon(
+                      onPressed: ignored ? null : onEdit,
+                      icon: const Icon(Icons.edit_outlined, size: 15),
+                      label: const Text('编辑'),
+                      style: _outlineButtonStyle(),
+                    ),
+                  ),
+                  const SizedBox(height: 9),
+                  SizedBox(
+                    height: 36,
+                    child: OutlinedButton.icon(
+                      onPressed: onIgnore,
+                      icon: Icon(
+                        ignored ? Icons.undo_rounded : Icons.close_rounded,
+                        size: 15,
+                      ),
+                      label: Text(ignored ? '恢复' : '忽略'),
+                      style: _outlineButtonStyle(
+                        foregroundColor: ignored
+                            ? ProductColors.primary
+                            : ProductColors.text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+            if (compact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  body,
+                  const SizedBox(height: 14),
+                  actions,
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: body),
+                const SizedBox(width: 18),
+                Container(
+                  width: 1,
+                  height: 116,
+                  color: ProductColors.border,
+                ),
+                const SizedBox(width: 18),
+                actions,
+              ],
+            );
+          },
+        ),
       ),
     );
   }
+}
+
+Future<_LearningTaskDraft?> _showLearningTaskCreateSheet(
+  BuildContext context, {
+  _LearningTaskDraft? initialDraft,
+  String title = '新建学习任务',
+  String subtitle = '直接保存为学习任务；需要系统推导时再使用“AI 生成任务草案”。',
+  String submitLabel = '保存任务',
+}) {
+  final titleController =
+      TextEditingController(text: initialDraft?.title ?? '');
+  final descriptionController =
+      TextEditingController(text: initialDraft?.description ?? '');
+  final minutesController = TextEditingController(
+    text: (initialDraft?.estimatedMinutes ?? 0) > 0
+        ? initialDraft!.estimatedMinutes.toString()
+        : '',
+  );
+  var priority = initialDraft?.priority ?? 'medium';
+  var error = '';
+  _LearningTaskDraft? draft;
+
+  return showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (sheetContext) {
+      return StatefulBuilder(
+        builder: (context, setSheetState) {
+          void submit() {
+            final title = titleController.text.trim();
+            if (title.isEmpty) {
+              setSheetState(() => error = '先写一个任务标题');
+              return;
+            }
+            final rawMinutes = minutesController.text.trim();
+            final minutes = rawMinutes.isEmpty
+                ? 0
+                : int.tryParse(rawMinutes.replaceAll(RegExp(r'[^0-9]'), '')) ??
+                    0;
+            draft = _LearningTaskDraft(
+              title: title.trim(),
+              description: descriptionController.text.trim(),
+              taskType: initialDraft?.taskType ?? 'custom',
+              priority: priority,
+              estimatedMinutes: minutes,
+              skillTags: initialDraft?.skillTags ?? const [],
+              successCriteria: initialDraft?.successCriteria ?? const [],
+              reason: initialDraft?.reason ?? '',
+              sourceRefs: initialDraft?.sourceRefs ?? const [],
+            );
+            Navigator.of(sheetContext).pop();
+          }
+
+          final bottom = MediaQuery.viewInsetsOf(context).bottom;
+          return Dialog(
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            backgroundColor: Colors.transparent,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: bottom),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 640,
+                  maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.88,
+                ),
+                child: SingleChildScrollView(
+                  child: ProductCard(
+                    padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const ProductIconTile(
+                              icon: Icons.add_task_rounded,
+                              tone: ProductTone.primary,
+                              size: 36,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: AppTheme.ts(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w900,
+                                      color: ProductColors.text,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    subtitle,
+                                    style: AppTheme.ts(
+                                      fontSize: 11.2,
+                                      color: ProductColors.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '关闭',
+                              onPressed: () => Navigator.of(sheetContext).pop(),
+                              icon: const Icon(Icons.close_rounded),
+                              color: ProductColors.textSecondary,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        TextField(
+                          key: const Key('learning_task_title_field'),
+                          controller: titleController,
+                          decoration: _learningInputDecoration('任务标题'),
+                          style: AppTheme.ts(
+                            fontSize: 12.8,
+                            fontWeight: FontWeight.w800,
+                            color: ProductColors.text,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          key: const Key('learning_task_description_field'),
+                          controller: descriptionController,
+                          minLines: 3,
+                          maxLines: 5,
+                          decoration: _learningInputDecoration('任务说明（可选）'),
+                          style: AppTheme.ts(
+                            fontSize: 12.6,
+                            height: 1.48,
+                            color: ProductColors.text,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final priorityField =
+                                DropdownButtonFormField<String>(
+                              initialValue: priority,
+                              decoration: _learningInputDecoration('优先级'),
+                              items: const [
+                                DropdownMenuItem(
+                                    value: 'high', child: Text('高')),
+                                DropdownMenuItem(
+                                  value: 'medium',
+                                  child: Text('中'),
+                                ),
+                                DropdownMenuItem(
+                                    value: 'low', child: Text('低')),
+                              ],
+                              onChanged: (value) => setSheetState(() {
+                                priority = value ?? priority;
+                              }),
+                            );
+                            final minutesField = TextField(
+                              key: const Key('learning_task_minutes_field'),
+                              controller: minutesController,
+                              keyboardType: TextInputType.number,
+                              decoration: _learningInputDecoration('预计分钟数'),
+                              style: AppTheme.ts(
+                                fontSize: 12.6,
+                                color: ProductColors.text,
+                              ),
+                            );
+                            if (constraints.maxWidth < 560) {
+                              return Column(
+                                children: [
+                                  priorityField,
+                                  const SizedBox(height: 10),
+                                  minutesField,
+                                ],
+                              );
+                            }
+                            return Row(
+                              children: [
+                                Expanded(child: priorityField),
+                                const SizedBox(width: 10),
+                                SizedBox(width: 180, child: minutesField),
+                              ],
+                            );
+                          },
+                        ),
+                        if (error.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            error,
+                            style: AppTheme.ts(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
+                              color: ProductColors.danger,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.of(sheetContext).pop(),
+                              child: const Text('取消'),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton.icon(
+                              onPressed: submit,
+                              icon: const Icon(Icons.check_rounded, size: 16),
+                              label: Text(submitLabel),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: ProductColors.primary,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  ).whenComplete(() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      titleController.dispose();
+      descriptionController.dispose();
+      minutesController.dispose();
+    });
+  }).then((_) => draft);
+}
+
+InputDecoration _learningInputDecoration(String label) {
+  return InputDecoration(
+    labelText: label,
+    filled: true,
+    fillColor: ProductColors.surface,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: ProductColors.border),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: ProductColors.border),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: ProductColors.primary, width: 1.2),
+    ),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+    labelStyle: AppTheme.ts(fontSize: 12, color: ProductColors.textMuted),
+  );
+}
+
+List<String> _splitBlockers(String value) {
+  return value
+      .split(RegExp(r'[\n；;]+'))
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList(growable: false);
+}
+
+String _checkinProgressState(String nextState) {
+  return switch (nextState.trim()) {
+    'done' => 'completed',
+    'blocked' => 'blocked',
+    'skipped' => 'skipped',
+    _ => 'in_progress',
+  };
 }
 
 class _LearningHero extends StatelessWidget {
@@ -364,6 +1486,7 @@ class _LearningHero extends StatelessWidget {
   final int progress;
   final bool loading;
   final VoidCallback onPrimary;
+  final VoidCallback onRoadmap;
 
   const _LearningHero({
     required this.app,
@@ -371,6 +1494,7 @@ class _LearningHero extends StatelessWidget {
     required this.progress,
     required this.loading,
     required this.onPrimary,
+    required this.onRoadmap,
   });
 
   @override
@@ -385,8 +1509,29 @@ class _LearningHero extends StatelessWidget {
         ? '选择或创建求职项目后，这里会展示面向岗位的短板和任务推进。'
         : '围绕 ${position.isEmpty ? '目标岗位' : position} 持续补齐关键技能与面试证据。';
     return Container(
-      padding: const EdgeInsets.fromLTRB(26, 24, 26, 24),
-      decoration: ProductSurface.hero(),
+      padding: const EdgeInsets.fromLTRB(24, 14, 24, 14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            ProductColors.primarySoft.withValues(alpha: 0.86),
+            ProductColors.surface,
+            ProductColors.infoSoft.withValues(alpha: 0.38),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: ProductColors.primary.withValues(alpha: 0.18),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: ProductColors.primary.withValues(alpha: 0.08),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 760;
@@ -399,7 +1544,7 @@ class _LearningHero extends StatelessWidget {
                   Text(
                     title,
                     style: AppTheme.ts(
-                      fontSize: compact ? 22 : 25,
+                      fontSize: compact ? 21 : 22,
                       fontWeight: FontWeight.w900,
                       color: ProductColors.text,
                     ),
@@ -412,19 +1557,19 @@ class _LearningHero extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 7),
               Text(
                 subtitle,
-                maxLines: compact ? 4 : 2,
+                maxLines: compact ? 4 : 1,
                 overflow: TextOverflow.ellipsis,
                 style: AppTheme.ts(
-                  fontSize: 14,
-                  height: 1.55,
+                  fontSize: 13.5,
+                  height: 1.45,
                   fontWeight: FontWeight.w700,
                   color: ProductColors.textSecondary,
                 ),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 9),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -446,37 +1591,59 @@ class _LearningHero extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 18),
-              SizedBox(
-                height: 44,
-                child: ElevatedButton.icon(
-                  onPressed: onPrimary,
-                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                  label: Text(
-                    app == null ? '选择项目生成计划' : '生成下一步建议',
-                    style: AppTheme.ts(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 9,
+                runSpacing: 8,
+                children: [
+                  SizedBox(
+                    height: 36,
+                    child: ElevatedButton.icon(
+                      onPressed: onPrimary,
+                      icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                      label: Text(
+                        app == null
+                            ? '选择求职项目'
+                            : learning.openTaskCount > 0
+                                ? '继续今日任务'
+                                : 'AI 生成任务草案',
+                        style: AppTheme.ts(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: ProductColors.primary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 18),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
                     ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: ProductColors.primary,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                  SizedBox(
+                    height: 36,
+                    child: OutlinedButton.icon(
+                      onPressed: onRoadmap,
+                      icon: const Icon(Icons.route_outlined, size: 16),
+                      label: const Text('查看学习路线'),
+                      style: _outlineButtonStyle(),
                     ),
                   ),
-                ),
+                ],
               ),
             ],
           );
-          final insight = ProductCard(
-            soft: true,
-            tone: ProductTone.primary,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          final insight = Container(
+            padding: const EdgeInsets.fromLTRB(15, 13, 15, 13),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.72),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: ProductColors.borderStrong),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -535,8 +1702,9 @@ class _LearningHero extends StatelessWidget {
           );
           final ring = ProductScoreRing(
             score: progress,
-            label: '学习进度',
-            size: compact ? 92 : 106,
+            label: '整体进度',
+            suffix: '%',
+            size: compact ? 96 : 112,
           );
           if (compact) {
             return Column(
@@ -553,10 +1721,10 @@ class _LearningHero extends StatelessWidget {
           return Row(
             children: [
               Expanded(child: content),
-              const SizedBox(width: 20),
+              const SizedBox(width: 26),
               ring,
-              const SizedBox(width: 20),
-              SizedBox(width: 330, child: insight),
+              const SizedBox(width: 26),
+              SizedBox(width: 320, child: insight),
             ],
           );
         },
@@ -584,22 +1752,26 @@ class _LearningProjectStrip extends StatelessWidget {
         ),
       );
     }
-    return ProductCard(
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      height: 50,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: ProductColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ProductColors.border),
+      ),
+      child: Row(
         children: [
           Text(
             '关联求职项目',
             style: AppTheme.ts(
-              fontSize: 13,
+              fontSize: 12.5,
               fontWeight: FontWeight.w900,
               color: ProductColors.text,
             ),
           ),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 42,
+          const SizedBox(width: 10),
+          Expanded(
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: apps.length,
@@ -608,13 +1780,17 @@ class _LearningProjectStrip extends StatelessWidget {
                 final item = apps[index];
                 final selected =
                     item.application.applicationId == selectedId?.trim();
-                return _ProjectChip(
-                  summary: item,
-                  selected: selected,
-                  loading: provider
-                      .isApplicationLoading(item.application.applicationId),
-                  onTap: () => unawaited(
-                    provider.selectApplication(item.application.applicationId),
+                return Align(
+                  alignment: Alignment.centerLeft,
+                  child: _ProjectChip(
+                    summary: item,
+                    selected: selected,
+                    loading: provider
+                        .isApplicationLoading(item.application.applicationId),
+                    onTap: () => unawaited(
+                      provider
+                          .selectApplication(item.application.applicationId),
+                    ),
                   ),
                 );
               },
@@ -692,104 +1868,240 @@ class _LearningMetricStrip extends StatelessWidget {
 }
 
 class _LearningPlanSection extends StatelessWidget {
-  final List<CareerWorkbenchLearningPlanView> plans;
+  final CareerLearningSummaryView learning;
+  final int overallProgress;
 
-  const _LearningPlanSection({required this.plans});
+  const _LearningPlanSection({
+    required this.learning,
+    required this.overallProgress,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final visible = [...plans]
+    final visible = [...learning.plans]
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return ProductSection(
-      title: '学习路线',
-      subtitle: visible.isEmpty ? '暂无路线' : '${visible.length} 条路线',
-      icon: Icons.route_outlined,
-      tone: ProductTone.purple,
-      child: visible.isEmpty
-          ? const _EmptyLearningMessage(
-              message: '还没有学习路线。可以先让 Agent 根据岗位匹配差距生成一版。',
-            )
-          : Column(
-              children: [
-                for (final plan in visible.take(3)) ...[
-                  _LearningPlanCard(plan: plan),
-                  if (plan != visible.take(3).last) const SizedBox(height: 10),
-                ],
-              ],
-            ),
-    );
-  }
-}
-
-class _LearningPlanCard extends StatelessWidget {
-  final CareerWorkbenchLearningPlanView plan;
-
-  const _LearningPlanCard({required this.plan});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-      decoration: ProductSurface.softCard(tone: ProductTone.purple),
+    final roadmap = _buildRoadmapSteps(learning, overallProgress);
+    final trailing = visible.isEmpty
+        ? const ProductTag(label: '待生成', tone: ProductTone.neutral)
+        : ProductTag(label: '${visible.length} 条路线', tone: ProductTone.purple);
+    return ProductCard(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              const ProductIconTile(
+                icon: Icons.route_outlined,
+                tone: ProductTone.purple,
+                size: 30,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '学习路线',
+                      style: AppTheme.ts(
+                        fontSize: 13.8,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '你的学习阶段与当前进度。',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 11,
+                        color: ProductColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              trailing,
+            ],
+          ),
+          const SizedBox(height: 8),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 780;
+              if (compact) {
+                return Column(
+                  children: [
+                    for (final step in roadmap) ...[
+                      _RoadmapStepCard(step: step, compact: true),
+                      if (step != roadmap.last) const SizedBox(height: 9),
+                    ],
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  for (var index = 0; index < roadmap.length; index++) ...[
+                    Expanded(
+                      child: _RoadmapStepCard(step: roadmap[index]),
+                    ),
+                    if (index < roadmap.length - 1) ...[
+                      const SizedBox(width: 7),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: ProductColors.textMuted.withValues(alpha: 0.72),
+                      ),
+                      const SizedBox(width: 7),
+                    ],
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoadmapStepData {
+  final int index;
+  final String title;
+  final String subtitle;
+  final int progress;
+  final ProductTone tone;
+
+  const _RoadmapStepData({
+    required this.index,
+    required this.title,
+    required this.subtitle,
+    required this.progress,
+    required this.tone,
+  });
+}
+
+class _RoadmapStepCard extends StatelessWidget {
+  final _RoadmapStepData step;
+  final bool compact;
+
+  const _RoadmapStepCard({
+    required this.step,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = productToneStyle(step.tone);
+    final done = step.progress >= 100;
+    final active = step.progress > 0 && step.progress < 100;
+    return Container(
+      constraints: BoxConstraints(minHeight: compact ? 68 : 70),
+      padding: const EdgeInsets.fromLTRB(9, 8, 9, 8),
+      decoration: BoxDecoration(
+        color: active
+            ? style.soft.withValues(alpha: 0.58)
+            : done
+                ? ProductColors.primarySoft.withValues(alpha: 0.48)
+                : ProductColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: active || done
+              ? style.color.withValues(alpha: 0.18)
+              : ProductColors.border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 25,
+                height: 24,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: done ? ProductColors.primary : style.soft,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: style.color.withValues(alpha: 0.2)),
+                ),
+                child: done
+                    ? const Icon(
+                        Icons.check_rounded,
+                        size: 15,
+                        color: Colors.white,
+                      )
+                    : Text(
+                        step.index.toString().padLeft(2, '0'),
+                        style: AppTheme.ts(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w900,
+                          color: style.color,
+                        ),
+                      ),
+              ),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
-                  plan.title.trim().isEmpty ? '未命名学习路线' : plan.title.trim(),
+                  step.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTheme.ts(
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w900,
                     color: ProductColors.text,
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              ProductTag(
-                label: careerPriorityLabel(plan.priority),
-                tone: careerPriorityTone(plan.priority),
-              ),
             ],
           ),
-          const SizedBox(height: 7),
+          const SizedBox(height: 4),
           Text(
-            careerFirstNonEmpty(
-              [plan.progressSummary, plan.description],
-              fallback: '围绕目标岗位拆解学习目标和任务。',
-            ),
-            maxLines: 2,
+            step.subtitle,
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: AppTheme.ts(
-              fontSize: 11.5,
-              height: 1.45,
+              fontSize: 10.6,
+              height: 1.25,
               color: ProductColors.textSecondary,
             ),
           ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
+          const SizedBox(height: 5),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: step.progress.clamp(0, 100).toDouble() / 100,
+              minHeight: 4.5,
+              color: style.color,
+              backgroundColor: ProductColors.border.withValues(alpha: 0.66),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
             children: [
-              for (final tag in plan.focusSkillTags.take(5))
-                ProductTag(label: tag, tone: ProductTone.purple),
-              if (plan.targetRole.trim().isNotEmpty)
-                ProductTag(
-                    label: plan.targetRole.trim(), tone: ProductTone.info),
-              ProductTag(
-                label: '更新 ${careerFormatDateTime(plan.updatedAt)}',
-                tone: ProductTone.neutral,
+              Text(
+                done
+                    ? '已完成'
+                    : active
+                        ? '进行中'
+                        : '未开始',
+                style: AppTheme.ts(
+                  fontSize: 10.2,
+                  fontWeight: FontWeight.w900,
+                  color: style.color,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${step.progress}%',
+                style: AppTheme.ts(
+                  fontSize: 10.2,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.textSecondary,
+                ),
               ),
             ],
           ),
-          if (plan.goals.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            for (final goal in plan.goals.take(3))
-              _CheckLine(text: goal, tone: ProductTone.purple),
-          ],
         ],
       ),
     );
@@ -798,13 +2110,22 @@ class _LearningPlanCard extends StatelessWidget {
 
 class _LearningTaskBoard extends StatelessWidget {
   final List<CareerWorkbenchLearningTaskView> tasks;
+  final _InlineLearningActionState action;
+  final ValueChanged<CareerWorkbenchLearningTaskView> onOpenDetails;
   final ValueChanged<CareerWorkbenchLearningTaskView> onCheckIn;
   final VoidCallback onCreateTask;
+  final VoidCallback onGenerateTaskDrafts;
+  final Future<void> Function(
+      CareerWorkbenchLearningTaskView task, String state) onMoveTask;
 
   const _LearningTaskBoard({
     required this.tasks,
+    required this.action,
+    required this.onOpenDetails,
     required this.onCheckIn,
     required this.onCreateTask,
+    required this.onGenerateTaskDrafts,
+    required this.onMoveTask,
   });
 
   @override
@@ -814,111 +2135,485 @@ class _LearningTaskBoard extends StatelessWidget {
         .where((task) => task.state != 'doing' && _isOpenTask(task))
         .toList();
     final done = tasks.where(_isDoneTask).toList();
-    return ProductSection(
-      title: '学习任务',
-      subtitle: tasks.isEmpty ? '暂无任务' : '${tasks.length} 个任务',
-      icon: Icons.fact_check_outlined,
-      tone: ProductTone.info,
-      trailing: TextButton.icon(
-        onPressed: onCreateTask,
-        icon: const Icon(Icons.add_rounded, size: 15),
-        label: const Text('新建'),
-        style: TextButton.styleFrom(
-          foregroundColor: ProductColors.primary,
-          textStyle: AppTheme.ts(fontSize: 11, fontWeight: FontWeight.w900),
-        ),
-      ),
-      child: tasks.isEmpty
-          ? const _EmptyLearningMessage(
+    final lanes = [
+      _TaskLaneData('进行中', doing, ProductTone.primary, 'doing'),
+      _TaskLaneData('待推进', todo, ProductTone.info, 'todo'),
+      _TaskLaneData('已完成', done, ProductTone.neutral, 'done'),
+    ];
+    return ProductCard(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const ProductIconTile(
+                icon: Icons.fact_check_outlined,
+                tone: ProductTone.info,
+                size: 32,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '学习任务',
+                      style: AppTheme.ts(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      tasks.isEmpty ? '暂无任务' : '任务看板，聚焦当前优先级，持续推进。',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 12,
+                        color: ProductColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  SizedBox(
+                    height: 34,
+                    child: OutlinedButton.icon(
+                      onPressed: action.isRunning ? null : onGenerateTaskDrafts,
+                      icon: const Icon(Icons.auto_awesome_rounded, size: 15),
+                      label: const Text('AI 生成任务草案'),
+                      style: _outlineButtonStyle(),
+                    ),
+                  ),
+                  SizedBox(
+                    height: 34,
+                    child: ElevatedButton.icon(
+                      onPressed: onCreateTask,
+                      icon: const Icon(Icons.add_rounded, size: 15),
+                      label: const Text('新建'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: ProductColors.primary,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        textStyle: AppTheme.ts(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (action.isVisible) ...[
+            const SizedBox(height: 12),
+            _InlineLearningActionNotice(action: action),
+          ],
+          const SizedBox(height: 8),
+          if (tasks.isEmpty)
+            const _EmptyLearningMessage(
               message: '还没有学习任务。可以从岗位差距、面试复盘或手动输入创建。',
             )
-          : LayoutBuilder(
+          else
+            LayoutBuilder(
               builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 920
-                    ? 3
-                    : constraints.maxWidth >= 620
-                        ? 2
-                        : 1;
-                final width =
-                    (constraints.maxWidth - (columns - 1) * 10) / columns;
-                final lanes = [
-                  _TaskLaneData('进行中', doing, ProductTone.primary),
-                  _TaskLaneData('待推进', todo, ProductTone.info),
-                  _TaskLaneData('已完成', done, ProductTone.neutral),
-                ];
+                if (constraints.maxWidth >= 920) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        flex: 10,
+                        child: _TaskLane(
+                          lane: lanes[0],
+                          onOpenDetails: onOpenDetails,
+                          onCheckIn: onCheckIn,
+                          onMoveTask: onMoveTask,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 13,
+                        child: _TaskLane(
+                          lane: lanes[1],
+                          onOpenDetails: onOpenDetails,
+                          onCheckIn: onCheckIn,
+                          onMoveTask: onMoveTask,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        flex: 10,
+                        child: _TaskLane(
+                          lane: lanes[2],
+                          onOpenDetails: onOpenDetails,
+                          onCheckIn: onCheckIn,
+                          onMoveTask: onMoveTask,
+                        ),
+                      ),
+                    ],
+                  );
+                }
+                final twoColumns = constraints.maxWidth >= 640;
+                final width = twoColumns
+                    ? (constraints.maxWidth - 12) / 2
+                    : constraints.maxWidth;
                 return Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
+                  spacing: 12,
+                  runSpacing: 12,
                   children: [
                     for (final lane in lanes)
                       SizedBox(
                         width: width,
                         child: _TaskLane(
                           lane: lane,
+                          onOpenDetails: onOpenDetails,
                           onCheckIn: onCheckIn,
+                          onMoveTask: onMoveTask,
                         ),
                       ),
                   ],
                 );
               },
             ),
+        ],
+      ),
     );
   }
 }
 
 class _TaskLane extends StatelessWidget {
   final _TaskLaneData lane;
+  final ValueChanged<CareerWorkbenchLearningTaskView> onOpenDetails;
   final ValueChanged<CareerWorkbenchLearningTaskView> onCheckIn;
+  final Future<void> Function(
+      CareerWorkbenchLearningTaskView task, String state) onMoveTask;
 
   const _TaskLane({
     required this.lane,
+    required this.onOpenDetails,
     required this.onCheckIn,
+    required this.onMoveTask,
   });
 
   @override
   Widget build(BuildContext context) {
     final style = productToneStyle(lane.tone);
-    return Container(
-      constraints: const BoxConstraints(minHeight: 220),
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-      decoration: BoxDecoration(
-        color: style.soft.withValues(alpha: 0.46),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: style.color.withValues(alpha: 0.12)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final doneLane = lane.title == '已完成';
+    final maxVisibleTasks = doneLane ? 5 : 2;
+    final visibleTasks = lane.tasks.take(maxVisibleTasks).toList();
+    final hiddenTaskCount =
+        math.max(0, lane.tasks.length - visibleTasks.length);
+    return DragTarget<CareerWorkbenchLearningTaskView>(
+      onWillAcceptWithDetails: (details) =>
+          _taskLaneState(details.data.state) != lane.targetState,
+      onAcceptWithDetails: (details) =>
+          unawaited(onMoveTask(details.data, lane.targetState)),
+      builder: (context, candidateData, rejectedData) {
+        final accepting = candidateData.isNotEmpty;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          constraints: const BoxConstraints(minHeight: 136),
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                style.soft.withValues(alpha: doneLane ? 0.38 : 0.56),
+                ProductColors.surface,
+              ],
+              stops: const [0, 0.42],
+            ),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: accepting
+                  ? style.color.withValues(alpha: 0.58)
+                  : style.color.withValues(alpha: 0.12),
+              width: accepting ? 1.4 : 1,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Text(
-                  lane.title,
-                  style: AppTheme.ts(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    color: ProductColors.text,
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      accepting ? '松开移动到${lane.title}' : lane.title,
+                      style: AppTheme.ts(
+                        fontSize: 13.2,
+                        fontWeight: FontWeight.w900,
+                        color: doneLane ? ProductColors.primary : style.color,
+                      ),
+                    ),
                   ),
-                ),
+                  ProductTag(label: '${lane.tasks.length}', tone: lane.tone),
+                ],
               ),
-              ProductTag(label: '${lane.tasks.length}', tone: lane.tone),
+              const SizedBox(height: 7),
+              if (lane.tasks.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: accepting
+                        ? style.soft.withValues(alpha: 0.72)
+                        : ProductColors.surfaceSoft,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: ProductColors.border),
+                  ),
+                  child: Text(
+                    accepting ? '拖到这里更新状态' : '暂无',
+                    style: AppTheme.ts(
+                      fontSize: 12,
+                      color: accepting ? style.color : ProductColors.textMuted,
+                      fontWeight: accepting ? FontWeight.w800 : FontWeight.w400,
+                    ),
+                  ),
+                )
+              else ...[
+                for (var index = 0; index < visibleTasks.length; index++) ...[
+                  _DraggableTaskCard(
+                    task: visibleTasks[index],
+                    doneLane: doneLane,
+                    onOpenDetails: () => onOpenDetails(visibleTasks[index]),
+                    onCheckIn: () => onCheckIn(visibleTasks[index]),
+                    onStart: () =>
+                        unawaited(onMoveTask(visibleTasks[index], 'doing')),
+                  ),
+                  if (index < visibleTasks.length - 1)
+                    const SizedBox(height: 6),
+                ],
+                if (hiddenTaskCount > 0) ...[
+                  const SizedBox(height: 7),
+                  Center(
+                    child: TextButton.icon(
+                      onPressed: () => unawaited(
+                        _showTaskLaneTaskListSheet(
+                          context,
+                          lane: lane,
+                          onOpenDetails: onOpenDetails,
+                          onCheckIn: onCheckIn,
+                          onMoveTask: onMoveTask,
+                        ),
+                      ),
+                      icon: const Icon(Icons.view_list_rounded, size: 14),
+                      label: Text('查看全部 ${lane.tasks.length} 个${lane.title}任务'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: style.color,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        minimumSize: const Size(0, 30),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: AppTheme.ts(
+                          fontSize: 11.2,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ],
           ),
-          const SizedBox(height: 10),
-          if (lane.tasks.isEmpty)
-            Text(
-              '暂无',
-              style: AppTheme.ts(
-                fontSize: 11,
-                color: ProductColors.textMuted,
-              ),
-            )
-          else
-            for (final task in lane.tasks.take(4)) ...[
-              _LearningTaskCard(task: task, onCheckIn: () => onCheckIn(task)),
-              if (task != lane.tasks.take(4).last) const SizedBox(height: 8),
-            ],
-        ],
+        );
+      },
+    );
+  }
+}
+
+Future<void> _showTaskLaneTaskListSheet(
+  BuildContext context, {
+  required _TaskLaneData lane,
+  required ValueChanged<CareerWorkbenchLearningTaskView> onOpenDetails,
+  required ValueChanged<CareerWorkbenchLearningTaskView> onCheckIn,
+  required Future<void> Function(
+    CareerWorkbenchLearningTaskView task,
+    String state,
+  ) onMoveTask,
+}) {
+  final doneLane = lane.title == '已完成';
+  return showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (sheetContext) {
+      void closeThen(VoidCallback action) {
+        Navigator.of(sheetContext).pop();
+        action();
+      }
+
+      return Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        backgroundColor: Colors.transparent,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 760,
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.82,
+          ),
+          child: ProductCard(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    ProductIconTile(
+                      icon: doneLane
+                          ? Icons.verified_outlined
+                          : Icons.fact_check_outlined,
+                      tone: lane.tone,
+                      size: 34,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${lane.title}任务',
+                            style: AppTheme.ts(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              color: ProductColors.text,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '共 ${lane.tasks.length} 个，点击任务可查看详情。',
+                            style: AppTheme.ts(
+                              fontSize: 11.5,
+                              color: ProductColors.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ProductTag(
+                      label: '${lane.tasks.length}',
+                      tone: lane.tone,
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      tooltip: '关闭',
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                      color: ProductColors.textSecondary,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: lane.tasks.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final task = lane.tasks[index];
+                      if (doneLane) {
+                        return _CompletedLearningTaskMoveRow(
+                          task: task,
+                          onOpenDetails: () => closeThen(
+                            () => onOpenDetails(task),
+                          ),
+                          onMoveToTodo: () => closeThen(
+                            () => unawaited(onMoveTask(task, 'todo')),
+                          ),
+                          onMoveToDoing: () => closeThen(
+                            () => unawaited(onMoveTask(task, 'doing')),
+                          ),
+                        );
+                      }
+                      return _LearningTaskCard(
+                        task: task,
+                        onOpenDetails: () => closeThen(
+                          () => onOpenDetails(task),
+                        ),
+                        onCheckIn: () => closeThen(
+                          () => onCheckIn(task),
+                        ),
+                        onStart: () => closeThen(
+                          () => unawaited(onMoveTask(task, 'doing')),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _DraggableTaskCard extends StatelessWidget {
+  final CareerWorkbenchLearningTaskView task;
+  final bool doneLane;
+  final VoidCallback onOpenDetails;
+  final VoidCallback onCheckIn;
+  final VoidCallback onStart;
+
+  const _DraggableTaskCard({
+    required this.task,
+    required this.doneLane,
+    required this.onOpenDetails,
+    required this.onCheckIn,
+    required this.onStart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final card = doneLane
+        ? _CompletedLearningTaskRow(task: task, onOpenDetails: onOpenDetails)
+        : _LearningTaskCard(
+            task: task,
+            onOpenDetails: onOpenDetails,
+            onCheckIn: onCheckIn,
+            onStart: onStart,
+          );
+    return Draggable<CareerWorkbenchLearningTaskView>(
+      data: task,
+      feedback: Material(
+        color: Colors.transparent,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 330),
+          child: Opacity(
+            opacity: 0.94,
+            child: doneLane
+                ? _CompletedLearningTaskRow(
+                    task: task,
+                    onOpenDetails: onOpenDetails,
+                  )
+                : _LearningTaskCard(
+                    task: task,
+                    onOpenDetails: onOpenDetails,
+                    onCheckIn: onCheckIn,
+                    onStart: onStart,
+                  ),
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.36, child: card),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.grab,
+        child: card,
       ),
     );
   }
@@ -926,29 +2621,282 @@ class _TaskLane extends StatelessWidget {
 
 class _LearningTaskCard extends StatelessWidget {
   final CareerWorkbenchLearningTaskView task;
+  final VoidCallback onOpenDetails;
   final VoidCallback onCheckIn;
+  final VoidCallback onStart;
 
   const _LearningTaskCard({
     required this.task,
+    required this.onOpenDetails,
     required this.onCheckIn,
+    required this.onStart,
   });
 
   @override
   Widget build(BuildContext context) {
     final tone = _taskStateTone(task.state);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-      decoration: ProductSurface.card(radius: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    final progress = _taskVisualProgress(task);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onOpenDetails,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 78),
+          padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+          decoration: BoxDecoration(
+            color: ProductColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: ProductColors.border),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.025),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ProductIconTile(
-                icon: _taskTypeIcon(task.taskType),
-                tone: tone,
-                size: 34,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ProductIconTile(
+                    icon: _taskTypeIcon(task.taskType),
+                    tone: tone,
+                    size: 28,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          task.title.trim().isEmpty
+                              ? '未命名任务'
+                              : task.title.trim(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTheme.ts(
+                            fontSize: 12,
+                            height: 1.25,
+                            fontWeight: FontWeight.w900,
+                            color: ProductColors.text,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _taskSubtitle(task),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTheme.ts(
+                            fontSize: 10.8,
+                            height: 1.32,
+                            color: ProductColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(
+                    Icons.drag_indicator_rounded,
+                    size: 16,
+                    color: ProductColors.textMuted.withValues(alpha: 0.72),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 5),
+              Wrap(
+                spacing: 5,
+                runSpacing: 4,
+                children: [
+                  ProductTag(label: _taskStateLabel(task.state), tone: tone),
+                  ProductTag(
+                    label: careerPriorityLabel(task.priority),
+                    tone: careerPriorityTone(task.priority),
+                  ),
+                  if (task.estimatedMinutes > 0)
+                    ProductTag(
+                      label: '${task.estimatedMinutes} 分钟',
+                      tone: ProductTone.neutral,
+                    ),
+                ],
+              ),
+              if (task.skillTags.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 5,
+                  runSpacing: 5,
+                  children: [
+                    for (final tag in task.skillTags.take(2))
+                      ProductTag(label: tag, tone: ProductTone.purple),
+                  ],
+                ),
+              ],
+              if (!_isDoneTask(task)) ...[
+                const SizedBox(height: 6),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 380;
+                    final progressView = _TaskProgressInline(
+                      progress: progress,
+                      tone: tone,
+                    );
+                    Widget buttons({required bool expanded}) {
+                      final started = _taskLaneState(task.state) == 'doing' ||
+                          task.state.trim() == 'blocked';
+                      final recordButton = SizedBox(
+                        width: expanded ? null : 90,
+                        height: 28,
+                        child: ElevatedButton.icon(
+                          onPressed: started ? onCheckIn : onStart,
+                          icon: Icon(
+                            started
+                                ? Icons.edit_note_outlined
+                                : Icons.play_arrow_rounded,
+                            size: 15,
+                          ),
+                          label: Text(started ? '记录进度' : '开始任务'),
+                          style: _primaryCompactButtonStyle(),
+                        ),
+                      );
+                      final detailButton = SizedBox(
+                        width: expanded ? null : 70,
+                        height: 28,
+                        child: OutlinedButton.icon(
+                          onPressed: onOpenDetails,
+                          icon: const Icon(Icons.article_outlined, size: 14),
+                          label: const Text('详情'),
+                          style: _outlineButtonStyle(),
+                        ),
+                      );
+                      if (expanded) {
+                        return Row(
+                          children: [
+                            Expanded(child: recordButton),
+                            const SizedBox(width: 7),
+                            Expanded(child: detailButton),
+                          ],
+                        );
+                      }
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          recordButton,
+                          const SizedBox(width: 8),
+                          detailButton,
+                        ],
+                      );
+                    }
+
+                    if (compact) {
+                      return Column(
+                        children: [
+                          progressView,
+                          const SizedBox(height: 6),
+                          buttons(expanded: true),
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        SizedBox(
+                          width: math.min(126, constraints.maxWidth * 0.36),
+                          child: progressView,
+                        ),
+                        const Spacer(),
+                        buttons(expanded: false),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TaskProgressInline extends StatelessWidget {
+  final int progress;
+  final ProductTone tone;
+
+  const _TaskProgressInline({
+    required this.progress,
+    required this.tone,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = productToneStyle(tone);
+    return Row(
+      children: [
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: progress.clamp(0, 100).toDouble() / 100,
+              minHeight: 6,
+              color: style.color,
+              backgroundColor: ProductColors.border,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          '$progress%',
+          style: AppTheme.ts(
+            fontSize: 11.2,
+            fontWeight: FontWeight.w900,
+            color: style.color,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CompletedLearningTaskRow extends StatelessWidget {
+  final CareerWorkbenchLearningTaskView task;
+  final VoidCallback onOpenDetails;
+
+  const _CompletedLearningTaskRow({
+    required this.task,
+    required this.onOpenDetails,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onOpenDetails,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(9, 7, 9, 7),
+          decoration: BoxDecoration(
+            color: ProductColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: ProductColors.border),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: ProductColors.primary,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Icon(
+                  Icons.check_rounded,
+                  color: Colors.white,
+                  size: 14,
+                ),
               ),
               const SizedBox(width: 9),
               Expanded(
@@ -957,72 +2905,730 @@ class _LearningTaskCard extends StatelessWidget {
                   children: [
                     Text(
                       task.title.trim().isEmpty ? '未命名任务' : task.title.trim(),
-                      maxLines: 2,
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(
-                        fontSize: 12.2,
-                        height: 1.25,
+                        fontSize: 12,
                         fontWeight: FontWeight.w900,
                         color: ProductColors.text,
                       ),
                     ),
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 3),
                     Text(
-                      _taskSubtitle(task),
-                      maxLines: 2,
+                      task.completedAt == null
+                          ? '已完成'
+                          : '完成于 ${careerFormatDateTime(task.completedAt!)}',
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(
-                        fontSize: 10.8,
-                        height: 1.35,
-                        color: ProductColors.textSecondary,
+                        fontSize: 10.5,
+                        color: ProductColors.textMuted,
                       ),
                     ),
                   ],
                 ),
               ),
+              const SizedBox(width: 6),
+              Icon(
+                Icons.drag_indicator_rounded,
+                size: 16,
+                color: ProductColors.textMuted.withValues(alpha: 0.72),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompletedLearningTaskMoveRow extends StatelessWidget {
+  final CareerWorkbenchLearningTaskView task;
+  final VoidCallback onOpenDetails;
+  final VoidCallback onMoveToTodo;
+  final VoidCallback onMoveToDoing;
+
+  const _CompletedLearningTaskMoveRow({
+    required this.task,
+    required this.onOpenDetails,
+    required this.onMoveToTodo,
+    required this.onMoveToDoing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: ProductColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ProductColors.border),
+      ),
+      child: Row(
+        children: [
+          InkWell(
+            onTap: onOpenDetails,
+            borderRadius: BorderRadius.circular(999),
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: ProductColors.primary,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Icon(
+                Icons.check_rounded,
+                color: Colors.white,
+                size: 15,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: InkWell(
+              onTap: onOpenDetails,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      task.title.trim().isEmpty ? '未命名任务' : task.title.trim(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 12.4,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      task.completedAt == null
+                          ? '已完成'
+                          : '完成于 ${careerFormatDateTime(task.completedAt!)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 10.8,
+                        color: ProductColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            height: 34,
+            child: OutlinedButton.icon(
+              onPressed: onMoveToTodo,
+              icon: const Icon(Icons.low_priority_rounded, size: 14),
+              label: const Text('移到待推进'),
+              style: _outlineButtonStyle(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            height: 34,
+            child: ElevatedButton.icon(
+              onPressed: onMoveToDoing,
+              icon: const Icon(Icons.play_arrow_rounded, size: 15),
+              label: const Text('移到进行中'),
+              style: _primaryCompactButtonStyle(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _LearningTaskDetailAction { checkIn, archive }
+
+Future<_LearningTaskDetailAction?> _showLearningTaskDetailSheet(
+  BuildContext context,
+  CareerWorkbenchLearningTaskView task, {
+  required Future<String?> Function() onAiDecompose,
+}) {
+  return showDialog<_LearningTaskDetailAction>(
+    context: context,
+    barrierDismissible: false,
+    builder: (sheetContext) {
+      var decomposing = false;
+      String? decomposeResult;
+      String? decomposeError;
+
+      Future<void> runAiDecompose(StateSetter setSheetState) async {
+        if (decomposing) return;
+        setSheetState(() {
+          decomposing = true;
+          decomposeError = null;
+          decomposeResult = null;
+        });
+        try {
+          final result = await onAiDecompose();
+          if (!sheetContext.mounted) return;
+          setSheetState(() {
+            decomposing = false;
+            decomposeResult = result?.trim().isNotEmpty == true
+                ? result!.trim()
+                : 'AI 拆解已完成，但没有返回可展示内容。本页已刷新。';
+          });
+        } catch (error) {
+          if (!sheetContext.mounted) return;
+          setSheetState(() {
+            decomposing = false;
+            decomposeError = error.toString();
+          });
+        }
+      }
+
+      return StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          return Dialog(
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            backgroundColor: Colors.transparent,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 720,
+                maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.88,
+              ),
+              child: ProductCard(
+                padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                task.title.trim().isEmpty
+                                    ? '未命名学习任务'
+                                    : task.title.trim(),
+                                style: AppTheme.ts(
+                                  fontSize: 21,
+                                  height: 1.28,
+                                  fontWeight: FontWeight.w900,
+                                  color: ProductColors.text,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 10,
+                                runSpacing: 8,
+                                children: [
+                                  ProductTag(
+                                    label: _taskStateLabel(task.state),
+                                    tone: _taskStateTone(task.state),
+                                  ),
+                                  ProductTag(
+                                    label: careerPriorityLabel(
+                                      task.priority,
+                                    ),
+                                    tone: careerPriorityTone(
+                                      task.priority,
+                                    ),
+                                  ),
+                                  if (task.estimatedMinutes > 0)
+                                    ProductTag(
+                                      label: '${task.estimatedMinutes} 分钟',
+                                      tone: ProductTone.neutral,
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: '关闭',
+                          onPressed: decomposing
+                              ? null
+                              : () => Navigator.of(sheetContext).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                          color: ProductColors.textSecondary,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _TaskDetailBlock(
+                              title: '任务要求',
+                              body: _taskSubtitle(task),
+                              icon: Icons.radio_button_checked_rounded,
+                            ),
+                            if (task.description.trim().isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              _TaskDetailBlock(
+                                title: '完成说明',
+                                body: task.description.trim(),
+                                icon: Icons.assignment_turned_in_outlined,
+                              ),
+                            ],
+                            if (task.successCriteria.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              _TaskDetailListBlock(
+                                title: '完成标准',
+                                items: task.successCriteria,
+                                icon: Icons.checklist_rounded,
+                              ),
+                            ],
+                            if (task.progressNotes.trim().isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              _TaskProgressRecordBlock(
+                                notes: task.progressNotes.trim(),
+                              ),
+                            ],
+                            if (task.skillTags.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                '技能标签',
+                                style: AppTheme.ts(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                  color: ProductColors.text,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: [
+                                  for (final tag in task.skillTags)
+                                    ProductTag(
+                                      label: tag,
+                                      tone: ProductTone.purple,
+                                    ),
+                                ],
+                              ),
+                            ],
+                            if (decomposing ||
+                                decomposeResult != null ||
+                                decomposeError != null) ...[
+                              const SizedBox(height: 12),
+                              _TaskAiDecomposeBlock(
+                                loading: decomposing,
+                                result: decomposeResult,
+                                error: decomposeError,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton.icon(
+                          onPressed: decomposing
+                              ? null
+                              : () => Navigator.of(sheetContext)
+                                  .pop(_LearningTaskDetailAction.archive),
+                          icon: const Icon(Icons.delete_outline_rounded,
+                              size: 15),
+                          label: const Text('删除任务'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: ProductColors.danger,
+                            textStyle: AppTheme.ts(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        OutlinedButton.icon(
+                          onPressed: decomposing
+                              ? null
+                              : () => unawaited(
+                                    runAiDecompose(setSheetState),
+                                  ),
+                          icon: decomposing
+                              ? const SizedBox(
+                                  width: 15,
+                                  height: 15,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.auto_awesome_rounded,
+                                  size: 15),
+                          label: Text(decomposing ? '拆解中' : 'AI 拆解'),
+                          style: _outlineButtonStyle(),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton.icon(
+                          onPressed: decomposing
+                              ? null
+                              : () => Navigator.of(sheetContext)
+                                  .pop(_LearningTaskDetailAction.checkIn),
+                          icon: const Icon(Icons.edit_note_outlined, size: 15),
+                          label: const Text('记录进度'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: ProductColors.primary,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor:
+                                ProductColors.primary.withValues(
+                              alpha: 0.42,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            textStyle: AppTheme.ts(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
+Future<bool?> _confirmArchiveLearningTask(
+  BuildContext context,
+  CareerWorkbenchLearningTaskView task,
+) {
+  return showDialog<bool>(
+    context: context,
+    builder: (dialogContext) {
+      return AlertDialog(
+        title: const Text('删除学习任务？'),
+        content: Text(
+          '任务「${task.title.trim().isEmpty ? '未命名任务' : task.title.trim()}」会从学习看板中移除，历史记录仍会保留。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: ProductColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('删除'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
+class _TaskDetailBlock extends StatelessWidget {
+  final String title;
+  final String body;
+  final IconData icon;
+
+  const _TaskDetailBlock({
+    required this.title,
+    required this.body,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: ProductSurface.softCard(tone: ProductTone.neutral),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: ProductColors.textSecondary),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: AppTheme.ts(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SelectableText(
+            body.trim().isEmpty ? '暂无说明' : body.trim(),
+            style: AppTheme.ts(
+              fontSize: 13.2,
+              height: 1.65,
+              color: ProductColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TaskDetailListBlock extends StatelessWidget {
+  final String title;
+  final List<String> items;
+  final IconData icon;
+
+  const _TaskDetailListBlock({
+    required this.title,
+    required this.items,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final visible = items
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: ProductSurface.softCard(tone: ProductTone.primary),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: ProductColors.textSecondary),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: AppTheme.ts(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (visible.isEmpty)
+            Text(
+              '暂无',
+              style: AppTheme.ts(
+                fontSize: 12,
+                color: ProductColors.textSecondary,
+              ),
+            )
+          else
+            for (final item in visible)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.check_circle_outline_rounded,
+                      size: 15,
+                      color: ProductColors.primary,
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: SelectableText(
+                        item,
+                        style: AppTheme.ts(
+                          fontSize: 13,
+                          height: 1.48,
+                          color: ProductColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TaskProgressRecordBlock extends StatelessWidget {
+  final String notes;
+
+  const _TaskProgressRecordBlock({required this.notes});
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = notes
+        .split(RegExp(r'[\n\r]+'))
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList(growable: false);
+    final visibleRows = rows.isEmpty ? ['暂无进展记录'] : rows.take(3).toList();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: ProductSurface.softCard(tone: ProductTone.neutral),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.event_note_outlined,
+                size: 18,
+                color: ProductColors.textSecondary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '进展记录',
+                style: AppTheme.ts(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (var index = 0; index < visibleRows.length; index++) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Column(
+                  children: [
+                    const SizedBox(height: 2),
+                    const Icon(
+                      Icons.check_circle_rounded,
+                      size: 18,
+                      color: ProductColors.primary,
+                    ),
+                    if (index < visibleRows.length - 1)
+                      Container(
+                        width: 1,
+                        height: 34,
+                        margin: const EdgeInsets.symmetric(vertical: 3),
+                        color: ProductColors.primary.withValues(alpha: 0.24),
+                      ),
+                  ],
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.86),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: ProductColors.border),
+                    ),
+                    child: Text(
+                      visibleRows[index],
+                      style: AppTheme.ts(
+                        fontSize: 12.6,
+                        height: 1.48,
+                        color: ProductColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (index < visibleRows.length - 1) const SizedBox(height: 4),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TaskAiDecomposeBlock extends StatelessWidget {
+  final bool loading;
+  final String? result;
+  final String? error;
+
+  const _TaskAiDecomposeBlock({
+    required this.loading,
+    this.result,
+    this.error,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasError = error?.trim().isNotEmpty == true;
+    final tone = hasError
+        ? ProductTone.danger
+        : loading
+            ? ProductTone.purple
+            : ProductTone.primary;
+    final style = productToneStyle(tone);
+    final title = hasError
+        ? 'AI 拆解失败'
+        : loading
+            ? 'AI 正在拆解任务'
+            : 'AI 拆解结果';
+    final body = hasError
+        ? error!.trim()
+        : loading
+            ? '正在分析任务要求、完成标准和当前状态，完成后会在这里展示下一步行动、子步骤和验收标准。'
+            : (result?.trim().isNotEmpty == true ? result!.trim() : '暂无可展示结果。');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
+      decoration: ProductSurface.softCard(tone: tone),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (loading)
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: style.color,
+                  ),
+                )
+              else
+                Icon(
+                  hasError
+                      ? Icons.error_outline_rounded
+                      : Icons.auto_awesome_rounded,
+                  size: 18,
+                  color: style.color,
+                ),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: AppTheme.ts(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 9),
-          Wrap(
-            spacing: 5,
-            runSpacing: 5,
-            children: [
-              ProductTag(label: _taskStateLabel(task.state), tone: tone),
-              ProductTag(
-                label: careerPriorityLabel(task.priority),
-                tone: careerPriorityTone(task.priority),
-              ),
-              if (task.estimatedMinutes > 0)
-                ProductTag(
-                  label: '${task.estimatedMinutes} 分钟',
-                  tone: ProductTone.neutral,
-                ),
-            ],
+          SelectableText(
+            body,
+            style: AppTheme.ts(
+              fontSize: 12.2,
+              height: 1.5,
+              color: ProductColors.textSecondary,
+            ),
           ),
-          if (task.skillTags.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 5,
-              runSpacing: 5,
-              children: [
-                for (final tag in task.skillTags.take(3))
-                  ProductTag(label: tag, tone: ProductTone.purple),
-              ],
-            ),
-          ],
-          if (!_isDoneTask(task)) ...[
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 32,
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: onCheckIn,
-                icon: const Icon(Icons.edit_note_outlined, size: 15),
-                label: const Text('记录进度'),
-                style: _outlineButtonStyle(),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -1033,63 +3639,88 @@ class _LearningWeaknessSection extends StatelessWidget {
   final List<CareerWorkbenchWeaknessView> weaknesses;
   final List<CareerWorkbenchLearningTaskView> tasks;
   final VoidCallback onCreateTask;
+  final VoidCallback onOpenNotes;
+  final VoidCallback onRecommend;
+  final _InlineLearningActionState action;
 
   const _LearningWeaknessSection({
     required this.weaknesses,
     required this.tasks,
     required this.onCreateTask,
+    required this.onOpenNotes,
+    required this.onRecommend,
+    required this.action,
   });
 
   @override
   Widget build(BuildContext context) {
     final openWeaknesses = weaknesses
-        .where((item) => item.state != 'resolved' && item.status == 'active')
+        .where((item) =>
+            item.status == 'active' &&
+            item.state != 'resolved' &&
+            item.state != 'ignored')
         .toList()
       ..sort((a, b) =>
           _severityRank(a.severity).compareTo(_severityRank(b.severity)));
+    final hasTrackedWeaknesses =
+        weaknesses.any((item) => item.status == 'active');
+    final content = openWeaknesses.isEmpty
+        ? _LearningInsightEmptyState(
+            icon: Icons.track_changes_rounded,
+            tone: hasTrackedWeaknesses
+                ? ProductTone.primary
+                : ProductTone.neutral,
+            title: hasTrackedWeaknesses ? '当前短板已处理' : '还没有待处理短板',
+            message: hasTrackedWeaknesses
+                ? '已解决或暂不处理的短板不会占用主页面。后续新的 JD 匹配、简历诊断或面试复盘会继续沉淀新的差距。'
+                : '完成 JD 匹配、简历诊断或面试复盘后，这里会显示影响岗位匹配的能力缺口，帮助你判断哪些学习任务最值得优先做。',
+            primaryLabel: '从匹配报告生成短板',
+            onPrimary: action.isRunning ? null : onRecommend,
+            secondaryLabel: '查看复盘笔记',
+            onSecondary: onOpenNotes,
+          )
+        : LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 760 ? 2 : 1;
+              final width =
+                  (constraints.maxWidth - (columns - 1) * 10) / columns;
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final weakness in openWeaknesses.take(4))
+                    SizedBox(
+                      width: width,
+                      child: _WeaknessCard(
+                        weakness: weakness,
+                        taskCount: tasks
+                            .where((task) => weakness.relatedTaskIds
+                                .contains(task.learningTaskId))
+                            .length,
+                        onCreateTask: onCreateTask,
+                      ),
+                    ),
+                ],
+              );
+            },
+          );
     return ProductSection(
       title: '短板与证据缺口',
-      subtitle:
-          openWeaknesses.isEmpty ? '暂无高优先短板' : '${openWeaknesses.length} 个待补齐',
+      subtitle: openWeaknesses.isEmpty
+          ? '说明学习任务为什么重要'
+          : '${openWeaknesses.length} 个影响岗位匹配的差距',
       icon: Icons.report_problem_outlined,
       tone: openWeaknesses.isEmpty ? ProductTone.neutral : ProductTone.warning,
-      trailing: TextButton.icon(
-        onPressed: onCreateTask,
-        icon: const Icon(Icons.add_task_rounded, size: 15),
-        label: const Text('转任务'),
-        style: TextButton.styleFrom(
-          foregroundColor: ProductColors.primary,
-          textStyle: AppTheme.ts(fontSize: 11, fontWeight: FontWeight.w900),
-        ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (action.isVisible) ...[
+            _InlineLearningActionNotice(action: action),
+            const SizedBox(height: 10),
+          ],
+          content,
+        ],
       ),
-      child: openWeaknesses.isEmpty
-          ? const _EmptyLearningMessage(
-              message: '暂时没有未解决短板。后续 JD 匹配、面试复盘会把差距沉淀到这里。',
-            )
-          : LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 760 ? 2 : 1;
-                final width =
-                    (constraints.maxWidth - (columns - 1) * 10) / columns;
-                return Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    for (final weakness in openWeaknesses.take(4))
-                      SizedBox(
-                        width: width,
-                        child: _WeaknessCard(
-                          weakness: weakness,
-                          taskCount: tasks
-                              .where((task) => weakness.relatedTaskIds
-                                  .contains(task.learningTaskId))
-                              .length,
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
     );
   }
 }
@@ -1097,15 +3728,19 @@ class _LearningWeaknessSection extends StatelessWidget {
 class _WeaknessCard extends StatelessWidget {
   final CareerWorkbenchWeaknessView weakness;
   final int taskCount;
+  final VoidCallback onCreateTask;
 
   const _WeaknessCard({
     required this.weakness,
     required this.taskCount,
+    required this.onCreateTask,
   });
 
   @override
   Widget build(BuildContext context) {
     final tone = _severityTone(weakness.severity);
+    final style = productToneStyle(tone);
+    final hasTask = taskCount > 0;
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: ProductSurface.softCard(tone: tone),
@@ -1138,6 +3773,27 @@ class _WeaknessCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              ProductTag(
+                label: _weaknessSourceLabel(weakness),
+                tone: ProductTone.neutral,
+              ),
+              ProductTag(
+                label: _weaknessStateLabel(weakness.state),
+                tone: weakness.state == 'improving'
+                    ? ProductTone.primary
+                    : ProductTone.warning,
+              ),
+              ProductTag(
+                label: hasTask ? '$taskCount 个关联任务' : '未转任务',
+                tone: hasTask ? ProductTone.primary : ProductTone.warning,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           Text(
             weakness.description.trim().isEmpty
                 ? '需要补充可验证的学习或项目证据。'
@@ -1151,16 +3807,45 @@ class _WeaknessCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 9),
-          Wrap(
-            spacing: 5,
-            runSpacing: 5,
+          Row(
             children: [
-              for (final tag in weakness.skillTags.take(4))
-                ProductTag(label: tag, tone: ProductTone.purple),
-              ProductTag(
-                label: taskCount == 0 ? '未关联任务' : '$taskCount 个任务',
-                tone:
-                    taskCount == 0 ? ProductTone.warning : ProductTone.primary,
+              Expanded(
+                child: Wrap(
+                  spacing: 5,
+                  runSpacing: 5,
+                  children: [
+                    for (final tag in weakness.skillTags.take(3))
+                      ProductTag(label: tag, tone: ProductTone.purple),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: hasTask ? null : onCreateTask,
+                icon: Icon(
+                  hasTask ? Icons.link_rounded : Icons.add_task_rounded,
+                  size: 14,
+                ),
+                label: Text(hasTask ? '已转任务' : '转成任务'),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 30),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  foregroundColor:
+                      hasTask ? ProductColors.textMuted : style.color,
+                  disabledForegroundColor: ProductColors.textMuted,
+                  side: BorderSide(
+                    color: hasTask
+                        ? ProductColors.border
+                        : style.color.withValues(alpha: 0.3),
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  textStyle: AppTheme.ts(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1172,31 +3857,132 @@ class _WeaknessCard extends StatelessWidget {
 
 class _LearningReviewSection extends StatelessWidget {
   final List<CareerWorkbenchReviewView> reviews;
+  final List<CareerWorkbenchLearningTaskView> tasks;
+  final VoidCallback onRecommend;
+  final _InlineLearningActionState action;
 
-  const _LearningReviewSection({required this.reviews});
+  const _LearningReviewSection({
+    required this.reviews,
+    required this.tasks,
+    required this.onRecommend,
+    required this.action,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final visible = [...reviews]..sort((a, b) => (a.nextReviewAt ?? a.updatedAt)
-        .compareTo(b.nextReviewAt ?? b.updatedAt));
+    final visible = reviews
+        .where((review) =>
+            review.status == 'active' &&
+            review.state != 'done' &&
+            review.state != 'completed' &&
+            review.state != 'cancelled')
+        .toList()
+      ..sort((a, b) => _reviewSortTime(a).compareTo(_reviewSortTime(b)));
+    final doneTasks = tasks.where(_isDoneTask).length;
+    final dueCount = visible.where(_isReviewDue).length;
+    final content = visible.isEmpty
+        ? _LearningInsightEmptyState(
+            icon: Icons.event_repeat_outlined,
+            tone: doneTasks > 0 ? ProductTone.primary : ProductTone.neutral,
+            title: doneTasks > 0 ? '可以安排一次复盘' : '完成任务后可安排复盘',
+            message: doneTasks > 0
+                ? '你已经有完成的学习任务。复盘用于确认是否真的掌握，并把成果沉淀成面试表达或简历证据。'
+                : '这里会在学习任务完成后提醒你回顾重点，避免任务只是打卡完成，却没有真正转化成求职竞争力。',
+            primaryLabel: doneTasks > 0 ? '安排复盘' : null,
+            onPrimary: doneTasks > 0 && !action.isRunning ? onRecommend : null,
+          )
+        : Column(
+            children: [
+              for (final review in visible.take(4)) ...[
+                _ReviewRow(review: review),
+                if (review != visible.take(4).last)
+                  const Divider(height: 16, color: ProductColors.border),
+              ],
+            ],
+          );
     return ProductSection(
       title: '复盘安排',
-      subtitle: visible.isEmpty ? '暂无复盘' : '${visible.length} 条安排',
+      subtitle: visible.isEmpty
+          ? '确认学完后是否真的掌握'
+          : dueCount > 0
+              ? '$dueCount 个今天需要复盘'
+              : '${visible.length} 条待复盘',
       icon: Icons.event_note_outlined,
-      tone: ProductTone.neutral,
-      child: visible.isEmpty
-          ? const _EmptyLearningMessage(
-              message: '暂无复盘安排。完成任务或面试复盘后，可以在这里追踪回顾节奏。',
-            )
-          : Column(
-              children: [
-                for (final review in visible.take(4)) ...[
-                  _ReviewRow(review: review),
-                  if (review != visible.take(4).last)
-                    const Divider(height: 16, color: ProductColors.border),
-                ],
-              ],
-            ),
+      tone: dueCount > 0 ? ProductTone.primary : ProductTone.neutral,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (action.isVisible) ...[
+            _InlineLearningActionNotice(action: action),
+            const SizedBox(height: 10),
+          ],
+          content,
+        ],
+      ),
+    );
+  }
+}
+
+class _LearningBottomInsightGrid extends StatelessWidget {
+  final List<CareerWorkbenchWeaknessView> weaknesses;
+  final List<CareerWorkbenchLearningTaskView> tasks;
+  final List<CareerWorkbenchReviewView> reviews;
+  final VoidCallback onCreateTask;
+  final VoidCallback onOpenNotes;
+  final VoidCallback onWeaknessRecommend;
+  final VoidCallback onReviewRecommend;
+  final _InlineLearningActionState weaknessAction;
+  final _InlineLearningActionState reviewAction;
+
+  const _LearningBottomInsightGrid({
+    required this.weaknesses,
+    required this.tasks,
+    required this.reviews,
+    required this.onCreateTask,
+    required this.onOpenNotes,
+    required this.onWeaknessRecommend,
+    required this.onReviewRecommend,
+    required this.weaknessAction,
+    required this.reviewAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 780;
+        final weakness = _LearningWeaknessSection(
+          weaknesses: weaknesses,
+          tasks: tasks,
+          onCreateTask: onCreateTask,
+          onOpenNotes: onOpenNotes,
+          onRecommend: onWeaknessRecommend,
+          action: weaknessAction,
+        );
+        final review = _LearningReviewSection(
+          reviews: reviews,
+          tasks: tasks,
+          onRecommend: onReviewRecommend,
+          action: reviewAction,
+        );
+        if (!wide) {
+          return Column(
+            children: [
+              weakness,
+              const SizedBox(height: 14),
+              review,
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: weakness),
+            const SizedBox(width: 14),
+            Expanded(child: review),
+          ],
+        );
+      },
     );
   }
 }
@@ -1208,8 +3994,7 @@ class _LearningRightRail extends StatelessWidget {
   final List<CareerWorkbenchLearningTaskView> openTasks;
   final VoidCallback onOpenProjects;
   final VoidCallback onOpenNotes;
-  final VoidCallback onCreateTask;
-  final VoidCallback onRecommend;
+  final ValueChanged<CareerWorkbenchLearningTaskView> onCheckIn;
 
   const _LearningRightRail({
     required this.provider,
@@ -1218,8 +4003,7 @@ class _LearningRightRail extends StatelessWidget {
     required this.openTasks,
     required this.onOpenProjects,
     required this.onOpenNotes,
-    required this.onCreateTask,
-    required this.onRecommend,
+    required this.onCheckIn,
   });
 
   @override
@@ -1233,14 +4017,6 @@ class _LearningRightRail extends StatelessWidget {
           subtitle: openTasks.isEmpty ? '暂无待办' : '${openTasks.length} 个待办',
           icon: Icons.today_outlined,
           tone: ProductTone.primary,
-          trailing: TextButton(
-            onPressed: onRecommend,
-            style: TextButton.styleFrom(
-              foregroundColor: ProductColors.primary,
-              textStyle: AppTheme.ts(fontSize: 11, fontWeight: FontWeight.w900),
-            ),
-            child: const Text('生成建议'),
-          ),
           child: openTasks.isEmpty
               ? const _EmptyLearningMessage(message: '今天没有待推进任务。')
               : Column(
@@ -1252,8 +4028,8 @@ class _LearningRightRail extends StatelessWidget {
                         icon: _taskTypeIcon(task.taskType),
                         tone: _taskStateTone(task.state),
                         badge: careerPriorityLabel(task.priority),
-                        actionLabel: '推进',
-                        onTap: onCreateTask,
+                        actionLabel: '记录',
+                        onTap: () => onCheckIn(task),
                       ),
                       if (task != openTasks.take(4).last)
                         const SizedBox(height: 8),
@@ -1316,24 +4092,33 @@ class _LearningRightRail extends StatelessWidget {
               '${learning.plans.length + learning.tasks.length + learning.weaknesses.length} 条记录',
           icon: Icons.folder_copy_outlined,
           tone: ProductTone.purple,
-          child: Column(
+          child: GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 1.9,
             children: [
               _AssetCountRow(
                 label: '路线',
                 value: learning.plans.length,
                 icon: Icons.route_outlined,
               ),
-              const SizedBox(height: 8),
               _AssetCountRow(
                 label: '任务',
                 value: learning.tasks.length,
                 icon: Icons.fact_check_outlined,
               ),
-              const SizedBox(height: 8),
               _AssetCountRow(
                 label: '短板',
                 value: learning.weaknesses.length,
                 icon: Icons.report_problem_outlined,
+              ),
+              _AssetCountRow(
+                label: '复盘',
+                value: learning.reviews.length,
+                icon: Icons.event_repeat_outlined,
               ),
             ],
           ),
@@ -1457,12 +4242,13 @@ class _ReviewRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tone = _reviewDisplayTone(review);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ProductIconTile(
           icon: Icons.event_repeat_outlined,
-          tone: _reviewTone(review.state),
+          tone: tone,
           size: 34,
         ),
         const SizedBox(width: 10),
@@ -1480,7 +4266,19 @@ class _ReviewRow extends StatelessWidget {
                   color: ProductColors.text,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  ProductTag(label: _reviewDueLabel(review), tone: tone),
+                  ProductTag(
+                    label: _reviewTypeLabel(review.reviewType),
+                    tone: ProductTone.neutral,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
               Text(
                 careerFirstNonEmpty(
                   [
@@ -1503,9 +4301,25 @@ class _ReviewRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        ProductTag(
-          label: _reviewStateLabel(review.state),
-          tone: _reviewTone(review.state),
+        OutlinedButton(
+          onPressed: () {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(
+                content: Text('复盘记录流程还未接入；当前只能查看复盘安排。'),
+              ),
+            );
+          },
+          style: OutlinedButton.styleFrom(
+            foregroundColor: ProductColors.primary,
+            side: const BorderSide(color: ProductColors.border),
+            minimumSize: const Size(0, 30),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            textStyle: AppTheme.ts(fontSize: 11, fontWeight: FontWeight.w900),
+          ),
+          child: const Text('开始复盘'),
         ),
       ],
     );
@@ -1574,63 +4388,43 @@ class _AssetCountRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        ProductIconTile(icon: icon, tone: ProductTone.purple, size: 32),
-        const SizedBox(width: 9),
-        Expanded(
-          child: Text(
-            label,
-            style: AppTheme.ts(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w800,
-              color: ProductColors.textSecondary,
-            ),
-          ),
-        ),
-        Text(
-          '$value',
-          style: AppTheme.ts(
-            fontSize: 14,
-            fontWeight: FontWeight.w900,
-            color: ProductColors.text,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _CheckLine extends StatelessWidget {
-  final String text;
-  final ProductTone tone;
-
-  const _CheckLine({
-    required this.text,
-    required this.tone,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final style = productToneStyle(tone);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+      decoration: BoxDecoration(
+        color: ProductColors.surfaceSoft,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: ProductColors.border),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.check_circle_outline_rounded,
-              size: 14, color: style.color),
-          const SizedBox(width: 7),
+          ProductIconTile(icon: icon, tone: ProductTone.purple, size: 30),
+          const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              text,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: AppTheme.ts(
-                fontSize: 11.2,
-                height: 1.38,
-                color: ProductColors.textSecondary,
-              ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: ProductColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$value',
+                  style: AppTheme.ts(
+                    fontSize: 17,
+                    height: 1,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.text,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1657,6 +4451,224 @@ class _EmptyLearningMessage extends StatelessWidget {
           height: 1.45,
           color: ProductColors.textSecondary,
         ),
+      ),
+    );
+  }
+}
+
+enum _InlineLearningActionStatus { idle, running, completed, failed }
+
+class _InlineLearningActionState {
+  final _InlineLearningActionStatus status;
+  final String message;
+
+  const _InlineLearningActionState._(this.status, this.message);
+
+  const _InlineLearningActionState.idle()
+      : this._(_InlineLearningActionStatus.idle, '');
+
+  const _InlineLearningActionState.running(String message)
+      : this._(_InlineLearningActionStatus.running, message);
+
+  const _InlineLearningActionState.completed(String message)
+      : this._(_InlineLearningActionStatus.completed, message);
+
+  const _InlineLearningActionState.failed(String message)
+      : this._(_InlineLearningActionStatus.failed, message);
+
+  bool get isVisible => status != _InlineLearningActionStatus.idle;
+  bool get isRunning => status == _InlineLearningActionStatus.running;
+
+  ProductTone get tone {
+    return switch (status) {
+      _InlineLearningActionStatus.failed => ProductTone.danger,
+      _InlineLearningActionStatus.idle => ProductTone.neutral,
+      _ => ProductTone.primary,
+    };
+  }
+
+  IconData get icon {
+    return switch (status) {
+      _InlineLearningActionStatus.completed =>
+        Icons.check_circle_outline_rounded,
+      _InlineLearningActionStatus.failed => Icons.error_outline_rounded,
+      _ => Icons.auto_awesome_rounded,
+    };
+  }
+
+  String get title {
+    return switch (status) {
+      _InlineLearningActionStatus.running => '正在生成',
+      _InlineLearningActionStatus.completed => '生成完成',
+      _InlineLearningActionStatus.failed => '生成失败',
+      _InlineLearningActionStatus.idle => '',
+    };
+  }
+}
+
+class _InlineLearningActionNotice extends StatelessWidget {
+  final _InlineLearningActionState action;
+
+  const _InlineLearningActionNotice({required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = productToneStyle(action.tone);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+      decoration: ProductSurface.softCard(tone: action.tone),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: style.soft,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: style.color.withValues(alpha: 0.22)),
+            ),
+            child: action.isRunning
+                ? Padding(
+                    padding: const EdgeInsets.all(7),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: style.color,
+                    ),
+                  )
+                : Icon(action.icon, size: 16, color: style.color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  action.title,
+                  style: AppTheme.ts(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.text,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  action.message,
+                  style: AppTheme.ts(
+                    fontSize: 11.5,
+                    height: 1.45,
+                    color: ProductColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LearningInsightEmptyState extends StatelessWidget {
+  final IconData icon;
+  final ProductTone tone;
+  final String title;
+  final String message;
+  final String? primaryLabel;
+  final VoidCallback? onPrimary;
+  final String? secondaryLabel;
+  final VoidCallback? onSecondary;
+
+  const _LearningInsightEmptyState({
+    required this.icon,
+    required this.tone,
+    required this.title,
+    required this.message,
+    this.primaryLabel,
+    this.onPrimary,
+    this.secondaryLabel,
+    this.onSecondary,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPrimary =
+        primaryLabel?.trim().isNotEmpty == true && onPrimary != null;
+    final hasSecondary =
+        secondaryLabel?.trim().isNotEmpty == true && onSecondary != null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+      decoration: ProductSurface.softCard(tone: tone),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ProductIconTile(icon: icon, tone: tone, size: 34),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: AppTheme.ts(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      message,
+                      style: AppTheme.ts(
+                        fontSize: 12,
+                        height: 1.45,
+                        color: ProductColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (hasPrimary || hasSecondary) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (hasPrimary)
+                  ElevatedButton.icon(
+                    onPressed: onPrimary,
+                    icon: const Icon(Icons.auto_awesome_rounded, size: 15),
+                    label: Text(primaryLabel!.trim()),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ProductColors.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      minimumSize: const Size(0, 34),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      textStyle: AppTheme.ts(
+                          fontSize: 12, fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                if (hasSecondary)
+                  OutlinedButton(
+                    onPressed: onSecondary,
+                    style: _outlineButtonStyle(),
+                    child: Text(secondaryLabel!.trim()),
+                  ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -1722,8 +4734,9 @@ class _TaskLaneData {
   final String title;
   final List<CareerWorkbenchLearningTaskView> tasks;
   final ProductTone tone;
+  final String targetState;
 
-  const _TaskLaneData(this.title, this.tasks, this.tone);
+  const _TaskLaneData(this.title, this.tasks, this.tone, this.targetState);
 }
 
 CareerLearningSummaryView _emptyLearning() {
@@ -1767,10 +4780,175 @@ bool _isDoneTask(CareerWorkbenchLearningTaskView task) {
   return task.state == 'done' || task.state == 'completed';
 }
 
+String _taskLaneState(String state) {
+  return switch (state.trim()) {
+    'doing' || 'in_progress' => 'doing',
+    'done' || 'completed' => 'done',
+    _ => 'todo',
+  };
+}
+
+String _taskLaneTitle(String state) {
+  return switch (state.trim()) {
+    'doing' || 'in_progress' => '进行中',
+    'done' || 'completed' => '已完成',
+    _ => '待推进',
+  };
+}
+
 int _progressPercent(int open, int done) {
   final total = open + done;
   if (total <= 0) return 0;
   return ((done / total) * 100).round().clamp(0, 100);
+}
+
+List<_RoadmapStepData> _buildRoadmapSteps(
+  CareerLearningSummaryView learning,
+  int overallProgress,
+) {
+  final hasLearningData =
+      learning.plans.isNotEmpty || learning.tasks.isNotEmpty;
+  final foundation = _roadmapPhaseProgress(
+    learning,
+    phase: 1,
+    overallProgress: overallProgress,
+    fallback: hasLearningData ? math.min(80, overallProgress).toInt() : 0,
+  );
+  final rag = _roadmapPhaseProgress(
+    learning,
+    phase: 2,
+    overallProgress: overallProgress,
+    fallback: hasLearningData ? math.min(65, overallProgress).toInt() : 0,
+  );
+  final agent = _roadmapPhaseProgress(
+    learning,
+    phase: 3,
+    overallProgress: overallProgress,
+    fallback: hasLearningData ? math.min(45, overallProgress).toInt() : 0,
+  );
+  final interview = _roadmapPhaseProgress(
+    learning,
+    phase: 4,
+    overallProgress: overallProgress,
+    fallback: learning.reviews.isNotEmpty ? math.min(35, overallProgress) : 0,
+  );
+  return [
+    _RoadmapStepData(
+      index: 1,
+      title: '基础夯实',
+      subtitle: _roadmapSubtitle(
+        learning,
+        fallback: 'Python / 算法 / 后端基础',
+        planIndex: 0,
+      ),
+      progress: foundation,
+      tone: ProductTone.primary,
+    ),
+    _RoadmapStepData(
+      index: 2,
+      title: 'LangChain / RAG',
+      subtitle: '核心组件与检索增强',
+      progress: rag,
+      tone: ProductTone.info,
+    ),
+    _RoadmapStepData(
+      index: 3,
+      title: 'Agent 工程化',
+      subtitle: '工具调用与流程编排',
+      progress: agent,
+      tone: ProductTone.purple,
+    ),
+    _RoadmapStepData(
+      index: 4,
+      title: '面试冲刺',
+      subtitle: '项目表达与面试准备',
+      progress: interview,
+      tone: ProductTone.neutral,
+    ),
+  ];
+}
+
+String _roadmapSubtitle(
+  CareerLearningSummaryView learning, {
+  required String fallback,
+  required int planIndex,
+}) {
+  if (learning.plans.length > planIndex) {
+    final plan = learning.plans[planIndex];
+    final tags = plan.focusSkillTags.take(3).join(' / ');
+    return careerFirstNonEmpty(
+      [tags, plan.targetRole, plan.description, plan.progressSummary],
+      fallback: fallback,
+    );
+  }
+  return fallback;
+}
+
+int _roadmapPhaseProgress(
+  CareerLearningSummaryView learning, {
+  required int phase,
+  required int overallProgress,
+  required int fallback,
+}) {
+  final related = learning.tasks
+      .where((task) => _taskRoadmapPhase(task) == phase)
+      .toList(growable: false);
+  if (related.isEmpty) {
+    return _capRoadmapProgress(fallback, overallProgress, learning);
+  }
+  final done = related.where(_isDoneTask).length;
+  final open = related.where(_isOpenTask).length;
+  return _capRoadmapProgress(
+      _progressPercent(open, done), overallProgress, learning);
+}
+
+int _capRoadmapProgress(
+  int progress,
+  int overallProgress,
+  CareerLearningSummaryView learning,
+) {
+  final normalized = progress.clamp(0, 100).toInt();
+  if (learning.openTaskCount <= 0) return normalized;
+  return math.min(normalized, overallProgress.clamp(0, 99)).toInt();
+}
+
+int _taskRoadmapPhase(CareerWorkbenchLearningTaskView task) {
+  final haystack = [
+    task.title,
+    task.description,
+    task.taskType,
+    ...task.skillTags,
+    ...task.successCriteria,
+  ].join(' ').toLowerCase();
+  if (_containsAny(haystack, const ['面试', '复盘', 'mock', '题', 'interview'])) {
+    return 4;
+  }
+  if (_containsAny(
+    haystack,
+    const ['agent', '工具', 'workflow', 'langgraph', '多 agent'],
+  )) {
+    return 3;
+  }
+  if (_containsAny(
+    haystack,
+    const ['rag', 'langchain', '检索', '向量', '知识库', 'retrieval'],
+  )) {
+    return 2;
+  }
+  return 1;
+}
+
+bool _containsAny(String value, List<String> keywords) {
+  return keywords.any((keyword) => value.contains(keyword.toLowerCase()));
+}
+
+int _taskVisualProgress(CareerWorkbenchLearningTaskView task) {
+  return switch (task.state.trim()) {
+    'doing' || 'in_progress' => task.progressNotes.trim().isEmpty ? 38 : 62,
+    'blocked' => 28,
+    'done' || 'completed' => 100,
+    _ => 12,
+  };
 }
 
 String _learningJudgement(CareerLearningSummaryView learning) {
@@ -1869,11 +5047,78 @@ String _severityLabel(String severity) {
   };
 }
 
+String _weaknessStateLabel(String state) {
+  return switch (state.trim()) {
+    'improving' => '处理中',
+    'resolved' => '已补齐',
+    'ignored' => '暂不处理',
+    _ => '待处理',
+  };
+}
+
+String _weaknessSourceLabel(CareerWorkbenchWeaknessView weakness) {
+  final type = weakness.weaknessType.trim();
+  if (type.contains('interview') || type.contains('面试')) {
+    return '来自面试复盘';
+  }
+  if (type.contains('resume') || type.contains('简历')) {
+    return '来自简历诊断';
+  }
+  if (type.contains('project') || type.contains('项目')) {
+    return '来自项目差距';
+  }
+  if (type.contains('skill') || type.contains('gap')) {
+    return '来自岗位匹配';
+  }
+  return '来自学习诊断';
+}
+
 ProductTone _severityTone(String severity) {
   return switch (severity.trim()) {
     'critical' || 'high' => ProductTone.warning,
     'low' => ProductTone.info,
     _ => ProductTone.neutral,
+  };
+}
+
+int _reviewSortTime(CareerWorkbenchReviewView review) {
+  final date = review.nextReviewAt ?? review.reviewAt ?? review.updatedAt;
+  return date.millisecondsSinceEpoch;
+}
+
+bool _isReviewDue(CareerWorkbenchReviewView review) {
+  final dueAt = review.nextReviewAt ?? review.reviewAt;
+  if (dueAt == null) return false;
+  final now = DateTime.now();
+  final todayEnd = DateTime(now.year, now.month, now.day, 23, 59, 59);
+  return !dueAt.isAfter(todayEnd);
+}
+
+ProductTone _reviewDisplayTone(CareerWorkbenchReviewView review) {
+  if (_isReviewDue(review)) return ProductTone.primary;
+  return _reviewTone(review.state);
+}
+
+String _reviewDueLabel(CareerWorkbenchReviewView review) {
+  final dueAt = review.nextReviewAt ?? review.reviewAt;
+  if (dueAt == null) return _reviewStateLabel(review.state);
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final date = DateTime(dueAt.year, dueAt.month, dueAt.day);
+  final diff = date.difference(today).inDays;
+  if (diff < 0) return '已到期';
+  if (diff == 0) return '今天复盘';
+  if (diff == 1) return '明天复盘';
+  return careerFormatDateTime(dueAt);
+}
+
+String _reviewTypeLabel(String type) {
+  return switch (type.trim()) {
+    'spaced_repetition' => '间隔复盘',
+    'interview_rehearsal' => '面试演练',
+    'resume_review' => '简历复盘',
+    'project_drill' => '项目演练',
+    _ => '自定义复盘',
   };
 }
 
@@ -1894,12 +5139,24 @@ ProductTone _reviewTone(String state) {
   };
 }
 
-ButtonStyle _outlineButtonStyle() {
+ButtonStyle _outlineButtonStyle(
+    {Color foregroundColor = ProductColors.primary}) {
   return OutlinedButton.styleFrom(
-    foregroundColor: ProductColors.primary,
+    foregroundColor: foregroundColor,
     side: const BorderSide(color: ProductColors.borderStrong),
     padding: const EdgeInsets.symmetric(horizontal: 12),
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     textStyle: AppTheme.ts(fontSize: 12, fontWeight: FontWeight.w900),
+  );
+}
+
+ButtonStyle _primaryCompactButtonStyle() {
+  return ElevatedButton.styleFrom(
+    backgroundColor: ProductColors.primary,
+    foregroundColor: Colors.white,
+    elevation: 0,
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+    textStyle: AppTheme.ts(fontSize: 11, fontWeight: FontWeight.w900),
   );
 }

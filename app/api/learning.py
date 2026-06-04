@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.deps import get_learning_store
+from app.api.deps import get_career_product_store, get_learning_store, get_model_client
 from app.api.presenters import (
     learning_plan_view,
     learning_task_view,
@@ -19,6 +19,8 @@ from app.api.presenters import (
 from app.api.responses import ok
 from app.core.errors import ValidationError
 from app.core.time import app_now
+from app.career.store import CareerProductStore
+from app.domain.protocols import ChatModelClient
 from app.learning.models import (
     LearningPlan,
     LearningRecordStatus,
@@ -34,6 +36,8 @@ from app.schemas.learning import (
     LearningPlanUpdateRequest,
     LearningPlanView,
     LearningTaskCreateRequest,
+    LearningTaskDraftGenerateRequest,
+    LearningTaskDraftGenerateResponse,
     LearningTaskStateUpdateRequest,
     LearningTaskUpdateRequest,
     LearningTaskView,
@@ -47,6 +51,7 @@ from app.schemas.learning import (
     WeaknessTrackerUpdateRequest,
     WeaknessTrackerView,
 )
+from app.services.learning_task_draft_service import LearningTaskDraftService
 
 __all__ = ["admin_router", "router"]
 
@@ -199,6 +204,24 @@ def create_learning_task(
         progress_notes=request.progress_notes,
     )
     return ok(learning_task_view(store.save_learning_task(record)))
+
+
+@admin_router.post(
+    "/task-drafts/generate",
+    response_model=StandardResponse[LearningTaskDraftGenerateResponse],
+)
+def generate_learning_task_drafts(
+    request: LearningTaskDraftGenerateRequest,
+    career_store: CareerProductStore = Depends(get_career_product_store),
+    learning_store: LearningStore = Depends(get_learning_store),
+    model_client: ChatModelClient = Depends(get_model_client),
+) -> StandardResponse[LearningTaskDraftGenerateResponse]:
+    service = LearningTaskDraftService(
+        career_store=career_store,
+        learning_store=learning_store,
+        model_client=model_client,
+    )
+    return ok(service.generate(request))
 
 
 @router.get("/tasks/{learning_task_id}", response_model=StandardResponse[LearningTaskView])
@@ -589,4 +612,3 @@ def _new_review_schedule_id() -> str:
 
 def _placeholder_time() -> datetime:
     return app_now()
-

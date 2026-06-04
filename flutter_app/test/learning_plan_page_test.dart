@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resume_agent_app/core/models/api_models.dart';
+import 'package:resume_agent_app/core/providers/chat_provider.dart';
 import 'package:resume_agent_app/core/services/api_service.dart';
 import 'package:resume_agent_app/features/career_workbench/career_workbench_provider.dart';
 import 'package:resume_agent_app/features/learning/learning_plan_page.dart';
@@ -23,6 +24,7 @@ void main() {
           careerWorkbenchProvider.overrideWith(
             (ref) => CareerWorkbenchProvider(api),
           ),
+          apiServiceProvider.overrideWithValue(api),
         ],
         child: MaterialApp(
           home: Scaffold(
@@ -41,29 +43,26 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('学习计划'), findsOneWidget);
-    expect(find.text('补短板'), findsOneWidget);
     expect(find.text('当前学习状态'), findsOneWidget);
     expect(find.text('关联求职项目'), findsOneWidget);
 
-    await tester.tap(find.text('生成建议').first);
-    await tester.pump();
+    await tester.tap(find.text('AI 生成任务草案').last);
+    await tester.pumpAndSettle();
 
-    expect(sentPrompt, contains('application_learning_plan'));
-    expect(sentAction?.origin, 'learning_plan');
-    expect(sentAction?.actionType, 'learning_recommend');
+    expect(sentPrompt, isNull);
+    expect(sentAction, isNull);
+    expect(find.text('AI 生成任务草案'), findsWidgets);
+    expect(find.text('补齐工具调用幂等案例'), findsOneWidget);
 
     expect(find.text('学习路线'), findsWidgets);
-    expect(find.text('多 Agent 后端工程化补强路线'), findsWidgets);
+    expect(find.text('LangChain / RAG'), findsWidgets);
 
     expect(find.text('补齐任务编排状态机实践'), findsWidgets);
 
     expect(find.text('生产级任务编排经验不足'), findsWidgets);
 
-    await tester.drag(find.byType(ListView).first, const Offset(0, -900));
-    await tester.pumpAndSettle();
-
-    expect(find.text('系统设计复盘'), findsOneWidget);
+    expect(find.text('复盘安排'), findsWidgets);
+    await tester.pump(const Duration(seconds: 5));
   });
 
   testWidgets('学习任务记录进度先收集打卡内容再发送结构化动作', (tester) async {
@@ -82,6 +81,7 @@ void main() {
           careerWorkbenchProvider.overrideWith(
             (ref) => CareerWorkbenchProvider(api),
           ),
+          apiServiceProvider.overrideWithValue(api),
         ],
         child: MaterialApp(
           home: Scaffold(
@@ -100,13 +100,13 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(OutlinedButton, '记录进度'), findsWidgets);
-    await tester.tap(find.widgetWithText(OutlinedButton, '记录进度').first);
+    expect(find.widgetWithText(ElevatedButton, '记录进度'), findsWidgets);
+    await tester.tap(find.widgetWithText(ElevatedButton, '记录进度').first);
     await tester.pumpAndSettle();
 
     expect(sentPrompt, isNull);
     expect(find.text('记录学习进度'), findsOneWidget);
-    expect(find.textContaining('Agent 只负责按内容写入'), findsOneWidget);
+    expect(find.textContaining('系统会按你提交的内容直接保存'), findsOneWidget);
 
     await tester.enterText(
       find.byKey(const Key('learning_checkin_summary_field')),
@@ -126,23 +126,24 @@ void main() {
     );
     await tester.tap(find.text('进行中').last);
     await tester.pump();
-    await tester.tap(find.text('交给 Agent 写入'));
+    await tester.tap(find.text('保存进度'));
     await tester.pumpAndSettle();
 
-    expect(sentAction?.origin, 'learning_plan');
-    expect(sentAction?.actionType, 'learning_checkin');
-    expect(sentPrompt, contains('learning_task_orchestration'));
-    expect(sentPrompt, contains('调用 learning_checkin_create'));
-    expect(sentPrompt, contains('summary: 完成了任务状态机复盘'));
-    expect(sentPrompt, contains('blockers: RAG 压测场景'));
-    expect(sentPrompt, contains('next_action: 明天整理成一页系统设计说明'));
-    expect(sentPrompt, contains('minutes_spent: 45'));
-    expect(sentPrompt, contains('state_change: doing'));
+    expect(sentPrompt, isNull);
+    expect(sentAction, isNull);
+    expect(api.lastCheckin?['learning_task_id'], 'learning_task_orchestration');
+    expect(api.lastCheckin?['summary'], contains('完成了任务状态机复盘'));
+    expect(api.lastCheckin?['blockers'], contains('RAG 压测场景的证据还不够完整。'));
+    expect(api.lastCheckin?['next_action'], '明天整理成一页系统设计说明。');
+    expect(api.lastCheckin?['minutes_spent'], 45);
+    expect(api.lastUpdatedTaskState, 'doing');
   });
 }
 
 class _FakeLearningPlanApi extends ApiService {
   final now = DateTime(2026, 5, 16, 10, 49);
+  Map<String, dynamic>? lastCheckin;
+  String? lastUpdatedTaskState;
 
   _FakeLearningPlanApi() : super(baseUrl: 'http://localhost');
 
@@ -250,6 +251,65 @@ class _FakeLearningPlanApi extends ApiService {
         progressNotes: '来源：面试复盘建议',
         updatedAt: now.subtract(const Duration(hours: 2)),
       );
+
+  @override
+  Future<List<LearningTaskDraftView>> generateLearningTaskDrafts({
+    required String applicationId,
+    int maxDrafts = 3,
+    String focus = "general",
+    bool excludeExisting = true,
+  }) async {
+    return [
+      LearningTaskDraftView(
+        draftId: 'draft_tool_idempotency',
+        title: '补齐工具调用幂等案例',
+        description: '围绕 tool gateway 和任务账本整理一套可复用的项目说明。',
+        taskType: 'project',
+        priority: 'high',
+        estimatedMinutes: 60,
+        skillTags: const ['工具幂等', 'Agent'],
+        successCriteria: const ['形成项目说明', '补充到简历版本'],
+        reason: '岗位匹配短板集中在生产级任务编排。',
+        sourceRefs: const ['fit_learning'],
+      ),
+    ];
+  }
+
+  @override
+  Future<Map<String, dynamic>> createLearningCheckin({
+    required String sourceSessionId,
+    required String learningTaskId,
+    String? learningPlanId,
+    int minutesSpent = 0,
+    String progressState = "in_progress",
+    String summary = "",
+    List<String> blockers = const [],
+    String nextAction = "",
+    List<String> evidenceRefs = const [],
+  }) async {
+    lastCheckin = {
+      'source_session_id': sourceSessionId,
+      'learning_task_id': learningTaskId,
+      'learning_plan_id': learningPlanId,
+      'minutes_spent': minutesSpent,
+      'progress_state': progressState,
+      'summary': summary,
+      'blockers': blockers,
+      'next_action': nextAction,
+      'evidence_refs': evidenceRefs,
+    };
+    return lastCheckin!;
+  }
+
+  @override
+  Future<CareerWorkbenchLearningTaskView> updateLearningTaskState({
+    required String learningTaskId,
+    required String state,
+    DateTime? completedAt,
+  }) async {
+    lastUpdatedTaskState = state;
+    return learningTaskId == _doingTask.learningTaskId ? _doingTask : _todoTask;
+  }
 
   CareerWorkbenchWeaknessView get _weakness => CareerWorkbenchWeaknessView(
         status: 'active',

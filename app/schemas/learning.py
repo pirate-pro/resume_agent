@@ -11,6 +11,9 @@ __all__ = [
     "LearningPlanUpdateRequest",
     "LearningPlanView",
     "LearningTaskCreateRequest",
+    "LearningTaskDraftGenerateRequest",
+    "LearningTaskDraftGenerateResponse",
+    "LearningTaskDraftView",
     "LearningTaskStateUpdateRequest",
     "LearningTaskUpdateRequest",
     "LearningTaskView",
@@ -73,6 +76,30 @@ class LearningTaskView(LearningRecordMetaView):
     output_artifact_id: str | None = None
     success_criteria: list[str] = Field(default_factory=list)
     progress_notes: str = ""
+
+
+class LearningTaskDraftGenerateRequest(BaseModel):
+    application_id: str
+    max_drafts: int = Field(default=3, ge=1, le=5)
+    focus: str = "general"
+    exclude_existing: bool = True
+
+
+class LearningTaskDraftView(BaseModel):
+    draft_id: str
+    title: str
+    description: str = ""
+    task_type: str = "custom"
+    priority: str = "medium"
+    estimated_minutes: int = 0
+    skill_tags: list[str] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+    reason: str = ""
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class LearningTaskDraftGenerateResponse(BaseModel):
+    drafts: list[LearningTaskDraftView] = Field(default_factory=list)
 
 
 class ProgressCheckinView(LearningRecordMetaView):
@@ -325,4 +352,3 @@ class ReviewScheduleUpdateRequest(BaseModel):
     last_reviewed_at: datetime | None = None
     next_review_at: datetime | None = None
     summary: str | None = None
-

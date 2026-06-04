@@ -5,7 +5,7 @@ import '../../../shared/theme/app_theme.dart';
 import '../../../shared/theme/product_tokens.dart';
 import '../../../shared/widgets/product_components.dart';
 
-Future<String?> showLearningCheckinSheet(
+Future<LearningCheckinDraft?> showLearningCheckinSheet(
   BuildContext context, {
   required CareerWorkbenchLearningTaskView task,
 }) {
@@ -15,13 +15,11 @@ Future<String?> showLearningCheckinSheet(
   final minutesController = TextEditingController();
   var nextState = '';
   var error = '';
-  String? detail;
+  LearningCheckinDraft? draft;
 
-  return showModalBottomSheet<void>(
+  return showDialog<void>(
     context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    backgroundColor: Colors.transparent,
+    barrierDismissible: false,
     builder: (sheetContext) {
       return StatefulBuilder(
         builder: (context, setSheetState) {
@@ -40,8 +38,7 @@ Future<String?> showLearningCheckinSheet(
                       rawMinutes.replaceAll(RegExp(r'[^0-9]'), ''),
                     ) ??
                     0;
-            detail = _learningCheckinDetail(
-              task: task,
+            draft = LearningCheckinDraft(
               summary: summary,
               blockers: blockers,
               nextAction: nextAction,
@@ -52,14 +49,18 @@ Future<String?> showLearningCheckinSheet(
           }
 
           final bottom = MediaQuery.viewInsetsOf(context).bottom;
-          return SafeArea(
-            top: false,
+          return Dialog(
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            backgroundColor: Colors.transparent,
             child: Padding(
-              padding: EdgeInsets.fromLTRB(12, 0, 12, 12 + bottom),
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 760),
+              padding: EdgeInsets.only(bottom: bottom),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 640,
+                  maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.88,
+                ),
+                child: SingleChildScrollView(
                   child: Container(
                     decoration: AppTheme.floatingPanelDecoration(
                       radius: 24,
@@ -94,7 +95,7 @@ Future<String?> showLearningCheckinSheet(
                                     ),
                                     const SizedBox(height: 3),
                                     Text(
-                                      '先填写本次 check-in；Agent 只负责按内容写入，不会凭空判断进度。',
+                                      '先填写本次 check-in；系统会按你提交的内容直接保存。',
                                       style: AppTheme.ts(
                                         fontSize: 11.2,
                                         color: ProductColors.textMuted,
@@ -141,14 +142,24 @@ Future<String?> showLearningCheckinSheet(
                                   ),
                                 ),
                                 const SizedBox(height: 4),
-                                Text(
-                                  '当前状态：${_taskStateLabel(task.state)} · ${task.learningTaskId}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: AppTheme.ts(
-                                    fontSize: 11,
-                                    color: ProductColors.textMuted,
-                                  ),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 6,
+                                  children: [
+                                    ProductTag(
+                                      label: _taskStateLabel(task.state),
+                                      tone: ProductTone.primary,
+                                    ),
+                                    ProductTag(
+                                      label: '进度 ${_taskProgress(task)}%',
+                                      tone: ProductTone.info,
+                                    ),
+                                    if (task.estimatedMinutes > 0)
+                                      ProductTag(
+                                        label: '预计 ${task.estimatedMinutes} 分钟',
+                                        tone: ProductTone.neutral,
+                                      ),
+                                  ],
                                 ),
                               ],
                             ),
@@ -293,7 +304,7 @@ Future<String?> showLearningCheckinSheet(
                                   Icons.arrow_forward_rounded,
                                   size: 16,
                                 ),
-                                label: const Text('交给 Agent 写入'),
+                                label: const Text('保存进度'),
                                 style: FilledButton.styleFrom(
                                   backgroundColor: ProductColors.primary,
                                   foregroundColor: Colors.white,
@@ -322,7 +333,23 @@ Future<String?> showLearningCheckinSheet(
       nextActionController.dispose();
       minutesController.dispose();
     });
-  }).then((_) => detail);
+  }).then((_) => draft);
+}
+
+class LearningCheckinDraft {
+  final String summary;
+  final String blockers;
+  final String nextAction;
+  final int minutes;
+  final String nextState;
+
+  const LearningCheckinDraft({
+    required this.summary,
+    required this.blockers,
+    required this.nextAction,
+    required this.minutes,
+    required this.nextState,
+  });
 }
 
 class _CheckinChoice {
@@ -442,32 +469,6 @@ InputDecoration _inputDecoration(String label) {
   );
 }
 
-String _learningCheckinDetail({
-  required CareerWorkbenchLearningTaskView task,
-  required String summary,
-  required String blockers,
-  required String nextAction,
-  required int minutes,
-  required String nextState,
-}) {
-  return '''
-请记录学习任务今日进度。
-
-任务信息：
-- learning_task_id: ${task.learningTaskId}
-- title: ${task.title}
-- current_state: ${task.state}
-
-进度内容：
-${summary.trim().isEmpty ? "" : "- summary: ${summary.trim()}\n"}${blockers.trim().isEmpty ? "" : "- blockers: ${blockers.trim()}\n"}${nextAction.trim().isEmpty ? "" : "- next_action: ${nextAction.trim()}\n"}${minutes <= 0 ? "" : "- minutes_spent: $minutes\n"}${nextState.trim().isEmpty ? "- state_change: 不变\n" : "- state_change: $nextState\n"}
-执行要求：
-1. 先读取并定位该 LearningTask。
-2. 调用 learning_checkin_create 记录本次进度。
-3. 只有 state_change 不是“不变”时，才调用 learning_task_update_state。
-4. 不要自动写 Note、CareerApplication、WeaknessTracker 或 memory。
-''';
-}
-
 String _taskStateLabel(String state) {
   return switch (state.trim()) {
     'todo' => '待办',
@@ -476,5 +477,20 @@ String _taskStateLabel(String state) {
     'blocked' => '受阻',
     'cancelled' => '已取消',
     _ => '待推进',
+  };
+}
+
+int _taskProgress(CareerWorkbenchLearningTaskView task) {
+  final notes = task.progressNotes;
+  final match = RegExp(r'(\d{1,3})\s*%').firstMatch(notes);
+  if (match != null) {
+    final value = int.tryParse(match.group(1) ?? '');
+    if (value != null) return value.clamp(0, 100).toInt();
+  }
+  return switch (task.state.trim()) {
+    'done' || 'completed' => 100,
+    'doing' || 'in_progress' => 62,
+    'blocked' => 35,
+    _ => 0,
   };
 }
