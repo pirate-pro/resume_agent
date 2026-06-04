@@ -43,20 +43,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('笔记'), findsOneWidget);
-    expect(find.text('知识沉淀'), findsOneWidget);
+    expect(find.textContaining('知识沉淀'), findsWidgets);
     expect(find.text('笔记库'), findsOneWidget);
     expect(find.text('投递准备记录'), findsWidgets);
     expect(find.text('AI Agent 面试复盘'), findsWidgets);
-    expect(find.byKey(const Key('notes_markdown_preview')), findsOneWidget);
     expect(find.textContaining('面试关注点'), findsWidgets);
 
-    await tester.tap(find.text('复盘整理').first);
-    await tester.pump();
-    expect(sentPrompt, contains('application_notes'));
-    expect(sentAction?.origin, 'notes_library');
-    expect(sentAction?.actionType, 'note_create');
+    await tester.tap(find.text('整理复盘').first);
+    await tester.pumpAndSettle();
+    expect(sentPrompt, isNull);
+    expect(sentAction, isNull);
+    expect(find.text('整理成复盘草案'), findsWidgets);
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
 
-    await tester.tap(find.text('编辑').last);
+    await tester.tap(find.byKey(const Key('notes_reader_header_edit_button')));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const Key('notes_body_field')),
@@ -66,8 +67,8 @@ void main() {
       find.byKey(const Key('notes_summary_field')),
       '已补充面试关注点。',
     );
-    await tester.ensureVisible(find.text('保存').last);
-    await tester.tap(find.text('保存').last);
+    await tester.ensureVisible(find.text('保存笔记').last);
+    await tester.tap(find.text('保存笔记').last);
     await tester.pumpAndSettle();
 
     expect(api.updatedNoteBodies.last, contains('更新后的投递准备'));
@@ -83,8 +84,8 @@ void main() {
       find.byKey(const Key('notes_body_field')),
       '# 系统设计追问记录\n\n- 解释任务状态机和工具幂等。',
     );
-    await tester.ensureVisible(find.text('保存').last);
-    await tester.tap(find.text('保存').last);
+    await tester.ensureVisible(find.text('保存笔记').last);
+    await tester.tap(find.text('保存笔记').last);
     await tester.pumpAndSettle();
 
     expect(api.createdNoteTitles.last, '系统设计追问记录');
