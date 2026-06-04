@@ -7,7 +7,7 @@ import 'package:resume_agent_app/features/career_workbench/career_workbench_prov
 import 'package:resume_agent_app/features/resumes/resume_library_page.dart';
 
 void main() {
-  testWidgets('简历资料页展示版本、预览、洞察并发送生成版本动作', (tester) async {
+  testWidgets('简历资料页展示版本、预览、洞察并生成岗位定制草案', (tester) async {
     tester.view.physicalSize = const Size(1440, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -15,7 +15,6 @@ void main() {
 
     final api = _FakeResumeLibraryApi();
     String? sentPrompt;
-    CareerWorkbenchActionRequest? sentAction;
 
     await tester.pumpWidget(
       ProviderScope(
@@ -31,7 +30,6 @@ void main() {
               onOpenJDMatch: () {},
               onSendPrompt: (prompt, {action}) async {
                 sentPrompt = prompt;
-                sentAction = action;
               },
             ),
           ),
@@ -42,20 +40,32 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('简历资料'), findsOneWidget);
-    expect(find.text('版本管理'), findsOneWidget);
-    expect(find.text('版本列表'), findsOneWidget);
+    expect(find.text('版本库'), findsOneWidget);
     expect(find.text('前端开发工程师定制简历'), findsWidgets);
     expect(find.text('张明'), findsOneWidget);
     expect(find.text('AI 洞察'), findsOneWidget);
     expect(find.text('推荐动作'), findsOneWidget);
     expect(find.text('关联岗位'), findsOneWidget);
 
-    await tester.tap(find.text('生成新版本').first);
-    await tester.pump();
+    await tester.tap(find.text('生成岗位定制版').first);
+    await tester.pumpAndSettle();
+    expect(find.text('生成岗位定制版'), findsWidgets);
+    expect(find.text('开始生成草案'), findsOneWidget);
 
-    expect(sentPrompt, contains('application_resume_library'));
-    expect(sentAction?.origin, 'resume_library');
-    expect(sentAction?.actionType, 'custom_resume');
+    await tester.tap(find.text('开始生成草案'));
+    await tester.pumpAndSettle();
+
+    expect(sentPrompt, isNull);
+    expect(api.generatedDraftApplicationId, 'application_resume_library');
+    expect(api.generatedDraftResumeProfileId, 'resume_profile_resume_library');
+    expect(api.generatedDraftStrategy, contains('突出 Agent 项目'));
+    expect(find.text('岗位定制简历草案'), findsOneWidget);
+    expect(find.text('保存为新版本'), findsOneWidget);
+
+    await tester.tap(find.text('保存为新版本'));
+    await tester.pumpAndSettle();
+
+    expect(api.acceptedDraftId, 'resume_draft_resume_library');
 
     await tester.scrollUntilVisible(
       find.text('版本历史'),
@@ -68,6 +78,10 @@ void main() {
 
 class _FakeResumeLibraryApi extends ApiService {
   final now = DateTime(2026, 5, 16, 10, 49);
+  String? generatedDraftApplicationId;
+  String? generatedDraftResumeProfileId;
+  List<String> generatedDraftStrategy = const [];
+  String? acceptedDraftId;
 
   _FakeResumeLibraryApi() : super(baseUrl: 'http://localhost');
 
@@ -131,6 +145,30 @@ class _FakeResumeLibraryApi extends ApiService {
         changeSummary: const ['强化项目指标和业务价值表达'],
         keywordStrategy: const ['React', 'TypeScript', '微前端'],
         riskNotes: const ['部分项目缺少量化结果'],
+      );
+
+  ResumeVersionDraftView get _resumeDraft => ResumeVersionDraftView(
+        meta: _meta,
+        resumeVersionDraftId: 'resume_draft_resume_library',
+        baseResumeProfileId: 'resume_profile_resume_library',
+        targetJdAnalysisId: 'jd_resume_library',
+        applicationId: 'application_resume_library',
+        jobFitReportId: 'fit_resume_library',
+        title: '前端开发工程师定制版草案',
+        format: 'markdown',
+        markdown: '''
+# 张明
+
+前端开发工程师，强化 Agent 平台与工程化经验。
+
+## 项目经历
+- 负责创作客服数据分析平台，补充业务指标和性能优化结果。
+''',
+        changeSummary: const ['强化项目指标和岗位关键词'],
+        keywordStrategy: const ['React', 'TypeScript', '工程化'],
+        riskNotes: const ['仍需补充更多业务量化结果'],
+        draftSource: 'structured_draft_api',
+        acceptedResumeVersionId: null,
       );
 
   CareerApplicationView get _application => CareerApplicationView(
@@ -249,4 +287,34 @@ class _FakeResumeLibraryApi extends ApiService {
     bool includeArchived = false,
   }) async =>
       [_resumeVersion];
+
+  @override
+  Future<ResumeVersionDraftGenerateResponse> generateResumeVersionDraft({
+    String? applicationId,
+    String? resumeProfileId,
+    String? baseResumeVersionId,
+    String? targetJdAnalysisId,
+    String? jobFitReportId,
+    String? title,
+    List<String> strategy = const [],
+  }) async {
+    generatedDraftApplicationId = applicationId;
+    generatedDraftResumeProfileId = resumeProfileId;
+    generatedDraftStrategy = strategy;
+    return ResumeVersionDraftGenerateResponse(draft: _resumeDraft);
+  }
+
+  @override
+  Future<ResumeVersionDraftAcceptResponse> acceptResumeVersionDraft({
+    required String resumeVersionDraftId,
+    String? title,
+    String? markdown,
+    bool linkApplication = true,
+  }) async {
+    acceptedDraftId = resumeVersionDraftId;
+    return ResumeVersionDraftAcceptResponse(
+      draft: _resumeDraft,
+      resumeVersion: _resumeVersion,
+    );
+  }
 }
