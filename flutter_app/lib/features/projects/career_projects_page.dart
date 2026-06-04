@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +15,7 @@ class CareerProjectsPage extends ConsumerStatefulWidget {
   final VoidCallback onOpenResumes;
   final VoidCallback onOpenJDMatch;
   final VoidCallback onOpenLearning;
+  final VoidCallback onOpenNotes;
   final CareerPromptSender? onSendPrompt;
 
   const CareerProjectsPage({
@@ -24,6 +24,7 @@ class CareerProjectsPage extends ConsumerStatefulWidget {
     required this.onOpenResumes,
     required this.onOpenJDMatch,
     required this.onOpenLearning,
+    required this.onOpenNotes,
     this.onSendPrompt,
   });
 
@@ -36,6 +37,46 @@ class _CareerProjectsPageState extends ConsumerState<CareerProjectsPage> {
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(careerWorkbenchProvider).ensureLoaded());
+  }
+
+  void _sendAction(
+    CareerApplicationView? app, {
+    required String label,
+    required String actionType,
+    String? detail,
+  }) {
+    sendCareerPromptAction(
+      sender: widget.onSendPrompt,
+      application: app,
+      label: label,
+      actionType: actionType,
+      origin: 'projects',
+      detail: detail,
+    );
+  }
+
+  Future<void> _showCustomResumeDialog(
+    CareerApplicationView app,
+    CareerApplicationWorkbenchView? detail,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return _CustomResumeDialog(
+          application: app,
+          detail: detail,
+          onStart: () {
+            Navigator.of(dialogContext).pop();
+            _sendAction(
+              app,
+              label: '生成岗位定制简历',
+              actionType: 'custom_resume',
+              detail: '基于基础简历画像、JD 分析和匹配报告生成岗位定制简历草案。',
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -53,9 +94,9 @@ class _CareerProjectsPageState extends ConsumerState<CareerProjectsPage> {
       );
     }
 
-    final selectedSummary = provider.selectedApplicationSummary;
+    final summary = provider.selectedApplicationSummary;
     final detail = provider.selectedApplicationDetail;
-    final selectedApp = detail?.application ?? selectedSummary?.application;
+    final app = detail?.application ?? summary?.application;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -65,84 +106,99 @@ class _CareerProjectsPageState extends ConsumerState<CareerProjectsPage> {
           children: [
             _ProjectHeader(
               provider: provider,
-              selectedApplication: selectedApp,
+              selectedApplication: app,
               onRefresh: () => unawaited(provider.refresh()),
             ),
             const SizedBox(height: 14),
-            if (provider.activeAction != null) ...[
-              _ProjectActionBanner(run: provider.activeAction!),
-              const SizedBox(height: 14),
-            ],
             _ProjectHeroCard(
-              summary: selectedSummary,
+              summary: summary,
               detail: detail,
               onOpenJDMatch: widget.onOpenJDMatch,
-              onSendPrompt: widget.onSendPrompt,
+              onOpenResumes: widget.onOpenResumes,
+              onPrimaryAction:
+                  app == null ? null : () => _handlePrimaryAction(app, detail),
             ),
-            const SizedBox(height: 16),
-            _PositionOverviewCard(summary: selectedSummary, detail: detail),
-            const SizedBox(height: 16),
-            _ExecutionBoard(
-              summary: selectedSummary,
-              detail: detail,
-              onSendPrompt: widget.onSendPrompt,
-            ),
-            const SizedBox(height: 16),
+            if (provider.activeAction != null) ...[
+              const SizedBox(height: 12),
+              _ProjectActionBanner(run: provider.activeAction!),
+            ],
+            const SizedBox(height: 14),
+            _ProjectFactStrip(summary: summary, detail: detail),
+            const SizedBox(height: 14),
+            _ProjectWorkflowCard(summary: summary, detail: detail),
+            const SizedBox(height: 14),
             _RiskActionGrid(
-              summary: selectedSummary,
+              summary: summary,
               detail: detail,
               onOpenLearning: widget.onOpenLearning,
-              onSendPrompt: widget.onSendPrompt,
+              onOpenResumes: widget.onOpenResumes,
+              onOpenJDMatch: widget.onOpenJDMatch,
+              onCustomResume: app == null
+                  ? null
+                  : () => _showCustomResumeDialog(app, detail),
+              onSendAction: _sendAction,
             ),
+            const SizedBox(height: 14),
+            _ProjectTimelineCard(detail: detail),
           ],
         );
+
         final rail = _ProjectRightRail(
           provider: provider,
-          summary: selectedSummary,
+          summary: summary,
           detail: detail,
           onOpenResumes: widget.onOpenResumes,
           onOpenJDMatch: widget.onOpenJDMatch,
+          onOpenNotes: widget.onOpenNotes,
         );
+
         if (!desktop) {
           return ListView(
             padding: EdgeInsets.zero,
             children: [
               _ProjectHeader(
                 provider: provider,
-                selectedApplication: selectedApp,
+                selectedApplication: app,
                 onRefresh: () => unawaited(provider.refresh()),
               ),
               const SizedBox(height: 14),
-              if (provider.activeAction != null) ...[
-                _ProjectActionBanner(run: provider.activeAction!),
-                const SizedBox(height: 14),
-              ],
               _ProjectHeroCard(
-                summary: selectedSummary,
+                summary: summary,
                 detail: detail,
                 onOpenJDMatch: widget.onOpenJDMatch,
-                onSendPrompt: widget.onSendPrompt,
+                onOpenResumes: widget.onOpenResumes,
+                onPrimaryAction: app == null
+                    ? null
+                    : () => _handlePrimaryAction(app, detail),
               ),
+              if (provider.activeAction != null) ...[
+                const SizedBox(height: 12),
+                _ProjectActionBanner(run: provider.activeAction!),
+              ],
               const SizedBox(height: 14),
               rail,
               const SizedBox(height: 14),
-              _PositionOverviewCard(summary: selectedSummary, detail: detail),
+              _ProjectFactStrip(summary: summary, detail: detail),
               const SizedBox(height: 14),
-              _ExecutionBoard(
-                summary: selectedSummary,
-                detail: detail,
-                onSendPrompt: widget.onSendPrompt,
-              ),
+              _ProjectWorkflowCard(summary: summary, detail: detail),
               const SizedBox(height: 14),
               _RiskActionGrid(
-                summary: selectedSummary,
+                summary: summary,
                 detail: detail,
                 onOpenLearning: widget.onOpenLearning,
-                onSendPrompt: widget.onSendPrompt,
+                onOpenResumes: widget.onOpenResumes,
+                onOpenJDMatch: widget.onOpenJDMatch,
+                onCustomResume: app == null
+                    ? null
+                    : () => _showCustomResumeDialog(app, detail),
+                onSendAction: _sendAction,
               ),
+              const SizedBox(height: 14),
+              _ProjectTimelineCard(detail: detail),
             ],
           );
         }
+
         return Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -152,6 +208,31 @@ class _CareerProjectsPageState extends ConsumerState<CareerProjectsPage> {
           ],
         );
       },
+    );
+  }
+
+  void _handlePrimaryAction(
+    CareerApplicationView app,
+    CareerApplicationWorkbenchView? detail,
+  ) {
+    final action = _primaryProjectAction(app, detail);
+    if (action.actionType == 'custom_resume') {
+      unawaited(_showCustomResumeDialog(app, detail));
+      return;
+    }
+    if (action.actionType == 'jd_match_analysis') {
+      widget.onOpenJDMatch();
+      return;
+    }
+    if (action.actionType == 'resume_view') {
+      widget.onOpenResumes();
+      return;
+    }
+    _sendAction(
+      app,
+      label: action.label,
+      actionType: action.actionType,
+      detail: action.reason,
     );
   }
 }
@@ -170,47 +251,26 @@ class _ProjectHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final applications = provider.applications;
-    return ProductCard(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < ProductBreakpoints.compact;
           final title = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    '求职项目',
-                    style: AppTheme.ts(
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      color: ProductColors.text,
-                    ),
-                  ),
-                  ProductTag(
-                    label: '岗位工作台',
-                    tone: ProductTone.primary,
-                    icon: Icons.business_center_outlined,
-                  ),
-                  if (provider.isRefreshing)
-                    const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: ProductColors.primary,
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 5),
               Text(
-                '围绕一个目标岗位管理匹配判断、执行进度、风险差距和关联资产。',
-                maxLines: compact ? 2 : 1,
+                '求职项目',
+                style: AppTheme.ts(
+                  fontSize: 23,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '在这里推进一个目标岗位，跟踪进度，提升命中率',
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: AppTheme.ts(
                   fontSize: 12.5,
@@ -225,6 +285,15 @@ class _ProjectHeader extends StatelessWidget {
             alignment: WrapAlignment.end,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
+              if (provider.isRefreshing)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: ProductColors.primary,
+                  ),
+                ),
               _ProjectFilterMenu(provider: provider),
               if (applications.length > 1)
                 _ProjectSelector(
@@ -379,6 +448,227 @@ class _ProjectSelector extends StatelessWidget {
   }
 }
 
+class _ProjectHeroCard extends StatelessWidget {
+  final CareerApplicationSummaryView? summary;
+  final CareerApplicationWorkbenchView? detail;
+  final VoidCallback onOpenJDMatch;
+  final VoidCallback onOpenResumes;
+  final VoidCallback? onPrimaryAction;
+
+  const _ProjectHeroCard({
+    required this.summary,
+    required this.detail,
+    required this.onOpenJDMatch,
+    required this.onOpenResumes,
+    required this.onPrimaryAction,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final app = detail?.application ?? summary?.application;
+    final readiness = detail?.readiness ?? summary?.readiness;
+    if (app == null) {
+      return ProductCard(
+        padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+        child: Row(
+          children: [
+            const ProductIconTile(
+              icon: Icons.business_center_outlined,
+              tone: ProductTone.primary,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                '还没有求职项目。可以先上传简历和 JD，让 Agent 生成第一个岗位推进工作台。',
+                style: AppTheme.ts(
+                  fontSize: 13,
+                  height: 1.5,
+                  color: ProductColors.textSecondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final primaryAction = _primaryProjectAction(app, detail);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
+      decoration: ProductSurface.hero().copyWith(
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 760;
+          final titleBlock = Row(
+            children: [
+              _CompanyAvatar(label: app.company),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      careerShortLabel(app.company, fallback: '目标公司'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    Text(
+                      careerShortLabel(app.position, fallback: '目标岗位'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTheme.ts(
+                        fontSize: compact ? 22 : 26,
+                        height: 1.18,
+                        fontWeight: FontWeight.w900,
+                        color: ProductColors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 9,
+                      runSpacing: 8,
+                      children: [
+                        ProductTag(
+                          label: careerShortLabel(app.location),
+                          icon: Icons.location_on_outlined,
+                          tone: ProductTone.neutral,
+                        ),
+                        ProductTag(
+                          label: careerStageLabel(app.stage),
+                          tone: careerStageTone(app.stage),
+                        ),
+                        ProductTag(
+                          label: '优先级 ${careerPriorityLabel(app.priority)}',
+                          tone: careerPriorityTone(app.priority),
+                        ),
+                        ProductTag(
+                          label:
+                              '更新于 ${careerFormatDateTime(app.meta.updatedAt)}',
+                          tone: ProductTone.info,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+
+          final scoreBlock = Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ProductScoreRing(
+                score: readiness?.score,
+                size: 118,
+                label: '匹配度',
+              ),
+              const SizedBox(height: 10),
+              ProductTag(
+                label: careerRecommendationLabel(
+                  readiness?.recommendation,
+                  readiness?.score,
+                ),
+                tone: careerScoreTone(readiness?.score),
+              ),
+            ],
+          );
+
+          final judgement = Container(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+            decoration: BoxDecoration(
+              color: ProductColors.surface.withValues(alpha: 0.72),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: ProductColors.primary.withValues(alpha: 0.12),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '整体准备度：${readiness?.score?.toString() ?? '-'} / 100（${careerStageLabel(app.stage)}阶段）',
+                  style: AppTheme.ts(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.text,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  careerDisplaySummary(
+                    careerFirstNonEmpty(
+                      [readiness?.summary, app.summary],
+                      fallback: '完成 JD 匹配后会在这里展示项目判断、风险和推进建议。',
+                    ),
+                    maxChars: compact ? 128 : 176,
+                  ),
+                  maxLines: compact ? 4 : 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 12.4,
+                    height: 1.5,
+                    color: ProductColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    _PrimaryProjectButton(
+                      label: primaryAction.label,
+                      icon: primaryAction.icon,
+                      onPressed: onPrimaryAction,
+                    ),
+                    _SecondaryProjectButton(
+                      label: detail?.jobFitReport == null
+                          ? '分析 JD 匹配'
+                          : '查看完整匹配判断',
+                      icon: Icons.analytics_outlined,
+                      onPressed: onOpenJDMatch,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                titleBlock,
+                const SizedBox(height: 20),
+                Center(child: scoreBlock),
+                const SizedBox(height: 18),
+                judgement,
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Expanded(flex: 5, child: titleBlock),
+              const SizedBox(width: 24),
+              scoreBlock,
+              const SizedBox(width: 26),
+              Expanded(flex: 5, child: judgement),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _ProjectActionBanner extends StatelessWidget {
   final CareerWorkbenchActionRun run;
 
@@ -392,14 +682,14 @@ class _ProjectActionBanner extends StatelessWidget {
       CareerWorkbenchActionState.failed => ProductTone.danger,
     };
     final title = switch (run.state) {
-      CareerWorkbenchActionState.running => '执行中：${run.request.label}',
-      CareerWorkbenchActionState.completed => '已完成：${run.request.label}',
-      CareerWorkbenchActionState.failed => '执行失败：${run.request.label}',
+      CareerWorkbenchActionState.running => '正在${run.request.label}',
+      CareerWorkbenchActionState.completed => '${run.request.label}已完成',
+      CareerWorkbenchActionState.failed => '${run.request.label}失败',
     };
     final subtitle = run.state == CareerWorkbenchActionState.failed
-        ? run.error ?? '动作执行失败'
+        ? run.error ?? '动作执行失败，请检查输入资料后重试。'
         : run.resultHints.isEmpty
-            ? 'Agent 正在通过聊天链路执行，并会在结束后刷新项目状态。'
+            ? '完成后会刷新当前项目、关联资产、推荐下一步和时间线。'
             : run.resultHints.join('；');
     return ProductCard(
       soft: true,
@@ -449,248 +739,11 @@ class _ProjectActionBanner extends StatelessWidget {
   }
 }
 
-class _ProjectHeroCard extends StatelessWidget {
-  final CareerApplicationSummaryView? summary;
-  final CareerApplicationWorkbenchView? detail;
-  final VoidCallback onOpenJDMatch;
-  final CareerPromptSender? onSendPrompt;
-
-  const _ProjectHeroCard({
-    required this.summary,
-    required this.detail,
-    required this.onOpenJDMatch,
-    required this.onSendPrompt,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final app = detail?.application ?? summary?.application;
-    final readiness = detail?.readiness ?? summary?.readiness;
-    if (app == null) {
-      return ProductCard(
-        padding: const EdgeInsets.fromLTRB(22, 22, 22, 22),
-        child: Row(
-          children: [
-            const ProductIconTile(
-              icon: Icons.business_center_outlined,
-              tone: ProductTone.primary,
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Text(
-                '还没有求职项目。可以先上传简历和 JD，让 Agent 生成第一个岗位工作台。',
-                style: AppTheme.ts(
-                  fontSize: 13,
-                  height: 1.5,
-                  color: ProductColors.textSecondary,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Container(
-      padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
-      decoration: ProductSurface.hero(),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 620;
-          final leading = Row(
-            children: [
-              _CompanyAvatar(label: app.company),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text(
-                          careerShortLabel(app.company, fallback: '目标公司'),
-                          style: AppTheme.ts(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                            color: ProductColors.textSecondary,
-                          ),
-                        ),
-                        ProductTag(
-                          label: careerStageLabel(app.stage),
-                          tone: careerStageTone(app.stage),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 7),
-                    Text(
-                      careerShortLabel(app.position, fallback: '目标岗位'),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTheme.ts(
-                        fontSize: compact ? 18 : 20,
-                        height: 1.2,
-                        fontWeight: FontWeight.w900,
-                        color: ProductColors.text,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 8,
-                      children: [
-                        ProductTag(
-                          label: careerShortLabel(app.location),
-                          icon: Icons.location_on_outlined,
-                          tone: ProductTone.neutral,
-                        ),
-                        ProductTag(
-                          label: '优先级 ${careerPriorityLabel(app.priority)}',
-                          tone: careerPriorityTone(app.priority),
-                        ),
-                        ProductTag(
-                          label:
-                              '更新 ${careerFormatDateTime(app.meta.updatedAt)}',
-                          tone: ProductTone.info,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-          final score = Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ProductScoreRing(score: readiness?.score, size: 92),
-              const SizedBox(height: 8),
-              ProductTag(
-                label: careerRecommendationLabel(
-                  readiness?.recommendation,
-                  readiness?.score,
-                ),
-                tone: careerScoreTone(readiness?.score),
-              ),
-            ],
-          );
-          final summaryBlock = Container(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-            decoration: BoxDecoration(
-              color: ProductColors.surface.withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: ProductColors.primary.withValues(alpha: 0.12),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'AI 总结',
-                  style: AppTheme.ts(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    color: ProductColors.text,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                Text(
-                  careerDisplaySummary(
-                    careerFirstNonEmpty(
-                      [readiness?.summary, app.summary],
-                      fallback: '完成 JD 匹配后会在这里展示岗位判断、核心风险和推进建议。',
-                    ),
-                    maxChars: compact ? 118 : 142,
-                  ),
-                  maxLines: compact ? 5 : 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTheme.ts(
-                    fontSize: 12.2,
-                    height: 1.48,
-                    color: ProductColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    SizedBox(
-                      height: 34,
-                      child: ElevatedButton(
-                        onPressed: () => sendCareerPromptAction(
-                          sender: onSendPrompt,
-                          application: app,
-                          label: '生成定制简历',
-                          actionType: 'custom_resume',
-                          origin: 'projects',
-                          detail: '基于当前岗位匹配结论生成定制简历版本。',
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: ProductColors.primary,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                        ),
-                        child: const Text('生成定制简历'),
-                      ),
-                    ),
-                    SizedBox(
-                      height: 34,
-                      child: OutlinedButton(
-                        onPressed: onOpenJDMatch,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: ProductColors.primary,
-                          side: const BorderSide(color: ProductColors.border),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                        ),
-                        child: const Text('查看完整分析报告'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          );
-          if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                leading,
-                const SizedBox(height: 18),
-                Center(child: score),
-                const SizedBox(height: 18),
-                summaryBlock,
-              ],
-            );
-          }
-          return Row(
-            children: [
-              Expanded(flex: 5, child: leading),
-              const SizedBox(width: 22),
-              score,
-              const SizedBox(width: 22),
-              Expanded(flex: 4, child: summaryBlock),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _PositionOverviewCard extends StatelessWidget {
+class _ProjectFactStrip extends StatelessWidget {
   final CareerApplicationSummaryView? summary;
   final CareerApplicationWorkbenchView? detail;
 
-  const _PositionOverviewCard({
+  const _ProjectFactStrip({
     required this.summary,
     required this.detail,
   });
@@ -700,61 +753,60 @@ class _PositionOverviewCard extends StatelessWidget {
     final app = detail?.application ?? summary?.application;
     final jd = detail?.jdAnalysis;
     final report = detail?.jobFitReport;
+    final metrics = [
+      _FactMetric(
+        icon: Icons.calendar_today_outlined,
+        label: '投递时间',
+        value: careerFormatDate(app?.meta.createdAt),
+        tone: ProductTone.primary,
+      ),
+      _FactMetric(
+        icon: Icons.link_rounded,
+        label: '来源渠道',
+        value: app?.jobUrl.trim().isNotEmpty == true ? '岗位链接' : 'Agent 记录',
+        tone: ProductTone.info,
+      ),
+      _FactMetric(
+        icon: Icons.people_alt_outlined,
+        label: '招聘类型',
+        value: careerFirstNonEmpty([jd?.seniority], fallback: '待补充'),
+        tone: ProductTone.info,
+      ),
+      _FactMetric(
+        icon: Icons.local_fire_department_outlined,
+        label: '岗位热度',
+        value: careerPriorityLabel(app?.priority),
+        tone: careerPriorityTone(app?.priority),
+      ),
+      _FactMetric(
+        icon: Icons.fact_check_outlined,
+        label: '证据覆盖 / 评估信度',
+        value: report == null
+            ? '${summary?.linkedAssetCount ?? 0} 份资料'
+            : '${report.scoreBreakdown.length} 项评分',
+        tone: ProductTone.purple,
+      ),
+    ];
     return ProductSection(
-      title: '岗位总览',
+      title: '岗位信息',
       subtitle: '投递信息、岗位来源和材料完整度',
       icon: Icons.dashboard_customize_outlined,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final columns = constraints.maxWidth >= 900
+          final columns = constraints.maxWidth >= 960
               ? 5
-              : constraints.maxWidth >= 620
+              : constraints.maxWidth >= 680
                   ? 3
                   : 2;
-          const spacing = 10.0;
+          const spacing = 12.0;
           final width =
               (constraints.maxWidth - spacing * (columns - 1)) / columns;
-          final metrics = [
-            _OverviewMetricData(
-              icon: Icons.calendar_today_outlined,
-              label: '投递时间',
-              value: careerFormatDate(app?.meta.createdAt),
-              tone: ProductTone.primary,
-            ),
-            _OverviewMetricData(
-              icon: Icons.campaign_outlined,
-              label: '岗位来源',
-              value:
-                  app?.jobUrl.trim().isNotEmpty == true ? '链接导入' : 'Agent 记录',
-              tone: ProductTone.info,
-            ),
-            _OverviewMetricData(
-              icon: Icons.people_alt_outlined,
-              label: '招聘类型',
-              value: careerFirstNonEmpty([jd?.seniority], fallback: '社招'),
-              tone: ProductTone.info,
-            ),
-            _OverviewMetricData(
-              icon: Icons.local_fire_department_outlined,
-              label: '岗位热度',
-              value: careerPriorityLabel(app?.priority),
-              tone: careerPriorityTone(app?.priority),
-            ),
-            _OverviewMetricData(
-              icon: Icons.fact_check_outlined,
-              label: '证据覆盖',
-              value: report == null
-                  ? '${summary?.linkedAssetCount ?? 0} 份资料'
-                  : '${report.scoreBreakdown.length} 项评分',
-              tone: ProductTone.purple,
-            ),
-          ];
           return Wrap(
             spacing: spacing,
             runSpacing: spacing,
             children: [
               for (final metric in metrics)
-                SizedBox(width: width, child: _OverviewMetric(metric: metric)),
+                SizedBox(width: width, child: _FactMetricTile(metric: metric)),
             ],
           );
         },
@@ -763,161 +815,27 @@ class _PositionOverviewCard extends StatelessWidget {
   }
 }
 
-class _ExecutionBoard extends StatelessWidget {
+class _ProjectWorkflowCard extends StatelessWidget {
   final CareerApplicationSummaryView? summary;
   final CareerApplicationWorkbenchView? detail;
-  final CareerPromptSender? onSendPrompt;
 
-  const _ExecutionBoard({
+  const _ProjectWorkflowCard({
     required this.summary,
     required this.detail,
-    required this.onSendPrompt,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 860;
-        final timeline = _InterviewTimelineCard(
-          application: detail?.application ?? summary?.application,
-          timeline: detail?.timeline ?? const [],
-        );
-        final agents = _AgentExecutionCard(
-          summary: summary,
-          detail: detail,
-          onSendPrompt: onSendPrompt,
-        );
-        if (compact) {
-          return Column(
-            children: [
-              timeline,
-              const SizedBox(height: 14),
-              agents,
-            ],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(width: 260, child: timeline),
-            const SizedBox(width: 14),
-            Expanded(child: agents),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _InterviewTimelineCard extends StatelessWidget {
-  final CareerApplicationView? application;
-  final List<CareerTimelineItemView> timeline;
-
-  const _InterviewTimelineCard({
-    required this.application,
-    required this.timeline,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final currentStage = application?.stage;
-    final steps = [
-      _TimelineStep('简历投递', 'applied', Icons.send_outlined),
-      _TimelineStep('简历筛选', 'screening', Icons.fact_check_outlined),
-      _TimelineStep('技术面试', 'interviewing', Icons.code_rounded),
-      _TimelineStep('综合面试', 'interviewing', Icons.groups_outlined),
-      _TimelineStep('Offer', 'offer', Icons.verified_outlined),
-    ];
-    return ProductSection(
-      title: '面试流程时间线',
-      subtitle: timeline.isEmpty ? '按当前阶段推断' : '来自项目事件',
-      icon: Icons.timeline_outlined,
-      tone: ProductTone.primary,
-      child: Column(
-        children: [
-          for (var i = 0; i < steps.length; i++) ...[
-            _TimelineStepRow(
-              step: steps[i],
-              active: _isStageActive(currentStage, steps[i].stage, i),
-              done: _isStageDone(currentStage, i),
-              subtitle: _timelineSubtitle(timeline, steps[i].label),
-            ),
-            if (i != steps.length - 1) const SizedBox(height: 8),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _AgentExecutionCard extends StatelessWidget {
-  final CareerApplicationSummaryView? summary;
-  final CareerApplicationWorkbenchView? detail;
-  final CareerPromptSender? onSendPrompt;
-
-  const _AgentExecutionCard({
-    required this.summary,
-    required this.detail,
-    required this.onSendPrompt,
   });
 
   @override
   Widget build(BuildContext context) {
     final app = detail?.application ?? summary?.application;
-    final agents = [
-      _AgentStep(
-        title: '简历解析 Agent',
-        subtitle: detail?.resumeProfile == null ? '等待简历画像' : '提取关键项目与技能',
-        icon: Icons.article_outlined,
-        done: detail?.resumeProfile != null ||
-            app?.resumeProfileId?.trim().isNotEmpty == true,
-        tone: ProductTone.primary,
-      ),
-      _AgentStep(
-        title: 'JD 分析 Agent',
-        subtitle: detail?.jdAnalysis == null ? '等待岗位要求' : '解析岗位要求与职责',
-        icon: Icons.near_me_outlined,
-        done: detail?.jdAnalysis != null ||
-            app?.jdAnalysisId?.trim().isNotEmpty == true,
-        tone: ProductTone.info,
-      ),
-      _AgentStep(
-        title: '匹配评估 Agent',
-        subtitle: '评估匹配度与差距',
-        icon: Icons.analytics_outlined,
-        done: (detail?.readiness.score ?? summary?.readiness.score) != null,
-        tone: ProductTone.info,
-      ),
-      _AgentStep(
-        title: '简历改写 Agent',
-        subtitle:
-            detail?.resumeVersions.isEmpty == false ? '已生成定制版本' : '可生成岗位定制简历',
-        icon: Icons.edit_note_outlined,
-        done: detail?.resumeVersions.isEmpty == false ||
-            app?.resumeVersionIds.isNotEmpty == true,
-        tone: ProductTone.warning,
-        actionLabel: '生成定制简历',
-        actionType: 'custom_resume',
-      ),
-      _AgentStep(
-        title: '面试准备 Agent',
-        subtitle: '生成面试问题与答案',
-        icon: Icons.forum_outlined,
-        done: detail?.learning.openTaskCount != null &&
-            (detail?.learning.openTaskCount ?? 0) > 0,
-        tone: ProductTone.purple,
-        actionLabel: '继续执行',
-        actionType: 'interview_prep',
-      ),
-    ];
+    final steps = _workflowSteps(app, detail);
+    final done = steps.where((step) => step.status == _StepStatus.done).length;
     return ProductSection(
-      title: '多 Agent 执行进度',
-      subtitle: '展示当前岗位已完成和可继续的执行链路',
-      icon: Icons.account_tree_outlined,
-      tone: ProductTone.info,
+      title: '项目推进流程',
+      subtitle: '跟踪当前岗位的求职全流程进度',
+      icon: Icons.route_outlined,
+      tone: ProductTone.primary,
       trailing: Text(
-        '${agents.where((item) => item.done).length}/${agents.length}',
+        '$done / ${steps.length} 步完成',
         style: AppTheme.ts(
           fontSize: 12,
           fontWeight: FontWeight.w900,
@@ -926,26 +844,22 @@ class _AgentExecutionCard extends StatelessWidget {
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final columns = constraints.maxWidth >= 860
-              ? 3
-              : constraints.maxWidth >= 560
-                  ? 2
-                  : 1;
-          const spacing = 12.0;
+          final columns = constraints.maxWidth >= 960
+              ? 6
+              : constraints.maxWidth >= 720
+                  ? 3
+                  : 2;
+          const spacing = 10.0;
           final width =
               (constraints.maxWidth - spacing * (columns - 1)) / columns;
           return Wrap(
             spacing: spacing,
             runSpacing: spacing,
             children: [
-              for (final agent in agents)
+              for (var i = 0; i < steps.length; i++)
                 SizedBox(
                   width: width,
-                  child: _AgentStepCard(
-                    step: agent,
-                    application: app,
-                    onSendPrompt: onSendPrompt,
-                  ),
+                  child: _WorkflowStepTile(index: i + 1, step: steps[i]),
                 ),
             ],
           );
@@ -959,13 +873,24 @@ class _RiskActionGrid extends StatelessWidget {
   final CareerApplicationSummaryView? summary;
   final CareerApplicationWorkbenchView? detail;
   final VoidCallback onOpenLearning;
-  final CareerPromptSender? onSendPrompt;
+  final VoidCallback onOpenResumes;
+  final VoidCallback onOpenJDMatch;
+  final VoidCallback? onCustomResume;
+  final void Function(
+    CareerApplicationView? app, {
+    required String label,
+    required String actionType,
+    String? detail,
+  }) onSendAction;
 
   const _RiskActionGrid({
     required this.summary,
     required this.detail,
     required this.onOpenLearning,
-    required this.onSendPrompt,
+    required this.onOpenResumes,
+    required this.onOpenJDMatch,
+    required this.onCustomResume,
+    required this.onSendAction,
   });
 
   @override
@@ -978,7 +903,10 @@ class _RiskActionGrid extends StatelessWidget {
           summary: summary,
           detail: detail,
           onOpenLearning: onOpenLearning,
-          onSendPrompt: onSendPrompt,
+          onOpenResumes: onOpenResumes,
+          onOpenJDMatch: onOpenJDMatch,
+          onCustomResume: onCustomResume,
+          onSendAction: onSendAction,
         );
         if (compact) {
           return Column(
@@ -1021,8 +949,8 @@ class _ProjectRisksCard extends StatelessWidget {
       ...app?.risks ?? const <String>[],
     ].where((item) => item.trim().isNotEmpty).take(4).toList();
     return ProductSection(
-      title: '风险与差距',
-      subtitle: '优先处理会影响推进的短板',
+      title: '当前风险与提醒',
+      subtitle: '基于岗位要求与匹配分析',
       icon: Icons.report_problem_outlined,
       tone: ProductTone.warning,
       child: risks.isEmpty
@@ -1040,6 +968,7 @@ class _ProjectRisksCard extends StatelessWidget {
                   _RiskRow(
                     risk: risks[i],
                     tone: i == 0 ? ProductTone.warning : ProductTone.info,
+                    level: i == 0 ? '中风险' : '提醒',
                   ),
                   if (i != risks.length - 1) const SizedBox(height: 8),
                 ],
@@ -1053,13 +982,24 @@ class _ProjectRecommendedActions extends StatelessWidget {
   final CareerApplicationSummaryView? summary;
   final CareerApplicationWorkbenchView? detail;
   final VoidCallback onOpenLearning;
-  final CareerPromptSender? onSendPrompt;
+  final VoidCallback onOpenResumes;
+  final VoidCallback onOpenJDMatch;
+  final VoidCallback? onCustomResume;
+  final void Function(
+    CareerApplicationView? app, {
+    required String label,
+    required String actionType,
+    String? detail,
+  }) onSendAction;
 
   const _ProjectRecommendedActions({
     required this.summary,
     required this.detail,
     required this.onOpenLearning,
-    required this.onSendPrompt,
+    required this.onOpenResumes,
+    required this.onOpenJDMatch,
+    required this.onCustomResume,
+    required this.onSendAction,
   });
 
   @override
@@ -1067,13 +1007,13 @@ class _ProjectRecommendedActions extends StatelessWidget {
     final app = detail?.application ?? summary?.application;
     final actions = _recommendedProjectActions(app, detail).take(3).toList();
     return ProductSection(
-      title: '推荐动作',
-      subtitle: '从当前岗位状态推导下一步',
+      title: '推荐下一步',
+      subtitle: '优先完成以下行动，提升命中率',
       icon: Icons.auto_fix_high_outlined,
       tone: ProductTone.primary,
       trailing: TextButton(
         onPressed: onOpenLearning,
-        child: const Text('全部'),
+        child: const Text('全部行动'),
       ),
       child: actions.isEmpty
           ? Text(
@@ -1093,18 +1033,87 @@ class _ProjectRecommendedActions extends StatelessWidget {
                     icon: careerActionIcon(actions[i].actionType),
                     tone: actions[i].tone,
                     actionLabel: actions[i].actionLabel,
-                    onTap: () => sendCareerPromptAction(
-                      sender: onSendPrompt,
-                      application: app,
-                      label: actions[i].label,
-                      actionType: actions[i].actionType,
-                      origin: 'projects',
-                      detail: actions[i].reason,
-                    ),
+                    onTap: () {
+                      final action = actions[i];
+                      if (action.actionType == 'custom_resume') {
+                        onCustomResume?.call();
+                        return;
+                      }
+                      if (action.actionType == 'jd_match_analysis') {
+                        onOpenJDMatch();
+                        return;
+                      }
+                      if (action.actionType == 'resume_view') {
+                        onOpenResumes();
+                        return;
+                      }
+                      if (action.actionType == 'learning_task') {
+                        onOpenLearning();
+                        return;
+                      }
+                      onSendAction(
+                        app,
+                        label: action.label,
+                        actionType: action.actionType,
+                        detail: action.reason,
+                      );
+                    },
                   ),
                   if (i != actions.length - 1) const SizedBox(height: 8),
                 ],
               ],
+            ),
+    );
+  }
+}
+
+class _ProjectTimelineCard extends StatelessWidget {
+  final CareerApplicationWorkbenchView? detail;
+
+  const _ProjectTimelineCard({required this.detail});
+
+  @override
+  Widget build(BuildContext context) {
+    final allTimeline =
+        detail?.timeline.toList() ?? const <CareerTimelineItemView>[];
+    final timeline =
+        detail?.timeline.take(4).toList() ?? const <CareerTimelineItemView>[];
+    return ProductSection(
+      title: '时间线 / 最近记录',
+      subtitle: '记录关键进展与里程碑',
+      icon: Icons.timeline_outlined,
+      tone: ProductTone.primary,
+      trailing: TextButton(
+        onPressed: allTimeline.isEmpty
+            ? null
+            : () => _showProjectTimelineDialog(context, allTimeline),
+        child: const Text('查看全部记录'),
+      ),
+      child: timeline.isEmpty
+          ? Text(
+              '暂无项目动态。完成 JD 匹配、生成简历或记录复盘后会沉淀到这里。',
+              style: AppTheme.ts(
+                fontSize: 12.2,
+                height: 1.5,
+                color: ProductColors.textMuted,
+              ),
+            )
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 760 ? 4 : 2;
+                const spacing = 12.0;
+                final width =
+                    (constraints.maxWidth - spacing * (columns - 1)) / columns;
+                return Wrap(
+                  spacing: spacing,
+                  runSpacing: spacing,
+                  children: [
+                    for (final item in timeline)
+                      SizedBox(
+                          width: width, child: _TimelineMiniItem(item: item)),
+                  ],
+                );
+              },
             ),
     );
   }
@@ -1116,6 +1125,7 @@ class _ProjectRightRail extends StatelessWidget {
   final CareerApplicationWorkbenchView? detail;
   final VoidCallback onOpenResumes;
   final VoidCallback onOpenJDMatch;
+  final VoidCallback onOpenNotes;
 
   const _ProjectRightRail({
     required this.provider,
@@ -1123,6 +1133,7 @@ class _ProjectRightRail extends StatelessWidget {
     required this.detail,
     required this.onOpenResumes,
     required this.onOpenJDMatch,
+    required this.onOpenNotes,
   });
 
   @override
@@ -1138,7 +1149,10 @@ class _ProjectRightRail extends StatelessWidget {
           detail: detail,
           onOpenResumes: onOpenResumes,
           onOpenJDMatch: onOpenJDMatch,
+          onOpenNotes: onOpenNotes,
         ),
+        const SizedBox(height: 14),
+        _ProjectRelatedNotesCard(detail: detail, onOpenNotes: onOpenNotes),
       ],
     );
   }
@@ -1155,42 +1169,43 @@ class _ProjectJudgmentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final app = detail?.application ?? summary?.application;
     final readiness = detail?.readiness ?? summary?.readiness;
+    final strengths = readiness?.strengths.take(3).toList() ?? const <String>[];
+    final risks = readiness?.risks.take(2).toList() ?? const <String>[];
     return ProductSection(
       title: '当前判断',
-      subtitle: '匹配度与推进建议',
+      subtitle: '基于评分与推进建议',
       icon: Icons.psychology_alt_outlined,
       tone: careerScoreTone(readiness?.score),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
                 readiness?.score?.toString() ?? '-',
                 style: AppTheme.ts(
-                  fontSize: 34,
+                  fontSize: 36,
                   height: 1,
                   fontWeight: FontWeight.w900,
                   color: ProductColors.primary,
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 4),
               Text(
-                '匹配度',
+                '/100',
                 style: AppTheme.ts(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
                   color: ProductColors.textSecondary,
                 ),
               ),
               const Spacer(),
               ProductTag(
-                label: careerRecommendationLabel(
-                  readiness?.recommendation,
-                  readiness?.score,
-                ),
-                tone: careerScoreTone(readiness?.score),
+                label: careerStageLabel(app?.stage),
+                tone: careerStageTone(app?.stage),
               ),
             ],
           ),
@@ -1201,7 +1216,7 @@ class _ProjectJudgmentCard extends StatelessWidget {
                 [readiness?.summary],
                 fallback: '完成匹配后这里会展示 AI 判断。',
               ),
-              maxChars: 132,
+              maxChars: 142,
             ),
             maxLines: 5,
             overflow: TextOverflow.ellipsis,
@@ -1211,19 +1226,19 @@ class _ProjectJudgmentCard extends StatelessWidget {
               color: ProductColors.textSecondary,
             ),
           ),
-          if (readiness?.strengths.isNotEmpty == true) ...[
-            const SizedBox(height: 12),
+          if (strengths.isNotEmpty) ...[
+            const SizedBox(height: 14),
             _MiniBulletBlock(
-              title: '优势',
-              items: readiness!.strengths.take(2).toList(),
+              title: '主要优势',
+              items: strengths,
               tone: ProductTone.primary,
             ),
           ],
-          if (readiness?.risks.isNotEmpty == true) ...[
+          if (risks.isNotEmpty) ...[
             const SizedBox(height: 10),
             _MiniBulletBlock(
-              title: '风险',
-              items: readiness!.risks.take(2).toList(),
+              title: '主要风险',
+              items: risks,
               tone: ProductTone.warning,
             ),
           ],
@@ -1245,11 +1260,12 @@ class _ProjectProgressCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = detail?.application ?? summary?.application;
-    const total = 6;
-    final done = _stageIndex(app?.stage).clamp(0, total);
+    final steps = _workflowSteps(app, detail);
+    final done = steps.where((step) => step.status == _StepStatus.done).length;
+    final progress = steps.isEmpty ? 0.0 : done / steps.length;
     return ProductSection(
-      title: '求职进展',
-      subtitle: '$done / $total 完成流程',
+      title: '求职进度',
+      subtitle: '$done / ${steps.length} 步完成',
       icon: Icons.route_outlined,
       tone: ProductTone.primary,
       child: Column(
@@ -1258,37 +1274,18 @@ class _ProjectProgressCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(999),
             child: LinearProgressIndicator(
               minHeight: 7,
-              value: done / total,
+              value: progress,
               color: ProductColors.primary,
               backgroundColor: ProductColors.primary.withValues(alpha: 0.12),
             ),
           ),
           const SizedBox(height: 12),
-          _ProgressCompactRow(
-            label: '简历投递',
-            done: done >= 1,
-            active: done == 1,
-          ),
-          _ProgressCompactRow(
-            label: '简历筛选',
-            done: done >= 2,
-            active: done == 2,
-          ),
-          _ProgressCompactRow(
-            label: '技术面试',
-            done: done >= 3,
-            active: done == 3,
-          ),
-          _ProgressCompactRow(
-            label: '综合面试',
-            done: done >= 4,
-            active: done == 4,
-          ),
-          _ProgressCompactRow(
-            label: 'Offer',
-            done: done >= 5,
-            active: done >= 5,
-          ),
+          for (final step in steps)
+            _ProgressCompactRow(
+              label: step.title,
+              status: step.status,
+              timestamp: _stepTimestamp(step, detail),
+            ),
         ],
       ),
     );
@@ -1300,17 +1297,19 @@ class _ProjectLinkedAssetsCard extends StatelessWidget {
   final CareerApplicationWorkbenchView? detail;
   final VoidCallback onOpenResumes;
   final VoidCallback onOpenJDMatch;
+  final VoidCallback onOpenNotes;
 
   const _ProjectLinkedAssetsCard({
     required this.provider,
     required this.detail,
     required this.onOpenResumes,
     required this.onOpenJDMatch,
+    required this.onOpenNotes,
   });
 
   @override
   Widget build(BuildContext context) {
-    final assets = detail?.linkedAssets.take(4).toList() ??
+    final assets = detail?.linkedAssets.take(5).toList() ??
         const <CareerLinkedAssetView>[];
     return ProductSection(
       title: '关联资产',
@@ -1319,7 +1318,7 @@ class _ProjectLinkedAssetsCard extends StatelessWidget {
       tone: ProductTone.info,
       trailing: TextButton(
         onPressed: onOpenResumes,
-        child: const Text('全部资产'),
+        child: const Text('查看全部'),
       ),
       child: Column(
         children: [
@@ -1354,7 +1353,7 @@ class _ProjectLinkedAssetsCard extends StatelessWidget {
                       label: '笔记',
                       value: provider.notes.length,
                       icon: Icons.sticky_note_2_outlined,
-                      onTap: null,
+                      onTap: onOpenNotes,
                     ),
                   ),
                   SizedBox(
@@ -1363,7 +1362,13 @@ class _ProjectLinkedAssetsCard extends StatelessWidget {
                       label: '资料',
                       value: detail?.linkedAssets.length ?? 0,
                       icon: Icons.inventory_2_outlined,
-                      onTap: null,
+                      onTap: () {
+                        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                          const SnackBar(
+                            content: Text('项目资料暂时汇总在当前项目和关联资产中，独立资料页后续再接入。'),
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ],
@@ -1383,13 +1388,255 @@ class _ProjectLinkedAssetsCard extends StatelessWidget {
   }
 }
 
-class _OverviewMetricData {
+class _ProjectRelatedNotesCard extends StatelessWidget {
+  final CareerApplicationWorkbenchView? detail;
+  final VoidCallback onOpenNotes;
+
+  const _ProjectRelatedNotesCard({
+    required this.detail,
+    required this.onOpenNotes,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final notes =
+        detail?.notes.take(3).toList() ?? const <CareerNoteSummaryView>[];
+    return ProductSection(
+      title: '关联笔记',
+      subtitle: notes.isEmpty ? '暂无笔记' : '${notes.length} 条最近笔记',
+      icon: Icons.sticky_note_2_outlined,
+      tone: ProductTone.warning,
+      trailing: TextButton(onPressed: onOpenNotes, child: const Text('查看全部')),
+      child: notes.isEmpty
+          ? Text(
+              '面试准备、复盘和项目备注会沉淀到这里。',
+              style: AppTheme.ts(
+                fontSize: 12.2,
+                height: 1.5,
+                color: ProductColors.textMuted,
+              ),
+            )
+          : Column(
+              children: [
+                for (final note in notes) ...[
+                  _NoteMiniItem(note: note),
+                  if (note != notes.last) const SizedBox(height: 10),
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+class _CustomResumeDialog extends StatelessWidget {
+  final CareerApplicationView application;
+  final CareerApplicationWorkbenchView? detail;
+  final VoidCallback onStart;
+
+  const _CustomResumeDialog({
+    required this.application,
+    required this.detail,
+    required this.onStart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final jdReady = detail?.jdAnalysis != null ||
+        application.jdAnalysisId?.trim().isNotEmpty == true;
+    final fitReady = detail?.jobFitReport != null ||
+        application.jobFitReportId?.trim().isNotEmpty == true;
+    final resumeReady = detail?.resumeProfile != null ||
+        application.resumeProfileId?.trim().isNotEmpty == true;
+    final availableHeight = MediaQuery.sizeOf(context).height - 48;
+    final dialogHeight = availableHeight < 520
+        ? availableHeight
+        : availableHeight > 760
+            ? 760.0
+            : availableHeight;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: SizedBox(
+        width: 760,
+        height: dialogHeight,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _CustomResumeDialogHeader(
+                onClose: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(height: 18),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      _DialogSection(
+                        number: '1',
+                        title: '目标岗位',
+                        child: _DialogTargetJob(application: application),
+                      ),
+                      _DialogSection(
+                        number: '2',
+                        title: '基础简历画像',
+                        child: _ResumeBaseSummary(detail: detail),
+                      ),
+                      _DialogSection(
+                        number: '3',
+                        title: '生成依据',
+                        child: Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: [
+                            _EvidenceChip(label: 'JD 分析', ready: jdReady),
+                            _EvidenceChip(label: '匹配报告', ready: fitReady),
+                            _EvidenceChip(label: '基础简历画像', ready: resumeReady),
+                          ],
+                        ),
+                      ),
+                      _DialogSection(
+                        number: '4',
+                        title: '本次优化重点',
+                        child: Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          children: const [
+                            _StrategyChip(label: '强化 Agent 工程化'),
+                            _StrategyChip(label: '补齐 RAG 细节'),
+                            _StrategyChip(label: '强调量化结果'),
+                            _StrategyChip(label: '突出系统稳定性'),
+                          ],
+                        ),
+                      ),
+                      _DialogSection(
+                        number: '5',
+                        title: '预期产物',
+                        child: Column(
+                          children: const [
+                            _DialogOutcomeRow(
+                              icon: Icons.description_outlined,
+                              title: '岗位定制简历草案',
+                              subtitle: '围绕目标岗位改写项目经历、关键词和能力表达。',
+                            ),
+                            SizedBox(height: 8),
+                            _DialogOutcomeRow(
+                              icon: Icons.folder_copy_outlined,
+                              title: '关联项目资产',
+                              subtitle: '生成后刷新当前项目的简历版本和关联资产。',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              _CustomResumeDialogFooter(
+                onCancel: () => Navigator.of(context).pop(),
+                onStart: onStart,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CustomResumeDialogHeader extends StatelessWidget {
+  final VoidCallback onClose;
+
+  const _CustomResumeDialogHeader({required this.onClose});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        ProductIconTile(
+          icon: Icons.auto_awesome_rounded,
+          tone: ProductTone.primary,
+          size: 38,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '生成岗位定制版',
+                style: AppTheme.ts(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '基于岗位需求与已有材料，生成更贴合岗位的定制简历草案。',
+                style: AppTheme.ts(
+                  fontSize: 12.5,
+                  color: ProductColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          onPressed: onClose,
+          icon: const Icon(Icons.close_rounded),
+        ),
+      ],
+    );
+  }
+}
+
+class _CustomResumeDialogFooter extends StatelessWidget {
+  final VoidCallback onCancel;
+  final VoidCallback onStart;
+
+  const _CustomResumeDialogFooter({
+    required this.onCancel,
+    required this.onStart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        OutlinedButton(
+          onPressed: onCancel,
+          child: const Text('取消'),
+        ),
+        const SizedBox(width: 10),
+        ElevatedButton.icon(
+          onPressed: onStart,
+          icon: const Icon(Icons.auto_awesome_rounded, size: 16),
+          label: const Text('开始生成草案'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: ProductColors.primary,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(11),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FactMetric {
   final IconData icon;
   final String label;
   final String value;
   final ProductTone tone;
 
-  const _OverviewMetricData({
+  const _FactMetric({
     required this.icon,
     required this.label,
     required this.value,
@@ -1397,46 +1644,47 @@ class _OverviewMetricData {
   });
 }
 
-class _OverviewMetric extends StatelessWidget {
-  final _OverviewMetricData metric;
+class _FactMetricTile extends StatelessWidget {
+  final _FactMetric metric;
 
-  const _OverviewMetric({required this.metric});
+  const _FactMetricTile({required this.metric});
 
   @override
   Widget build(BuildContext context) {
+    final style = productToneStyle(metric.tone);
     return Container(
+      constraints: const BoxConstraints(minHeight: 64),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
       decoration: BoxDecoration(
-        color: productToneStyle(metric.tone).soft.withValues(alpha: 0.45),
+        color: style.soft.withValues(alpha: 0.48),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: productToneStyle(metric.tone).color.withValues(alpha: 0.1),
-        ),
+        border: Border.all(color: style.color.withValues(alpha: 0.1)),
       ),
       child: Row(
         children: [
-          ProductIconTile(icon: metric.icon, tone: metric.tone, size: 34),
+          ProductIconTile(icon: metric.icon, tone: metric.tone, size: 36),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
                   metric.label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTheme.ts(
-                    fontSize: 10.5,
+                    fontSize: 11,
                     color: ProductColors.textMuted,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 5),
                 Text(
                   metric.value,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTheme.ts(
-                    fontSize: 12.3,
+                    fontSize: 13,
                     fontWeight: FontWeight.w900,
                     color: ProductColors.text,
                   ),
@@ -1450,204 +1698,114 @@ class _OverviewMetric extends StatelessWidget {
   }
 }
 
-class _TimelineStep {
-  final String label;
-  final String stage;
-  final IconData icon;
+enum _StepStatus { done, active, pending, blocked }
 
-  const _TimelineStep(this.label, this.stage, this.icon);
-}
-
-class _TimelineStepRow extends StatelessWidget {
-  final _TimelineStep step;
-  final bool active;
-  final bool done;
-  final String? subtitle;
-
-  const _TimelineStepRow({
-    required this.step,
-    required this.active,
-    required this.done,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final tone = done || active ? ProductTone.primary : ProductTone.neutral;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
-      decoration: BoxDecoration(
-        color: active
-            ? ProductColors.primarySoft
-            : done
-                ? ProductColors.surfaceMint.withValues(alpha: 0.55)
-                : Colors.transparent,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: active
-              ? ProductColors.primary.withValues(alpha: 0.18)
-              : Colors.transparent,
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            done
-                ? Icons.check_circle_rounded
-                : active
-                    ? step.icon
-                    : Icons.radio_button_unchecked_rounded,
-            size: 18,
-            color: productToneStyle(tone).color,
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  step.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTheme.ts(
-                    fontSize: 12.2,
-                    fontWeight: FontWeight.w900,
-                    color: done || active
-                        ? ProductColors.text
-                        : ProductColors.textMuted,
-                  ),
-                ),
-                if (subtitle?.trim().isNotEmpty == true) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTheme.ts(
-                      fontSize: 10.5,
-                      color: ProductColors.textMuted,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          if (active) ProductTag(label: '进行中', tone: ProductTone.primary),
-        ],
-      ),
-    );
-  }
-}
-
-class _AgentStep {
+class _WorkflowStep {
   final String title;
   final String subtitle;
   final IconData icon;
-  final bool done;
-  final ProductTone tone;
-  final String? actionLabel;
-  final String? actionType;
+  final _StepStatus status;
 
-  const _AgentStep({
+  const _WorkflowStep({
     required this.title,
     required this.subtitle,
     required this.icon,
-    required this.done,
-    required this.tone,
-    this.actionLabel,
-    this.actionType,
+    required this.status,
   });
 }
 
-class _AgentStepCard extends StatelessWidget {
-  final _AgentStep step;
-  final CareerApplicationView? application;
-  final CareerPromptSender? onSendPrompt;
+class _WorkflowStepTile extends StatelessWidget {
+  final int index;
+  final _WorkflowStep step;
 
-  const _AgentStepCard({
+  const _WorkflowStepTile({
+    required this.index,
     required this.step,
-    required this.application,
-    required this.onSendPrompt,
   });
 
   @override
   Widget build(BuildContext context) {
-    final style = productToneStyle(step.tone);
+    final tone = switch (step.status) {
+      _StepStatus.done => ProductTone.primary,
+      _StepStatus.active => ProductTone.primary,
+      _StepStatus.blocked => ProductTone.warning,
+      _StepStatus.pending => ProductTone.neutral,
+    };
+    final style = productToneStyle(tone);
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      constraints: const BoxConstraints(minHeight: 92),
+      padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
-        color: ProductColors.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: ProductColors.border),
+        color: step.status == _StepStatus.active
+            ? ProductColors.primarySoft
+            : step.status == _StepStatus.done
+                ? ProductColors.surfaceMint.withValues(alpha: 0.56)
+                : step.status == _StepStatus.blocked
+                    ? ProductColors.warningSoft
+                    : ProductColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: step.status == _StepStatus.active
+              ? ProductColors.primary
+              : style.color.withValues(alpha: 0.14),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              ProductIconTile(icon: step.icon, tone: step.tone, size: 38),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  step.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppTheme.ts(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w900,
-                    color: ProductColors.text,
-                  ),
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: step.status == _StepStatus.done
+                      ? ProductColors.primary
+                      : style.soft,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Center(
+                  child: step.status == _StepStatus.done
+                      ? const Icon(
+                          Icons.check_rounded,
+                          size: 17,
+                          color: Colors.white,
+                        )
+                      : Text(
+                          index.toString(),
+                          style: AppTheme.ts(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            color: style.color,
+                          ),
+                        ),
                 ),
               ),
-              Icon(
-                step.done ? Icons.check_circle_rounded : Icons.schedule_rounded,
-                size: 16,
-                color:
-                    step.done ? ProductColors.primary : ProductColors.warning,
-              ),
+              const Spacer(),
+              Icon(step.icon, size: 16, color: style.color),
             ],
           ),
           const SizedBox(height: 10),
-          ProductTag(
-            label: step.done ? '已完成' : '可继续',
-            tone: step.done ? ProductTone.primary : ProductTone.warning,
-          ),
-          const SizedBox(height: 10),
           Text(
-            step.subtitle,
-            maxLines: 2,
+            step.title,
+            maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: AppTheme.ts(
-              fontSize: 11.3,
-              height: 1.35,
+              fontSize: 12.4,
+              fontWeight: FontWeight.w900,
+              color: ProductColors.text,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            step.subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppTheme.ts(
+              fontSize: 10.8,
               color: ProductColors.textSecondary,
             ),
           ),
-          if (!step.done && step.actionLabel != null) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 32,
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () => sendCareerPromptAction(
-                  sender: onSendPrompt,
-                  application: application,
-                  label: step.actionLabel!,
-                  actionType: step.actionType ?? 'project_action',
-                  origin: 'projects',
-                  detail: step.subtitle,
-                ),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: style.color,
-                  side: BorderSide(color: style.color.withValues(alpha: 0.22)),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: Text(step.actionLabel!),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -1657,14 +1815,17 @@ class _AgentStepCard extends StatelessWidget {
 class _RiskRow extends StatelessWidget {
   final String risk;
   final ProductTone tone;
+  final String level;
 
   const _RiskRow({
     required this.risk,
     required this.tone,
+    required this.level,
   });
 
   @override
   Widget build(BuildContext context) {
+    final style = productToneStyle(tone);
     return Container(
       padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
       decoration: ProductSurface.softCard(tone: tone, radius: 12),
@@ -1676,7 +1837,7 @@ class _RiskRow extends StatelessWidget {
                 ? Icons.warning_amber_rounded
                 : Icons.info_outline_rounded,
             size: 17,
-            color: productToneStyle(tone).color,
+            color: style.color,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -1692,6 +1853,8 @@ class _RiskRow extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(width: 8),
+          ProductTag(label: level, tone: tone),
         ],
       ),
     );
@@ -1704,6 +1867,7 @@ class _ProjectActionItem {
   final String actionType;
   final ProductTone tone;
   final String actionLabel;
+  final IconData icon;
 
   const _ProjectActionItem({
     required this.label,
@@ -1711,7 +1875,213 @@ class _ProjectActionItem {
     required this.actionType,
     required this.tone,
     required this.actionLabel,
+    required this.icon,
   });
+}
+
+class _TimelineMiniItem extends StatelessWidget {
+  final CareerTimelineItemView item;
+
+  const _TimelineMiniItem({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 62),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: ProductColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ProductColors.border),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.check_circle_outline_rounded,
+            size: 17,
+            color: ProductColors.primary,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  item.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.text,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  careerFirstNonEmpty(
+                    [item.subtitle, careerFormatDateTime(item.occurredAt)],
+                    fallback: '-',
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 10.8,
+                    color: ProductColors.textMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> _showProjectTimelineDialog(
+  BuildContext context,
+  List<CareerTimelineItemView> timeline,
+) async {
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) {
+      return Dialog(
+        insetPadding: const EdgeInsets.all(24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 760),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    ProductIconTile(
+                      icon: Icons.timeline_outlined,
+                      tone: ProductTone.primary,
+                      size: 40,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '全部项目记录',
+                            style: AppTheme.ts(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                              color: ProductColors.text,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '共 ${timeline.length} 条推进记录，按时间倒序展示。',
+                            style: AppTheme.ts(
+                              fontSize: 12.5,
+                              color: ProductColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '关闭',
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: timeline.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final item = timeline[index];
+                      return Container(
+                        padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+                        decoration: BoxDecoration(
+                          color: ProductColors.surfaceSoft,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: ProductColors.border),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            ProductIconTile(
+                              icon: Icons.check_circle_outline_rounded,
+                              tone: ProductTone.primary,
+                              size: 34,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          item.title,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: AppTheme.ts(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w900,
+                                            color: ProductColors.text,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Text(
+                                        careerFormatDateTime(item.occurredAt),
+                                        style: AppTheme.ts(
+                                          fontSize: 11.5,
+                                          color: ProductColors.textMuted,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (item.subtitle.trim().isNotEmpty) ...[
+                                    const SizedBox(height: 5),
+                                    Text(
+                                      item.subtitle,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppTheme.ts(
+                                        fontSize: 12,
+                                        height: 1.45,
+                                        color: ProductColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('关闭'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 class _MiniBulletBlock extends StatelessWidget {
@@ -1778,17 +2148,19 @@ class _MiniBulletBlock extends StatelessWidget {
 
 class _ProgressCompactRow extends StatelessWidget {
   final String label;
-  final bool done;
-  final bool active;
+  final _StepStatus status;
+  final String? timestamp;
 
   const _ProgressCompactRow({
     required this.label,
-    required this.done,
-    required this.active,
+    required this.status,
+    required this.timestamp,
   });
 
   @override
   Widget build(BuildContext context) {
+    final done = status == _StepStatus.done;
+    final active = status == _StepStatus.active;
     return Padding(
       padding: const EdgeInsets.only(bottom: 9),
       child: Row(
@@ -1808,6 +2180,8 @@ class _ProgressCompactRow extends StatelessWidget {
           Expanded(
             child: Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: AppTheme.ts(
                 fontSize: 12,
                 fontWeight: active ? FontWeight.w900 : FontWeight.w700,
@@ -1817,7 +2191,16 @@ class _ProgressCompactRow extends StatelessWidget {
               ),
             ),
           ),
-          if (active) ProductTag(label: '进行中', tone: ProductTone.primary),
+          if (timestamp?.trim().isNotEmpty == true)
+            Text(
+              timestamp!,
+              style: AppTheme.ts(
+                fontSize: 10.5,
+                color: ProductColors.textMuted,
+              ),
+            )
+          else if (active)
+            ProductTag(label: '进行中', tone: ProductTone.primary),
         ],
       ),
     );
@@ -1892,7 +2275,7 @@ class _AssetLine extends StatelessWidget {
     return Row(
       children: [
         ProductIconTile(
-          icon: Icons.insert_drive_file_outlined,
+          icon: _assetIcon(asset.type),
           tone: asset.isCurrent ? ProductTone.primary : ProductTone.info,
           size: 32,
         ),
@@ -1932,6 +2315,51 @@ class _AssetLine extends StatelessWidget {
   }
 }
 
+class _NoteMiniItem extends StatelessWidget {
+  final CareerNoteSummaryView note;
+
+  const _NoteMiniItem({required this.note});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        ProductIconTile(
+          icon: Icons.sticky_note_2_outlined,
+          tone: ProductTone.warning,
+          size: 32,
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                careerShortLabel(note.title, fallback: '项目笔记'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTheme.ts(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                careerFormatDateTime(note.updatedAt),
+                style: AppTheme.ts(
+                  fontSize: 10.5,
+                  color: ProductColors.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _CompanyAvatar extends StatelessWidget {
   final String label;
 
@@ -1941,8 +2369,8 @@ class _CompanyAvatar extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = label.trim().isEmpty ? '岗' : label.trim().characters.first;
     return Container(
-      width: 64,
-      height: 64,
+      width: 74,
+      height: 74,
       decoration: BoxDecoration(
         color: ProductColors.surface,
         borderRadius: BorderRadius.circular(20),
@@ -1959,11 +2387,327 @@ class _CompanyAvatar extends StatelessWidget {
         child: Text(
           text,
           style: AppTheme.ts(
-            fontSize: 24,
+            fontSize: 26,
             fontWeight: FontWeight.w900,
             color: ProductColors.primary,
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _PrimaryProjectButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  const _PrimaryProjectButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: ProductColors.primary,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SecondaryProjectButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const _SecondaryProjectButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: ProductColors.primary,
+          side: const BorderSide(color: ProductColors.borderStrong),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DialogSection extends StatelessWidget {
+  final String number;
+  final String title;
+  final Widget child;
+
+  const _DialogSection({
+    required this.number,
+    required this.title,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: ProductColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: ProductColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: ProductColors.primary,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Center(
+                  child: Text(
+                    number,
+                    style: AppTheme.ts(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: AppTheme.ts(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                  color: ProductColors.text,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _DialogTargetJob extends StatelessWidget {
+  final CareerApplicationView application;
+
+  const _DialogTargetJob({required this.application});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration:
+          ProductSurface.softCard(tone: ProductTone.primary, radius: 12),
+      child: Row(
+        children: [
+          _CompanyAvatar(label: application.company),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  careerShortLabel(application.company, fallback: '目标公司'),
+                  style: AppTheme.ts(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  careerShortLabel(application.position, fallback: '目标岗位'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.text,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    ProductTag(
+                      label: careerShortLabel(application.location),
+                      tone: ProductTone.neutral,
+                    ),
+                    ProductTag(
+                      label: '优先级 ${careerPriorityLabel(application.priority)}',
+                      tone: careerPriorityTone(application.priority),
+                    ),
+                    ProductTag(
+                      label: careerStageLabel(application.stage),
+                      tone: careerStageTone(application.stage),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ResumeBaseSummary extends StatelessWidget {
+  final CareerApplicationWorkbenchView? detail;
+
+  const _ResumeBaseSummary({required this.detail});
+
+  @override
+  Widget build(BuildContext context) {
+    final profile = detail?.resumeProfile;
+    final skills = profile?.skills.take(8).toList() ?? const <String>[];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          profile == null ? '尚未读取到基础简历画像' : '已读取基础简历画像',
+          style: AppTheme.ts(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w900,
+            color: ProductColors.text,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          children: [
+            for (final skill in skills)
+              ProductTag(label: skill, tone: ProductTone.info),
+            if (skills.isEmpty)
+              ProductTag(label: '等待简历画像', tone: ProductTone.warning),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _EvidenceChip extends StatelessWidget {
+  final String label;
+  final bool ready;
+
+  const _EvidenceChip({
+    required this.label,
+    required this.ready,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ProductTag(
+      label: '$label ${ready ? '已完成' : '待补充'}',
+      icon: ready ? Icons.check_circle_rounded : Icons.pending_outlined,
+      tone: ready ? ProductTone.primary : ProductTone.warning,
+    );
+  }
+}
+
+class _StrategyChip extends StatelessWidget {
+  final String label;
+
+  const _StrategyChip({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return ProductTag(
+      label: label,
+      icon: Icons.check_rounded,
+      tone: ProductTone.primary,
+    );
+  }
+}
+
+class _DialogOutcomeRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _DialogOutcomeRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(11, 10, 11, 10),
+      decoration:
+          ProductSurface.softCard(tone: ProductTone.primary, radius: 12),
+      child: Row(
+        children: [
+          ProductIconTile(icon: icon, tone: ProductTone.primary, size: 32),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: AppTheme.ts(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w900,
+                    color: ProductColors.text,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: AppTheme.ts(
+                    fontSize: 11,
+                    height: 1.35,
+                    color: ProductColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2016,6 +2760,170 @@ class _ProjectsError extends StatelessWidget {
   }
 }
 
+List<_WorkflowStep> _workflowSteps(
+  CareerApplicationView? app,
+  CareerApplicationWorkbenchView? detail,
+) {
+  final jdDone = detail?.jdAnalysis != null ||
+      app?.jdAnalysisId?.trim().isNotEmpty == true;
+  final fitDone = detail?.jobFitReport != null ||
+      app?.jobFitReportId?.trim().isNotEmpty == true;
+  final resumeDone = detail?.resumeVersions.isNotEmpty == true ||
+      app?.resumeVersionIds.isNotEmpty == true;
+  final applied = _stageOrder(app?.stage) >= _stageOrder('applied');
+  final interview = _stageOrder(app?.stage) >= _stageOrder('interviewing');
+  final hasNotes = detail?.notes.isNotEmpty == true;
+
+  final data = [
+    _StepSeed(
+      title: 'JD 匹配',
+      subtitle: jdDone || fitDone ? '已完成' : '待分析',
+      icon: Icons.analytics_outlined,
+      done: jdDone || fitDone,
+    ),
+    _StepSeed(
+      title: '定制简历',
+      subtitle: resumeDone ? '已完成' : '待生成',
+      icon: Icons.description_outlined,
+      done: resumeDone,
+    ),
+    _StepSeed(
+      title: '投递前检查',
+      subtitle: applied ? '已完成' : '待进行',
+      icon: Icons.checklist_rounded,
+      done: applied,
+    ),
+    _StepSeed(
+      title: '简历投递',
+      subtitle: applied ? '进行中' : '待进行',
+      icon: Icons.send_outlined,
+      done: _stageOrder(app?.stage) > _stageOrder('applied'),
+    ),
+    _StepSeed(
+      title: '面试准备',
+      subtitle: interview ? '进行中' : '待进行',
+      icon: Icons.forum_outlined,
+      done: _stageOrder(app?.stage) > _stageOrder('interviewing'),
+    ),
+    _StepSeed(
+      title: '复盘记录',
+      subtitle: hasNotes ? '有笔记' : '待记录',
+      icon: Icons.sticky_note_2_outlined,
+      done: hasNotes && _stageOrder(app?.stage) >= _stageOrder('interviewing'),
+    ),
+  ];
+
+  var activeAssigned = false;
+  return [
+    for (final item in data)
+      _WorkflowStep(
+        title: item.title,
+        subtitle: item.subtitle,
+        icon: item.icon,
+        status: item.done
+            ? _StepStatus.done
+            : activeAssigned
+                ? _StepStatus.pending
+                : (activeAssigned = true) == true
+                    ? _StepStatus.active
+                    : _StepStatus.pending,
+      ),
+  ];
+}
+
+class _StepSeed {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final bool done;
+
+  const _StepSeed({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.done,
+  });
+}
+
+String? _stepTimestamp(
+  _WorkflowStep step,
+  CareerApplicationWorkbenchView? detail,
+) {
+  for (final item in detail?.timeline ?? const <CareerTimelineItemView>[]) {
+    if (item.title.contains(step.title) || step.title.contains(item.title)) {
+      return careerFormatDateTime(item.occurredAt);
+    }
+  }
+  return null;
+}
+
+_ProjectActionItem _primaryProjectAction(
+  CareerApplicationView app,
+  CareerApplicationWorkbenchView? detail,
+) {
+  if (detail?.jdAnalysis == null &&
+      app.jdAnalysisId?.trim().isNotEmpty != true) {
+    return const _ProjectActionItem(
+      label: '分析 JD 匹配',
+      reason: '补齐岗位要求和匹配判断。',
+      actionType: 'jd_match_analysis',
+      tone: ProductTone.info,
+      actionLabel: '去分析',
+      icon: Icons.analytics_outlined,
+    );
+  }
+  if (detail?.jobFitReport == null &&
+      app.jobFitReportId?.trim().isNotEmpty != true) {
+    return const _ProjectActionItem(
+      label: '生成匹配报告',
+      reason: '结合简历画像和 JD 生成岗位匹配报告。',
+      actionType: 'jd_match_analysis',
+      tone: ProductTone.info,
+      actionLabel: '去生成',
+      icon: Icons.fact_check_outlined,
+    );
+  }
+  if (detail?.resumeVersions.isNotEmpty != true &&
+      app.resumeVersionIds.isEmpty) {
+    return const _ProjectActionItem(
+      label: '生成定制简历',
+      reason: '基于岗位匹配结果生成 tailored 简历版本。',
+      actionType: 'custom_resume',
+      tone: ProductTone.primary,
+      actionLabel: '去生成',
+      icon: Icons.description_outlined,
+    );
+  }
+  if ((app.stage).trim() == 'ready_to_apply') {
+    return const _ProjectActionItem(
+      label: '投递前检查',
+      reason: '检查简历、匹配报告和投递材料。',
+      actionType: 'pre_apply_check',
+      tone: ProductTone.warning,
+      actionLabel: '去检查',
+      icon: Icons.checklist_rounded,
+    );
+  }
+  if ((app.stage).trim() == 'interviewing') {
+    return const _ProjectActionItem(
+      label: '准备面试题',
+      reason: '基于岗位风险生成面试问题和答案草案。',
+      actionType: 'interview_prep',
+      tone: ProductTone.purple,
+      actionLabel: '去准备',
+      icon: Icons.forum_outlined,
+    );
+  }
+  return const _ProjectActionItem(
+    label: '查看下一步',
+    reason: '查看当前推荐动作。',
+    actionType: 'project_next',
+    tone: ProductTone.primary,
+    actionLabel: '查看',
+    icon: Icons.arrow_forward_rounded,
+  );
+}
+
 List<_ProjectActionItem> _recommendedProjectActions(
   CareerApplicationView? app,
   CareerApplicationWorkbenchView? detail,
@@ -2025,38 +2933,42 @@ List<_ProjectActionItem> _recommendedProjectActions(
     if (!action.enabled) continue;
     actions.add(
       _ProjectActionItem(
-        label: careerShortLabel(action.label, fallback: '推进求职动作'),
+        label: _projectActionLabel(action.actionType, action.label),
         reason: careerFirstNonEmpty(
           [action.reason, action.promptIntent, app?.summary],
           fallback: '基于当前项目状态继续推进。',
         ),
-        actionType: action.actionType,
+        actionType: _normalizeActionType(action.actionType),
         tone: careerPriorityTone(action.priority),
-        actionLabel: '去执行',
+        actionLabel: _projectActionButton(action.actionType),
+        icon: careerActionIcon(action.actionType),
       ),
     );
   }
   final fallback = [
-    _ProjectActionItem(
+    const _ProjectActionItem(
       label: '生成定制简历',
       reason: '围绕目标岗位改写项目经历、关键词和能力表达。',
       actionType: 'custom_resume',
       tone: ProductTone.primary,
-      actionLabel: '去优化简历',
+      actionLabel: '去生成',
+      icon: Icons.description_outlined,
     ),
-    _ProjectActionItem(
-      label: '准备技术面试',
+    const _ProjectActionItem(
+      label: '投递前检查',
+      reason: '检查简历与岗位匹配度，优化投递材料。',
+      actionType: 'pre_apply_check',
+      tone: ProductTone.warning,
+      actionLabel: '去检查',
+      icon: Icons.checklist_rounded,
+    ),
+    const _ProjectActionItem(
+      label: '准备面试题',
       reason: '根据 JD 风险点生成面试问题和参考答案。',
       actionType: 'interview_prep',
       tone: ProductTone.purple,
-      actionLabel: '开始准备',
-    ),
-    _ProjectActionItem(
-      label: '补充项目案例',
-      reason: '把缺失证据转成可补齐的项目表述和学习任务。',
-      actionType: 'learning_task',
-      tone: ProductTone.info,
-      actionLabel: '去补充',
+      actionLabel: '去准备',
+      icon: Icons.forum_outlined,
     ),
   ];
   for (final item in fallback) {
@@ -2066,6 +2978,43 @@ List<_ProjectActionItem> _recommendedProjectActions(
     }
   }
   return actions;
+}
+
+String _projectActionLabel(String type, String fallback) {
+  final normalized = _normalizeActionType(type);
+  return switch (normalized) {
+    'jd_match_analysis' => '分析 JD 匹配',
+    'custom_resume' => '生成定制简历',
+    'resume_optimize' => '优化当前简历',
+    'pre_apply_check' => '投递前检查',
+    'interview_prep' => '准备面试题',
+    'learning_task' => '转成学习任务',
+    'note_review' => '记录复盘',
+    _ => careerShortLabel(fallback, fallback: '推进求职动作'),
+  };
+}
+
+String _projectActionButton(String type) {
+  final normalized = _normalizeActionType(type);
+  return switch (normalized) {
+    'jd_match_analysis' => '去分析',
+    'custom_resume' => '去生成',
+    'resume_optimize' => '去优化',
+    'pre_apply_check' => '去检查',
+    'interview_prep' => '去准备',
+    'learning_task' => '去学习页',
+    'note_review' => '去记录',
+    _ => '去执行',
+  };
+}
+
+String _normalizeActionType(String type) {
+  return switch (type.trim()) {
+    'jd_match' || 'job_fit' || 'fit_report' => 'jd_match_analysis',
+    'preflight_check' || 'pre_apply' => 'pre_apply_check',
+    'note' || 'note_create' => 'note_review',
+    _ => type.trim(),
+  };
 }
 
 String _projectFilterLabel(CareerProjectFilter filter) {
@@ -2079,38 +3028,26 @@ String _projectFilterLabel(CareerProjectFilter filter) {
   };
 }
 
-bool _isStageActive(String? currentStage, String stepStage, int index) {
-  final current = _stageIndex(currentStage);
-  final step = math.min(index + 1, 5);
-  if ((currentStage ?? '').trim() == 'interviewing' &&
-      stepStage == 'interviewing') {
-    return index == 2;
-  }
-  return current == step;
-}
-
-bool _isStageDone(String? currentStage, int index) {
-  return _stageIndex(currentStage) > index + 1;
-}
-
-int _stageIndex(String? stage) {
+int _stageOrder(String? stage) {
   return switch ((stage ?? '').trim()) {
     'draft' => 0,
     'ready_to_apply' => 1,
-    'applied' => 1,
-    'screening' => 2,
-    'interviewing' => 3,
+    'applied' => 2,
+    'screening' => 3,
+    'interviewing' => 4,
     'offer' => 5,
     'rejected' => 6,
     _ => 0,
   };
 }
 
-String? _timelineSubtitle(List<CareerTimelineItemView> timeline, String label) {
-  for (final item in timeline) {
-    if (item.title.contains(label) || label.contains(item.title)) {
-      return careerFormatDateTime(item.occurredAt);
-    }
-  }
-  return null;
+IconData _assetIcon(String type) {
+  return switch (type.trim()) {
+    'resume_profile' || 'resume_version' => Icons.description_outlined,
+    'jd_analysis' => Icons.analytics_outlined,
+    'job_fit_report' => Icons.fact_check_outlined,
+    'note' => Icons.sticky_note_2_outlined,
+    'learning_task' => Icons.school_outlined,
+    _ => Icons.insert_drive_file_outlined,
+  };
 }

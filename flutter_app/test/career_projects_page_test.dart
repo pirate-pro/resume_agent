@@ -7,7 +7,7 @@ import 'package:resume_agent_app/features/career_workbench/career_workbench_prov
 import 'package:resume_agent_app/features/projects/career_projects_page.dart';
 
 void main() {
-  testWidgets('求职项目页展示岗位工作台、执行进度和推荐动作', (tester) async {
+  testWidgets('求职项目页展示岗位推进工作台并就地确认定制简历动作', (tester) async {
     tester.view.physicalSize = const Size(1440, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -31,6 +31,7 @@ void main() {
               onOpenResumes: () {},
               onOpenJDMatch: () {},
               onOpenLearning: () {},
+              onOpenNotes: () {},
               onSendPrompt: (prompt, {action}) async {
                 sentPrompt = prompt;
                 sentAction = action;
@@ -44,29 +45,42 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('求职项目'), findsOneWidget);
-    expect(find.text('岗位工作台'), findsOneWidget);
     expect(find.text('星河智能'), findsWidgets);
-    expect(find.text('岗位总览'), findsOneWidget);
-    expect(find.text('面试流程时间线'), findsOneWidget);
-    expect(find.text('多 Agent 执行进度'), findsOneWidget);
+    expect(find.text('岗位信息'), findsOneWidget);
+    expect(find.text('项目推进流程'), findsOneWidget);
     expect(find.text('当前判断'), findsOneWidget);
-    expect(find.text('求职进展'), findsOneWidget);
+    expect(find.text('求职进度'), findsOneWidget);
     expect(find.text('关联资产'), findsOneWidget);
+    expect(find.text('关联笔记'), findsOneWidget);
 
-    await tester.scrollUntilVisible(
-      find.text('风险与差距'),
-      320,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('风险与差距'), findsOneWidget);
-    expect(find.text('推荐动作'), findsOneWidget);
+    await tester.tap(find.text('生成定制简历').first);
+    await tester.pumpAndSettle();
 
-    await tester.tap(find.text('去执行').first);
-    await tester.pump();
+    expect(find.text('生成岗位定制版'), findsOneWidget);
+    expect(find.text('目标岗位'), findsOneWidget);
+    expect(find.text('开始生成草案'), findsOneWidget);
+
+    await tester.tap(find.text('开始生成草案'));
+    await tester.pumpAndSettle();
 
     expect(sentPrompt, contains('application_projects_staragent'));
     expect(sentAction?.origin, 'projects');
     expect(sentAction?.actionType, 'custom_resume');
+
+    await tester.scrollUntilVisible(
+      find.text('当前风险与提醒'),
+      320,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('当前风险与提醒'), findsOneWidget);
+    expect(find.text('推荐下一步'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('时间线 / 最近记录'),
+      320,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('时间线 / 最近记录'), findsOneWidget);
   });
 }
 
