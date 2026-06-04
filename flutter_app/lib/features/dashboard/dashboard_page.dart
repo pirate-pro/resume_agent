@@ -83,6 +83,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
             _RecentApplicationsSection(
               apps: apps,
               onOpenProject: widget.onOpenProject,
+              onOpenProjects: widget.onOpenProjects,
               onSendPrompt: widget.onSendPrompt,
             ),
             const SizedBox(height: 18),
@@ -122,6 +123,7 @@ class _DashboardPageState extends ConsumerState<DashboardPage> {
               _RecentApplicationsSection(
                 apps: apps,
                 onOpenProject: widget.onOpenProject,
+                onOpenProjects: widget.onOpenProjects,
                 onSendPrompt: widget.onSendPrompt,
               ),
               const SizedBox(height: 14),
@@ -387,11 +389,13 @@ class _MetricStrip extends StatelessWidget {
 class _RecentApplicationsSection extends StatelessWidget {
   final List<CareerApplicationSummaryView> apps;
   final ValueChanged<String> onOpenProject;
+  final VoidCallback onOpenProjects;
   final DashboardPromptSender? onSendPrompt;
 
   const _RecentApplicationsSection({
     required this.apps,
     required this.onOpenProject,
+    required this.onOpenProjects,
     required this.onSendPrompt,
   });
 
@@ -402,7 +406,7 @@ class _RecentApplicationsSection extends StatelessWidget {
       subtitle: apps.isEmpty ? '暂无求职项目' : '按更新时间和推进状态排序',
       icon: Icons.business_center_outlined,
       trailing: TextButton(
-        onPressed: apps.isEmpty ? null : () {},
+        onPressed: apps.isEmpty ? null : onOpenProjects,
         child: const Text('查看全部'),
       ),
       child: apps.isEmpty

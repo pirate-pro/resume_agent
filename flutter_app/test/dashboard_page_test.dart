@@ -15,6 +15,7 @@ void main() {
 
     final api = _FakeDashboardApi();
     String? openedProjectId;
+    var openedProjects = false;
     String? sentPrompt;
     CareerWorkbenchActionRequest? sentAction;
 
@@ -29,7 +30,7 @@ void main() {
           home: Scaffold(
             body: DashboardPage(
               onOpenProject: (id) => openedProjectId = id,
-              onOpenProjects: () {},
+              onOpenProjects: () => openedProjects = true,
               onOpenResumes: () {},
               onOpenLearning: () {},
               onOpenNotes: () {},
@@ -54,6 +55,9 @@ void main() {
     expect(find.text('生成定制简历'), findsWidgets);
     expect(find.text('当前判断'), findsOneWidget);
     expect(find.text('关联资产'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, '查看全部').first);
+    expect(openedProjects, isTrue);
 
     await tester.tap(find.text('继续推进岗位'));
     expect(openedProjectId, 'application_dashboard_staragent');
