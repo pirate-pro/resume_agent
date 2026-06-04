@@ -13,16 +13,16 @@ class ProductBreakpoints {
 }
 
 class ProductColors {
-  static const canvas = Color(0xFFF7FAF9);
+  static const canvas = Color(0xFFF6FAF8);
   static const surface = Color(0xFFFFFFFF);
-  static const surfaceSoft = Color(0xFFF2F8F6);
-  static const surfaceMint = Color(0xFFEAF8F3);
-  static const border = Color(0xFFDDE8E4);
-  static const borderStrong = Color(0xFFC9D8D3);
+  static const surfaceSoft = Color(0xFFF9FCFA);
+  static const surfaceMint = Color(0xFFE7F7F0);
+  static const border = Color(0xFFE3ECE7);
+  static const borderStrong = Color(0xFFCFE3DA);
 
-  static const primary = Color(0xFF0F9B78);
-  static const primaryHover = Color(0xFF0B7E62);
-  static const primarySoft = Color(0xFFE5F6F1);
+  static const primary = Color(0xFF0F9F6E);
+  static const primaryHover = Color(0xFF0B8A5F);
+  static const primarySoft = Color(0xFFE7F7F0);
 
   static const info = Color(0xFF2563EB);
   static const infoSoft = Color(0xFFEFF6FF);
@@ -33,9 +33,9 @@ class ProductColors {
   static const purple = Color(0xFF8B5CF6);
   static const purpleSoft = Color(0xFFF5F3FF);
 
-  static const text = Color(0xFF14211B);
-  static const textSecondary = Color(0xFF55645F);
-  static const textMuted = Color(0xFF8A9892);
+  static const text = Color(0xFF1F2933);
+  static const textSecondary = Color(0xFF667085);
+  static const textMuted = Color(0xFF98A2B3);
 }
 
 class ProductToneStyle {
@@ -97,9 +97,9 @@ class ProductSurface {
       border: Border.all(color: borderColor ?? ProductColors.border),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: 0.05),
+          color: Colors.black.withValues(alpha: 0.04),
           blurRadius: 18,
-          offset: const Offset(0, 8),
+          offset: const Offset(0, 6),
         ),
       ],
     );

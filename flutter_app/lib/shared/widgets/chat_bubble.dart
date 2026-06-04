@@ -18,8 +18,8 @@ import 'run_progress_panel.dart';
 
 const double _bubbleMaxWidth = 780;
 const double _userBubbleMaxWidth = 560;
-const double _agentBubbleMaxWidth = 720;
-const double _agentUserBubbleMaxWidth = 460;
+const double _agentBubbleMaxWidth = 760;
+const double _agentUserBubbleMaxWidth = 560;
 const int _richMarkdownMaxChars = 6000;
 const int _richMarkdownMaxLines = 160;
 const int _streamStructuredMaxChars = 3200;
@@ -102,7 +102,7 @@ class _ChatBubbleState extends State<ChatBubble> {
       child: Container(
         padding: EdgeInsets.symmetric(
           horizontal: isUser ? 16 : (agentWorkspace ? 18 : 18),
-          vertical: isUser ? 12 : (agentWorkspace ? 16 : 14),
+          vertical: isUser ? 12 : (agentWorkspace ? 18 : 14),
         ),
         decoration: _bubbleDecoration(
           isUser: isUser,
@@ -118,6 +118,9 @@ class _ChatBubbleState extends State<ChatBubble> {
                   widget.message.progressEvents,
                   widget.style,
                 ),
+                style: agentWorkspace
+                    ? RunProgressPanelStyle.compact
+                    : RunProgressPanelStyle.detailed,
               ),
               if (widget.message.content.isNotEmpty) const SizedBox(height: 2),
             ],
@@ -130,6 +133,7 @@ class _ChatBubbleState extends State<ChatBubble> {
                   answerFormat: widget.message.answerFormat,
                   renderHint: widget.message.renderHint,
                   layoutHint: widget.message.layoutHint,
+                  presentationKind: widget.message.presentationKind,
                 ),
               ),
             if (detectedAssets.isNotEmpty) ...[
@@ -159,10 +163,10 @@ class _ChatBubbleState extends State<ChatBubble> {
         child: Container(
           constraints: BoxConstraints(maxWidth: maxBubbleWidth),
           margin: EdgeInsets.only(
-            left: isUser ? (agentWorkspace ? 260 : 160) : 0,
-            right: isUser ? 8 : (agentWorkspace ? 130 : 60),
-            top: isUser ? 14 : 8,
-            bottom: isUser ? 18 : 12,
+            left: isUser ? (agentWorkspace ? 220 : 160) : 0,
+            right: isUser ? 0 : (agentWorkspace ? 72 : 60),
+            top: isUser ? 18 : 10,
+            bottom: isUser ? 20 : 16,
           ),
           child: Column(
             crossAxisAlignment:
@@ -170,7 +174,7 @@ class _ChatBubbleState extends State<ChatBubble> {
             children: [
               if (!isUser)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8, left: 6, right: 6),
+                  padding: const EdgeInsets.only(bottom: 8, left: 4, right: 6),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -179,8 +183,10 @@ class _ChatBubbleState extends State<ChatBubble> {
                       Text(
                         agentWorkspace ? "Agent 助手" : "Assistant",
                         style: AppTheme.ts(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
+                            fontSize: agentWorkspace ? 14 : 12.5,
+                            fontWeight: agentWorkspace
+                                ? FontWeight.w700
+                                : FontWeight.w600,
                             color: AppTheme.textSecondary),
                       ),
                       if (agentWorkspace) ...[
@@ -188,8 +194,8 @@ class _ChatBubbleState extends State<ChatBubble> {
                         Text(
                           DateFormat('HH:mm').format(widget.message.timestamp),
                           style: AppTheme.ts(
-                            fontSize: 11.2,
-                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
                             color: ProductColors.textMuted,
                           ),
                         ),
@@ -226,6 +232,7 @@ class StreamingBubble extends StatelessWidget {
   final String? answerFormat;
   final String? renderHint;
   final String? layoutHint;
+  final String reasoningBuffer;
   final List<AnswerArtifactView> artifacts;
   final List<String> thinkingLines;
   final List<EventView> progressEvents;
@@ -236,6 +243,7 @@ class StreamingBubble extends StatelessWidget {
       this.answerFormat,
       this.renderHint,
       this.layoutHint,
+      this.reasoningBuffer = '',
       this.artifacts = const [],
       this.thinkingLines = const [],
       this.progressEvents = const [],
@@ -246,14 +254,19 @@ class StreamingBubble extends StatelessWidget {
     final agentWorkspace = style == ChatBubbleStyle.agentWorkspace;
     final progress = _workflowProgressEvents(progressEvents, style);
     final showProgress = RunProgressPanel.hasProgress(progress);
-    final showThinking = !agentWorkspace && thinkingLines.isNotEmpty;
+    final showReasoning = reasoningBuffer.trim().isNotEmpty;
+    final showThinking = thinkingLines.isNotEmpty;
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
           maxWidth: agentWorkspace ? _agentBubbleMaxWidth : _bubbleMaxWidth,
         ),
-        margin: const EdgeInsets.only(top: 6, bottom: 6),
+        margin: EdgeInsets.only(
+          top: 10,
+          right: agentWorkspace ? 72 : 0,
+          bottom: 16,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -266,11 +279,13 @@ class StreamingBubble extends StatelessWidget {
                   const _Avatar(isUser: false),
                   const SizedBox(width: 8),
                   Text(
-                    "Assistant",
+                    agentWorkspace ? "Agent 助手" : "Assistant",
                     style: AppTheme.ts(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textSecondary),
+                      fontSize: agentWorkspace ? 14 : 12.5,
+                      fontWeight:
+                          agentWorkspace ? FontWeight.w700 : FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
                   ),
                   if (buffer.isEmpty) ...[
                     const SizedBox(width: 8),
@@ -283,9 +298,16 @@ class StreamingBubble extends StatelessWidget {
             ),
             // Progress section (collapsible)
             if (showProgress)
-              RunProgressPanel(events: progress)
+              RunProgressPanel(
+                events: progress,
+                style: agentWorkspace
+                    ? RunProgressPanelStyle.compact
+                    : RunProgressPanelStyle.detailed,
+              )
             else if (showThinking)
               _ThinkingBlock(lines: thinkingLines),
+            if (showReasoning)
+              _ReasoningBlock(content: reasoningBuffer),
             // Content
             if (buffer.isNotEmpty)
               ConstrainedBox(
@@ -312,6 +334,7 @@ class StreamingBubble extends StatelessWidget {
                           answerFormat: answerFormat,
                           renderHint: renderHint,
                           layoutHint: layoutHint,
+                          presentationKind: 'chat_text',
                         ),
                       ),
                       if (artifacts.isNotEmpty) ...[
@@ -350,17 +373,21 @@ BoxDecoration _bubbleDecoration({
 
   if (isUser) {
     return BoxDecoration(
-      color: const Color(0xFFE5F6F1),
+      gradient: const LinearGradient(
+        colors: [Color(0xFFE5F8F0), Color(0xFFDDF4EB)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      ),
       borderRadius: const BorderRadius.only(
-        topLeft: Radius.circular(16),
-        topRight: Radius.circular(16),
-        bottomLeft: Radius.circular(16),
+        topLeft: Radius.circular(18),
+        topRight: Radius.circular(18),
+        bottomLeft: Radius.circular(18),
         bottomRight: Radius.circular(6),
       ),
-      border: Border.all(color: ProductColors.primary.withValues(alpha: 0.16)),
+      border: Border.all(color: const Color(0xFFBFE5D4)),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: 0.08),
+          color: Colors.black.withValues(alpha: 0.06),
           blurRadius: 18,
           offset: const Offset(0, 8),
         ),
@@ -372,15 +399,15 @@ BoxDecoration _bubbleDecoration({
     color: ProductColors.surface,
     borderRadius: const BorderRadius.only(
       topLeft: Radius.circular(6),
-      topRight: Radius.circular(16),
-      bottomLeft: Radius.circular(16),
-      bottomRight: Radius.circular(16),
+      topRight: Radius.circular(20),
+      bottomLeft: Radius.circular(20),
+      bottomRight: Radius.circular(20),
     ),
     border: Border.all(color: ProductColors.border),
     boxShadow: [
       BoxShadow(
-        color: Colors.black.withValues(alpha: 0.08),
-        blurRadius: 22,
+        color: Colors.black.withValues(alpha: 0.06),
+        blurRadius: 24,
         offset: const Offset(0, 10),
       ),
     ],
@@ -394,6 +421,11 @@ bool _shouldUseCareerPresentation(
   if (message.isUser) {
     return false;
   }
+  if (message.presentationKind == 'career_report' ||
+      message.presentationKind == 'document_preview' ||
+      message.presentationKind == 'artifact_card') {
+    return true;
+  }
   if (style == ChatBubbleStyle.standard) {
     return true;
   }
@@ -403,7 +435,7 @@ bool _shouldUseCareerPresentation(
   if (message.sourceKind != 'direct_answer') {
     return true;
   }
-  if (message.toolCalls.any((call) => _isWorkflowToolName(call.name))) {
+  if (message.toolCalls.any((call) => _isMultiAgentToolName(call.name))) {
     return true;
   }
   if (_hasWorkflowProgress(message.progressEvents)) {
@@ -441,28 +473,123 @@ bool _isWorkflowProgressEvent(EventView event) {
     return true;
   }
   if (event.type == 'tool_call') {
-    return _isWorkflowToolName((event.payload['name'] ?? '').toString());
+    return _isMultiAgentToolName((event.payload['name'] ?? '').toString());
   }
   if (event.type == 'tool_result') {
-    return _isWorkflowToolName((event.payload['tool_name'] ?? '').toString());
+    return _isMultiAgentToolName(
+      (event.payload['tool_name'] ?? '').toString(),
+    );
   }
   return false;
 }
 
-bool _isWorkflowToolName(String name) {
+bool _isMultiAgentToolName(String name) {
   final normalized = name.trim();
-  if (normalized.isEmpty) {
-    return false;
+  return normalized == 'delegate_agents' || normalized == 'agent_task_status';
+}
+
+// ── Reasoning block (ephemeral stream) ──────────────────────────────────
+
+class _ReasoningBlock extends StatefulWidget {
+  final String content;
+
+  const _ReasoningBlock({required this.content});
+
+  @override
+  State<_ReasoningBlock> createState() => _ReasoningBlockState();
+}
+
+class _ReasoningBlockState extends State<_ReasoningBlock> {
+  static const int _previewChars = 1600;
+  bool _expanded = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = widget.content.trim();
+    if (normalized.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final displayText = normalized.length > _previewChars
+        ? "...${normalized.substring(normalized.length - _previewChars)}"
+        : normalized;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: AppTheme.isDark ? 0.7 : 0.96),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.accent.withValues(alpha: 0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: AppTheme.accent.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppTheme.accent.withValues(alpha: 0.16),
+                      ),
+                    ),
+                    child: Icon(
+                      _expanded
+                          ? Icons.expand_more_rounded
+                          : Icons.chevron_right_rounded,
+                      size: 17,
+                      color: AppTheme.accent,
+                    ),
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      "模型思考",
+                      style: AppTheme.ts(
+                        fontSize: 12.2,
+                        height: 1.15,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    "实时",
+                    style: AppTheme.ts(
+                      fontSize: 10.5,
+                      height: 1.1,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.accent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Text(
+                displayText,
+                style: AppTheme.ts(
+                  fontSize: 12.2,
+                  height: 1.55,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
-  if (normalized == 'delegate_agents' || normalized == 'agent_task_status') {
-    return true;
-  }
-  return normalized.startsWith('career_') ||
-      normalized.startsWith('retrieval_') ||
-      normalized.startsWith('note_') ||
-      normalized.startsWith('learning_') ||
-      normalized.startsWith('workspace_') ||
-      normalized.startsWith('session_');
 }
 
 // ── Thinking block (collapsible) ────────────────────────────────────────
@@ -487,6 +614,15 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
     final failedCount = steps.where((step) => step.kind == "failed").length;
     final completedCount =
         steps.where((step) => step.kind == "completed").length;
+    final hasToolActivity = widget.lines.any(
+      (line) =>
+          line.contains("调用工具") ||
+          line.contains("工具成功") ||
+          line.contains("工具失败"),
+    );
+    final title = hasToolActivity ? "工具动态" : "模型思考";
+    final subtitle =
+        hasToolActivity ? "正在读取工具结果并组织回答" : "正在组织回答";
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -544,7 +680,7 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          "执行动态",
+                          title,
                           style: AppTheme.ts(
                             fontSize: 12.2,
                             height: 1.15,
@@ -554,7 +690,7 @@ class _ThinkingBlockState extends State<_ThinkingBlock> {
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          "正在整理上下文、工具结果和最终回答",
+                          subtitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: AppTheme.ts(
@@ -1007,16 +1143,32 @@ class _Avatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 26,
-      height: 26,
+      width: isUser ? 32 : 40,
+      height: isUser ? 32 : 40,
       decoration: BoxDecoration(
-        color: isUser ? const Color(0xFF6366F1) : AppTheme.accent,
-        borderRadius: BorderRadius.circular(9),
+        gradient: isUser
+            ? null
+            : const LinearGradient(
+                colors: [ProductColors.primary, Color(0xFF13B981)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+        color: isUser ? const Color(0xFF6366F1) : null,
+        borderRadius: BorderRadius.circular(isUser ? 12 : 14),
+        boxShadow: isUser
+            ? null
+            : [
+                BoxShadow(
+                  color: ProductColors.primary.withValues(alpha: 0.16),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
       ),
       child: Center(
         child: Icon(
           isUser ? Icons.person_rounded : Icons.auto_awesome_rounded,
-          size: 15,
+          size: isUser ? 17 : 21,
           color: Colors.white,
         ),
       ),
@@ -1030,8 +1182,8 @@ class _WorkspaceUserAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 32,
-      height: 32,
+      width: 36,
+      height: 36,
       decoration: BoxDecoration(
         color: ProductColors.infoSoft,
         shape: BoxShape.circle,
@@ -1098,6 +1250,7 @@ class _MessageBody extends StatelessWidget {
   final String? answerFormat;
   final String? renderHint;
   final String? layoutHint;
+  final String? presentationKind;
 
   const _MessageBody({
     required this.content,
@@ -1106,6 +1259,7 @@ class _MessageBody extends StatelessWidget {
     this.answerFormat,
     this.renderHint,
     this.layoutHint,
+    this.presentationKind,
   });
 
   @override
@@ -1142,7 +1296,8 @@ class _MessageBody extends StatelessWidget {
           );
       }
     }
-    if (CareerReportView.canRender(resolved.content)) {
+    if (presentationKind == 'career_report' &&
+        CareerReportView.canRender(resolved.content)) {
       return CareerReportView(content: resolved.content);
     }
     switch (resolved.mode) {

@@ -39,7 +39,7 @@ void main() {
     expect(find.text('执行动态'), findsNothing);
   });
 
-  testWidgets('Agent 工作区只有真实 workflow 事件才展示执行卡片', (tester) async {
+  testWidgets('Agent 工作区普通工具调用只展示工具动态', (tester) async {
     final message = ChatMessage(
       role: 'assistant',
       content: '投递前检查已完成。',
@@ -70,11 +70,46 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('投递前检查已完成'), findsOneWidget);
-    expect(find.textContaining('多 Agent'), findsOneWidget);
-    expect(find.text('执行阶段'), findsOneWidget);
+    expect(find.text('Agent 执行进度'), findsNothing);
+    expect(find.text('结果摘要'), findsNothing);
   });
 
-  testWidgets('流式兜底执行过程渲染为业务动态卡片', (tester) async {
+  testWidgets('Agent 工作区真实多 Agent 事件展示执行卡片', (tester) async {
+    final message = ChatMessage(
+      role: 'assistant',
+      content: '多 Agent 协作已完成。',
+      sourceKind: 'direct_answer',
+      progressEvents: [
+        _event('run_started'),
+        _event('tool_call', payload: {'name': 'delegate_agents'}),
+        _event('tool_result', payload: {
+          'tool_name': 'delegate_agents',
+          'success': true,
+        }),
+        _event('run_finished'),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ChatBubble(
+              message: message,
+              style: ChatBubbleStyle.agentWorkspace,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('多 Agent 协作已完成'), findsOneWidget);
+    expect(find.text('Agent 执行进度'), findsOneWidget);
+    expect(find.text('结果摘要'), findsOneWidget);
+  });
+
+  testWidgets('流式普通工具过程渲染为轻量工具动态', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -97,14 +132,37 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('执行动态'), findsOneWidget);
-    expect(find.text('正在整理上下文、工具结果和最终回答'), findsOneWidget);
+    expect(find.text('工具动态'), findsOneWidget);
+    expect(find.text('正在读取工具结果并组织回答'), findsOneWidget);
     expect(find.text('读取文件内容'), findsWidgets);
     expect(find.text('文件内容已读取'), findsOneWidget);
     expect(find.text('保存岗位匹配报告'), findsOneWidget);
     expect(find.text('运行中'), findsWidgets);
     expect(find.textContaining('session_read_artifact'), findsNothing);
     expect(find.textContaining('career_job_fit_report_save'), findsNothing);
+  });
+
+  testWidgets('Agent 工作台流式气泡展示 reasoning_content', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SizedBox(
+              width: 760,
+              child: StreamingBubble(
+                buffer: '',
+                reasoningBuffer: '我正在判断用户意图，并准备直接回答。',
+                style: ChatBubbleStyle.agentWorkspace,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('模型思考'), findsOneWidget);
+    expect(find.textContaining('正在判断用户意图'), findsOneWidget);
   });
 
   testWidgets('求职报告结构化卡片渲染 Markdown 而不是展示源码', (tester) async {
@@ -136,6 +194,7 @@ void main() {
 ''',
       answerFormat: 'markdown',
       renderHint: 'markdown',
+      presentationKind: 'career_report',
     );
 
     await tester.pumpWidget(

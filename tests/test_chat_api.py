@@ -178,12 +178,14 @@ def test_chat_stream_endpoint(tmp_path: Path) -> None:
             assert answer_meta["answer_format"] == "markdown"
             assert answer_meta["render_hint"] == "markdown_document"
             assert answer_meta["layout_hint"] == "paragraph"
+            assert answer_meta["presentation_kind"] == "chat_text"
 
             done_payload = next(payload for name, payload in events if name == "done")
             assert done_payload["answer"] == "# 流式标题\n\n内容"
             assert done_payload["answer_format"] == "markdown"
             assert done_payload["render_hint"] == "markdown_document"
             assert done_payload["layout_hint"] == "paragraph"
+            assert done_payload["presentation_kind"] == "chat_text"
     finally:
         app.dependency_overrides.clear()
 
@@ -417,6 +419,7 @@ def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> No
             assert chat_payload["answer_format"] == "markdown"
             assert chat_payload["render_hint"] == "markdown_document"
             assert chat_payload["layout_hint"] == "paragraph"
+            assert chat_payload["presentation_kind"] == "chat_text"
 
             messages_resp = client.get("/api/sessions/sess_render_protocol/messages")
             assert messages_resp.status_code == 200
@@ -425,6 +428,7 @@ def test_session_messages_endpoint_returns_render_protocol(tmp_path: Path) -> No
             assert assistant_message["answer_format"] == "markdown"
             assert assistant_message["render_hint"] == "markdown_document"
             assert assistant_message["layout_hint"] == "paragraph"
+            assert assistant_message["presentation_kind"] == "chat_text"
     finally:
         app.dependency_overrides.clear()
 

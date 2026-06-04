@@ -42,7 +42,7 @@ class _DismissPlusPanelIntent extends Intent {
   const _DismissPlusPanelIntent();
 }
 
-const double _composerMaxWidth = 820;
+const double _composerMaxWidth = 860;
 const double _menuTrayMaxWidth = 468;
 const double _slashTrayMaxWidth = 500;
 const double _configTrayMaxWidth = 560;
@@ -665,7 +665,7 @@ class _InputBarState extends State<InputBar> {
             }
           },
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            padding: const EdgeInsets.fromLTRB(32, 0, 32, 24),
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: _composerMaxWidth),
@@ -704,8 +704,8 @@ class _InputBarState extends State<InputBar> {
                     ),
                     Container(
                       decoration: AppTheme.floatingPanelDecoration(
-                        radius: 24,
-                        alpha: AppTheme.isDark ? 0.94 : 0.9,
+                        radius: 999,
+                        alpha: AppTheme.isDark ? 0.94 : 0.96,
                       ).copyWith(
                         border:
                             Border.all(color: borderColor, width: borderWidth),
@@ -713,13 +713,13 @@ class _InputBarState extends State<InputBar> {
                           BoxShadow(
                             color: hasInteractiveFocus
                                 ? AppTheme.accent.withValues(
-                                    alpha: AppTheme.isDark ? 0.14 : 0.1,
+                                    alpha: AppTheme.isDark ? 0.14 : 0.12,
                                   )
                                 : Colors.black.withValues(
-                                    alpha: AppTheme.isDark ? 0.12 : 0.04,
+                                    alpha: AppTheme.isDark ? 0.12 : 0.08,
                                   ),
-                            blurRadius: hasInteractiveFocus ? 26 : 18,
-                            offset: const Offset(0, 10),
+                            blurRadius: hasInteractiveFocus ? 34 : 28,
+                            offset: const Offset(0, 14),
                           ),
                         ],
                       ),
@@ -850,17 +850,17 @@ class _ComposerActionButtonState extends State<_ComposerActionButton> {
       onExit: (_) => setState(() => _hovering = false),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        width: 36,
-        height: 36,
+        width: widget.accent ? 44 : 40,
+        height: widget.accent ? 44 : 40,
         decoration: BoxDecoration(
           color: backgroundColor,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(999),
           border: Border.all(color: borderColor, width: widget.accent ? 0 : 1),
         ),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(999),
             onTap: enabled ? widget.onPressed : null,
             child: Center(
               child: widget.busy

@@ -18,6 +18,7 @@ def test_normalizer_unwraps_markdown_document_wrapper() -> None:
     assert normalized.render_hint == "markdown_document"
     assert normalized.layout_hint == "paragraph"
     assert normalized.source_kind == "direct_answer"
+    assert normalized.presentation_kind == "chat_text"
 
 
 def test_normalizer_keeps_markdown_source_when_no_document_unwrap() -> None:
@@ -37,6 +38,7 @@ def test_normalizer_keeps_markdown_source_when_no_document_unwrap() -> None:
     assert normalized.render_hint == "markdown_source"
     assert normalized.layout_hint == "paragraph"
     assert normalized.source_kind == "file_content"
+    assert normalized.presentation_kind == "artifact_card"
 
 
 def test_normalizer_derives_generated_file_artifact() -> None:
@@ -56,6 +58,7 @@ def test_normalizer_derives_generated_file_artifact() -> None:
     assert normalized.render_hint == "markdown_document"
     assert normalized.layout_hint == "paragraph"
     assert normalized.source_kind == "generated_document"
+    assert normalized.presentation_kind == "artifact_card"
     assert len(normalized.artifacts) == 1
     assert normalized.artifacts[0].path == "report.md"
     assert normalized.artifacts[0].role == "generated"
@@ -103,3 +106,25 @@ def test_normalizer_infers_bullets_layout_for_bullet_plain_answer() -> None:
 
     assert normalized.answer_format == "plain_text"
     assert normalized.layout_hint == "bullets"
+
+
+def test_normalizer_marks_career_report_presentation_explicitly() -> None:
+    normalizer = AnswerNormalizer()
+
+    normalized = normalizer.normalize_assistant_message(
+        """
+# 岗位匹配报告
+
+## 匹配结论
+整体匹配度 78/100，建议谨慎推进。
+
+## 核心优势
+- Python / FastAPI 经验匹配。
+
+## 主要差距
+- 分布式系统经验证据不足。
+""",
+    )
+
+    assert normalized.answer_format == "markdown"
+    assert normalized.presentation_kind == "career_report"

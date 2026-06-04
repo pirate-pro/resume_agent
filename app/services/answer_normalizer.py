@@ -21,6 +21,7 @@ AnswerFormat = Literal["plain_text", "markdown", "code", "markdown_source"]
 RenderHint = Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"]
 LayoutHint = Literal["brief", "paragraph", "bullets", "steps"]
 SourceKind = Literal["direct_answer", "generated_document", "file_content", "summary"]
+PresentationKind = Literal["chat_text", "workflow_trace", "career_report", "document_preview", "artifact_card"]
 ArtifactRole = Literal["generated", "source", "reference"]
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "ArtifactRole",
     "LayoutHint",
     "NormalizedAnswer",
+    "PresentationKind",
     "RenderHint",
     "SourceKind",
 ]
@@ -49,6 +51,7 @@ class NormalizedAnswer:
     render_hint: RenderHint
     layout_hint: LayoutHint
     source_kind: SourceKind
+    presentation_kind: PresentationKind
     artifacts: list[AnswerArtifact]
 
 
@@ -63,6 +66,7 @@ class AnswerNormalizer:
             render_hint="plain",
             layout_hint=infer_layout_hint("plain_text", normalized),
             source_kind="direct_answer",
+            presentation_kind="chat_text",
             artifacts=[],
         )
 
@@ -90,6 +94,7 @@ class AnswerNormalizer:
                     artifacts=artifacts,
                     content="",
                 ),
+                presentation_kind="chat_text",
                 artifacts=artifacts,
             )
 
@@ -125,12 +130,19 @@ class AnswerNormalizer:
             artifacts=artifacts,
             content=final_content,
         )
+        presentation_kind = self._infer_presentation_kind(
+            content=final_content,
+            render_hint=render_hint,
+            source_kind=source_kind,
+            artifacts=artifacts,
+        )
         return NormalizedAnswer(
             content=final_content,
             answer_format=answer_format,
             render_hint=render_hint,
             layout_hint=infer_layout_hint(answer_format, final_content),
             source_kind=source_kind,
+            presentation_kind=presentation_kind,
             artifacts=artifacts,
         )
 
@@ -194,9 +206,61 @@ class AnswerNormalizer:
 
         return "direct_answer"
 
+    def _infer_presentation_kind(
+        self,
+        *,
+        content: str,
+        render_hint: RenderHint,
+        source_kind: SourceKind,
+        artifacts: list[AnswerArtifact],
+    ) -> PresentationKind:
+        if _looks_like_career_report(content):
+            return "career_report"
+        if artifacts:
+            return "artifact_card"
+        if source_kind in {"generated_document", "file_content"} or render_hint == "large_document":
+            return "document_preview"
+        return "chat_text"
+
     def _string_argument(self, arguments: dict[str, object], key: str) -> str | None:
         raw_value = arguments.get(key)
         if not isinstance(raw_value, str):
             return None
         normalized = raw_value.strip()
         return normalized or None
+
+
+_CAREER_REPORT_SECTION_TITLES = (
+    "诊断摘要",
+    "匹配结论",
+    "核心优势",
+    "核心亮点",
+    "核心匹配点",
+    "关键匹配点",
+    "风险点",
+    "主要风险点",
+    "主要问题",
+    "关键改进建议",
+    "改进建议",
+    "简历优化建议",
+    "改进优先级",
+    "匹配摘要",
+    "候选人概况",
+    "岗位核心要求 vs 候选人能力",
+    "岗位核心要求",
+    "关键匹配证据",
+    "主要差距",
+    "简历优化方向",
+    "面试准备重点",
+    "面试准备优先级",
+)
+
+
+def _looks_like_career_report(content: str) -> bool:
+    normalized = (content or "").strip()
+    if not normalized:
+        return False
+    hits = sum(1 for title in _CAREER_REPORT_SECTION_TITLES if title in normalized)
+    return hits >= 2 and any(
+        marker in normalized for marker in ("简历", "诊断", "JD", "匹配")
+    )

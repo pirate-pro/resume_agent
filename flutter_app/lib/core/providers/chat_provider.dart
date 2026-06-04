@@ -31,9 +31,13 @@ class ChatProvider extends ChangeNotifier {
   String _streamRenderHint = "plain";
   String _streamLayoutHint = "paragraph";
   String _streamSourceKind = "direct_answer";
+  String _streamPresentationKind = "chat_text";
+  String _streamReasoningBuffer = "";
   List<AnswerArtifactView> _streamArtifacts = [];
   String _pendingStreamDelta = "";
+  String _pendingReasoningDelta = "";
   Timer? _streamFlushTimer;
+  Timer? _reasoningFlushTimer;
   Timer? _eventPollingTimer;
   Timer? _recentActivatedArtifactTimer;
   final Map<String, Future<void>> _pendingTitleRefreshes = {};
@@ -68,6 +72,8 @@ class ChatProvider extends ChangeNotifier {
   String get streamRenderHint => _streamRenderHint;
   String get streamLayoutHint => _streamLayoutHint;
   String get streamSourceKind => _streamSourceKind;
+  String get streamPresentationKind => _streamPresentationKind;
+  String get streamReasoningBuffer => _streamReasoningBuffer;
   List<AnswerArtifactView> get streamArtifacts =>
       List.unmodifiable(_streamArtifacts);
   String? get error => _error;
@@ -553,6 +559,7 @@ class ChatProvider extends ChangeNotifier {
         await _pollCurrentRunEvents();
       }
       _flushPendingStreamDelta(notify: false);
+      _flushPendingReasoningDelta(notify: false);
 
       // done 事件里的 answer 才是最终真值，必须覆盖流式阶段的临时 buffer。
       if (doneResponse != null) {
@@ -574,6 +581,7 @@ class ChatProvider extends ChangeNotifier {
             renderHint: doneResponse?.renderHint ?? "plain",
             layoutHint: doneResponse?.layoutHint ?? "paragraph",
             sourceKind: doneResponse?.sourceKind ?? "direct_answer",
+            presentationKind: doneResponse?.presentationKind ?? "chat_text",
             artifacts: doneResponse?.artifacts ?? const [],
             toolCalls: doneResponse?.toolCalls ?? const [],
             progressEvents: _progressTraceEvents(_streamEvents),
@@ -606,9 +614,11 @@ class ChatProvider extends ChangeNotifier {
       }
     } on ApiException catch (e) {
       _flushPendingStreamDelta(notify: false);
+      _flushPendingReasoningDelta(notify: false);
       _error = e.message;
     } catch (e) {
       _flushPendingStreamDelta(notify: false);
+      _flushPendingReasoningDelta(notify: false);
       _error = e.toString();
     } finally {
       _isStreaming = false;
@@ -638,12 +648,19 @@ class ChatProvider extends ChangeNotifier {
         _queueStreamDelta(delta);
         return null;
 
+      case "reasoning_delta":
+        final delta = data["delta"]?.toString() ?? "";
+        _queueReasoningDelta(delta);
+        return null;
+
       case "answer_meta":
         // 流式阶段优先吃后端协议，避免前端每次都重新猜测渲染模式。
         _streamAnswerFormat = data["answer_format"]?.toString() ?? "plain_text";
         _streamRenderHint = data["render_hint"]?.toString() ?? "plain";
         _streamLayoutHint = data["layout_hint"]?.toString() ?? "paragraph";
         _streamSourceKind = data["source_kind"]?.toString() ?? "direct_answer";
+        _streamPresentationKind =
+            data["presentation_kind"]?.toString() ?? "chat_text";
         _streamArtifacts = (data["artifacts"] as List?)
                 ?.map((item) => AnswerArtifactView.fromJson(
                     Map<String, dynamic>.from(item)))
@@ -657,7 +674,7 @@ class ChatProvider extends ChangeNotifier {
         return null;
 
       case "answer_reset":
-        _resetStreamingBuffer(notify: true);
+        _resetAnswerBuffer(notify: true);
         return null;
 
       case "run_event":
@@ -692,6 +709,7 @@ class ChatProvider extends ChangeNotifier {
       case "done":
         // The done event contains the full ChatResponse
         _flushPendingStreamDelta(notify: false);
+        _flushPendingReasoningDelta(notify: false);
         try {
           return ChatResponse.fromJson(data);
         } catch (_) {
@@ -700,6 +718,7 @@ class ChatProvider extends ChangeNotifier {
 
       case "error":
         _flushPendingStreamDelta(notify: false);
+        _flushPendingReasoningDelta(notify: false);
         _error = data["detail"]?.toString() ?? "Unknown stream error";
         notifyListeners();
         return null;
@@ -1004,6 +1023,17 @@ class ChatProvider extends ChangeNotifier {
     _streamFlushTimer ??= Timer(_streamFlushInterval, _flushPendingStreamDelta);
   }
 
+  void _queueReasoningDelta(String delta) {
+    if (delta.isEmpty) return;
+    _pendingReasoningDelta += delta;
+    if (_pendingReasoningDelta.length > 512) {
+      _flushPendingReasoningDelta();
+      return;
+    }
+    _reasoningFlushTimer ??=
+        Timer(_streamFlushInterval, _flushPendingReasoningDelta);
+  }
+
   void _flushPendingStreamDelta({bool notify = true}) {
     _streamFlushTimer?.cancel();
     _streamFlushTimer = null;
@@ -1015,7 +1045,29 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  void _flushPendingReasoningDelta({bool notify = true}) {
+    _reasoningFlushTimer?.cancel();
+    _reasoningFlushTimer = null;
+    if (_pendingReasoningDelta.isEmpty) return;
+    _streamReasoningBuffer += _pendingReasoningDelta;
+    _pendingReasoningDelta = "";
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
   void _resetStreamingBuffer({required bool notify}) {
+    _resetAnswerBuffer(notify: false);
+    _reasoningFlushTimer?.cancel();
+    _reasoningFlushTimer = null;
+    _pendingReasoningDelta = "";
+    _streamReasoningBuffer = "";
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _resetAnswerBuffer({required bool notify}) {
     _streamFlushTimer?.cancel();
     _streamFlushTimer = null;
     _pendingStreamDelta = "";
@@ -1031,6 +1083,7 @@ class ChatProvider extends ChangeNotifier {
     _streamRenderHint = "plain";
     _streamLayoutHint = "paragraph";
     _streamSourceKind = "direct_answer";
+    _streamPresentationKind = "chat_text";
     _streamArtifacts = [];
     if (notify) {
       notifyListeners();

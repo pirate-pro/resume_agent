@@ -16,8 +16,8 @@ import '../chat/chat_screen.dart';
 import '../workspace/workspace_models.dart';
 import '../workspace/workspace_nav.dart';
 
-const double _chatSidebarWidth = 284;
-const double _contextRailWidth = 344;
+const double _chatSidebarWidth = 280;
+const double _contextRailWidth = 360;
 const double _desktopBreakpoint = 1180;
 const double _tabletBreakpoint = 760;
 
@@ -264,16 +264,16 @@ class _AgentChatSidebarState extends State<_AgentChatSidebar> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 16, 10),
+              padding: const EdgeInsets.fromLTRB(22, 22, 16, 12),
               child: _BrandHeader(serverReachable: widget.serverReachable),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
               child: _NewSessionButton(onTap: widget.onNewSession),
             ),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 children: [
                   for (final page in pages) ...[
                     ProductNavItem(
@@ -344,8 +344,8 @@ class _BrandHeader extends StatelessWidget {
     return Row(
       children: [
         Container(
-          width: 42,
-          height: 42,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [ProductColors.primary, Color(0xFF059669)],
@@ -356,7 +356,7 @@ class _BrandHeader extends StatelessWidget {
             boxShadow: [
               BoxShadow(
                 color: ProductColors.primary.withValues(alpha: 0.22),
-                blurRadius: 18,
+                blurRadius: 20,
                 offset: const Offset(0, 8),
               ),
             ],
@@ -375,7 +375,7 @@ class _BrandHeader extends StatelessWidget {
               Text(
                 '求职 Agent',
                 style: AppTheme.ts(
-                  fontSize: 16,
+                  fontSize: 20,
                   fontWeight: FontWeight.w900,
                   color: ProductColors.text,
                 ),
@@ -400,7 +400,7 @@ class _BrandHeader extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(
-                        fontSize: 11.2,
+                        fontSize: 12,
                         color: ProductColors.textMuted,
                       ),
                     ),
@@ -430,6 +430,7 @@ class _NewSessionButton extends StatelessWidget {
           backgroundColor: ProductColors.primary,
           foregroundColor: Colors.white,
           elevation: 0,
+          shadowColor: ProductColors.primary.withValues(alpha: 0.22),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
@@ -442,7 +443,7 @@ class _NewSessionButton extends StatelessWidget {
             Text(
               '新建会话',
               style: AppTheme.ts(
-                fontSize: 13,
+                fontSize: 14,
                 fontWeight: FontWeight.w900,
                 color: Colors.white,
               ),
@@ -479,11 +480,11 @@ class _QuickGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return GridView.count(
       crossAxisCount: 2,
-      mainAxisSpacing: 8,
-      crossAxisSpacing: 8,
+      mainAxisSpacing: 10,
+      crossAxisSpacing: 10,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      childAspectRatio: 2.1,
+      childAspectRatio: 1.72,
       children: [
         _QuickTile(
           icon: Icons.description_outlined,
@@ -535,7 +536,7 @@ class _QuickTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
           decoration: BoxDecoration(
             color: ProductColors.surface,
             borderRadius: BorderRadius.circular(12),
@@ -543,7 +544,15 @@ class _QuickTile extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(icon, size: 16, color: ProductColors.primary),
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: ProductColors.primarySoft,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 13, color: ProductColors.primary),
+              ),
               const SizedBox(width: 7),
               Expanded(
                 child: Column(
@@ -555,9 +564,9 @@ class _QuickTile extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(
-                        fontSize: 11.5,
+                        fontSize: 12,
                         fontWeight: FontWeight.w900,
-                        color: ProductColors.textSecondary,
+                        color: ProductColors.text,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -566,7 +575,7 @@ class _QuickTile extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(
-                        fontSize: 9.6,
+                        fontSize: 10.5,
                         color: ProductColors.textMuted,
                       ),
                     ),
@@ -755,13 +764,13 @@ class _ContextRail extends ConsumerWidget {
       child: SafeArea(
         left: false,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+          padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
           children: [
             _ContextHeader(
               title: '当前任务上下文',
               subtitle: chat.isStreaming ? 'Agent 正在执行' : '对话上下文',
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             _CurrentTaskCard(contextData: contextData),
             const SizedBox(height: 14),
             _RecommendedActionsCard(
@@ -1016,14 +1025,22 @@ class _ContextCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-      decoration: ProductSurface.card(radius: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: ProductSurface.card(radius: 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(icon, size: 17, color: ProductColors.primary),
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: ProductColors.primarySoft,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 15, color: ProductColors.primary),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1031,8 +1048,8 @@ class _ContextCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: AppTheme.ts(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
                     color: ProductColors.text,
                   ),
                 ),
@@ -1048,7 +1065,7 @@ class _ContextCard extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           child,
         ],
       ),
@@ -1073,8 +1090,9 @@ class _ContextHeader extends StatelessWidget {
           width: 34,
           height: 34,
           decoration: BoxDecoration(
-            color: ProductColors.primarySoft,
+            color: ProductColors.surface,
             borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: ProductColors.border),
           ),
           child: const Icon(
             Icons.view_sidebar_outlined,
@@ -1090,8 +1108,8 @@ class _ContextHeader extends StatelessWidget {
               Text(
                 title,
                 style: AppTheme.ts(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
                   color: ProductColors.text,
                 ),
               ),
@@ -1128,11 +1146,11 @@ class _ContextField extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 52,
+            width: 72,
             child: Text(
               label,
               style: AppTheme.ts(
-                fontSize: 10.8,
+                fontSize: 13,
                 color: ProductColors.textMuted,
               ),
             ),
@@ -1143,9 +1161,9 @@ class _ContextField extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: AppTheme.ts(
-                fontSize: 11.4,
-                fontWeight: FontWeight.w800,
-                color: ProductColors.textSecondary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: ProductColors.text,
               ),
             ),
           ),
@@ -1165,7 +1183,7 @@ class _ContextParagraph extends StatelessWidget {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(top: 4),
-      padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
         color: ProductColors.surfaceSoft,
         borderRadius: BorderRadius.circular(12),
@@ -1173,10 +1191,10 @@ class _ContextParagraph extends StatelessWidget {
       ),
       child: Text(
         text,
-        maxLines: 4,
+        maxLines: 3,
         overflow: TextOverflow.ellipsis,
         style: AppTheme.ts(
-          fontSize: 11.2,
+          fontSize: 12.5,
           height: 1.42,
           color: ProductColors.textSecondary,
         ),
@@ -1206,7 +1224,8 @@ class _ActionRow extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 9, 8, 9),
+          height: 58,
+          padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
           decoration: BoxDecoration(
             color: ProductColors.surface,
             borderRadius: BorderRadius.circular(12),
@@ -1214,8 +1233,16 @@ class _ActionRow extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Icon(icon, size: 16, color: ProductColors.primary),
-              const SizedBox(width: 9),
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: ProductColors.primarySoft,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 16, color: ProductColors.primary),
+              ),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1225,9 +1252,9 @@ class _ActionRow extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppTheme.ts(
-                        fontSize: 11.8,
-                        fontWeight: FontWeight.w900,
-                        color: ProductColors.textSecondary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: ProductColors.text,
                       ),
                     ),
                     if (subtitle.trim().isNotEmpty) ...[
@@ -1237,7 +1264,7 @@ class _ActionRow extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppTheme.ts(
-                          fontSize: 10.2,
+                          fontSize: 12,
                           color: ProductColors.textMuted,
                         ),
                       ),
@@ -1274,8 +1301,8 @@ class _AssetRow extends StatelessWidget {
     return Row(
       children: [
         Container(
-          width: 32,
-          height: 32,
+          width: 34,
+          height: 34,
           decoration: BoxDecoration(
             color: ProductColors.primarySoft,
             borderRadius: BorderRadius.circular(10),
@@ -1292,9 +1319,9 @@ class _AssetRow extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: AppTheme.ts(
-                  fontSize: 11.6,
-                  fontWeight: FontWeight.w900,
-                  color: ProductColors.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: ProductColors.text,
                 ),
               ),
               const SizedBox(height: 2),
@@ -1303,7 +1330,7 @@ class _AssetRow extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: AppTheme.ts(
-                  fontSize: 10.2,
+                  fontSize: 12,
                   color: ProductColors.textMuted,
                 ),
               ),

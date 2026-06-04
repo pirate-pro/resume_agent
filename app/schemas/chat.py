@@ -146,6 +146,7 @@ class ChatResponse(BaseModel):
     render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
     layout_hint: Literal["brief", "paragraph", "bullets", "steps"] = "paragraph"
     source_kind: Literal["direct_answer", "generated_document", "file_content", "summary"] = "direct_answer"
+    presentation_kind: Literal["chat_text", "workflow_trace", "career_report", "document_preview", "artifact_card"] = "chat_text"
     artifacts: list[AnswerArtifactView] = Field(default_factory=list)
     tool_calls: list[ToolCallView]
     memory_hits: list[MemoryView]
@@ -236,6 +237,7 @@ class SessionMessage(BaseModel):
     render_hint: Literal["plain", "markdown_document", "markdown_source", "code_block", "large_document"] = "plain"
     layout_hint: Literal["brief", "paragraph", "bullets", "steps"] = "paragraph"
     source_kind: Literal["direct_answer", "generated_document", "file_content", "summary"] = "direct_answer"
+    presentation_kind: Literal["chat_text", "workflow_trace", "career_report", "document_preview", "artifact_card"] = "chat_text"
     artifacts: list[AnswerArtifactView] = Field(default_factory=list)
     tool_calls: list[ToolCallView] = Field(default_factory=list)
     created_at: datetime | None = None

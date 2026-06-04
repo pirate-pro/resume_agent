@@ -28,6 +28,7 @@ class ChatResponseBuilder:
             render_hint=normalized.render_hint,
             layout_hint=normalized.layout_hint,
             source_kind=normalized.source_kind,
+            presentation_kind=normalized.presentation_kind,
             artifacts=[_artifact_to_view(item) for item in normalized.artifacts],
             tool_calls=[ToolCallView(name=call.name, arguments=call.arguments) for call in run_output.tool_calls],
             memory_hits=[

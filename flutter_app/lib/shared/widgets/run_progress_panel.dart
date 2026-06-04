@@ -21,10 +21,17 @@ const _executionEventTypes = {
   "run_finished",
 };
 
+enum RunProgressPanelStyle { detailed, compact }
+
 class RunProgressPanel extends StatefulWidget {
   final List<EventView> events;
+  final RunProgressPanelStyle style;
 
-  const RunProgressPanel({super.key, required this.events});
+  const RunProgressPanel({
+    super.key,
+    required this.events,
+    this.style = RunProgressPanelStyle.detailed,
+  });
 
   static bool hasProgress(List<EventView> events) {
     return events.any(
@@ -46,6 +53,9 @@ class _RunProgressPanelState extends State<RunProgressPanel> {
     final snapshot = _RunProgressSnapshot.fromEvents(widget.events);
     if (snapshot.tasks.isEmpty && snapshot.executionItems.isEmpty) {
       return const SizedBox.shrink();
+    }
+    if (widget.style == RunProgressPanelStyle.compact) {
+      return _CompactRunProgressPanel(snapshot: snapshot);
     }
 
     final summaryParts = snapshot.tasks.isNotEmpty
@@ -207,6 +217,376 @@ class _RunProgressPanelState extends State<RunProgressPanel> {
                     ),
                   )
                 : const SizedBox.shrink(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactRunProgressPanel extends StatelessWidget {
+  final _RunProgressSnapshot snapshot;
+
+  const _CompactRunProgressPanel({required this.snapshot});
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = (snapshot.progressRatio * 100).round();
+    final tasks = snapshot.tasks.take(4).toList();
+    final steps = tasks.isEmpty
+        ? const [
+            _CompactStepData('接收请求', '创建运行上下文', 'completed'),
+            _CompactStepData('执行工具', '读取资料或处理任务', 'running'),
+            _CompactStepData('输出结果', '整理最终回答', 'queued'),
+          ]
+        : [
+            for (final task in tasks)
+              _CompactStepData(
+                _agentDisplayName(task.targetAgentId),
+                _compactTaskDetail(task),
+                task.status,
+              ),
+          ];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 11),
+            child: Row(
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: AppTheme.accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.hub_outlined,
+                    size: 16,
+                    color: AppTheme.accent,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Agent 执行进度',
+                    style: AppTheme.ts(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                ),
+                Container(
+                  height: 24,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                      color: AppTheme.accent.withValues(alpha: 0.16),
+                    ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$ratio%',
+                    style: AppTheme.ts(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.accent,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: AppTheme.border),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+            child: _CompactStepper(steps: steps),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: _CompactResultSummary(snapshot: snapshot),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactStepData {
+  final String title;
+  final String detail;
+  final String status;
+
+  const _CompactStepData(this.title, this.detail, this.status);
+}
+
+class _CompactStepper extends StatelessWidget {
+  final List<_CompactStepData> steps;
+
+  const _CompactStepper({required this.steps});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 560;
+        if (compact) {
+          return Column(
+            children: [
+              for (final step in steps) ...[
+                _CompactStepTile(step: step, horizontal: false),
+                if (step != steps.last) const SizedBox(height: 10),
+              ],
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var index = 0; index < steps.length; index++) ...[
+              Expanded(
+                child: _CompactStepTile(
+                  step: steps[index],
+                  horizontal: true,
+                ),
+              ),
+              if (index != steps.length - 1)
+                Padding(
+                  padding: const EdgeInsets.only(top: 15),
+                  child: Container(
+                    width: 42,
+                    height: 1,
+                    color: AppTheme.borderLight,
+                  ),
+                ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CompactStepTile extends StatelessWidget {
+  final _CompactStepData step;
+  final bool horizontal;
+
+  const _CompactStepTile({
+    required this.step,
+    required this.horizontal,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _statusColor(step.status);
+    final done = _isTerminalTaskStatus(step.status);
+    final running = step.status == 'running';
+    final node = Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: done || running ? color : AppTheme.surface,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: done || running ? color : AppTheme.borderLight,
+        ),
+        boxShadow: running
+            ? [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.16),
+                  blurRadius: 14,
+                  spreadRadius: 3,
+                ),
+              ]
+            : null,
+      ),
+      alignment: Alignment.center,
+      child: Icon(
+        done
+            ? Icons.check_rounded
+            : running
+                ? Icons.sync_rounded
+                : Icons.circle,
+        size: done || running ? 17 : 8,
+        color: done || running ? Colors.white : AppTheme.textTertiary,
+      ),
+    );
+
+    final texts = Column(
+      crossAxisAlignment:
+          horizontal ? CrossAxisAlignment.center : CrossAxisAlignment.start,
+      children: [
+        Text(
+          step.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: horizontal ? TextAlign.center : TextAlign.start,
+          style: AppTheme.ts(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          step.detail,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          textAlign: horizontal ? TextAlign.center : TextAlign.start,
+          style: AppTheme.ts(
+            fontSize: 12,
+            height: 1.3,
+            color: AppTheme.textTertiary,
+          ),
+        ),
+      ],
+    );
+
+    if (!horizontal) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          node,
+          const SizedBox(width: 10),
+          Expanded(child: texts),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        node,
+        const SizedBox(height: 8),
+        texts,
+      ],
+    );
+  }
+}
+
+class _CompactResultSummary extends StatelessWidget {
+  final _RunProgressSnapshot snapshot;
+
+  const _CompactResultSummary({required this.snapshot});
+
+  @override
+  Widget build(BuildContext context) {
+    final metrics = [
+      ('进行中任务', snapshot.runningCount.toString(), Icons.sync_rounded),
+      ('已完成任务', snapshot.completedCount.toString(), Icons.check_rounded),
+      ('总任务数', snapshot.tasks.length.toString(), Icons.layers_outlined),
+      ('整体进度', '${(snapshot.progressRatio * 100).round()}%', Icons.adjust),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '结果摘要',
+          style: AppTheme.ts(
+            fontSize: 14,
+            fontWeight: FontWeight.w800,
+            color: AppTheme.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth < 560 ? 2 : 4;
+            return GridView.count(
+              crossAxisCount: columns,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: columns == 2 ? 2.8 : 1.62,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                for (final metric in metrics)
+                  _CompactMetricCard(
+                    label: metric.$1,
+                    value: metric.$2,
+                    icon: metric.$3,
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _CompactMetricCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _CompactMetricCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceHover.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: AppTheme.accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 15, color: AppTheme.accent),
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTheme.ts(
+                    fontSize: 11.5,
+                    color: AppTheme.textTertiary,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  value,
+                  style: AppTheme.ts(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: label == '整体进度'
+                        ? AppTheme.accent
+                        : AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -2625,6 +3005,23 @@ String _agentPipelineDescription(_AgentTaskProgress task) {
     return _taskDescription(task);
   }
   return task.title.isEmpty ? "等待主控 Agent 分配执行" : "等待执行：${task.title}";
+}
+
+String _compactTaskDetail(_AgentTaskProgress task) {
+  final stage = task.currentStage.trim();
+  if (stage.isNotEmpty) {
+    return _truncateText(stage, 18);
+  }
+  final description = _taskDescription(task).trim();
+  if (description.isNotEmpty) {
+    return _truncateText(description, 18);
+  }
+  return switch (task.status) {
+    "completed" => "已完成",
+    "running" => "执行中",
+    "failed" => "需处理",
+    _ => "等待执行",
+  };
 }
 
 String _executionStageLabel(String kind) {

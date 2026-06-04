@@ -9,12 +9,12 @@ import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/chat_bubble.dart';
 import '../../shared/widgets/input_bar.dart';
 
-const double _messageRailMaxWidth = 1160;
-const double _messageListTopPadding = 114;
-const double _messageListBottomPadding = 92;
-const double _messageBottomContentFadeHeight = 128;
-const double _headerDockFadeHeight = 92;
-const double _jumpToBottomButtonBottom = 92;
+const double _messageRailMaxWidth = 920;
+const double _messageListTopPadding = 102;
+const double _messageListBottomPadding = 132;
+const double _messageBottomContentFadeHeight = 140;
+const double _chatHeaderHeight = 72;
+const double _jumpToBottomButtonBottom = 112;
 const double _jumpToBottomThreshold = 140;
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -224,13 +224,26 @@ class _ChatHeaderLayer extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final isDarkMode = themeMode == ThemeMode.dark;
     final compactHeader = MediaQuery.sizeOf(context).width < 620;
+    final headerTitle = ref.watch(
+      chatProvider.select((provider) {
+        final activeId = provider.sessionId;
+        if (activeId != null) {
+          for (final session in provider.sessions) {
+            if (session.id == activeId && session.title.trim().isNotEmpty) {
+              return session.title.trim();
+            }
+          }
+        }
+        return "求职 Agent 助手";
+      }),
+    );
 
     return _HeaderDock(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+        padding: EdgeInsets.symmetric(horizontal: compactHeader ? 14 : 32),
         child: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1180),
+            constraints: const BoxConstraints(maxWidth: _messageRailMaxWidth),
             child: Row(
               children: [
                 if (showSidebarToggle) ...[
@@ -241,113 +254,78 @@ class _ChatHeaderLayer extends ConsumerWidget {
                   const SizedBox(width: 10),
                 ],
                 Expanded(
-                  child: Container(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: compactHeader ? 12 : 16,
-                      vertical: compactHeader ? 8 : 10,
-                    ),
-                    decoration: AppTheme.floatingPanelDecoration(
-                      radius: 24,
-                      alpha: AppTheme.isDark ? 0.68 : 0.58,
-                    ),
-                    child: Row(
-                      children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              "求职 Agent",
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTheme.ts(
-                                fontSize: compactHeader ? 12.5 : 13.5,
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.textPrimary,
-                              ),
-                            ),
-                            if (!compactHeader) ...[
-                              const SizedBox(height: 2),
-                              Text(
-                                "对话 · 工具 · 资产",
-                                style: AppTheme.ts(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w500,
-                                  color: AppTheme.textTertiary,
-                                ),
-                              ),
-                            ],
-                          ],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        headerTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.ts(
+                          fontSize: compactHeader ? 16 : 18,
+                          fontWeight: FontWeight.w800,
+                          color: AppTheme.textPrimary,
                         ),
-                        const Spacer(),
-                        Container(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: compactHeader ? 4 : 6,
-                            vertical: compactHeader ? 4 : 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppTheme.surface.withValues(
-                              alpha: AppTheme.isDark ? 0.72 : 0.8,
-                            ),
-                            borderRadius: BorderRadius.circular(18),
-                            border: Border.all(
-                              color: AppTheme.border.withValues(alpha: 0.88),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              compactHeader
-                                  ? _HealthDot(reachable: reachable)
-                                  : _HealthBadge(reachable: reachable),
-                              if (showWorkbenchToggle) ...[
-                                if (!compactHeader) _HeaderDivider(),
-                                _HeaderButton(
-                                  icon: Icons.dashboard_customize_outlined,
-                                  active: isWorkbenchOpen,
-                                  label: compactHeader ? null : '工作台',
-                                  size: compactHeader ? 34 : 38,
-                                  tooltip: '求职工作台',
-                                  onTap: onWorkbenchToggle,
-                                ),
-                              ],
-                              if (showCareerAssetsToggle) ...[
-                                if (!compactHeader) _HeaderDivider(),
-                                _HeaderButton(
-                                  icon: Icons.work_outline_rounded,
-                                  active: isCareerAssetsPanelOpen,
-                                  size: compactHeader ? 34 : 38,
-                                  tooltip: '求职资产',
-                                  onTap: onCareerAssetsToggle,
-                                ),
-                              ],
-                              if (showDebugToggle && !compactHeader) ...[
-                                _HeaderDivider(),
-                                _HeaderButton(
-                                  icon: isDebugPanelOpen
-                                      ? Icons.tune_rounded
-                                      : Icons.developer_board_rounded,
-                                  active: isDebugPanelOpen,
-                                  onTap: onDebugToggle,
-                                ),
-                              ],
-                              if (!compactHeader) _HeaderDivider(),
-                              _HeaderButton(
-                                icon: isDarkMode
-                                    ? Icons.light_mode_rounded
-                                    : Icons.dark_mode_rounded,
-                                size: compactHeader ? 34 : 38,
-                                tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
-                                onTap: () => ref
-                                    .read(themeModeProvider.notifier)
-                                    .toggle(),
-                              ),
-                            ],
+                      ),
+                      if (!compactHeader) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          "对话 · 求职资产 · Agent 协作",
+                          style: AppTheme.ts(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: AppTheme.textTertiary,
                           ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
+                ),
+                const SizedBox(width: 14),
+                compactHeader
+                    ? _HealthDot(reachable: reachable)
+                    : _HealthBadge(reachable: reachable),
+                if (showWorkbenchToggle) ...[
+                  const SizedBox(width: 8),
+                  _HeaderButton(
+                    icon: Icons.dashboard_customize_outlined,
+                    active: isWorkbenchOpen,
+                    label: compactHeader ? null : '工作台',
+                    size: compactHeader ? 34 : 36,
+                    tooltip: '求职工作台',
+                    onTap: onWorkbenchToggle,
+                  ),
+                ],
+                if (showCareerAssetsToggle) ...[
+                  const SizedBox(width: 8),
+                  _HeaderButton(
+                    icon: Icons.work_outline_rounded,
+                    active: isCareerAssetsPanelOpen,
+                    size: compactHeader ? 34 : 36,
+                    tooltip: '求职资产',
+                    onTap: onCareerAssetsToggle,
+                  ),
+                ],
+                if (showDebugToggle && !compactHeader) ...[
+                  const SizedBox(width: 8),
+                  _HeaderButton(
+                    icon: isDebugPanelOpen
+                        ? Icons.tune_rounded
+                        : Icons.developer_board_rounded,
+                    active: isDebugPanelOpen,
+                    size: 36,
+                    onTap: onDebugToggle,
+                  ),
+                ],
+                const SizedBox(width: 8),
+                _HeaderButton(
+                  icon: isDarkMode
+                      ? Icons.light_mode_rounded
+                      : Icons.dark_mode_rounded,
+                  size: compactHeader ? 34 : 36,
+                  tooltip: isDarkMode ? '切换浅色主题' : '切换深色主题',
+                  onTap: () => ref.read(themeModeProvider.notifier).toggle(),
                 ),
               ],
             ),
@@ -378,6 +356,7 @@ class _ChatMessageLayer extends ConsumerWidget {
       streamAnswerFormat: provider.streamAnswerFormat,
       streamRenderHint: provider.streamRenderHint,
       streamLayoutHint: provider.streamLayoutHint,
+      streamReasoningBuffer: provider.streamReasoningBuffer,
       streamArtifacts: provider.streamArtifacts,
       streamEvents: provider.streamEvents,
       error: provider.error,
@@ -398,26 +377,114 @@ class _ChatComposerLayer extends ConsumerWidget {
     final provider = ref.read(chatProvider);
 
     return _ComposerDock(
-      child: InputBar(
-        enabled: viewModel.enabled,
-        isUploading: viewModel.isUploading,
-        isLoadingSkills: viewModel.isLoadingSkills,
-        sessionArtifacts: viewModel.sessionArtifacts,
-        activeArtifactIds: viewModel.activeArtifactIds,
-        highlightedArtifactId: viewModel.highlightedArtifactId,
-        availableSkills: viewModel.availableSkills,
-        selectedSkillNames: viewModel.selectedSkillNames,
-        maxToolRounds: viewModel.maxToolRounds,
-        skillsError: viewModel.skillsError,
-        onSend: (text) => provider.sendMessage(text),
-        onUpload: ({required filename, required bytes}) =>
-            provider.uploadSessionArtifact(filename: filename, bytes: bytes),
-        onToggleArtifactActive: (file, active) =>
-            provider.toggleArtifactActive(file.artifactId, active),
-        onRefreshSkills: provider.refreshSkills,
-        onToggleSkill: provider.toggleSkill,
-        onMaxToolRoundsChanged: provider.setMaxToolRounds,
-        onResetRuntimeOptions: provider.resetRuntimeOptions,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ComposerQuickChips(onSend: provider.sendMessage),
+          InputBar(
+            enabled: viewModel.enabled,
+            isUploading: viewModel.isUploading,
+            isLoadingSkills: viewModel.isLoadingSkills,
+            sessionArtifacts: viewModel.sessionArtifacts,
+            activeArtifactIds: viewModel.activeArtifactIds,
+            highlightedArtifactId: viewModel.highlightedArtifactId,
+            availableSkills: viewModel.availableSkills,
+            selectedSkillNames: viewModel.selectedSkillNames,
+            maxToolRounds: viewModel.maxToolRounds,
+            skillsError: viewModel.skillsError,
+            onSend: (text) => provider.sendMessage(text),
+            onUpload: ({required filename, required bytes}) => provider
+                .uploadSessionArtifact(filename: filename, bytes: bytes),
+            onToggleArtifactActive: (file, active) =>
+                provider.toggleArtifactActive(file.artifactId, active),
+            onRefreshSkills: provider.refreshSkills,
+            onToggleSkill: provider.toggleSkill,
+            onMaxToolRoundsChanged: provider.setMaxToolRounds,
+            onResetRuntimeOptions: provider.resetRuntimeOptions,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ComposerQuickChips extends StatelessWidget {
+  final Future<void> Function(String) onSend;
+
+  const _ComposerQuickChips({required this.onSend});
+
+  @override
+  Widget build(BuildContext context) {
+    const chips = [
+      (Icons.upload_file_outlined, "上传简历"),
+      (Icons.link_rounded, "分析 JD"),
+      (Icons.add_circle_outline_rounded, "创建学习任务"),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 10),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 860),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            children: [
+              for (final chip in chips)
+                _ComposerQuickChip(
+                  icon: chip.$1,
+                  label: chip.$2,
+                  onTap: () => onSend(chip.$2),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ComposerQuickChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _ComposerQuickChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: AppTheme.surface.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: AppTheme.accent),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: AppTheme.ts(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -473,34 +540,30 @@ class _HeaderDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        child,
-        IgnorePointer(
-          child: SizedBox(
-            height: _headerDockFadeHeight,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.9 : 0.8),
-                    AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.74 : 0.6),
-                    AppTheme.bg
-                        .withValues(alpha: AppTheme.isDark ? 0.42 : 0.28),
-                    AppTheme.bg
-                        .withValues(alpha: AppTheme.isDark ? 0.14 : 0.08),
-                    AppTheme.bg.withValues(alpha: 0),
-                  ],
-                  stops: const [0, 0.18, 0.42, 0.74, 1],
-                ),
-              ),
-            ),
+    return Container(
+      height: _chatHeaderHeight,
+      decoration: BoxDecoration(
+        color:
+            AppTheme.surface.withValues(alpha: AppTheme.isDark ? 0.86 : 0.92),
+        border: Border(
+          bottom: BorderSide(
+            color:
+                AppTheme.border.withValues(alpha: AppTheme.isDark ? 0.72 : 1),
           ),
         ),
-      ],
+        boxShadow: [
+          BoxShadow(
+            color:
+                Colors.black.withValues(alpha: AppTheme.isDark ? 0.18 : 0.03),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: child,
+      ),
     );
   }
 }
@@ -637,18 +700,6 @@ class _HealthDot extends StatelessWidget {
   }
 }
 
-class _HeaderDivider extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 1,
-      height: 20,
-      margin: const EdgeInsets.symmetric(horizontal: 4),
-      color: AppTheme.border.withValues(alpha: 0.9),
-    );
-  }
-}
-
 class _HeaderButton extends StatelessWidget {
   final IconData icon;
   final bool active;
@@ -673,7 +724,7 @@ class _HeaderButton extends StatelessWidget {
     final button = Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(10),
         onTap: onTap,
         child: Container(
           width: hasLabel ? null : size,
@@ -683,12 +734,12 @@ class _HeaderButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: active
                 ? AppTheme.accent.withValues(alpha: 0.16)
-                : AppTheme.surface.withValues(alpha: 0.52),
-            borderRadius: BorderRadius.circular(14),
+                : AppTheme.surface.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: active
                   ? AppTheme.accent.withValues(alpha: 0.3)
-                  : AppTheme.border.withValues(alpha: 0.9),
+                  : AppTheme.border,
             ),
           ),
           child: Row(
@@ -730,90 +781,132 @@ class _WelcomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Center(
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 560),
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 62,
-              height: 62,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [AppTheme.accent, Color(0xFF059669)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(18),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppTheme.accent.withValues(alpha: 0.3),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: const Center(
-                child: Icon(Icons.auto_awesome_rounded,
-                    size: 30, color: Colors.white),
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text("求职 Agent",
-                style: AppTheme.ts(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.textPrimary,
-                    letterSpacing: 0)),
-            const SizedBox(height: 8),
-            Text("上传简历，分析 JD，沉淀可复用求职资产",
-                style:
-                    AppTheme.ts(fontSize: 14, color: AppTheme.textSecondary)),
-            const SizedBox(height: 18),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: AppTheme.surface.withValues(alpha: 0.72),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: AppTheme.border),
-              ),
-              child: Column(
+    return Align(
+      alignment: Alignment.topCenter,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(32, 104, 32, 132),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: _messageRailMaxWidth),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _WelcomeFeature(
-                    icon: Icons.badge_outlined,
-                    text: "解析简历并生成画像、诊断报告和改进建议",
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFE7F7F0), Color(0xFFF6FFFB)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: AppTheme.accent.withValues(alpha: 0.12),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppTheme.accent.withValues(alpha: 0.12),
+                          blurRadius: 22,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Icon(
+                        Icons.auto_awesome_rounded,
+                        size: 30,
+                        color: AppTheme.accent,
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 10),
-                  _WelcomeFeature(
-                    icon: Icons.work_outline_rounded,
-                    text: "基于目标 JD 生成岗位分析、匹配报告和定制版本",
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "你好！我是求职 Agent 助手",
+                          style: AppTheme.ts(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            color: AppTheme.textPrimary,
+                            height: 1.25,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          "我可以帮你规划学习任务、分析岗位、优化简历、准备面试，陪你一起拿下 Offer。",
+                          style: AppTheme.ts(
+                            fontSize: 14,
+                            color: AppTheme.textSecondary,
+                            height: 1.55,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 28),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              alignment: WrapAlignment.center,
-              children: [
-                _QuickPrompt(
-                    icon: Icons.badge_outlined,
-                    text: "诊断已激活简历",
-                    onSend: (t) => ref.read(chatProvider).sendMessage(t)),
-                _QuickPrompt(
-                    icon: Icons.article_outlined,
-                    text: "分析目标 JD",
-                    onSend: (t) => ref.read(chatProvider).sendMessage(t)),
-                _QuickPrompt(
-                    icon: Icons.auto_fix_high_rounded,
-                    text: "生成定制简历",
-                    onSend: (t) => ref.read(chatProvider).sendMessage(t)),
-              ],
-            ),
-          ],
+              const SizedBox(height: 28),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _QuickPrompt(
+                    icon: Icons.upload_file_outlined,
+                    text: "上传简历",
+                    onSend: (t) => ref.read(chatProvider).sendMessage(t),
+                  ),
+                  _QuickPrompt(
+                    icon: Icons.link_rounded,
+                    text: "分析 JD",
+                    onSend: (t) => ref.read(chatProvider).sendMessage(t),
+                  ),
+                  _QuickPrompt(
+                    icon: Icons.add_circle_outline_rounded,
+                    text: "创建学习任务",
+                    onSend: (t) => ref.read(chatProvider).sendMessage(t),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 16,
+                ),
+                decoration: BoxDecoration(
+                  color: AppTheme.surface.withValues(alpha: 0.86),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: AppTheme.border),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Column(
+                  children: [
+                    _WelcomeFeature(
+                      icon: Icons.badge_outlined,
+                      text: "解析简历并生成画像、诊断报告和改进建议",
+                    ),
+                    SizedBox(height: 10),
+                    _WelcomeFeature(
+                      icon: Icons.work_outline_rounded,
+                      text: "基于目标 JD 生成岗位分析、匹配报告和定制版本",
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -874,39 +967,41 @@ class _QuickPrompt extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         onTap: () => onSend(text),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
-            color: AppTheme.surface.withValues(alpha: 0.82),
-            borderRadius: BorderRadius.circular(14),
+            color: AppTheme.surface.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppTheme.border),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 26,
-                height: 26,
+                width: 24,
+                height: 24,
                 decoration: BoxDecoration(
                   color: AppTheme.accent.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(9),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(icon, size: 14, color: AppTheme.accent),
+                child: Icon(icon, size: 13, color: AppTheme.accent),
               ),
               const SizedBox(width: 8),
               Text(text,
                   style: AppTheme.ts(
                       fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                      color: AppTheme.textSecondary)),
-              const SizedBox(width: 8),
-              Icon(
-                Icons.arrow_upward_rounded,
-                size: 14,
-                color: AppTheme.textTertiary,
-              ),
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary)),
             ],
           ),
         ),
@@ -925,6 +1020,7 @@ class _MessageList extends StatefulWidget {
   final String streamAnswerFormat;
   final String streamRenderHint;
   final String streamLayoutHint;
+  final String streamReasoningBuffer;
   final List<AnswerArtifactView> streamArtifacts;
   final List<EventView> streamEvents;
   final String? error;
@@ -939,6 +1035,7 @@ class _MessageList extends StatefulWidget {
     required this.streamAnswerFormat,
     required this.streamRenderHint,
     required this.streamLayoutHint,
+    required this.streamReasoningBuffer,
     required this.streamArtifacts,
     required this.streamEvents,
     required this.error,
@@ -984,6 +1081,7 @@ class _MessageListState extends State<_MessageList> {
               answerFormat: widget.streamAnswerFormat,
               renderHint: widget.streamRenderHint,
               layoutHint: widget.streamLayoutHint,
+              reasoningBuffer: widget.streamReasoningBuffer,
               artifacts: widget.streamArtifacts,
               progressEvents: _buildProgressEvents(widget.streamEvents),
               thinkingLines: _buildThinkingLines(widget.streamEvents),
@@ -1015,9 +1113,6 @@ class _MessageListState extends State<_MessageList> {
     for (final e in events) {
       final time = DateFormat("HH:mm:ss").format(e.createdAt);
       switch (e.type) {
-        case "run_started":
-          lines.add("[$time] 开始执行任务");
-          break;
         case "assistant_thinking":
           final content = (e.payload["content"] ?? "").toString();
           final short = content.length > 120
@@ -1033,9 +1128,6 @@ class _MessageListState extends State<_MessageList> {
           final name = e.payload["tool_name"] ?? "unknown";
           final ok = e.payload["success"] == true ? "成功" : "失败";
           lines.add("[$time] 工具$ok $name");
-          break;
-        case "run_finished":
-          lines.add("[$time] 执行完成，正在整理答案");
           break;
       }
     }
@@ -1155,7 +1247,20 @@ class _ComposerDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return child;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            AppTheme.bg.withValues(alpha: 0),
+            AppTheme.bg.withValues(alpha: AppTheme.isDark ? 0.9 : 0.96),
+          ],
+          stops: const [0, 0.34],
+        ),
+      ),
+      child: child,
+    );
   }
 }
 

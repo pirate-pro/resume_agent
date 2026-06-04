@@ -1655,6 +1655,7 @@ class AgentRuntime:
                 parts.append(chunk.delta)
             if chunk.reasoning_delta:
                 reasoning_parts.append(chunk.reasoning_delta)
+                await channel.emit("reasoning_delta", {"delta": chunk.reasoning_delta})
             if chunk.usage is not None:
                 usage = chunk.usage
             if chunk.model:
@@ -1792,6 +1793,7 @@ class AgentRuntime:
                 parts.append(chunk.delta)
             if chunk.reasoning_delta:
                 reasoning_parts.append(chunk.reasoning_delta)
+                await channel.emit("reasoning_delta", {"delta": chunk.reasoning_delta})
             if chunk.usage is not None:
                 usage = chunk.usage
             if chunk.model:
@@ -2393,17 +2395,45 @@ class AgentRuntime:
             resolved_tool_calls: list[ToolCall] = []
             round_usage: TokenUsage | None = None
             round_model: str | None = None
+            round_saw_tool_call_delta = False
+            round_emitted_provisional_answer = False
+            round_provisional_answer_reset = False
+            emitted_provisional_meta: tuple[str, str, str, str, str, str] | None = None
+            provisional_parts: list[str] = []
+
+            async def _reset_provisional_answer() -> None:
+                nonlocal round_provisional_answer_reset, emitted_provisional_meta
+                if not round_emitted_provisional_answer or round_provisional_answer_reset:
+                    return
+                await channel.emit("answer_meta_reset", {})
+                await channel.emit("answer_reset", {})
+                round_provisional_answer_reset = True
+                emitted_provisional_meta = None
 
             async for chunk in self._model_client.generate_stream(
                 system_prompt=context.system_prompt,
                 messages=messages,
                 tools=tools_payload,
             ):
+                if chunk.has_tool_call_delta:
+                    round_saw_tool_call_delta = True
+                    await _reset_provisional_answer()
                 if chunk.delta:
                     round_content_parts.append(chunk.delta)
                     round_content_deltas.append(chunk.delta)
+                    if not round_saw_tool_call_delta:
+                        provisional_parts.append(chunk.delta)
+                        emitted_provisional_meta = await self._emit_stream_answer_meta_if_changed(
+                            channel=channel,
+                            content="".join(provisional_parts),
+                            tool_calls=used_tool_calls,
+                            previous_meta=emitted_provisional_meta,
+                        )
+                        await channel.emit("answer_delta", {"delta": chunk.delta})
+                        round_emitted_provisional_answer = True
                 if chunk.reasoning_delta:
                     round_reasoning_parts.append(chunk.reasoning_delta)
+                    await channel.emit("reasoning_delta", {"delta": chunk.reasoning_delta})
                 if chunk.usage is not None:
                     round_usage = chunk.usage
                 if chunk.model:
@@ -2411,6 +2441,9 @@ class AgentRuntime:
 
                 if chunk.finished:
                     resolved_tool_calls = ensure_tool_call_ids(chunk.tool_calls or [])
+
+            if resolved_tool_calls:
+                await _reset_provisional_answer()
 
             round_content = "".join(round_content_parts).strip()
             round_reasoning = "".join(round_reasoning_parts).strip()
@@ -2450,6 +2483,7 @@ class AgentRuntime:
                     pending_runtime_plan=pending_runtime_plan,
                 )
                 if early_rejection_reason is not None:
+                    await _reset_provisional_answer()
                     await self._event_recorder.record_async(
                         context=run_context,
                         event_type="assistant_answer_rejected",
@@ -2471,6 +2505,7 @@ class AgentRuntime:
                         else None
                     )
                     if auto_tool_call is not None:
+                        await _reset_provisional_answer()
                         resolved_tool_calls = ensure_tool_call_ids([auto_tool_call])
                         answer = ""
                         round_content_deltas = []
@@ -2488,6 +2523,7 @@ class AgentRuntime:
                         premature_workflow_reminders += 1
                         premature_answer_reminders += 1
                         if premature_answer_reminders > _MAX_PREMATURE_WORKFLOW_REMINDERS:
+                            await _reset_provisional_answer()
                             await self._event_recorder.record_async(
                                 context=run_context,
                                 event_type="workflow_runtime_decision",
@@ -2515,11 +2551,13 @@ class AgentRuntime:
                             },
                             channel=channel,
                         )
+                        await _reset_provisional_answer()
                         tool_context_window.append_runtime_notice(notice)
                         round_index += 1
                         continue
                 if not resolved_tool_calls:
                     if _contains_internal_final_answer(answer):
+                        await _reset_provisional_answer()
                         await self._event_recorder.record_async(
                             context=run_context,
                             event_type="assistant_answer_rejected",
@@ -2536,8 +2574,15 @@ class AgentRuntime:
                             channel=channel,
                             pending_runtime_plan=pending_runtime_plan,
                         )
-                    if answer and round_content_deltas:
-                        emitted_answer_meta: tuple[str, str, str, str, str] | None = None
+                    if (
+                        answer
+                        and round_content_deltas
+                        and (
+                            not round_emitted_provisional_answer
+                            or round_provisional_answer_reset
+                        )
+                    ):
+                        emitted_answer_meta: tuple[str, str, str, str, str, str] | None = None
                         cumulative_parts: list[str] = []
                         for delta in round_content_deltas:
                             cumulative_parts.append(delta)
@@ -3342,6 +3387,8 @@ class AgentRuntime:
         usage: TokenUsage | None = None
         model: str | None = None
         resolved_tool_calls: list[ToolCall] = []
+        emitted_answer_meta: tuple[str, str, str, str, str, str] | None = None
+        cumulative_parts: list[str] = []
         async for chunk in self._model_client.generate_stream(
             system_prompt=FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT,
             messages=recovery_messages,
@@ -3349,8 +3396,17 @@ class AgentRuntime:
         ):
             if chunk.delta:
                 parts.append(chunk.delta)
+                cumulative_parts.append(chunk.delta)
+                emitted_answer_meta = await self._emit_stream_answer_meta_if_changed(
+                    channel=channel,
+                    content="".join(cumulative_parts),
+                    tool_calls=previous_tool_calls,
+                    previous_meta=emitted_answer_meta,
+                )
+                await channel.emit("answer_delta", {"delta": chunk.delta})
             if chunk.reasoning_delta:
                 reasoning_parts.append(chunk.reasoning_delta)
+                await channel.emit("reasoning_delta", {"delta": chunk.reasoning_delta})
             if chunk.usage is not None:
                 usage = chunk.usage
             if chunk.model:
@@ -3380,8 +3436,8 @@ class AgentRuntime:
         channel: EventChannel,
         content: str,
         tool_calls: list[ToolCall],
-        previous_meta: tuple[str, str, str, str, str] | None,
-    ) -> tuple[str, str, str, str, str] | None:
+        previous_meta: tuple[str, str, str, str, str, str] | None,
+    ) -> tuple[str, str, str, str, str, str] | None:
         normalized = self._answer_normalizer.normalize_assistant_message(
             content,
             tool_calls=tool_calls,
@@ -3394,6 +3450,7 @@ class AgentRuntime:
             normalized.render_hint,
             normalized.layout_hint,
             normalized.source_kind,
+            normalized.presentation_kind,
             artifact_signature,
         )
         if current_meta == previous_meta:
@@ -3405,6 +3462,7 @@ class AgentRuntime:
                 "render_hint": normalized.render_hint,
                 "layout_hint": normalized.layout_hint,
                 "source_kind": normalized.source_kind,
+                "presentation_kind": normalized.presentation_kind,
                 "artifacts": [
                     {
                         "type": item.type,

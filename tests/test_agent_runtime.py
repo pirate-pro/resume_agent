@@ -5074,9 +5074,69 @@ def test_runtime_stream_rejects_internal_limit_text_from_model_answer(tmp_path: 
 
     assert output.answer == "这是流式可用最终答复。"
     answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
-    assert not any("Tool call limit reached" in delta for delta in answer_deltas)
+    event_names = [event for event, _ in events]
+    assert answer_deltas == [
+        "Tool call limit reached before generating final answer.",
+        "这是流式可用最终答复。",
+    ]
+    assert event_names.index("answer_reset") > event_names.index("answer_delta")
     session_events = session_repo.list_events("sess_stream_internal_answer_recovery")
     assert any(event.type == "assistant_answer_rejected" for event in session_events)
+
+
+def test_runtime_stream_emits_reasoning_delta_events(tmp_path: Path) -> None:
+    class ReasoningStreamModelClient:
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages, tools)
+            return ModelResponse(content="最终答复", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            yield StreamChunk(reasoning_delta="先判断用户意图。", finished=False)
+            yield StreamChunk(delta="最终", finished=False)
+            yield StreamChunk(delta="答复", finished=False)
+            yield StreamChunk(delta="", tool_calls=[], finished=True)
+
+    runtime, _, _ = _build_runtime(tmp_path, ReasoningStreamModelClient())
+
+    class RecordingEventChannel(EventChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[tuple[str, dict[str, Any]]] = []
+
+        async def emit(self, event: str, data: dict[str, Any]) -> None:
+            self.events.append((event, data))
+
+    async def _run() -> tuple[AgentRunOutput, list[tuple[str, dict[str, Any]]]]:
+        channel = RecordingEventChannel()
+        output = await runtime.run_stream(
+            AgentRunInput(
+                session_id="sess_stream_reasoning_delta",
+                user_message="你好",
+                skill_names=["base"],
+                max_tool_rounds=1,
+                context=_context("sess_stream_reasoning_delta"),
+            ),
+            channel,
+        )
+        return output, channel.events
+
+    output, events = asyncio.run(_run())
+
+    reasoning_deltas = [data["delta"] for event, data in events if event == "reasoning_delta"]
+    answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
+    assert reasoning_deltas == ["先判断用户意图。"]
+    assert "".join(answer_deltas) == output.answer == "最终答复"
 
 
 def test_runtime_stream_compacts_consumed_tool_exchange(tmp_path: Path) -> None:
@@ -5163,7 +5223,7 @@ def test_runtime_stream_compacts_consumed_tool_exchange(tmp_path: Path) -> None:
     assert usage_events[2].payload["compacted_tool_observation_count"] == 1
 
 
-def test_runtime_stream_does_not_emit_and_reset_partial_answer_before_tool_call(tmp_path: Path) -> None:
+def test_runtime_stream_resets_provisional_answer_before_tool_call(tmp_path: Path) -> None:
     model = SequenceModelClient(
         responses=[
             ModelResponse(
@@ -5208,9 +5268,9 @@ def test_runtime_stream_does_not_emit_and_reset_partial_answer_before_tool_call(
     event_names = [event for event, _ in events]
 
     assert output.answer == "已经处理完毕。"
-    assert answer_deltas == ["已经处理完毕。"]
-    assert "answer_reset" not in event_names
-    assert "answer_meta_reset" not in event_names
+    assert answer_deltas == ["我先帮你看一下", "已经处理完毕。"]
+    assert event_names.index("answer_meta_reset") > event_names.index("answer_delta")
+    assert event_names.index("answer_reset") > event_names.index("answer_delta")
 
 
 def test_runtime_post_run_maintenance_is_single_flight_per_session_agent(tmp_path: Path) -> None:
