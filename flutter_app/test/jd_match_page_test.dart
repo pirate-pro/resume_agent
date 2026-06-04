@@ -30,6 +30,7 @@ void main() {
               onOpenProjects: () {},
               onOpenResumes: () {},
               onOpenLearning: () {},
+              onOpenNotes: () {},
               onSendPrompt: (prompt, {action}) async {
                 sentPrompt = prompt;
                 sentAction = action;
@@ -42,8 +43,7 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('JD 匹配'), findsOneWidget);
-    expect(find.text('智能分析'), findsOneWidget);
+    expect(find.text('重新分析'), findsOneWidget);
     expect(find.text('星河智能'), findsWidgets);
     expect(find.text('匹配总览'), findsOneWidget);
     expect(find.text('技术栈匹配'), findsOneWidget);
@@ -56,25 +56,78 @@ void main() {
     expect(sentPrompt, contains('application_jd_match_staragent'));
     expect(sentAction?.origin, 'jd_match');
     expect(sentAction?.actionType, 'jd_match_analysis');
+    ScaffoldMessenger.of(tester.element(find.byType(JDMatchPage)))
+        .clearSnackBars();
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('差距分析'));
     await tester.pumpAndSettle();
     expect(find.text('差距分析'), findsWidgets);
-    expect(find.text('优化方向'), findsOneWidget);
+    expect(find.text('关键差距与优先级'), findsOneWidget);
+    expect(find.text('优化简历表达'), findsWidgets);
+    expect(find.text('创建学习任务'), findsWidgets);
 
     await tester.tap(find.text('证据依据'));
     await tester.pumpAndSettle();
-    expect(find.text('岗位要求'), findsOneWidget);
+    expect(find.text('已命中证据'), findsOneWidget);
+    expect(find.text('未命中要求'), findsOneWidget);
     expect(find.text('Python'), findsWidgets);
+    await tester.tap(find.text('补充证据').first);
+    await tester.pumpAndSettle();
+    expect(find.text('补充项目证据'), findsWidgets);
+    await tester.enterText(
+      find.byKey(const Key('jd_evidence_description_field')),
+      '在智能客服 Agent 平台中使用 LangGraph 构建多 Agent 状态流，支持任务分派、工具调用和失败重试。',
+    );
+    await tester.enterText(
+      find.byKey(const Key('jd_evidence_skills_field')),
+      'LangGraph StateGraph ToolNode',
+    );
+    await tester.enterText(
+      find.byKey(const Key('jd_evidence_outcomes_field')),
+      '日均处理会话 18w+，流程失败率低于 0.6%。',
+    );
+    final saveEvidenceButton = find.byKey(const Key('jd_evidence_save_button'));
+    await tester.scrollUntilVisible(
+      saveEvidenceButton,
+      120,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(saveEvidenceButton);
+    await tester.pumpAndSettle();
+    expect(api.createdNotes, hasLength(1));
+    final evidenceNote = api.createdNotes.single;
+    expect(evidenceNote.origin, 'jd_match');
+    expect(evidenceNote.relatedApplicationId, 'application_jd_match_staragent');
+    expect(evidenceNote.tags, contains('项目证据'));
+    expect(evidenceNote.tags, contains('JD匹配'));
+    expect(evidenceNote.bodyMarkdown, contains('LangGraph'));
 
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, 700));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('面试准备'));
     await tester.pumpAndSettle();
-    expect(find.text('生成题库'), findsOneWidget);
+    expect(find.text('生成面试题'), findsWidgets);
+    expect(find.text('高频问题数'), findsOneWidget);
+
+    await tester.tap(find.text('展开要点').first);
+    await tester.pumpAndSettle();
+    expect(find.text('回答组织'), findsOneWidget);
+    await tester.tap(find.text('保存为笔记').last);
+    await tester.pumpAndSettle();
+    expect(api.createdNotes, hasLength(2));
+    expect(api.createdNotes.last.title, contains('面试题'));
+
+    await tester.tap(find.text('模拟问答').first);
+    await tester.pump();
+    expect(sentAction?.actionType, 'interview_prep');
   });
 }
 
 class _FakeJDMatchApi extends ApiService {
   final now = DateTime(2026, 5, 16, 10, 49);
+  final List<NoteView> createdNotes = [];
 
   _FakeJDMatchApi() : super(baseUrl: 'http://localhost');
 
@@ -277,4 +330,52 @@ class _FakeJDMatchApi extends ApiService {
           riskNotes: const [],
         ),
       ];
+
+  @override
+  Future<List<NoteView>> listNotes({
+    bool includeArchived = false,
+    String? collectionId,
+    String? relatedApplicationId,
+  }) async =>
+      createdNotes;
+
+  @override
+  Future<NoteView> createNote({
+    String? noteId,
+    required String sourceSessionId,
+    String? sourceArtifactId,
+    List<String> evidenceRefs = const [],
+    required String title,
+    required String bodyMarkdown,
+    String bodyFormat = "markdown",
+    String noteType = "note",
+    String origin = "user",
+    String? collectionId,
+    List<String> tags = const [],
+    List<Map<String, dynamic>> sourceRefs = const [],
+    String? relatedApplicationId,
+    String summary = "",
+  }) async {
+    final note = NoteView(
+      noteId: noteId ?? 'note_${createdNotes.length + 1}',
+      status: 'active',
+      sourceSessionId: sourceSessionId,
+      sourceArtifactId: sourceArtifactId,
+      evidenceRefs: evidenceRefs,
+      createdAt: now,
+      updatedAt: now,
+      title: title,
+      bodyMarkdown: bodyMarkdown,
+      bodyFormat: bodyFormat,
+      noteType: noteType,
+      origin: origin,
+      collectionId: collectionId,
+      tags: tags,
+      sourceRefs: const [],
+      relatedApplicationId: relatedApplicationId,
+      summary: summary,
+    );
+    createdNotes.add(note);
+    return note;
+  }
 }
