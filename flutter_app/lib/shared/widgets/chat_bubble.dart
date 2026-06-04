@@ -4871,7 +4871,7 @@ Future<void> _openLearningTaskSuggestionConfirm(
   } catch (_) {
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       const SnackBar(
-        content: Text("当前入口暂不可用"),
+        content: Text("当前聊天上下文未就绪，暂时不能创建学习任务"),
         duration: Duration(seconds: 1),
       ),
     );

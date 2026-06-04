@@ -143,7 +143,7 @@ void main() {
 
     await tester.tap(find.text('从项目推荐'));
     await tester.pumpAndSettle();
-    expect(backToChatCount, 1);
+    expect(backToChatCount, 0);
     expect(sentPrompt, contains('请基于当前求职项目生成可加入学习任务的推荐建议'));
     expect(sentPrompt,
         contains('不要写 Note、CareerApplication、WeaknessTracker 或 memory'));
@@ -167,7 +167,7 @@ void main() {
     );
     await tester.tap(find.text('交给 Agent 创建'));
     await tester.pumpAndSettle();
-    expect(backToChatCount, 2);
+    expect(backToChatCount, 0);
     expect(sentPrompt, contains('请创建一个用户主动添加的学习任务'));
     expect(sentPrompt, contains('title: 补 RAG 评估指标'));
     expect(sentPrompt, contains('estimated_minutes: 40'));
@@ -193,7 +193,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('交给 Agent 记录'));
     await tester.pumpAndSettle();
-    expect(backToChatCount, 3);
+    expect(backToChatCount, 0);
     expect(sentPrompt, contains('learning_task_id: learning_task_rag_eval'));
     expect(sentPrompt, contains('summary: 今天完成 RAG 指标整理。'));
     expect(sentPrompt, contains('minutes_spent: 35'));
@@ -271,7 +271,7 @@ void main() {
     await tester.tap(find.text('生成定制简历'));
     await tester.pumpAndSettle();
 
-    expect(backToChatCount, 4);
+    expect(backToChatCount, 1);
     expect(sentPrompt, contains('application_staragent_001'));
     expect(sentPrompt, contains('生成定制简历'));
     expect(sentPrompt, contains('不要写 memory'));

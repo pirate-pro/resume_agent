@@ -3157,7 +3157,7 @@ void _runApplicationPromptAction(
   if (onApplicationPromptAction == null) {
     messenger?.showSnackBar(
       const SnackBar(
-        content: Text("当前入口暂不可用"),
+        content: Text("当前资产面板未接入聊天执行通道，暂时不能发起该动作"),
         duration: Duration(seconds: 1),
       ),
     );

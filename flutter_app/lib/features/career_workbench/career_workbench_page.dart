@@ -3535,7 +3535,7 @@ class _DetailActionSection extends StatelessWidget {
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (sender == null) {
       messenger?.showSnackBar(
-        const SnackBar(content: Text("当前入口暂不可用")),
+        const SnackBar(content: Text("当前工作台未接入聊天执行通道，暂时不能发起推荐动作")),
       );
       return;
     }
@@ -7206,7 +7206,7 @@ Future<void> _sendLearningPrompt(
   final messenger = ScaffoldMessenger.maybeOf(context);
   if (sender == null) {
     messenger?.showSnackBar(
-      const SnackBar(content: Text("当前入口暂不可用")),
+      const SnackBar(content: Text("当前工作台未接入聊天执行通道，暂时不能发起学习动作")),
     );
     return;
   }
