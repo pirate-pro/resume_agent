@@ -114,6 +114,8 @@ def test_recovery_context_prefers_compact_finalization_packet() -> None:
     assert context.used_packet is True
     assert len(context.messages) == 3
     assert "FINALIZATION_PACKET" in recovery_text
+    assert "Do not list candidate name" in recovery_text
+    assert "不要在最终答复里列出这些细节" in recovery_text
     assert "note_alpha" in recovery_text
     assert "application_alpha" in recovery_text
     assert "候选人有 Python" not in recovery_text

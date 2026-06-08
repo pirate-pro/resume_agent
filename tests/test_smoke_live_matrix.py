@@ -117,6 +117,42 @@ def test_product_stop_line_rejects_hidden_runtime_results(tmp_path: Path) -> Non
     assert any("hidden/runtime-hidden" in error for error in report.errors)
 
 
+def test_product_stop_line_rejects_unrecovered_failed_tools(tmp_path: Path) -> None:
+    report = _report(
+        tmp_path,
+        scenario="career_full",
+        efficiency={
+            "failed_tool_result_count": 1,
+            "failed_tool_results": {"agent_main:career_resume_version_create": 1},
+            "unrecovered_failed_tool_result_count": 1,
+            "unrecovered_failed_tool_results": {"agent_main:career_resume_version_create": 1},
+        },
+    )
+
+    _apply_product_stop_line(report)
+
+    assert any("失败工具结果" in error for error in report.errors)
+
+
+def test_product_stop_line_allows_recovered_protective_failed_tools(tmp_path: Path) -> None:
+    report = _report(
+        tmp_path,
+        scenario="career_full",
+        efficiency={
+            "failed_tool_result_count": 1,
+            "failed_tool_results": {"agent_main:career_resume_version_create": 1},
+            "recovered_failed_tool_result_count": 1,
+            "recovered_failed_tool_results": {"agent_main:career_resume_version_create": 1},
+            "unrecovered_failed_tool_result_count": 0,
+            "unrecovered_failed_tool_results": {},
+        },
+    )
+
+    _apply_product_stop_line(report)
+
+    assert report.errors == []
+
+
 def test_product_stop_line_warns_for_cost_without_failing(tmp_path: Path) -> None:
     report = _report(
         tmp_path,

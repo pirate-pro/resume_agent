@@ -1419,6 +1419,7 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
     executed_tool_result_call_ids: set[tuple[str, str]] = set()
     hidden_tool_results: Counter[str] = Counter()
     failed_tool_results: Counter[str] = Counter()
+    failed_tool_payloads: list[tuple[str, dict[str, Any]]] = []
     recovered_or_prevented_call_ids: set[str] = set()
     workflow_decisions: Counter[str] = Counter()
     finalization_packet_count = 0
@@ -1478,6 +1479,7 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
                     recovered_or_prevented_call_ids.add(tool_call_id)
             if payload.get("success") is False:
                 failed_tool_results[tool_key] += 1
+                failed_tool_payloads.append((tool_key, dict(payload)))
             hidden_reason = _hidden_tool_result_reason(payload)
             if hidden_reason:
                 hidden_tool_results[f"{tool_key}:{hidden_reason}"] += 1
@@ -1510,6 +1512,17 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
     harmful_duplicate_tool_calls = {
         key: count for key, count in duplicate_tool_calls.items() if key not in recovery_duplicate_tool_calls
     }
+    recovered_failed_tool_results: Counter[str] = Counter()
+    for tool_key, failed_payload in failed_tool_payloads:
+        if recovered_protective_tool_failure(repository, session_id, failed_payload):
+            recovered_failed_tool_results[tool_key] += 1
+    unrecovered_failed_tool_results = failed_tool_results.copy()
+    for tool_key, count in recovered_failed_tool_results.items():
+        remaining = unrecovered_failed_tool_results[tool_key] - count
+        if remaining > 0:
+            unrecovered_failed_tool_results[tool_key] = remaining
+        else:
+            unrecovered_failed_tool_results.pop(tool_key, None)
     return {
         "llm_calls_by_agent": dict(sorted(llm_calls_by_agent.items())),
         "llm_tokens_by_agent": dict(sorted(llm_tokens_by_agent.items())),
@@ -1524,6 +1537,8 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
         "recovery_duplicate_tool_calls": recovery_duplicate_tool_calls,
         "hidden_tool_results": dict(sorted(hidden_tool_results.items())),
         "failed_tool_results": dict(sorted(failed_tool_results.items())),
+        "recovered_failed_tool_results": dict(sorted(recovered_failed_tool_results.items())),
+        "unrecovered_failed_tool_results": dict(sorted(unrecovered_failed_tool_results.items())),
         "workflow_decisions": dict(sorted(workflow_decisions.items())),
         "total_llm_calls": sum(llm_calls_by_agent.values()),
         "total_llm_tokens": sum(llm_tokens_by_agent.values()),
@@ -1539,6 +1554,8 @@ def efficiency_summary(repository: JsonlSessionRepository, session_id: str) -> d
         "recovery_duplicate_tool_call_count": sum(count - 1 for count in recovery_duplicate_tool_calls.values()),
         "hidden_tool_result_count": sum(hidden_tool_results.values()),
         "failed_tool_result_count": sum(failed_tool_results.values()),
+        "recovered_failed_tool_result_count": sum(recovered_failed_tool_results.values()),
+        "unrecovered_failed_tool_result_count": sum(unrecovered_failed_tool_results.values()),
     }
 
 

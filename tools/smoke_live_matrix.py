@@ -507,9 +507,13 @@ def _apply_product_stop_line(report: ScenarioReport) -> None:
     if hidden_results > 0:
         _append_unique_error(report, f"出现 hidden/runtime-hidden 工具结果: count={hidden_results}。")
 
-    failed_results = _int_value(report.efficiency.get("failed_tool_result_count")) or 0
-    if failed_results > 0:
+    if "unrecovered_failed_tool_result_count" in report.efficiency:
+        failed_results = _int_value(report.efficiency.get("unrecovered_failed_tool_result_count")) or 0
+        failed_tools = report.efficiency.get("unrecovered_failed_tool_results")
+    else:
+        failed_results = _int_value(report.efficiency.get("failed_tool_result_count")) or 0
         failed_tools = report.efficiency.get("failed_tool_results")
+    if failed_results > 0:
         _append_unique_error(report, f"出现失败工具结果: count={failed_results} tools={_compact_json(failed_tools)}。")
 
     decisions = report.efficiency.get("workflow_decisions")

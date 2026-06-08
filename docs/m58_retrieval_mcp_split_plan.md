@@ -1,6 +1,6 @@
 # M58 Retrieval MCP 拆分方案
 
-> 状态：M58-A 文档已落地；M58-B facade 初版已落地；M58-C MCP server / stdio runner 初版已落地并通过 stdio smoke；M58-D Streamable HTTP runner 已通过 localhost smoke；M58-E 内部 Agent MCP proxy 初版已落地。
+> 状态：M58-A 文档已落地；M58-B facade 初版已落地；M58-C MCP server / stdio runner 初版已落地并通过 stdio smoke；M58-D Streamable HTTP runner 已通过 localhost smoke；M58-E 内部 Agent MCP proxy 初版已落地；M58-F 高并发 live smoke 已收敛。
 
 ## 目标
 
@@ -609,6 +609,43 @@ RETRIEVAL_TOOL_BACKEND=mcp uv run --extra mcp python tools/smoke_live_matrix.py 
   --max-tool-rounds 24 \
   --data-dir data/live_smoke_matrix_m58e_mcp_rag_to_note_retry \
   --json-report data/live_smoke_matrix_m58e_mcp_rag_to_note_retry/report.json \
+  --quiet
+```
+
+### M58-F 高并发 live smoke 收敛
+
+M58-E 后继续收敛了两个和 MCP proxy 无关、但会影响全量验收稳定性的门禁问题：
+
+- `tools/smoke_career_live_flow.py` 的效率统计区分 raw failed tool result、已恢复保护性失败、未恢复失败。
+- `tools/smoke_live_matrix.py` 的 product stop-line 只把未恢复失败作为红线，已恢复的 `career_resume_version_create` 保护性拒绝保留为 warning。
+- `FINALIZATION_PACKET` / final-answer recovery prompt 增加更硬的 grounding 规则：packet 未明确给出的候选人姓名、年龄、学校、薪资、技能清单、项目经历、经验年限，不允许在最终答复里展开。
+
+验证结果：
+
+- `rag_to_note` 单场景复跑通过：`search=1`、`context_pack=1`、`budget_violations=0`。
+- 高并发全量 live smoke（P0+P1，11 场景，并发 4）最终通过：`11/11`。
+- 全量结果：`harmful_duplicate_runs=0/11`、`hidden_runs=0/11`。
+
+验证命令：
+
+```bash
+RETRIEVAL_TOOL_BACKEND=mcp uv run --extra mcp python tools/smoke_live_matrix.py \
+  --scenario rag_to_note \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m58f2_mcp_rag_to_note \
+  --json-report data/live_smoke_matrix_m58f2_mcp_rag_to_note/report.json \
+  --quiet
+
+RETRIEVAL_TOOL_BACKEND=mcp uv run --extra mcp python tools/smoke_live_matrix.py \
+  --all-p0 \
+  --all-p1 \
+  --runs 1 \
+  --concurrency 4 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m58f2_mcp_full_c4 \
+  --json-report data/live_smoke_matrix_m58f2_mcp_full_c4/report.json \
   --quiet
 ```
 

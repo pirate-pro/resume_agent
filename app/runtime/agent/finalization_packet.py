@@ -119,6 +119,10 @@ class FinalizationPacket:
                     "Only summarize committed facts in this packet.",
                     "Do not mention attempted tool arguments, repaired inputs, hidden runtime state, or unsupported facts.",
                     "If an expected detail is missing from the packet, say it was not provided instead of inventing it.",
+                    (
+                        "Do not list candidate name, age, school, salary, skill inventory, project experience, or "
+                        "years of experience unless that exact detail is present in this packet."
+                    ),
                 ],
             }
         )
@@ -182,6 +186,8 @@ def build_final_answer_recovery_context(
         recovery_prompt
         + "最终答复只能依据 FINALIZATION_PACKET 中的 committed facts / known_refs / product_refs / artifact_refs。"
         + "不要引用工具尝试参数、被修正的输入、隐藏运行时文本或 packet 外事实。"
+        + "如果 packet 没有明确给出候选人的姓名、年龄、学校、薪资、技能清单、项目经历或经验年限，"
+        + "不要在最终答复里列出这些细节；只说明已完成的动作和保存的产物 ID。"
     )
     return FinalAnswerRecoveryContext(
         messages=[

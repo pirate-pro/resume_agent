@@ -645,7 +645,45 @@ def test_efficiency_summary_reports_cost_duplicates_hidden_and_decisions(tmp_pat
     assert summary["recovery_duplicate_tool_call_count"] == 0
     assert summary["hidden_tool_result_count"] == 1
     assert summary["failed_tool_result_count"] == 1
+    assert summary["recovered_failed_tool_result_count"] == 0
+    assert summary["unrecovered_failed_tool_result_count"] == 1
     assert summary["workflow_decisions"] == {"tool_loop_stagnation": 1}
+
+
+def test_efficiency_summary_separates_recovered_protective_failures(tmp_path: Path) -> None:
+    session_id = "sess_live_recovered_protective_failure"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_failed_version",
+        tool_name="career_resume_version_create",
+        success=False,
+        content=(
+            "ResumeVersion validation failed: ResumeVersion content contains unverified quantitative metrics "
+            "not present in the base resume artifact: 3 年后端开发与项目."
+        ),
+        tool_call_id="call_failed_version",
+    )
+    _append_tool_result(
+        repository,
+        session_id=session_id,
+        event_id="evt_success_version",
+        tool_name="career_resume_version_create",
+        success=True,
+        content='{"record_type":"resume_version","record_id":"resume_version_alpha"}',
+        tool_call_id="call_success_version",
+    )
+
+    summary = efficiency_summary(repository, session_id)
+
+    assert summary["failed_tool_result_count"] == 1
+    assert summary["failed_tool_results"] == {"agent_main:career_resume_version_create": 1}
+    assert summary["recovered_failed_tool_result_count"] == 1
+    assert summary["recovered_failed_tool_results"] == {"agent_main:career_resume_version_create": 1}
+    assert summary["unrecovered_failed_tool_result_count"] == 0
+    assert summary["unrecovered_failed_tool_results"] == {}
 
 
 def test_efficiency_summary_separates_recovery_duplicates(tmp_path: Path) -> None:

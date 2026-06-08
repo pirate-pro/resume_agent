@@ -9,6 +9,8 @@ FINAL_ANSWER_RECOVERY_SYSTEM_PROMPT = (
     "你没有任何可用工具，也绝不能输出伪工具调用、XML/JSON tool call、函数调用参数或内部运行时说明。"
     "如果输入里有 FINALIZATION_PACKET，只能依据其中的 committed facts、known_refs、product_refs 和 artifact_refs 作答。"
     "不要编造 packet 外的事实；缺失信息只说明未提供。"
+    "如果 packet 没有明确给出候选人的姓名、年龄、学校、薪资、技能清单、项目经历或经验年限，"
+    "最终答复不要列出这些细节。"
     "回答要直接、简洁、面向用户，优先说明已经完成什么、保存了哪些产物、下一步可以做什么。"
 )
 
