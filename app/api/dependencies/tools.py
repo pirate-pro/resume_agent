@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.domain.agent_task_protocols import AgentTaskStore
+from app.api.dependencies.config import get_settings
 from app.api.dependencies.infrastructure import (
     get_career_product_store,
     get_learning_store,
@@ -63,8 +64,6 @@ from app.tools.builtins import (
     NoteGetTool,
     NoteListTool,
     NoteUpdateTool,
-    RetrievalContextPackTool,
-    RetrievalSearchTool,
     SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
     SessionPlanArtifactAccessTool,
@@ -78,6 +77,7 @@ from app.tools.builtins import (
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
+from app.tools.retrieval_registration import register_retrieval_tools
 from app.tools.registry import ToolRegistry
 
 __all__ = ["get_tool_registry"]
@@ -187,8 +187,11 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(NoteCollectionListTool(note_store=get_note_store()))
     registry.register(NoteCollectionUpdateTool(note_store=get_note_store()))
     registry.register(NoteCollectionArchiveTool(note_store=get_note_store()))
-    registry.register(RetrievalSearchTool(retrieval_service=get_retrieval_service()))
-    registry.register(RetrievalContextPackTool(retrieval_service=get_retrieval_service()))
+    register_retrieval_tools(
+        registry=registry,
+        retrieval_service=get_retrieval_service(),
+        backend=get_settings().retrieval_tool_backend,
+    )
     registry.register(
         LearningPlanCreateTool(
             learning_store=get_learning_store(),

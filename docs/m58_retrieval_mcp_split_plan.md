@@ -1,6 +1,6 @@
 # M58 Retrieval MCP 拆分方案
 
-> 状态：M58-A 文档已落地；M58-B facade 初版已落地；M58-C MCP server / stdio runner 初版已落地并通过 stdio smoke；M58-D Streamable HTTP runner 已通过 localhost smoke；内部 Agent MCP proxy 尚未开始。
+> 状态：M58-A 文档已落地；M58-B facade 初版已落地；M58-C MCP server / stdio runner 初版已落地并通过 stdio smoke；M58-D Streamable HTTP runner 已通过 localhost smoke；M58-E 内部 Agent MCP proxy 初版已落地。
 
 ## 目标
 
@@ -430,13 +430,34 @@ source_types 显式包含 artifacts / session_artifact：
 
 新增 `McpToolProxy`，让内部 Agent 可选通过 MCP 调 retrieval。
 
-这一步只有在 MCP server 已稳定后再做。
+第一版落地为 retrieval 专用 MCP proxy，默认不开启。
+
+启用方式：
+
+```text
+RETRIEVAL_TOOL_BACKEND=mcp
+```
+
+默认值：
+
+```text
+RETRIEVAL_TOOL_BACKEND=local
+```
 
 完成标准：
 
 - `ToolRegistry` 仍按 agent 类型控制工具可见性。
 - `RunContext.session_id` 仍由系统注入。
 - workflow / gateway / ledger 行为不回退。
+- 模型仍不能通过 tool 参数传 `session_id`。
+- API registry 和 live smoke registry 使用同一套 retrieval tool backend 切换逻辑。
+
+实现文件：
+
+```text
+app/tools/mcp_retrieval_proxy.py
+app/tools/retrieval_registration.py
+```
 
 ## 测试计划
 
@@ -538,6 +559,57 @@ sys.executable scripts/run_retrieval_mcp.py \
 
 ```text
 tests/test_retrieval_mcp_server.py::test_retrieval_mcp_streamable_http_runner_smoke_uses_real_data_dir_layout
+```
+
+### 内部 Agent MCP proxy
+
+已通过 `RETRIEVAL_TOOL_BACKEND=mcp` 让内部 Agent 注册同名 retrieval proxy tools：
+
+```text
+retrieval_search
+retrieval_context_pack
+```
+
+验证结果：
+
+- 内部 proxy 仍由系统注入 `RunContext.session_id`。
+- tool 参数仍拒绝 `session_id`。
+- proxy payload 不返回 `session_id`，不暴露本地路径。
+- live smoke 的 API registry 和脚本内 registry 都走同一套 `register_retrieval_tools()` backend 切换逻辑。
+- `rag_read_only` 探针通过：`search=1`、`context_pack=1`、`budget_violations=0`。
+- 高并发全量 live smoke（P0+P1，11 场景，并发 4）结果：10 过 1 失败；失败场景为 `rag_to_note`，失败点是前置 `career_resume_version_create` 首次生成无证据量化表述触发严格校验，retrieval proxy 本身无失败。
+- `rag_to_note` 单场景复跑通过：`search=1`、`context_pack=1`、`budget_violations=0`。
+
+验证命令：
+
+```bash
+RETRIEVAL_TOOL_BACKEND=mcp uv run --extra mcp python tools/smoke_live_matrix.py \
+  --scenario rag_read_only \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m58e_proxy_probe \
+  --json-report data/live_smoke_matrix_m58e_proxy_probe/report.json \
+  --quiet
+
+RETRIEVAL_TOOL_BACKEND=mcp uv run --extra mcp python tools/smoke_live_matrix.py \
+  --all-p0 \
+  --all-p1 \
+  --runs 1 \
+  --concurrency 4 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m58e_mcp_full_c4 \
+  --json-report data/live_smoke_matrix_m58e_mcp_full_c4/report.json \
+  --quiet
+
+RETRIEVAL_TOOL_BACKEND=mcp uv run --extra mcp python tools/smoke_live_matrix.py \
+  --scenario rag_to_note \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m58e_mcp_rag_to_note_retry \
+  --json-report data/live_smoke_matrix_m58e_mcp_rag_to_note_retry/report.json \
+  --quiet
 ```
 
 ## 不做事项

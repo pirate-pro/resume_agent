@@ -113,8 +113,6 @@ from app.tools.builtins import (
     NoteListTool,
     NoteUpdateTool,
     PublishArtifactTool,
-    RetrievalContextPackTool,
-    RetrievalSearchTool,
     SessionCreateTextArtifactTool,
     SessionListArtifactsTool,
     SessionPlanArtifactAccessTool,
@@ -127,6 +125,7 @@ from app.tools.builtins import (
     WorkspaceReadFileTool,
     WorkspaceWriteFileTool,
 )
+from app.tools.retrieval_registration import register_retrieval_tools
 from app.tools.registry import ToolRegistry
 from tools.check_career_product_store import check_career_product_store
 from tools.career_live_quality_gate import check_career_live_quality
@@ -293,6 +292,7 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         state_manager=state_manager,
         task_runtime=task_runtime,
         task_store=task_store,
+        retrieval_tool_backend=settings.retrieval_tool_backend,
     )
     return LiveStack(
         runtime=runtime,
@@ -318,6 +318,7 @@ def register_live_tools(
     state_manager: StateManager,
     task_runtime: AgentTaskRuntime,
     task_store: JsonlAgentTaskStore,
+    retrieval_tool_backend: str = "local",
 ) -> None:
     _ = capability_registry
     registry.register(DelegateAgentsTool(agent_task_runtime_provider=lambda: task_runtime))
@@ -370,8 +371,11 @@ def register_live_tools(
         learning_store=learning_store,
         session_repository=session_repository,
     )
-    registry.register(RetrievalSearchTool(retrieval_service=retrieval_service))
-    registry.register(RetrievalContextPackTool(retrieval_service=retrieval_service))
+    register_retrieval_tools(
+        registry=registry,
+        retrieval_service=retrieval_service,
+        backend=retrieval_tool_backend,
+    )
     registry.register(NoteCreateTool(note_store=note_store, session_repository=session_repository))
     registry.register(NoteGetTool(note_store=note_store))
     registry.register(NoteListTool(note_store=note_store))

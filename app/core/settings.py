@@ -92,6 +92,10 @@ class Settings(BaseSettings):
         default="sparse",
         validation_alias=AliasChoices("WORKFLOW_RULE_SELECTION_MODE"),
     )
+    retrieval_tool_backend: str = Field(
+        default="local",
+        validation_alias=AliasChoices("RETRIEVAL_TOOL_BACKEND"),
+    )
     enable_tool_gateway_ledger: bool = Field(
         default=True,
         validation_alias=AliasChoices("ENABLE_TOOL_GATEWAY_LEDGER"),
@@ -296,6 +300,14 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {"full", "sparse"}:
             raise ValidationError("WORKFLOW_RULE_SELECTION_MODE must be full/sparse.")
+        return normalized
+
+    @field_validator("retrieval_tool_backend")
+    @classmethod
+    def _validate_retrieval_tool_backend(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"local", "mcp"}:
+            raise ValidationError("RETRIEVAL_TOOL_BACKEND must be local/mcp.")
         return normalized
 
     @field_validator(
