@@ -99,7 +99,12 @@ def test_register_retrieval_tools_can_use_mcp_backend(tmp_path: Path) -> None:
     assert payload["context_pack"]["grouped_context"]["artifacts"]
 
 
-def test_settings_accepts_retrieval_tool_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_accepts_retrieval_tool_backend_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("RETRIEVAL_TOOL_BACKEND", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert Settings.load().retrieval_tool_backend == "mcp"
+    monkeypatch.setenv("RETRIEVAL_TOOL_BACKEND", "local")
+    assert Settings.load().retrieval_tool_backend == "local"
     monkeypatch.setenv("RETRIEVAL_TOOL_BACKEND", "mcp")
     assert Settings.load().retrieval_tool_backend == "mcp"
     monkeypatch.setenv("RETRIEVAL_TOOL_BACKEND", "unknown")

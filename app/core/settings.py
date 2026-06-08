@@ -93,7 +93,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("WORKFLOW_RULE_SELECTION_MODE"),
     )
     retrieval_tool_backend: str = Field(
-        default="local",
+        default="mcp",
         validation_alias=AliasChoices("RETRIEVAL_TOOL_BACKEND"),
     )
     enable_tool_gateway_ledger: bool = Field(

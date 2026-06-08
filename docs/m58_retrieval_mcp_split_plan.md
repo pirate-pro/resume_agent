@@ -1,6 +1,6 @@
 # M58 Retrieval MCP 拆分方案
 
-> 状态：M58-A 文档已落地；M58-B facade 初版已落地；M58-C MCP server / stdio runner 初版已落地并通过 stdio smoke；M58-D Streamable HTTP runner 已通过 localhost smoke；M58-E 内部 Agent MCP proxy 初版已落地；M58-F 高并发 live smoke 已收敛。
+> 状态：M58-A 文档已落地；M58-B facade 初版已落地；M58-C MCP server / stdio runner 初版已落地并通过 stdio smoke；M58-D Streamable HTTP runner 已通过 localhost smoke；M58-E 内部 Agent MCP proxy 初版已落地；M58-F 高并发 live smoke 已收敛；M58-G 内部 Agent 默认走 MCP 已落地。
 
 ## 目标
 
@@ -146,24 +146,28 @@ pyproject.toml
 app/tools/builtin_tools/retrieval.py
 ```
 
-`pyproject.toml` 只加可选依赖：
+M58-G 后，内部 Agent 默认走 MCP，MCP SDK 已进入主依赖：
+
+```toml
+[project]
+dependencies = [
+  "mcp>=1,<2",
+]
+```
+
+`mcp` extra 仍保留给旧命令兼容；如果需要 MCP CLI / Inspector 辅助本地调试，再用：
 
 ```toml
 [project.optional-dependencies]
 mcp = [
   "mcp>=1,<2",
 ]
-```
-
-如果需要 MCP CLI / Inspector 辅助本地调试，再用：
-
-```toml
 mcp-dev = [
   "mcp[cli]>=1,<2",
 ]
 ```
 
-不要把 MCP SDK 放进主 dependencies，避免主服务启动链路被 MCP 依赖影响。
+如果要临时回退本地工具路径，显式设置 `RETRIEVAL_TOOL_BACKEND=local`。
 
 ## facade 设计
 
@@ -428,17 +432,17 @@ source_types 显式包含 artifacts / session_artifact：
 
 ### M58-E 内部 proxy，可选
 
-新增 `McpToolProxy`，让内部 Agent 可选通过 MCP 调 retrieval。
+新增 `McpToolProxy`，让内部 Agent 通过 MCP 调 retrieval。
 
-第一版落地为 retrieval 专用 MCP proxy，默认不开启。
+第一版落地为 retrieval 专用 MCP proxy；M58-G 后默认开启。
 
-启用方式：
+默认值：
 
 ```text
 RETRIEVAL_TOOL_BACKEND=mcp
 ```
 
-默认值：
+回退方式：
 
 ```text
 RETRIEVAL_TOOL_BACKEND=local
@@ -671,5 +675,5 @@ RETRIEVAL_TOOL_BACKEND=mcp uv run --extra mcp python tools/smoke_live_matrix.py 
 - MCP tool 名称是否沿用 `retrieval_search` / `retrieval_context_pack`，还是改成 `retrieval.search` / `retrieval.context_pack`。
 - 无 app session 时，显式请求 `session_artifact` 是报错还是过滤。
 - 第一版是否只做 `stdio`，HTTP transport 是否放到后续。
-- 是否接受 `mcp` 作为 optional dependency，而不是主依赖。
+- MCP SDK 已进入主依赖，确保默认 MCP backend 可直接执行；`mcp` extra 保留兼容旧命令。
 - 是否需要在文档外另补一份 MCP client 配置示例。

@@ -196,7 +196,7 @@ def _load_fastmcp() -> Any:
     try:
         from mcp.server.fastmcp import FastMCP
     except ModuleNotFoundError as exc:
-        raise RuntimeError("MCP SDK is not installed. Install with `uv sync --extra mcp`.") from exc
+        raise RuntimeError("MCP SDK is not installed. Install project dependencies with `uv sync`.") from exc
     return FastMCP
 
 
