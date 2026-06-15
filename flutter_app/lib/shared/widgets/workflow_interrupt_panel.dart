@@ -38,12 +38,82 @@ class WorkflowInterruptPanel extends StatelessWidget {
           isSubmitting: isSubmitting,
           onSubmit: onSubmit,
         ),
+      "workflow_write_retry" => _WriteRetryForm(
+          interrupt: interrupt,
+          isSubmitting: isSubmitting,
+          onSubmit: onSubmit,
+        ),
       _ => _UnknownInterrupt(
           interrupt: interrupt,
           isSubmitting: isSubmitting,
           onSubmit: onSubmit,
         ),
     };
+  }
+}
+
+class _WriteRetryForm extends StatelessWidget {
+  final WorkflowInterruptView interrupt;
+  final bool isSubmitting;
+  final Future<void> Function(Map<String, dynamic>) onSubmit;
+
+  const _WriteRetryForm({
+    required this.interrupt,
+    required this.isSubmitting,
+    required this.onSubmit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final error = (interrupt.payload["error"] ?? "未知写入错误").toString();
+    final retryCount = interrupt.payload["retry_count"] ?? 1;
+    return _PanelShell(
+      title: "保存失败",
+      question: interrupt.question,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.danger.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: AppTheme.danger.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Text(
+              "$error\n\n已尝试 $retryCount 次。重试只会重新执行保存步骤。",
+              style: AppTheme.ts(
+                fontSize: 13,
+                color: AppTheme.textSecondary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                key: const Key("workflow-cancel"),
+                onPressed:
+                    isSubmitting ? null : () => onSubmit({"action": "cancel"}),
+                child: const Text("取消保存"),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                key: const Key("workflow-retry"),
+                onPressed:
+                    isSubmitting ? null : () => onSubmit({"action": "retry"}),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text("重试保存"),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 

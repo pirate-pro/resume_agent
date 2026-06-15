@@ -168,6 +168,32 @@ void main() {
 
     expect(submitted, {"action": "cancel"});
   });
+
+  testWidgets("write failure exposes retry action", (tester) async {
+    Map<String, dynamic>? submitted;
+    await tester.pumpWidget(
+      _host(
+        WorkflowInterruptPanel(
+          interrupt: WorkflowInterruptView.fromJson({
+            "workflow_instance_id": "wf_retry",
+            "workflow_version": 6,
+            "type": "workflow_write_retry",
+            "question": "笔记保存失败。你可以重试写入，或取消本次保存。",
+            "error": "temporary note write failure",
+            "retry_count": 2,
+          }),
+          isSubmitting: false,
+          onSubmit: (payload) async => submitted = payload,
+        ),
+      ),
+    );
+
+    expect(find.textContaining("已尝试 2 次"), findsOneWidget);
+    await tester.tap(find.byKey(const Key("workflow-retry")));
+    await tester.pump();
+
+    expect(submitted, {"action": "retry"});
+  });
 }
 
 Widget _host(Widget child) {
