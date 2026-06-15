@@ -1,6 +1,6 @@
 # M59 LangGraph Workflow 编排接入方案
 
-> 状态：M59-A 方案文档已落地；M59-B 依赖、配置和 runner skeleton 已落地；M59-C resume stream API 和 workflow SSE 事件已落地；M59-D `rag.note.write.interactive.v1` graph 已落地；M59-E 已补 pause/resume/retry/幂等单测；M59-F 已补交互式 live smoke matrix，并完成新旧矩阵验证；M59-G 已完成下一条 workflow 评估；M60-A 已新增 `interview.review.update.interactive.v1` id / state / runner skeleton / router flag；M60-B 已实现 read-only `retrieval_search` 和 `interview_review_scope` interrupt；M60-C 已实现 `retrieval_context_pack`、复盘草稿生成和 `interview_review_confirmation` interrupt；M60-D 已接 `note_create` 和 `career_application_merge`，并补写入幂等/恢复单测；M60-E 已把 Interview Review workflow 接入 ChatService dispatcher，并完成新增 live smoke 与旧矩阵回归；M61-A 已新增 WorkflowInstanceStore 状态投影，并接入 SQLite durable checkpoint backend；M61-B 已新增 `workflow_version` / `expected_version` 与 SQLite resume lease，挡住旧暂停卡片和跨进程同一 workflow 并发 resume；M61-C 已完成真实服务进程重启、跨进程并发 resume、最终写入 exactly-once 的 live smoke，并完成旧矩阵和全量回归。SQLite checkpointer 当前通过 `aiosqlite==0.20.0` 和 metadata serde compatibility shim 接入官方 `AsyncSqliteSaver`，避免用业务 snapshot 伪造 checkpoint 恢复。本文承接 M27/M39/M42/M58：当前已经有 `UnifiedWorkflowState`、`WorkflowContract` / `ActionContract`、`ToolGateway`、`ToolCallLedger` 和 Retrieval MCP backend。M59 不重写这些边界，而是把 LangGraph 接到“可恢复 workflow 编排、失败重试、人机交互暂停/恢复”这一层。
+> 状态：M59-A 方案文档已落地；M59-B 依赖、配置和 runner skeleton 已落地；M59-C resume stream API 和 workflow SSE 事件已落地；M59-D `rag.note.write.interactive.v1` graph 已落地；M59-E 已补 pause/resume/retry/幂等单测；M59-F 已补交互式 live smoke matrix，并完成新旧矩阵验证；M59-G 已完成下一条 workflow 评估；M60-A 已新增 `interview.review.update.interactive.v1` id / state / runner skeleton / router flag；M60-B 已实现 read-only `retrieval_search` 和 `interview_review_scope` interrupt；M60-C 已实现 `retrieval_context_pack`、复盘草稿生成和 `interview_review_confirmation` interrupt；M60-D 已接 `note_create` 和 `career_application_merge`，并补写入幂等/恢复单测；M60-E 已把 Interview Review workflow 接入 ChatService dispatcher，并完成新增 live smoke 与旧矩阵回归；M61-A 已新增 WorkflowInstanceStore 状态投影，并接入 SQLite durable checkpoint backend；M61-B 已新增 `workflow_version` / `expected_version` 与 SQLite resume lease，挡住旧暂停卡片和跨进程同一 workflow 并发 resume；M61-C 已完成真实服务进程重启、跨进程并发 resume、最终写入 exactly-once 的 live smoke；M61-D 已统一两条 graph 的写入失败恢复协议，并让 Interview Review 的 `note_create` / `career_application_merge` 在自动尝试耗尽后进入可持久化的 retry/cancel interrupt。SQLite checkpointer 当前通过 `aiosqlite==0.20.0` 和 metadata serde compatibility shim 接入官方 `AsyncSqliteSaver`，避免用业务 snapshot 伪造 checkpoint 恢复。本文承接 M27/M39/M42/M58：当前已经有 `UnifiedWorkflowState`、`WorkflowContract` / `ActionContract`、`ToolGateway`、`ToolCallLedger` 和 Retrieval MCP backend。M59 不重写这些边界，而是把 LangGraph 接到“可恢复 workflow 编排、失败重试、人机交互暂停/恢复”这一层。
 
 ## 1. 背景
 
@@ -1135,6 +1135,17 @@ M61-C 实际状态：
 - 新 smoke 报告：`data/live_smoke_m61_restart_resume_r2/report.json`；4 个服务进程日志位于同目录 `process_logs/`。
 - 旧矩阵回归：`data/live_smoke_matrix_m61_old_matrix_r1/report.json`，11/11 通过，0 失败。
 - 最终本地验证：`pytest` 902 tests 全通过；`mypy app tests` 342 个源文件通过；新 smoke 脚本 `py_compile` 通过。
+
+M61-D 实际状态：
+
+- 新增共享 `write_retry` helper，统一失败节点、错误摘要、重试轮次和 `retry/cancel` resume payload。
+- `rag.note.write.interactive.v1` 复用共享协议，不再维护独立解析器。
+- Interview Review 的 `note_create` 和 `career_application_merge` 会先按节点配置自动尝试；耗尽后进入 `workflow_write_retry` interrupt。
+- 项目合并失败时取消，只取消项目更新；已经成功创建的 Note 保留，最终答复明确返回 `note_id`。
+- SQLite runner 重建测试覆盖等待重试状态的恢复，且项目合并重试不会重复创建 Note。
+- 新增真实进程故障注入 smoke：连续两次阻断 `career_application_merge`，在 retry interrupt 后杀掉 Uvicorn，再由新进程从 SQLite checkpoint 恢复。报告位于 `data/live_smoke_m61_write_retry/report.json`，结果为 `note_create=1`、`career_application_merge=3`、最终项目记录 1 条。
+- 旧矩阵回归：`data/live_smoke_matrix_m61d_old_matrix_r1/report.json`，11/11 通过，`harmful_duplicate_runs=0/11`、`hidden_runs=0/11`。
+- 最终本地验证：`pytest` 907 tests 全通过；`mypy` 345 个源文件通过；Flutter analyze、组件测试和 Web build 通过。
 
 ## 14. 测试计划
 
