@@ -8,6 +8,7 @@ import '../../core/providers/theme_provider.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../shared/widgets/chat_bubble.dart';
 import '../../shared/widgets/input_bar.dart';
+import '../../shared/widgets/workflow_interrupt_panel.dart';
 
 const double _messageRailMaxWidth = 920;
 const double _messageListTopPadding = 102;
@@ -101,6 +102,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         return provider.isStreaming || provider.messages.isNotEmpty;
       }),
     );
+    final hasPendingWorkflow = ref.watch(
+      chatProvider.select(
+        (provider) => provider.pendingWorkflowInterrupt != null,
+      ),
+    );
 
     ref.listen<(int, int)>(
       chatProvider.select((provider) {
@@ -125,6 +131,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: _ChatMessageLayer(
                 scrollCtrl: _scrollCtrl,
                 messageStyle: widget.messageStyle,
+                hasPendingWorkflow: hasPendingWorkflow,
               ),
             ),
           )
@@ -152,7 +159,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           Positioned(
             left: 0,
             right: 0,
-            bottom: _jumpToBottomButtonBottom,
+            bottom: hasPendingWorkflow ? 500 : _jumpToBottomButtonBottom,
             child: IgnorePointer(
               ignoring: !_showJumpToBottom,
               child: AnimatedOpacity(
@@ -339,10 +346,12 @@ class _ChatHeaderLayer extends ConsumerWidget {
 class _ChatMessageLayer extends ConsumerWidget {
   final ScrollController scrollCtrl;
   final ChatBubbleStyle messageStyle;
+  final bool hasPendingWorkflow;
 
   const _ChatMessageLayer({
     required this.scrollCtrl,
     required this.messageStyle,
+    required this.hasPendingWorkflow,
   });
 
   @override
@@ -362,6 +371,7 @@ class _ChatMessageLayer extends ConsumerWidget {
       error: provider.error,
       onClearError: provider.clearError,
       messageStyle: messageStyle,
+      hasPendingWorkflow: hasPendingWorkflow,
     );
   }
 }
@@ -380,7 +390,14 @@ class _ChatComposerLayer extends ConsumerWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _ComposerQuickChips(onSend: provider.sendMessage),
+          if (viewModel.pendingWorkflowInterrupt != null)
+            WorkflowInterruptPanel(
+              interrupt: viewModel.pendingWorkflowInterrupt!,
+              isSubmitting: viewModel.isStreaming,
+              onSubmit: provider.resumePendingWorkflow,
+            )
+          else
+            _ComposerQuickChips(onSend: provider.sendMessage),
           InputBar(
             enabled: viewModel.enabled,
             isUploading: viewModel.isUploading,
@@ -579,6 +596,8 @@ class _ComposerViewModel {
   final List<String> selectedSkillNames;
   final int maxToolRounds;
   final String? skillsError;
+  final bool isStreaming;
+  final WorkflowInterruptView? pendingWorkflowInterrupt;
 
   const _ComposerViewModel({
     required this.enabled,
@@ -591,11 +610,14 @@ class _ComposerViewModel {
     required this.selectedSkillNames,
     required this.maxToolRounds,
     required this.skillsError,
+    required this.isStreaming,
+    required this.pendingWorkflowInterrupt,
   });
 
   factory _ComposerViewModel.fromProvider(ChatProvider provider) {
     return _ComposerViewModel(
-      enabled: !provider.isStreaming,
+      enabled:
+          !provider.isStreaming && provider.pendingWorkflowInterrupt == null,
       isUploading: provider.isUploadingFile,
       isLoadingSkills: provider.isLoadingSkills,
       sessionArtifacts: provider.sessionArtifacts,
@@ -605,6 +627,8 @@ class _ComposerViewModel {
       selectedSkillNames: provider.selectedSkillNames,
       maxToolRounds: provider.maxToolRounds,
       skillsError: provider.skillsError,
+      isStreaming: provider.isStreaming,
+      pendingWorkflowInterrupt: provider.pendingWorkflowInterrupt,
     );
   }
 
@@ -617,6 +641,8 @@ class _ComposerViewModel {
         other.highlightedArtifactId == highlightedArtifactId &&
         other.maxToolRounds == maxToolRounds &&
         other.skillsError == skillsError &&
+        other.isStreaming == isStreaming &&
+        other.pendingWorkflowInterrupt == pendingWorkflowInterrupt &&
         _stringListEquals(other.activeArtifactIds, activeArtifactIds) &&
         _sessionArtifactListEquals(other.sessionArtifacts, sessionArtifacts) &&
         _skillOptionListEquals(other.availableSkills, availableSkills) &&
@@ -631,6 +657,8 @@ class _ComposerViewModel {
         highlightedArtifactId,
         maxToolRounds,
         skillsError,
+        isStreaming,
+        pendingWorkflowInterrupt,
         activeArtifactIds.length,
         sessionArtifacts.length,
         availableSkills.length,
@@ -1026,6 +1054,7 @@ class _MessageList extends StatefulWidget {
   final String? error;
   final VoidCallback onClearError;
   final ChatBubbleStyle messageStyle;
+  final bool hasPendingWorkflow;
 
   const _MessageList({
     required this.messages,
@@ -1041,6 +1070,7 @@ class _MessageList extends StatefulWidget {
     required this.error,
     required this.onClearError,
     required this.messageStyle,
+    required this.hasPendingWorkflow,
   });
 
   @override
@@ -1056,11 +1086,11 @@ class _MessageListState extends State<_MessageList> {
 
     return ListView.builder(
       controller: widget.scrollCtrl,
-      padding: const EdgeInsets.fromLTRB(
+      padding: EdgeInsets.fromLTRB(
         18,
         _messageListTopPadding,
         18,
-        _messageListBottomPadding,
+        widget.hasPendingWorkflow ? 500 : _messageListBottomPadding,
       ),
       itemCount: itemCount,
       itemBuilder: (_, i) {

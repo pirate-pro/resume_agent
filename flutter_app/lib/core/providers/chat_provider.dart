@@ -52,6 +52,7 @@ class ChatProvider extends ChangeNotifier {
   bool _serverReachable = false;
   HealthView? _healthView;
   String? _activeRunId;
+  WorkflowInterruptView? _pendingWorkflowInterrupt;
 
   // Debug / side panel data
   List<ToolCallView> _lastToolCalls = [];
@@ -94,6 +95,8 @@ class ChatProvider extends ChangeNotifier {
   TokenUsageSummaryView? get tokenUsageSummary => _tokenUsageSummary;
   bool get isLoadingTokenUsageSummary => _isLoadingTokenUsageSummary;
   String? get recentActivatedArtifactId => _recentActivatedArtifactId;
+  WorkflowInterruptView? get pendingWorkflowInterrupt =>
+      _pendingWorkflowInterrupt;
 
   ChatProvider(this._api) {
     _init();
@@ -299,6 +302,7 @@ class ChatProvider extends ChangeNotifier {
 
   void createNewSession() {
     _sessionId = null;
+    _pendingWorkflowInterrupt = null;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
     _clearRecentActivatedArtifact(notify: false);
@@ -367,6 +371,7 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> switchSession(String sessionId) async {
     _sessionId = sessionId;
+    _pendingWorkflowInterrupt = null;
     _messages.clear();
     _resetStreamingBuffer(notify: false);
     _clearRecentActivatedArtifact(notify: false);
@@ -392,6 +397,7 @@ class ChatProvider extends ChangeNotifier {
     _sessions.removeWhere((s) => s.id == sessionId);
     if (_sessionId == sessionId) {
       _sessionId = null;
+      _pendingWorkflowInterrupt = null;
       _messages.clear();
     }
     await _saveSessions();
@@ -507,7 +513,11 @@ class ChatProvider extends ChangeNotifier {
   // ── Chat (streaming) ────────────────────────────────────────────────
 
   Future<void> sendMessage(String content) async {
-    if (content.trim().isEmpty || _isStreaming) return;
+    if (content.trim().isEmpty ||
+        _isStreaming ||
+        _pendingWorkflowInterrupt != null) {
+      return;
+    }
 
     _error = null;
     _lastToolCalls = [];
@@ -629,6 +639,74 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> resumePendingWorkflow(Map<String, dynamic> payload) async {
+    final interrupt = _pendingWorkflowInterrupt;
+    final sessionId = _sessionId;
+    if (interrupt == null || sessionId == null || _isStreaming) return;
+
+    _error = null;
+    _lastToolCalls = [];
+    _lastMemoryHits = [];
+    _streamEvents = [];
+    _activeRunId = null;
+    _isStreaming = true;
+    _resetStreamingBuffer(notify: false);
+    notifyListeners();
+
+    try {
+      ChatResponse? doneResponse;
+      await for (final event in _api.resumeWorkflowStream(
+        workflowInstanceId: interrupt.workflowInstanceId,
+        sessionId: sessionId,
+        expectedVersion: interrupt.workflowVersion,
+        payload: payload,
+      )) {
+        doneResponse = _handleStreamEvent(event) ?? doneResponse;
+      }
+
+      await _pollCurrentRunEvents();
+      _flushPendingStreamDelta(notify: false);
+      _flushPendingReasoningDelta(notify: false);
+      if (doneResponse != null) {
+        _sessionId = doneResponse.sessionId;
+        if (doneResponse.answer.isNotEmpty) {
+          _streamBuffer = doneResponse.answer;
+        }
+        _lastToolCalls = doneResponse.toolCalls;
+        _lastMemoryHits = doneResponse.memoryHits;
+      }
+      if (_streamBuffer.isNotEmpty) {
+        _messages.add(
+          ChatMessage(
+            role: "assistant",
+            content: _streamBuffer,
+            answerFormat: doneResponse?.answerFormat ?? "plain_text",
+            renderHint: doneResponse?.renderHint ?? "plain",
+            layoutHint: doneResponse?.layoutHint ?? "paragraph",
+            sourceKind: doneResponse?.sourceKind ?? "direct_answer",
+            presentationKind: doneResponse?.presentationKind ?? "chat_text",
+            artifacts: doneResponse?.artifacts ?? const [],
+            toolCalls: doneResponse?.toolCalls ?? const [],
+            progressEvents: _progressTraceEvents(_streamEvents),
+          ),
+        );
+        _resetStreamingBuffer(notify: false);
+      }
+      await refreshSessionArtifacts();
+      await refreshSessions();
+    } on ApiException catch (e) {
+      _error = e.message;
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      _isStreaming = false;
+      _stopEventPolling();
+      unawaited(_checkHealth());
+      unawaited(refreshTokenUsageSummary());
+      notifyListeners();
+    }
+  }
+
   /// Returns the ChatResponse from the "done" event, if received.
   ChatResponse? _handleStreamEvent(StreamEvent event) {
     final data = event.dataMap;
@@ -699,6 +777,20 @@ class ChatProvider extends ChangeNotifier {
         if (_streamEvents.length > 500) {
           _streamEvents = _streamEvents.sublist(_streamEvents.length - 500);
         }
+        notifyListeners();
+        return null;
+
+      case "workflow_waiting_for_input":
+        final interrupt = WorkflowInterruptView.fromJson(data);
+        if (interrupt.isValid) {
+          _pendingWorkflowInterrupt = interrupt;
+          notifyListeners();
+        }
+        return null;
+
+      case "workflow_completed":
+      case "workflow_failed":
+        _pendingWorkflowInterrupt = null;
         notifyListeners();
         return null;
 

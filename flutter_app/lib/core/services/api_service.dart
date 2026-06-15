@@ -95,6 +95,48 @@ class ApiService {
     }
   }
 
+  Stream<StreamEvent> resumeWorkflowStream({
+    required String workflowInstanceId,
+    required String sessionId,
+    required int expectedVersion,
+    required Map<String, dynamic> payload,
+  }) async* {
+    final request = http.Request(
+      "POST",
+      _uri("/api/workflows/$workflowInstanceId/resume/stream"),
+    );
+    request.headers["Content-Type"] = "application/json";
+    request.headers["Accept"] = "text/event-stream";
+    request.body = jsonEncode({
+      "session_id": sessionId,
+      "expected_version": expectedVersion,
+      "payload": payload,
+    });
+
+    final streamedResp = await http.Client().send(request);
+    if (streamedResp.statusCode != 200) {
+      final errBody = await streamedResp.stream.bytesToString();
+      throw ApiException(streamedResp.statusCode, errBody);
+    }
+
+    String buffer = "";
+    await for (final chunk in streamedResp.stream.transform(utf8.decoder)) {
+      buffer += chunk.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+      while (buffer.contains("\n\n")) {
+        final idx = buffer.indexOf("\n\n");
+        final raw = buffer.substring(0, idx);
+        buffer = buffer.substring(idx + 2);
+        if (raw.trim().isEmpty) continue;
+        final parsed = _parseSse(raw);
+        if (parsed != null) yield parsed;
+      }
+    }
+    if (buffer.trim().isNotEmpty) {
+      final parsed = _parseSse("$buffer\n\n");
+      if (parsed != null) yield parsed;
+    }
+  }
+
   StreamEvent? _parseSse(String raw) {
     String event = "message";
     final dataLines = <String>[];

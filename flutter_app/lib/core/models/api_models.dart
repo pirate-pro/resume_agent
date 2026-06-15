@@ -461,6 +461,35 @@ class ChatResponse {
   }
 }
 
+class WorkflowInterruptView {
+  final String workflowInstanceId;
+  final int workflowVersion;
+  final String type;
+  final String question;
+  final Map<String, dynamic> payload;
+
+  const WorkflowInterruptView({
+    required this.workflowInstanceId,
+    required this.workflowVersion,
+    required this.type,
+    required this.question,
+    required this.payload,
+  });
+
+  factory WorkflowInterruptView.fromJson(Map<String, dynamic> json) {
+    return WorkflowInterruptView(
+      workflowInstanceId: (json["workflow_instance_id"] ?? "").toString(),
+      workflowVersion: _readInt(json["workflow_version"]),
+      type: (json["type"] ?? "").toString(),
+      question: (json["question"] ?? "需要你的确认后才能继续。").toString(),
+      payload: Map<String, dynamic>.from(json),
+    );
+  }
+
+  bool get isValid =>
+      workflowInstanceId.isNotEmpty && workflowVersion > 0 && type.isNotEmpty;
+}
+
 class SessionArtifactView {
   final String artifactId;
   final String title;
