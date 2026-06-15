@@ -37,6 +37,13 @@ from app.runtime.langgraph.types import (
     WorkflowGraphRunResult,
     WorkflowResumeRequest,
 )
+from app.runtime.langgraph.write_retry import (
+    WRITE_RETRY_INTERRUPT_TYPE,
+    failed_write_node,
+    parse_write_retry_action,
+    write_failure_update,
+    write_retry_interrupt_payload,
+)
 from app.runtime.workflow.action_payloads import ActionPayloadBuilder
 
 __all__ = ["InterviewReviewWorkflowRunner"]
@@ -51,6 +58,7 @@ _PHASE_REVIEW = "review"
 _PHASE_REVIEW_CONFIRMED = "review_confirmed"
 _PHASE_NOTE_WRITTEN = "note_written"
 _PHASE_APPLICATION_MERGED = "application_merged"
+_PHASE_WRITE_RETRY = "write_retry"
 _PHASE_COMPLETED = "completed"
 _PHASE_CANCELLED = "cancelled"
 _PHASE_FAILED = "failed"
@@ -266,8 +274,9 @@ class InterviewReviewWorkflowRunner:
         builder.add_node("retrieval_context_pack", self._retrieval_context_pack, retry_policy=retry, timeout=timeout)
         builder.add_node("draft_review_update", self._draft_review_update, retry_policy=retry, timeout=timeout)
         builder.add_node("review_confirmation", self._review_confirmation)
-        builder.add_node("write_review_note", self._write_review_note, retry_policy=retry, timeout=timeout)
-        builder.add_node("merge_career_application", self._merge_career_application, retry_policy=retry, timeout=timeout)
+        builder.add_node("write_review_note", self._write_review_note, timeout=timeout)
+        builder.add_node("merge_career_application", self._merge_career_application, timeout=timeout)
+        builder.add_node("write_retry", self._write_retry)
         builder.add_node("final_answer", self._final_answer)
         builder.add_edge(START, "init_interview_review")
         builder.add_edge("init_interview_review", "retrieval_search")
@@ -276,8 +285,31 @@ class InterviewReviewWorkflowRunner:
         builder.add_edge("retrieval_context_pack", "draft_review_update")
         builder.add_edge("draft_review_update", "review_confirmation")
         builder.add_edge("review_confirmation", "write_review_note")
-        builder.add_edge("write_review_note", "merge_career_application")
-        builder.add_edge("merge_career_application", "final_answer")
+        builder.add_conditional_edges(
+            "write_review_note",
+            _route_after_review_note_write,
+            {
+                "retry": "write_retry",
+                "next": "merge_career_application",
+            },
+        )
+        builder.add_conditional_edges(
+            "merge_career_application",
+            _route_after_application_merge,
+            {
+                "retry": "write_retry",
+                "final": "final_answer",
+            },
+        )
+        builder.add_conditional_edges(
+            "write_retry",
+            _route_after_write_retry,
+            {
+                "note": "write_review_note",
+                "application": "merge_career_application",
+                "final": "final_answer",
+            },
+        )
         builder.add_edge("final_answer", END)
         return builder.compile(checkpointer=checkpointer)
 
@@ -461,10 +493,20 @@ class InterviewReviewWorkflowRunner:
             }
         await self._emit_node_event(state, "write_review_note", "workflow_node_started")
         args = _note_create_args(state)
-        result = await self._execute_tool("note_create", args, state=state, missing_output="note")
+        result = await self._execute_write_tool(
+            "note_create",
+            args,
+            state=state,
+            missing_output="note",
+        )
         if not result.success:
             await self._emit_node_failed(state, "write_review_note", result.content)
-            raise WorkflowTransientError(result.content)
+            return write_failure_update(
+                dict(state),
+                failed_node="write_review_note",
+                error=result.content,
+                retry_phase=_PHASE_WRITE_RETRY,
+            )
         payload = _json_object(result.content)
         note_id = _string(payload.get("record_id")) or _string(payload.get("note_id")) or _note_id(state)
         await self._emit_node_event(
@@ -475,6 +517,7 @@ class InterviewReviewWorkflowRunner:
         )
         return {
             "phase": _PHASE_NOTE_WRITTEN,
+            "last_error": None,
             "known_refs": _known_refs_with(state, {"note_id": note_id, "record_id": note_id}),
             "outputs": _merged_outputs(
                 state,
@@ -509,7 +552,7 @@ class InterviewReviewWorkflowRunner:
                 "answer": "缺少求职项目或 Note 引用，已停止项目更新。",
             }
         await self._emit_node_event(state, "merge_career_application", "workflow_node_started")
-        result = await self._execute_tool(
+        result = await self._execute_write_tool(
             "career_application_merge",
             args,
             state=state,
@@ -517,7 +560,12 @@ class InterviewReviewWorkflowRunner:
         )
         if not result.success:
             await self._emit_node_failed(state, "merge_career_application", result.content)
-            raise WorkflowTransientError(result.content)
+            return write_failure_update(
+                dict(state),
+                failed_node="merge_career_application",
+                error=result.content,
+                retry_phase=_PHASE_WRITE_RETRY,
+            )
         payload = _json_object(result.content)
         application_id = _string(payload.get("record_id")) or _string(payload.get("application_id")) or _string(
             args.get("application_id")
@@ -530,9 +578,48 @@ class InterviewReviewWorkflowRunner:
         )
         return {
             "phase": _PHASE_APPLICATION_MERGED,
+            "last_error": None,
             "known_refs": _known_refs_with(state, {"application_id": application_id}),
             "outputs": _merged_outputs(state, {"application_id": application_id}),
             "tool_calls": _append_tool_call(state, "career_application_merge", args),
+        }
+
+    async def _write_retry(self, state: InterviewReviewGraphState) -> dict[str, Any]:
+        failed_node = failed_write_node(dict(state))
+        is_application_merge = failed_node == "merge_career_application"
+        payload = write_retry_interrupt_payload(
+            dict(state),
+            question=(
+                "求职项目更新失败。面试复盘 Note 已保存，你可以重试项目更新，或保留 Note 并取消更新。"
+                if is_application_merge
+                else "面试复盘 Note 保存失败。你可以重试保存，或取消本次写入。"
+            ),
+            operation_label="更新求职项目" if is_application_merge else "保存面试复盘 Note",
+        )
+        answer = interrupt(payload)
+        action = parse_write_retry_action(answer)
+        if action == "cancel":
+            outputs = _outputs(state)
+            note_id = _string(outputs.get("note_id"))
+            return {
+                "phase": _PHASE_CANCELLED,
+                "outputs": _merged_outputs(
+                    state,
+                    {
+                        "cancelled": True,
+                        "application_update_cancelled": is_application_merge,
+                    },
+                ),
+                "answer": (
+                    f"面试复盘 Note 已保存（note_id: {note_id}），已取消更新求职项目。"
+                    if is_application_merge and note_id is not None
+                    else "已取消面试复盘写入。"
+                ),
+                "pending_question": None,
+            }
+        return {
+            "phase": _PHASE_NOTE_WRITTEN if is_application_merge else _PHASE_REVIEW_CONFIRMED,
+            "pending_question": None,
         }
 
     async def _final_answer(self, state: InterviewReviewGraphState) -> dict[str, Any]:
@@ -660,6 +747,28 @@ class InterviewReviewWorkflowRunner:
                 gateway_result.event_payload,
                 channel=bindings.channel,
             )
+        return result
+
+    async def _execute_write_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        state: InterviewReviewGraphState,
+        missing_output: str,
+    ) -> ToolExecutionResult:
+        result: ToolExecutionResult | None = None
+        for _ in range(self._node_retry_attempts):
+            result = await self._execute_tool(
+                tool_name,
+                arguments,
+                state=state,
+                missing_output=missing_output,
+            )
+            if result.success:
+                return result
+        if result is None:
+            raise ValidationError("write tool execution produced no result.")
         return result
 
     async def _result_from_graph_output(
@@ -1310,7 +1419,29 @@ def _answer_for_interrupt(payload: dict[str, Any]) -> str:
         return "需要你确认要更新的面试复盘范围。"
     if kind == "interview_review_confirmation":
         return "面试复盘草稿和项目更新预览已生成，需要你确认、编辑或取消。"
+    if kind == WRITE_RETRY_INTERRUPT_TYPE:
+        operation_label = _string(payload.get("operation_label")) or "写入"
+        return f"{operation_label}失败，需要你选择重试或取消。"
     return "workflow 已暂停，等待你的输入。"
+
+
+def _route_after_review_note_write(state: InterviewReviewGraphState) -> str:
+    return "retry" if state.get("phase") == _PHASE_WRITE_RETRY else "next"
+
+
+def _route_after_application_merge(state: InterviewReviewGraphState) -> str:
+    return "retry" if state.get("phase") == _PHASE_WRITE_RETRY else "final"
+
+
+def _route_after_write_retry(state: InterviewReviewGraphState) -> str:
+    if state.get("phase") == _PHASE_CANCELLED:
+        return "final"
+    failed_node = failed_write_node(dict(state))
+    if failed_node == "write_review_note":
+        return "note"
+    if failed_node == "merge_career_application":
+        return "application"
+    return "final"
 
 
 def _runtime_plan_for_tool(

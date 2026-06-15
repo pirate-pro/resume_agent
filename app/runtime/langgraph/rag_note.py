@@ -37,6 +37,12 @@ from app.runtime.langgraph.types import (
     WorkflowGraphState,
     WorkflowResumeRequest,
 )
+from app.runtime.langgraph.write_retry import (
+    WRITE_RETRY_INTERRUPT_TYPE,
+    parse_write_retry_action,
+    write_failure_update,
+    write_retry_interrupt_payload,
+)
 
 __all__ = ["RagNoteWorkflowRunner"]
 
@@ -421,13 +427,12 @@ class RagNoteWorkflowRunner:
             args = repaired_args
         if not result.success:
             await self._emit_node_failed(state, "write_note", result.content)
-            retry_counters = dict(state.get("retry_counters") or {})
-            retry_counters["write_note"] = retry_counters.get("write_note", 0) + 1
-            return {
-                "phase": _PHASE_WRITE_RETRY,
-                "last_error": {"node": "write_note", "error": result.content[:500]},
-                "retry_counters": retry_counters,
-            }
+            return write_failure_update(
+                dict(state),
+                failed_node="write_note",
+                error=result.content,
+                retry_phase=_PHASE_WRITE_RETRY,
+            )
         payload = _json_object(result.content)
         note_id = _string(payload.get("record_id")) or _string(payload.get("note_id")) or _note_id(state)
         await self._emit_node_event(
@@ -438,25 +443,19 @@ class RagNoteWorkflowRunner:
         )
         return {
             "phase": _PHASE_COMPLETED,
+            "last_error": None,
             "outputs": {"reviewed": True, "note_id": note_id, "note_title": args.get("title")},
             "tool_calls": _append_tool_call(state, "note_create", args),
         }
 
     async def _write_retry(self, state: WorkflowGraphState) -> dict[str, Any]:
-        error = state.get("last_error")
-        error_message = _string(error.get("error")) if isinstance(error, dict) else None
-        payload = {
-            "type": "workflow_write_retry",
-            "workflow_instance_id": state["workflow_instance_id"],
-            "thread_id": state["thread_id"],
-            "question": "笔记保存失败。你可以重试写入，或取消本次保存。",
-            "failed_node": "write_note",
-            "error": error_message or "未知写入错误",
-            "retry_count": (state.get("retry_counters") or {}).get("write_note", 1),
-            "actions": ["retry", "cancel"],
-        }
+        payload = write_retry_interrupt_payload(
+            dict(state),
+            question="笔记保存失败。你可以重试写入，或取消本次保存。",
+            operation_label="保存笔记",
+        )
         answer = interrupt(payload)
-        action = _parse_write_retry_answer(answer)
+        action = parse_write_retry_action(answer)
         if action == "cancel":
             return {
                 "phase": _PHASE_CANCELLED,
@@ -846,15 +845,6 @@ def _parse_note_review_answer(answer: Any, current_draft: dict[str, Any]) -> tup
     return action, current_draft
 
 
-def _parse_write_retry_answer(answer: Any) -> str:
-    if not isinstance(answer, dict):
-        raise ValidationError("write retry resume payload must be an object.")
-    action = (_string(answer.get("action")) or "retry").lower()
-    if action not in {"retry", "cancel"}:
-        raise ValidationError("write retry action must be retry/cancel.")
-    return action
-
-
 def _context_pack_query(state: WorkflowGraphState) -> str:
     supplement = _string(state.get("user_supplement"))
     if supplement:
@@ -1166,7 +1156,7 @@ def _answer_for_interrupt(payload: dict[str, Any]) -> str:
         return "需要你选择用于生成笔记的来源，或补充要写入的内容。"
     if kind == "note_review":
         return "笔记草稿已生成，需要你确认、编辑或取消。"
-    if kind == "workflow_write_retry":
+    if kind == WRITE_RETRY_INTERRUPT_TYPE:
         return "笔记保存失败，需要你选择重试或取消。"
     return "workflow 已暂停，等待你的输入。"
 

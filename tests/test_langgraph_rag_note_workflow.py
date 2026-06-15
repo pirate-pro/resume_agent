@@ -317,6 +317,157 @@ def test_interview_review_workflow_retries_merge_without_recreating_note() -> No
     assert [call.name for call in gateway.calls].count("career_application_merge") == 2
 
 
+@pytest.mark.parametrize(
+    ("failed_tool", "expected_failed_node"),
+    [
+        ("note_create", "write_review_note"),
+        ("career_application_merge", "merge_career_application"),
+    ],
+)
+def test_interview_review_write_failure_interrupts_and_resumes_without_duplicate_note(
+    failed_tool: str,
+    expected_failed_node: str,
+) -> None:
+    gateway = _FakeGateway(
+        fail_note_attempts=2 if failed_tool == "note_create" else 0,
+        fail_merge_attempts=2 if failed_tool == "career_application_merge" else 0,
+    )
+    runner = InterviewReviewWorkflowRunner(
+        tool_gateway=cast(ToolGateway, gateway),
+        model_client=_InterviewReviewDraftModel(),
+        event_recorder=EventRecorder(cast(SessionRepository, _EventRepo())),
+        checkpoint_backend="memory",
+        node_timeout_seconds=30,
+        node_retry_attempts=2,
+    )
+
+    async def _exercise() -> tuple[Any, Any]:
+        first = await runner.run_stream(
+            _run_input(
+                "我刚面完星河智能一面，请把这次面试复盘保存成一条 Note，"
+                "并更新当前求职项目的阶段、风险、下一步行动和项目备注。"
+            )
+        )
+        assert first.interrupt_payload is not None
+        second = await runner.resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload(
+                    {
+                        "selected_application_id": "application_langgraph",
+                        "save_note": True,
+                        "update_application": True,
+                    }
+                ),
+                context=_context(run_id=f"run_{failed_tool}_scope"),
+            )
+        )
+        assert second.interrupt_payload is not None
+        failed = await runner.resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload({"action": "approve"}),
+                context=_context(run_id=f"run_{failed_tool}_failure"),
+            )
+        )
+        assert failed.status == "interrupted"
+        assert failed.interrupt_payload is not None
+        assert failed.interrupt_payload["type"] == "workflow_write_retry"
+        assert failed.interrupt_payload["failed_node"] == expected_failed_node
+        resumed = await runner.resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload({"action": "retry"}),
+                context=_context(run_id=f"run_{failed_tool}_retry"),
+            )
+        )
+        return failed, resumed
+
+    _failed, resumed = asyncio.run(_exercise())
+
+    assert resumed.status == "completed"
+    assert gateway.note_create_count == (3 if failed_tool == "note_create" else 1)
+    assert gateway.application_merge_count == (1 if failed_tool == "note_create" else 3)
+    assert [call.name for call in gateway.calls].count("note_create") == gateway.note_create_count
+
+
+def test_interview_review_write_retry_survives_sqlite_runner_restart(tmp_path: Path) -> None:
+    JsonlSessionRepository(data_dir=tmp_path).create_session("sess_langgraph")
+    store = JsonlWorkflowInstanceStore(data_dir=tmp_path)
+    checkpoint_path = tmp_path / "langgraph" / "checkpoints.sqlite"
+    gateway = _FakeGateway(fail_merge_attempts=2)
+
+    def _runner() -> InterviewReviewWorkflowRunner:
+        return InterviewReviewWorkflowRunner(
+            tool_gateway=cast(ToolGateway, gateway),
+            model_client=_InterviewReviewDraftModel(),
+            event_recorder=EventRecorder(cast(SessionRepository, _EventRepo())),
+            workflow_store=store,
+            checkpoint_backend="sqlite",
+            checkpoint_path=checkpoint_path,
+            node_timeout_seconds=30,
+            node_retry_attempts=2,
+        )
+
+    async def _exercise() -> tuple[Any, Any]:
+        first = await _runner().run_stream(
+            _run_input(
+                "我刚面完星河智能一面，请把这次面试复盘保存成一条 Note，"
+                "并更新当前求职项目的阶段、风险、下一步行动和项目备注。"
+            )
+        )
+        assert first.interrupt_payload is not None
+        second = await _runner().resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload(
+                    {
+                        "selected_application_id": "application_langgraph",
+                        "save_note": True,
+                        "update_application": True,
+                    }
+                ),
+                context=_context(run_id="run_restart_retry_scope"),
+            )
+        )
+        assert second.interrupt_payload is not None
+        failed = await _runner().resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload({"action": "approve"}),
+                context=_context(run_id="run_restart_retry_failure"),
+            )
+        )
+        assert failed.interrupt_payload is not None
+        assert failed.interrupt_payload["failed_node"] == "merge_career_application"
+        waiting = store.get("sess_langgraph", str(first.workflow_instance_id))
+        assert waiting is not None
+        assert waiting.status == "waiting"
+        resumed = await _runner().resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload({"action": "retry"}),
+                context=_context(run_id="run_restart_retry_resume"),
+            )
+        )
+        return first, resumed
+
+    first, resumed = asyncio.run(_exercise())
+
+    assert resumed.status == "completed"
+    assert gateway.note_create_count == 1
+    assert gateway.application_merge_count == 3
+    stored = store.get("sess_langgraph", str(first.workflow_instance_id))
+    assert stored is not None
+    assert stored.status == "completed"
+
+
 def test_interview_review_note_create_skips_unsupported_note_source_refs() -> None:
     gateway = _FakeGateway(include_note_hit=True)
     runner = InterviewReviewWorkflowRunner(
@@ -867,6 +1018,7 @@ class _FakeGateway:
         *,
         fail_search_once: bool = False,
         fail_merge_once: bool = False,
+        fail_merge_attempts: int = 0,
         include_note_hit: bool = False,
         include_learning_hit: bool = False,
         fail_note_attempts: int = 0,
@@ -876,6 +1028,7 @@ class _FakeGateway:
         self.application_merge_count = 0
         self._fail_search_once = fail_search_once
         self._fail_merge_once = fail_merge_once
+        self._fail_merge_attempts = fail_merge_attempts
         self._include_note_hit = include_note_hit
         self._include_learning_hit = include_learning_hit
         self._fail_note_attempts = fail_note_attempts
@@ -1004,6 +1157,16 @@ class _FakeGateway:
             return _gateway_result(tool_call, payload)
         if tool_call.name == "career_application_merge":
             self.application_merge_count += 1
+            if self._fail_merge_attempts > 0:
+                self._fail_merge_attempts -= 1
+                return ToolGatewayResult(
+                    tool_call=tool_call,
+                    result=ToolExecutionResult(
+                        tool_name=tool_call.name,
+                        success=False,
+                        content="temporary career application merge timeout",
+                    ),
+                )
             if self._fail_merge_once:
                 self._fail_merge_once = False
                 return ToolGatewayResult(
