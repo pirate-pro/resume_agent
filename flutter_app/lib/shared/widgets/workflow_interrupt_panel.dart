@@ -67,8 +67,10 @@ class _WriteRetryForm extends StatelessWidget {
   Widget build(BuildContext context) {
     final error = (interrupt.payload["error"] ?? "未知写入错误").toString();
     final retryCount = interrupt.payload["retry_count"] ?? 1;
+    final operationLabel =
+        (interrupt.payload["operation_label"] ?? "保存").toString();
     return _PanelShell(
-      title: "保存失败",
+      title: "$operationLabel失败",
       question: interrupt.question,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -84,7 +86,7 @@ class _WriteRetryForm extends StatelessWidget {
               ),
             ),
             child: Text(
-              "$error\n\n已尝试 $retryCount 次。重试只会重新执行保存步骤。",
+              "$error\n\n已尝试 $retryCount 轮。重试只会重新执行“$operationLabel”步骤。",
               style: AppTheme.ts(
                 fontSize: 13,
                 color: AppTheme.textSecondary,
@@ -99,7 +101,7 @@ class _WriteRetryForm extends StatelessWidget {
                 key: const Key("workflow-cancel"),
                 onPressed:
                     isSubmitting ? null : () => onSubmit({"action": "cancel"}),
-                child: const Text("取消保存"),
+                child: const Text("取消"),
               ),
               const SizedBox(width: 8),
               FilledButton.icon(
@@ -107,7 +109,7 @@ class _WriteRetryForm extends StatelessWidget {
                 onPressed:
                     isSubmitting ? null : () => onSubmit({"action": "retry"}),
                 icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: const Text("重试保存"),
+                label: Text("重试$operationLabel"),
               ),
             ],
           ),

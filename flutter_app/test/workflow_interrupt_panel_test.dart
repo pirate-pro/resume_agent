@@ -188,7 +188,7 @@ void main() {
       ),
     );
 
-    expect(find.textContaining("已尝试 2 次"), findsOneWidget);
+    expect(find.textContaining("已尝试 2 轮"), findsOneWidget);
     await tester.tap(find.byKey(const Key("workflow-retry")));
     await tester.pump();
 
