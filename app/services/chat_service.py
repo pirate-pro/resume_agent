@@ -18,11 +18,19 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.runtime.agent_capability import AgentCapabilityRegistry
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.event_channel import EventChannel
+from app.runtime.langgraph import (
+    RAG_NOTE_WORKFLOW_ID,
+    RagNoteWorkflowRunner,
+    WorkflowResumePayload,
+    WorkflowResumeRequest,
+    WorkflowRouter,
+    WorkflowRunnerDispatcher,
+)
 from app.runtime.session_manager import SessionManager
 from app.services.answer_normalizer import AnswerNormalizer
 from app.services.chat_response_builder import ChatResponseBuilder
 from app.services.session_title_service import DEFAULT_SESSION_TITLES, SessionTitleService
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import ChatRequest, ChatResponse, WorkflowResumeStreamRequest
 
 __all__ = ["ChatService"]
 _logger = logging.getLogger(__name__)
@@ -40,6 +48,8 @@ class ChatService:
         session_lock_manager: SessionLockManager,
         session_title_service: SessionTitleService,
         answer_normalizer: AnswerNormalizer | None = None,
+        workflow_router: WorkflowRouter | None = None,
+        workflow_runner: RagNoteWorkflowRunner | WorkflowRunnerDispatcher | None = None,
         stream_heartbeat_interval_seconds: float = 15.0,
         stream_run_timeout_seconds: float = 300.0,
         session_title_timeout_seconds: float = 40.0,
@@ -51,6 +61,8 @@ class ChatService:
         self._session_lock_manager = session_lock_manager
         self._session_title_service = session_title_service
         self._chat_response_builder = ChatResponseBuilder(answer_normalizer)
+        self._workflow_router = workflow_router
+        self._workflow_runner = workflow_runner
         if stream_heartbeat_interval_seconds <= 0:
             raise ValidationError("stream_heartbeat_interval_seconds must be positive.")
         if stream_run_timeout_seconds <= 0:
@@ -79,7 +91,11 @@ class ChatService:
                 self._should_generate_session_title,
                 session.session_id,
             )
-            run_output = await asyncio.to_thread(self._runtime.run, run_input)
+            workflow_result = await self._try_run_workflow(run_input, channel=None)
+            if workflow_result is not None:
+                run_output = workflow_result
+            else:
+                run_output = await asyncio.to_thread(self._runtime.run, run_input)
 
         title_pending = False
         if should_generate_title:
@@ -122,10 +138,14 @@ class ChatService:
                         self._should_generate_session_title,
                         session_id,
                     )
-                    run_output = await asyncio.wait_for(
-                        self._runtime.run_stream(run_input, channel),
-                        timeout=self._stream_run_timeout_seconds,
-                    )
+                    workflow_result = await self._try_run_workflow(run_input, channel=channel)
+                    if workflow_result is not None:
+                        run_output = workflow_result
+                    else:
+                        run_output = await asyncio.wait_for(
+                            self._runtime.run_stream(run_input, channel),
+                            timeout=self._stream_run_timeout_seconds,
+                        )
                     return run_output, should_generate_title
             except asyncio.TimeoutError as exc:
                 raise TimeoutError(
@@ -190,6 +210,102 @@ class ChatService:
             await channel.close()
             yield {"event": "error", "data": {"detail": str(exc)}}
 
+    async def resume_workflow_stream(
+        self,
+        workflow_instance_id: str,
+        request: WorkflowResumeStreamRequest,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Resume a paused LangGraph workflow and stream workflow events."""
+
+        if self._workflow_runner is None:
+            yield {"event": "error", "data": {"detail": "LangGraph workflow runner is not enabled."}}
+            return
+        workflow_runner = self._workflow_runner
+        session = self._session_manager.get_or_create_session(request.session_id)
+        run_context = self._prepare_resume_context(
+            session_id=session.session_id,
+            entry_agent_id=request.entry_agent_id,
+            trace_level=request.trace_level,
+        )
+        lock = self._session_lock_manager.get_lock(session.session_id)
+        channel = EventChannel(maxsize=512)
+
+        async def _resume_with_lock() -> AgentRunOutput:
+            try:
+                async with lock:
+                    resume_request = WorkflowResumeRequest(
+                        session_id=session.session_id,
+                        workflow_instance_id=workflow_instance_id,
+                        payload=WorkflowResumePayload(dict(request.payload)),
+                        context=run_context,
+                        expected_version=request.expected_version,
+                    )
+                    if isinstance(workflow_runner, WorkflowRunnerDispatcher):
+                        result = await asyncio.wait_for(
+                            workflow_runner.resume_workflow_stream(
+                                workflow_instance_id,
+                                resume_request,
+                                channel=channel,
+                            ),
+                            timeout=self._stream_run_timeout_seconds,
+                        )
+                    else:
+                        result = await asyncio.wait_for(
+                            workflow_runner.resume_stream(resume_request, channel=channel),
+                            timeout=self._stream_run_timeout_seconds,
+                        )
+                    if result.output is None:
+                        raise RuntimeError("workflow resume did not produce output")
+                    return result.output
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"workflow resume timed out after {self._stream_run_timeout_seconds:.1f}s"
+                ) from exc
+            finally:
+                await channel.close()
+
+        run_task = asyncio.create_task(_resume_with_lock())
+        yield {
+            "event": "session",
+            "data": {
+                "session_id": session.session_id,
+                "workflow_instance_id": workflow_instance_id,
+            },
+        }
+        try:
+            while True:
+                try:
+                    item = await channel.receive(timeout_seconds=self._stream_heartbeat_interval_seconds)
+                except asyncio.TimeoutError:
+                    yield {
+                        "event": "heartbeat",
+                        "data": {
+                            "session_id": session.session_id,
+                            "workflow_instance_id": workflow_instance_id,
+                            "idle_seconds": self._stream_heartbeat_interval_seconds,
+                            "created_at": to_app_iso(_utc_now()),
+                        },
+                    }
+                    if run_task.done():
+                        break
+                    continue
+                if item is None:
+                    break
+                yield item
+            run_output = await run_task
+            chat_response = self._chat_response_builder.build(run_output, title_pending=False)
+            yield {"event": "done", "data": chat_response.model_dump(mode="json")}
+        except Exception as exc:
+            _logger.exception("workflow resume stream 失败: session_id=%s error=%s", session.session_id, exc)
+            if not run_task.done():
+                run_task.cancel()
+                try:
+                    await run_task
+                except asyncio.CancelledError:
+                    pass
+            await channel.close()
+            yield {"event": "error", "data": {"detail": str(exc)}}
+
     async def wait_for_background_tasks(self) -> None:
         if not self._background_tasks:
             return
@@ -220,6 +336,76 @@ class ChatService:
             context=run_context,
         )
         return session, run_input
+
+    def _prepare_resume_context(
+        self,
+        *,
+        session_id: str,
+        entry_agent_id: str,
+        trace_level: str,
+    ) -> RunContext:
+        normalized_agent_id = entry_agent_id.strip()
+        self._capability_registry.require(normalized_agent_id)
+        return RunContext(
+            session_id=session_id,
+            run_id=f"run_{uuid4().hex[:12]}",
+            agent_id=normalized_agent_id,
+            turn_id=f"turn_{uuid4().hex[:12]}",
+            entry_agent_id=normalized_agent_id,
+            parent_run_id=None,
+            trace_flags={"verbose": trace_level == "verbose"},
+        )
+
+    async def _try_run_workflow(
+        self,
+        run_input: AgentRunInput,
+        *,
+        channel: EventChannel | None,
+    ) -> AgentRunOutput | None:
+        if self._workflow_router is None or self._workflow_runner is None:
+            return None
+        workflow_id = self._workflow_router.select_workflow(run_input)
+        if workflow_id is None:
+            return None
+        if isinstance(self._workflow_runner, WorkflowRunnerDispatcher):
+            _logger.info(
+                "LangGraph workflow 命中: session_id=%s workflow_id=%s",
+                run_input.session_id,
+                workflow_id,
+            )
+            result = await asyncio.wait_for(
+                self._workflow_runner.run_workflow_stream(workflow_id, run_input, channel=channel),
+                timeout=self._stream_run_timeout_seconds,
+            )
+            if not result.handled:
+                _logger.info(
+                    "LangGraph workflow 未注册 runner，回退 AgentRuntime: session_id=%s workflow_id=%s",
+                    run_input.session_id,
+                    workflow_id,
+                )
+                return None
+            if result.output is None:
+                raise RuntimeError("workflow did not produce output")
+            return result.output
+        if workflow_id != RAG_NOTE_WORKFLOW_ID:
+            _logger.info(
+                "LangGraph workflow 尚未接入 runner，回退 AgentRuntime: session_id=%s workflow_id=%s",
+                run_input.session_id,
+                workflow_id,
+            )
+            return None
+        _logger.info(
+            "LangGraph workflow 命中: session_id=%s workflow_id=%s",
+            run_input.session_id,
+            workflow_id,
+        )
+        result = await asyncio.wait_for(
+            self._workflow_runner.run_stream(run_input, channel=channel),
+            timeout=self._stream_run_timeout_seconds,
+        )
+        if result.output is None:
+            raise RuntimeError("workflow did not produce output")
+        return result.output
 
     def _should_generate_session_title(self, session_id: str) -> bool:
         meta = self._session_repository.get_session(session_id)

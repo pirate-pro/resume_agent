@@ -47,6 +47,9 @@ class ToolCallController:
         pending_runtime_plan: dict[str, Any] | None,
         visible_tool_names_for_round: set[str],
     ) -> ToolCall | None:
+        completion_tools = runtime_plan_completion_tools(pending_runtime_plan or {})
+        if _is_read_only_probe_tool(tool_call.name) and completion_tools == ["career_application_create"]:
+            return None
         return self.strict_required_tool_auto_call_from_plan(
             pending_runtime_plan=pending_runtime_plan,
             visible_tool_names_for_round=visible_tool_names_for_round,
@@ -102,9 +105,12 @@ class ToolCallController:
     ) -> bool:
         if pending_runtime_plan is None or pending_runtime_plan.get("final_answer_ready") is True:
             return False
-        if pending_runtime_plan.get("phase") != "resume_version":
-            return False
         if tool_call.name != "session_create_text_artifact":
+            return False
+        phase = pending_runtime_plan.get("phase")
+        if phase == "note_write":
+            return _note_write_artifact_support_allowed(tool_call, pending_runtime_plan=pending_runtime_plan)
+        if phase != "resume_version":
             return False
         if "resume_version" not in _string_list_from_runtime_plan(pending_runtime_plan.get("missing_outputs")):
             return False
@@ -224,6 +230,42 @@ def _looks_like_resume_version_artifact_title(title: str) -> bool:
     if "简历版本" in compact or "定制简历" in compact:
         return True
     return "resume" in compact and "version" in compact
+
+
+def _note_write_artifact_support_allowed(
+    tool_call: ToolCall,
+    *,
+    pending_runtime_plan: dict[str, Any] | None,
+) -> bool:
+    if "note" not in _string_list_from_runtime_plan((pending_runtime_plan or {}).get("missing_outputs")):
+        return False
+    arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
+    title = arguments.get("title")
+    content = arguments.get("content")
+    kind = arguments.get("kind")
+    media_type = arguments.get("media_type")
+    if not isinstance(title, str) or not title.strip():
+        return False
+    if not isinstance(content, str) or not content.strip():
+        return False
+    if kind is not None and kind not in {"generated_file", "pasted_text"}:
+        return False
+    if media_type is not None and not isinstance(media_type, str):
+        return False
+    return True
+
+
+def _is_read_only_probe_tool(tool_name: str) -> bool:
+    name = str(tool_name or "").strip()
+    if not name:
+        return False
+    if name == _SCHEMA_SEARCH_TOOL_NAME:
+        return True
+    if name.startswith("session_") and (
+        name.endswith("_get") or name.endswith("_list") or name in {"session_read_artifact", "session_list_artifacts"}
+    ):
+        return True
+    return name.endswith("_get") or name.endswith("_list")
 
 
 def _is_final_answer_ready_runtime_plan(pending_runtime_plan: dict[str, Any] | None) -> bool:

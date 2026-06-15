@@ -26,6 +26,7 @@ __all__ = [
     "SessionMessage",
     "WorkspaceFilePreviewResponse",
     "ToolCallView",
+    "WorkflowResumeStreamRequest",
 ]
 
 
@@ -83,6 +84,37 @@ class ChatRequest(BaseModel):
             normalized.append(item)
             seen.add(item)
         return normalized
+
+    @field_validator("entry_agent_id")
+    @classmethod
+    def _validate_entry_agent_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("entry_agent_id cannot be empty.")
+        return normalized
+
+
+class WorkflowResumeStreamRequest(BaseModel):
+    session_id: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    expected_version: int | None = Field(default=None, ge=1)
+    entry_agent_id: str = "agent_main"
+    trace_level: Literal["basic", "verbose"] = "basic"
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("session_id cannot be empty.")
+        return normalized
+
+    @field_validator("payload")
+    @classmethod
+    def _validate_payload(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise ValueError("payload must be an object.")
+        return value
 
     @field_validator("entry_agent_id")
     @classmethod

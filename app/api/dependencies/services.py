@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Any
 
 from app.api.dependencies.config import get_settings
-from app.api.dependencies.infrastructure import get_career_product_store, get_lock_manager, get_session_repository
+from app.api.dependencies.infrastructure import (
+    get_career_product_store,
+    get_lock_manager,
+    get_session_repository,
+    get_tool_call_ledger,
+    get_workflow_instance_store,
+    get_workflow_resume_lease_store,
+)
 from app.api.dependencies.managers import (
     get_agent_capability_registry,
     get_agent_registry,
@@ -14,7 +22,17 @@ from app.api.dependencies.managers import (
     get_session_manager,
 )
 from app.api.dependencies.model import get_model_client
-from app.api.dependencies.runtime import get_agent_runtime
+from app.api.dependencies.runtime import get_agent_runtime, get_workflow_runtime_guard
+from app.api.dependencies.tools import get_tool_registry
+from app.runtime.agent.tool_gateway import ToolGateway
+from app.runtime.langgraph import (
+    INTERVIEW_REVIEW_WORKFLOW_ID,
+    RAG_NOTE_WORKFLOW_ID,
+    InterviewReviewWorkflowRunner,
+    RagNoteWorkflowRunner,
+    WorkflowRouter,
+    WorkflowRunnerDispatcher,
+)
 from app.infra.storage.jsonl_agent_task_store import JsonlAgentTaskStore
 from app.services.agent_invocation_service import AgentInvocationService
 from app.services.agent_task_runtime import AgentTaskRuntime
@@ -33,9 +51,13 @@ __all__ = [
     "get_answer_normalizer",
     "get_chat_service",
     "get_memory_query_service",
+    "get_interview_review_workflow_runner",
+    "get_rag_note_workflow_runner",
     "get_session_artifact_service",
     "get_session_query_service",
     "get_session_title_service",
+    "get_workflow_runner_dispatcher",
+    "get_workflow_router",
 ]
 
 
@@ -79,6 +101,70 @@ def get_session_title_service() -> SessionTitleService:
 
 
 @lru_cache(maxsize=1)
+def get_workflow_router() -> WorkflowRouter:
+    settings = get_settings()
+    return WorkflowRouter(
+        enabled=settings.langgraph_workflow_enabled,
+        interactive_note_enabled=settings.langgraph_interactive_note_enabled,
+        interactive_interview_review_enabled=settings.langgraph_interactive_interview_review_enabled,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_rag_note_workflow_runner() -> RagNoteWorkflowRunner:
+    settings = get_settings()
+    return RagNoteWorkflowRunner(
+        tool_gateway=_build_workflow_tool_gateway(),
+        model_client=get_model_client(),
+        event_recorder=get_event_recorder(),
+        workflow_store=get_workflow_instance_store(),
+        checkpoint_backend=settings.langgraph_workflow_backend,
+        checkpoint_path=settings.langgraph_checkpoint_path,
+        node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+        node_retry_attempts=settings.langgraph_node_retry_attempts,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_interview_review_workflow_runner() -> InterviewReviewWorkflowRunner:
+    settings = get_settings()
+    return InterviewReviewWorkflowRunner(
+        tool_gateway=_build_workflow_tool_gateway(),
+        model_client=get_model_client(),
+        event_recorder=get_event_recorder(),
+        workflow_store=get_workflow_instance_store(),
+        checkpoint_backend=settings.langgraph_workflow_backend,
+        checkpoint_path=settings.langgraph_checkpoint_path,
+        node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+        node_retry_attempts=settings.langgraph_node_retry_attempts,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_workflow_runner_dispatcher() -> WorkflowRunnerDispatcher:
+    settings = get_settings()
+    runners: dict[str, Any] = {}
+    if settings.langgraph_interactive_note_enabled:
+        runners[RAG_NOTE_WORKFLOW_ID] = get_rag_note_workflow_runner()
+    if settings.langgraph_interactive_interview_review_enabled:
+        runners[INTERVIEW_REVIEW_WORKFLOW_ID] = get_interview_review_workflow_runner()
+    return WorkflowRunnerDispatcher(
+        runners=runners,
+        workflow_store=get_workflow_instance_store(),
+        resume_lease_store=get_workflow_resume_lease_store(),
+        resume_lease_ttl_seconds=settings.langgraph_resume_lease_ttl_seconds,
+    )
+
+
+def _build_workflow_tool_gateway() -> ToolGateway:
+    return ToolGateway(
+        tool_executor=get_tool_registry(),
+        ledger=get_tool_call_ledger(),
+        workflow_guard=get_workflow_runtime_guard(),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_session_query_service() -> SessionQueryService:
     return SessionQueryService(
         session_repository=get_session_repository(),
@@ -113,6 +199,8 @@ def get_chat_service() -> ChatService:
         session_lock_manager=get_lock_manager(),
         session_title_service=get_session_title_service(),
         answer_normalizer=get_answer_normalizer(),
+        workflow_router=get_workflow_router(),
+        workflow_runner=get_workflow_runner_dispatcher() if settings.langgraph_workflow_enabled else None,
         stream_heartbeat_interval_seconds=settings.chat_stream_heartbeat_interval_seconds,
         stream_run_timeout_seconds=settings.chat_stream_run_timeout_seconds,
     )

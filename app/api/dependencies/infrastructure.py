@@ -10,8 +10,10 @@ from app.career.store import CareerProductStore
 from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.jsonl_tool_call_ledger import JsonlToolCallLedger
+from app.infra.storage.jsonl_workflow_instance_store import JsonlWorkflowInstanceStore
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.infra.storage.sqlite_workflow_resume_lease_store import SqliteWorkflowResumeLeaseStore
 from app.knowledge.store import KnowledgeStore
 from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
@@ -32,6 +34,8 @@ __all__ = [
     "get_skill_repository",
     "get_state_store",
     "get_tool_call_ledger",
+    "get_workflow_instance_store",
+    "get_workflow_resume_lease_store",
 ]
 
 
@@ -45,6 +49,18 @@ def get_session_repository() -> JsonlSessionRepository:
 def get_tool_call_ledger() -> JsonlToolCallLedger:
     settings = get_settings()
     return JsonlToolCallLedger(data_dir=settings.data_dir)
+
+
+@lru_cache(maxsize=1)
+def get_workflow_instance_store() -> JsonlWorkflowInstanceStore:
+    settings = get_settings()
+    return JsonlWorkflowInstanceStore(data_dir=settings.data_dir)
+
+
+@lru_cache(maxsize=1)
+def get_workflow_resume_lease_store() -> SqliteWorkflowResumeLeaseStore:
+    settings = get_settings()
+    return SqliteWorkflowResumeLeaseStore(path=settings.langgraph_resume_lease_path)
 
 
 @lru_cache(maxsize=1)

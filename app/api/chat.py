@@ -36,6 +36,7 @@ from app.schemas.chat import (
     SessionMessage,
     SessionUpdateRequest,
     SkillSummaryView,
+    WorkflowResumeStreamRequest,
     WorkspaceFilePreviewResponse,
 )
 from app.schemas.common import StandardResponse
@@ -120,6 +121,40 @@ async def post_chat_stream(
         except Exception as exc:
             # 流式响应已经开始后，全局异常处理器无法再接管，只能发送 SSE error 事件。
             _logger.exception("流式聊天处理失败: %s", exc)
+            yield _format_sse("error", {"detail": str(exc)})
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/workflows/{workflow_instance_id}/resume/stream")
+async def post_workflow_resume_stream(
+    workflow_instance_id: str,
+    request: WorkflowResumeStreamRequest,
+    service: ChatService = Depends(get_chat_service),
+) -> StreamingResponse:
+    _logger.info(
+        "收到 workflow resume 请求: session_id=%s workflow_instance_id=%s payload_keys=%s",
+        request.session_id,
+        workflow_instance_id,
+        sorted(request.payload.keys()),
+    )
+
+    async def _event_generator() -> AsyncIterator[str]:
+        try:
+            async for item in service.resume_workflow_stream(workflow_instance_id, request):
+                event_name = str(item.get("event", "message"))
+                event_data = item.get("data", {})
+                yield _format_sse(event_name, event_data)
+        except Exception as exc:
+            _logger.exception("workflow resume 处理失败: %s", exc)
             yield _format_sse("error", {"detail": str(exc)})
 
     return StreamingResponse(

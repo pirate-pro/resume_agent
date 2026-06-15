@@ -955,13 +955,16 @@ class AgentRuntime:
                         "schema_search_rounds": schema_search_rounds,
                     },
                 )
-                answer = self._recover_final_answer(
-                    run_context=run_context,
-                    system_prompt=context.system_prompt,
-                    messages=tool_context_window.render_messages(),
-                    original_user_message=run_input.user_message,
-                    pending_runtime_plan=pending_runtime_plan,
-                )
+                if _skip_final_answer_recovery(pending_runtime_plan):
+                    answer = _deterministic_final_answer_fallback(pending_runtime_plan)
+                else:
+                    answer = self._recover_final_answer(
+                        run_context=run_context,
+                        system_prompt=context.system_prompt,
+                        messages=tool_context_window.render_messages(),
+                        original_user_message=run_input.user_message,
+                        pending_runtime_plan=pending_runtime_plan,
+                    )
                 answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
             if terminal_workflow_results and all(terminal_workflow_results):
@@ -3075,15 +3078,18 @@ class AgentRuntime:
                     },
                     channel=channel,
                 )
-                answer = await self._recover_final_answer_stream(
-                    run_context=run_context,
-                    system_prompt=context.system_prompt,
-                    messages=tool_context_window.render_messages(),
-                    original_user_message=run_input.user_message,
-                    previous_tool_calls=used_tool_calls,
-                    channel=channel,
-                    pending_runtime_plan=pending_runtime_plan,
-                )
+                if _skip_final_answer_recovery(pending_runtime_plan):
+                    answer = _deterministic_final_answer_fallback(pending_runtime_plan)
+                else:
+                    answer = await self._recover_final_answer_stream(
+                        run_context=run_context,
+                        system_prompt=context.system_prompt,
+                        messages=tool_context_window.render_messages(),
+                        original_user_message=run_input.user_message,
+                        previous_tool_calls=used_tool_calls,
+                        channel=channel,
+                        pending_runtime_plan=pending_runtime_plan,
+                    )
                 answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
             if terminal_workflow_results and all(terminal_workflow_results):
@@ -4090,6 +4096,10 @@ def _is_final_answer_ready_runtime_plan(pending_runtime_plan: dict[str, Any] | N
     return pending_runtime_plan is not None and pending_runtime_plan.get("final_answer_ready") is True
 
 
+def _skip_final_answer_recovery(pending_runtime_plan: dict[str, Any] | None) -> bool:
+    return pending_runtime_plan is not None and pending_runtime_plan.get("phase") == "note_write"
+
+
 def _hard_model_round_limit(max_tool_rounds: int) -> int:
     return max(
         _HARD_MODEL_ROUND_FLOOR,
@@ -4158,6 +4168,8 @@ def _deterministic_final_answer_fallback(pending_runtime_plan: dict[str, Any] | 
 
 def _deterministic_completed_workflow_answer(pending_runtime_plan: dict[str, Any]) -> str:
     phase = pending_runtime_plan.get("phase")
+    if phase == "note_write":
+        return "已保存为笔记。"
     phase_name = _workflow_phase_display_name(phase)
     known_refs = _runtime_plan_known_refs(pending_runtime_plan)
     lines = [f"{phase_name}已完成，关键产物已经写入系统。"]

@@ -489,9 +489,10 @@ def _first_jd_source(artifact_refs: list[str], instruction: str) -> str | None:
         if lowered.startswith("artifact_jd") or "_jd_" in lowered or lowered.endswith("_jd"):
             return ref
     for ref in re.findall(r"\bartifact_[A-Za-z0-9_-]+\b", instruction):
-        lowered = ref.casefold()
+        value = str(ref)
+        lowered = value.casefold()
         if lowered.startswith("artifact_jd") or "_jd_" in lowered or lowered.endswith("_jd"):
-            return ref
+            return value
     return None
 
 
@@ -501,9 +502,10 @@ def _first_resume_source(artifact_refs: list[str], instruction: str) -> str | No
         if "resume" in lowered or "简历" in lowered:
             return ref
     for ref in re.findall(r"\bartifact_[A-Za-z0-9_-]+\b", instruction):
-        lowered = ref.casefold()
+        value = str(ref)
+        lowered = value.casefold()
         if "resume" in lowered:
-            return ref
+            return value
     return None
 
 

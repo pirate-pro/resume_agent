@@ -96,6 +96,42 @@ class Settings(BaseSettings):
         default="mcp",
         validation_alias=AliasChoices("RETRIEVAL_TOOL_BACKEND"),
     )
+    langgraph_workflow_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGGRAPH_WORKFLOW_ENABLED"),
+    )
+    langgraph_interactive_note_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGGRAPH_INTERACTIVE_NOTE_ENABLED"),
+    )
+    langgraph_interactive_interview_review_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGGRAPH_INTERACTIVE_INTERVIEW_REVIEW_ENABLED"),
+    )
+    langgraph_workflow_backend: str = Field(
+        default="memory",
+        validation_alias=AliasChoices("LANGGRAPH_WORKFLOW_BACKEND"),
+    )
+    langgraph_checkpoint_path: Path = Field(
+        default=Path("data/langgraph/checkpoints.sqlite"),
+        validation_alias=AliasChoices("LANGGRAPH_CHECKPOINT_PATH"),
+    )
+    langgraph_resume_lease_path: Path = Field(
+        default=Path("data/langgraph/resume_locks.sqlite"),
+        validation_alias=AliasChoices("LANGGRAPH_RESUME_LEASE_PATH"),
+    )
+    langgraph_resume_lease_ttl_seconds: float = Field(
+        default=600.0,
+        validation_alias=AliasChoices("LANGGRAPH_RESUME_LEASE_TTL_SECONDS"),
+    )
+    langgraph_node_timeout_seconds: float = Field(
+        default=90.0,
+        validation_alias=AliasChoices("LANGGRAPH_NODE_TIMEOUT_SECONDS"),
+    )
+    langgraph_node_retry_attempts: int = Field(
+        default=3,
+        validation_alias=AliasChoices("LANGGRAPH_NODE_RETRY_ATTEMPTS"),
+    )
     enable_tool_gateway_ledger: bool = Field(
         default=True,
         validation_alias=AliasChoices("ENABLE_TOOL_GATEWAY_LEDGER"),
@@ -217,7 +253,13 @@ class Settings(BaseSettings):
                 return False
         raise ValidationError("DEBUG must be a boolean-like value.")
 
-    @field_validator("data_dir", "agent_capabilities_path", "agent_registry_path")
+    @field_validator(
+        "data_dir",
+        "agent_capabilities_path",
+        "agent_registry_path",
+        "langgraph_checkpoint_path",
+        "langgraph_resume_lease_path",
+    )
     @classmethod
     def _validate_path_value(cls, value: Path) -> Path:
         raw_value = str(value).strip()
@@ -248,11 +290,11 @@ class Settings(BaseSettings):
             raise ValidationError("CHAT_STREAM_HEARTBEAT_INTERVAL_SECONDS must be positive.")
         return value
 
-    @field_validator("chat_stream_run_timeout_seconds")
+    @field_validator("chat_stream_run_timeout_seconds", "langgraph_node_timeout_seconds", "langgraph_resume_lease_ttl_seconds")
     @classmethod
     def _validate_chat_stream_run_timeout(cls, value: float) -> float:
         if value <= 0:
-            raise ValidationError("CHAT_STREAM_RUN_TIMEOUT_SECONDS must be positive.")
+            raise ValidationError("timeout configuration values must be positive.")
         return value
 
     @field_validator("mid_term_flush_worker_enabled", mode="before")
@@ -265,10 +307,17 @@ class Settings(BaseSettings):
     def _validate_context_compaction_enabled(cls, value: bool | str) -> bool:
         return _parse_bool(value, field_name="CONTEXT_COMPACTION_ENABLED")
 
-    @field_validator("enable_tool_gateway_ledger", "enable_unified_workflow_state", mode="before")
+    @field_validator(
+        "enable_tool_gateway_ledger",
+        "enable_unified_workflow_state",
+        "langgraph_workflow_enabled",
+        "langgraph_interactive_note_enabled",
+        "langgraph_interactive_interview_review_enabled",
+        mode="before",
+    )
     @classmethod
     def _validate_m27_feature_flags(cls, value: bool | str) -> bool:
-        return _parse_bool(value, field_name="M27 feature flag")
+        return _parse_bool(value, field_name="feature flag")
 
     @field_validator("context_compaction_retention_strategy")
     @classmethod
@@ -309,6 +358,21 @@ class Settings(BaseSettings):
         if normalized not in {"local", "mcp"}:
             raise ValidationError("RETRIEVAL_TOOL_BACKEND must be local/mcp.")
         return normalized
+
+    @field_validator("langgraph_workflow_backend")
+    @classmethod
+    def _validate_langgraph_workflow_backend(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"memory", "sqlite"}:
+            raise ValidationError("LANGGRAPH_WORKFLOW_BACKEND must be memory/sqlite.")
+        return normalized
+
+    @field_validator("langgraph_node_retry_attempts")
+    @classmethod
+    def _validate_langgraph_node_retry_attempts(cls, value: int) -> int:
+        if value <= 0:
+            raise ValidationError("LANGGRAPH_NODE_RETRY_ATTEMPTS must be positive.")
+        return value
 
     @field_validator(
         "context_compaction_trigger_context_window_ratio",

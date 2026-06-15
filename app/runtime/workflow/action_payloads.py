@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 from app.domain.models import ToolCall
 from app.runtime.workflow.tool_hints import build_required_tool_call_hint
@@ -202,4 +202,4 @@ def _dedupe_non_empty_strings(values: list[Any]) -> list[str]:
 
 
 def _json_clone(value: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(json.dumps(value, ensure_ascii=False))
+    return cast(dict[str, Any], json.loads(json.dumps(value, ensure_ascii=False)))
