@@ -27,6 +27,7 @@ __all__ = [
     "WorkspaceFilePreviewResponse",
     "ToolCallView",
     "WorkflowResumeStreamRequest",
+    "WorkflowPendingView",
 ]
 
 
@@ -123,6 +124,15 @@ class WorkflowResumeStreamRequest(BaseModel):
         if not normalized:
             raise ValueError("entry_agent_id cannot be empty.")
         return normalized
+
+
+class WorkflowPendingView(BaseModel):
+    workflow_instance_id: str
+    workflow_id: str
+    workflow_version: int = Field(ge=1)
+    phase: str
+    interrupt: dict[str, Any]
+    updated_at: datetime
 
 
 class ToolCallView(BaseModel):

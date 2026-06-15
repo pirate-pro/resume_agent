@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from datetime import datetime
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -16,10 +17,13 @@ from app.api.deps import (
     get_session_artifact_service,
     get_session_query_service,
     get_skill_repository,
+    get_workflow_instance_store,
 )
 from app.api.presenters import event_view, memory_view, session_item_view, session_message_view, skill_summary_view
 from app.api.responses import ok
 from app.domain.protocols import SkillRepository
+from app.domain.workflow_instance_protocols import WorkflowInstanceStore
+from app.domain.workflow_instances import WORKFLOW_STATUS_WAITING
 from app.schemas.chat import (
     ActiveArtifactsRequest,
     ArtifactUploadRequest,
@@ -37,6 +41,7 @@ from app.schemas.chat import (
     SessionUpdateRequest,
     SkillSummaryView,
     WorkflowResumeStreamRequest,
+    WorkflowPendingView,
     WorkspaceFilePreviewResponse,
 )
 from app.schemas.common import StandardResponse
@@ -74,6 +79,35 @@ async def get_session_messages(
 ) -> StandardResponse[list[SessionMessage]]:
     _logger.info("查询会话消息: session_id=%s", session_id)
     return ok([session_message_view(item) for item in service.list_session_messages(session_id)])
+
+
+@router.get(
+    "/sessions/{session_id}/workflows/pending",
+    response_model=StandardResponse[list[WorkflowPendingView]],
+)
+async def get_pending_session_workflows(
+    session_id: str,
+    store: WorkflowInstanceStore = Depends(get_workflow_instance_store),
+) -> StandardResponse[list[WorkflowPendingView]]:
+    _logger.info("查询会话待处理 workflow: session_id=%s", session_id)
+    records = store.list_session_instances(
+        session_id,
+        statuses={WORKFLOW_STATUS_WAITING},
+    )
+    return ok(
+        [
+            WorkflowPendingView(
+                workflow_instance_id=record.workflow_instance_id,
+                workflow_id=record.workflow_id,
+                workflow_version=record.version,
+                phase=record.phase,
+                interrupt=dict(record.pending_interrupt_payload),
+                updated_at=cast(datetime, record.updated_at),
+            )
+            for record in records
+            if record.pending_interrupt_payload is not None
+        ]
+    )
 
 
 @router.post("/chat", response_model=StandardResponse[ChatResponse])

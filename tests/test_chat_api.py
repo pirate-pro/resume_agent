@@ -13,10 +13,14 @@ from app.api.deps import (
     get_memory_query_service,
     get_session_artifact_service,
     get_session_query_service,
+    get_workflow_instance_store,
 )
 from app.core.time import app_now
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, SessionArtifact, ToolCall
 from app.domain.protocols import ModelResponse
+from app.domain.workflow_instances import WORKFLOW_STATUS_WAITING
+from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
+from app.infra.storage.jsonl_workflow_instance_store import JsonlWorkflowInstanceStore
 from app.main import app
 from app.runtime.event_channel import EventChannel
 from app.runtime.langgraph import WorkflowGraphRunResult, WorkflowResumeRequest, WorkflowRouter
@@ -225,6 +229,45 @@ def test_workflow_resume_stream_endpoint(tmp_path: Path) -> None:
             assert "workflow_completed" in [name for name, _ in resume_events]
             done_payload = next(payload for name, payload in resume_events if name == "done")
             assert done_payload["answer"] == "已保存笔记"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_pending_workflow_endpoint_returns_latest_interrupt(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="fallback"))
+    JsonlSessionRepository(data_dir=tmp_path).create_session("sess_pending_workflow")
+    workflow_store = JsonlWorkflowInstanceStore(data_dir=tmp_path)
+    workflow_store.create_or_update(
+        session_id="sess_pending_workflow",
+        workflow_instance_id="wf_pending",
+        workflow_id="rag.note.write.interactive.v1",
+        thread_id="sess_pending_workflow:wf_pending",
+        run_id="run_pending",
+        status=WORKFLOW_STATUS_WAITING,
+        phase="note_review",
+        state_snapshot={"phase": "note_review"},
+        pending_interrupt_payload={
+            "type": "note_review",
+            "question": "确认笔记草稿",
+            "draft": {"title": "草稿", "body_markdown": "正文"},
+        },
+    )
+    _override_api_services(bundle)
+    app.dependency_overrides[get_workflow_instance_store] = lambda: workflow_store
+
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/sessions/sess_pending_workflow/workflows/pending")
+
+        assert response.status_code == 200
+        payload = _data(response)
+        assert len(payload) == 1
+        assert payload[0]["workflow_instance_id"] == "wf_pending"
+        assert payload[0]["workflow_version"] == 1
+        assert payload[0]["phase"] == "note_review"
+        assert payload[0]["interrupt"]["type"] == "note_review"
+        assert payload[0]["interrupt"]["workflow_version"] == 1
+        assert "state_snapshot" not in payload[0]
     finally:
         app.dependency_overrides.clear()
 
