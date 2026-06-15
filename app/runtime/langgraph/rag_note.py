@@ -46,6 +46,7 @@ _PHASE_CONTEXT_PACK = "context_pack"
 _PHASE_DRAFT = "draft"
 _PHASE_REVIEW = "review"
 _PHASE_WRITE = "write"
+_PHASE_WRITE_RETRY = "write_retry"
 _PHASE_COMPLETED = "completed"
 _PHASE_CANCELLED = "cancelled"
 _PHASE_FAILED = "failed"
@@ -67,6 +68,7 @@ _RETRIEVAL_TO_NOTE_SOURCE_TYPE = {
     "jd_analysis": "jd_analysis",
     "job_fit_report": "job_fit_report",
     "resume_version": "resume_version",
+    "external_resource": "artifact",
 }
 
 
@@ -235,6 +237,7 @@ class RagNoteWorkflowRunner:
         builder.add_node("draft_note", self._draft_note, retry_policy=retry, timeout=timeout)
         builder.add_node("note_review", self._note_review)
         builder.add_node("write_note", self._write_note, retry_policy=retry, timeout=timeout)
+        builder.add_node("write_retry", self._write_retry)
         builder.add_node("final_answer", self._final_answer)
         builder.add_edge(START, "init_request")
         builder.add_edge("init_request", "retrieval_search")
@@ -243,7 +246,22 @@ class RagNoteWorkflowRunner:
         builder.add_edge("retrieval_context_pack", "draft_note")
         builder.add_edge("draft_note", "note_review")
         builder.add_edge("note_review", "write_note")
-        builder.add_edge("write_note", "final_answer")
+        builder.add_conditional_edges(
+            "write_note",
+            _route_after_note_write,
+            {
+                "retry": "write_retry",
+                "final": "final_answer",
+            },
+        )
+        builder.add_conditional_edges(
+            "write_retry",
+            _route_after_write_retry,
+            {
+                "retry": "write_note",
+                "final": "final_answer",
+            },
+        )
         builder.add_edge("final_answer", END)
         return builder.compile(checkpointer=checkpointer)
 
@@ -403,10 +421,12 @@ class RagNoteWorkflowRunner:
             args = repaired_args
         if not result.success:
             await self._emit_node_failed(state, "write_note", result.content)
+            retry_counters = dict(state.get("retry_counters") or {})
+            retry_counters["write_note"] = retry_counters.get("write_note", 0) + 1
             return {
-                "phase": _PHASE_FAILED,
+                "phase": _PHASE_WRITE_RETRY,
                 "last_error": {"node": "write_note", "error": result.content[:500]},
-                "answer": "笔记保存失败，已停止本次 workflow。",
+                "retry_counters": retry_counters,
             }
         payload = _json_object(result.content)
         note_id = _string(payload.get("record_id")) or _string(payload.get("note_id")) or _note_id(state)
@@ -422,13 +442,44 @@ class RagNoteWorkflowRunner:
             "tool_calls": _append_tool_call(state, "note_create", args),
         }
 
+    async def _write_retry(self, state: WorkflowGraphState) -> dict[str, Any]:
+        error = state.get("last_error")
+        error_message = _string(error.get("error")) if isinstance(error, dict) else None
+        payload = {
+            "type": "workflow_write_retry",
+            "workflow_instance_id": state["workflow_instance_id"],
+            "thread_id": state["thread_id"],
+            "question": "笔记保存失败。你可以重试写入，或取消本次保存。",
+            "failed_node": "write_note",
+            "error": error_message or "未知写入错误",
+            "retry_count": (state.get("retry_counters") or {}).get("write_note", 1),
+            "actions": ["retry", "cancel"],
+        }
+        answer = interrupt(payload)
+        action = _parse_write_retry_answer(answer)
+        if action == "cancel":
+            return {
+                "phase": _PHASE_CANCELLED,
+                "outputs": {
+                    **dict(state.get("outputs") or {}),
+                    "cancelled": True,
+                },
+                "answer": "已取消保存笔记。",
+                "pending_question": None,
+            }
+        return {
+            "phase": _PHASE_WRITE,
+            "last_error": None,
+            "pending_question": None,
+        }
+
     async def _final_answer(self, state: WorkflowGraphState) -> dict[str, Any]:
         raw_outputs = state.get("outputs")
         outputs = raw_outputs if isinstance(raw_outputs, dict) else {}
         if state.get("phase") == _PHASE_CANCELLED:
             answer = _non_empty(state.get("answer"), "已取消保存笔记。")
         elif state.get("phase") == _PHASE_FAILED:
-            answer = _non_empty(state.get("answer"), "笔记保存失败，已停止本次 workflow。")
+            answer = _non_empty(state.get("answer"), "笔记保存失败。")
         else:
             note_id = _string(outputs.get("note_id")) or _note_id(state)
             raw_draft = state.get("draft_note")
@@ -795,6 +846,15 @@ def _parse_note_review_answer(answer: Any, current_draft: dict[str, Any]) -> tup
     return action, current_draft
 
 
+def _parse_write_retry_answer(answer: Any) -> str:
+    if not isinstance(answer, dict):
+        raise ValidationError("write retry resume payload must be an object.")
+    action = (_string(answer.get("action")) or "retry").lower()
+    if action not in {"retry", "cancel"}:
+        raise ValidationError("write retry action must be retry/cancel.")
+    return action
+
+
 def _context_pack_query(state: WorkflowGraphState) -> str:
     supplement = _string(state.get("user_supplement"))
     if supplement:
@@ -944,6 +1004,9 @@ def _repair_note_args(args: dict[str, Any], state: WorkflowGraphState) -> dict[s
         if isinstance(ref, dict)
         and (_string(ref.get("source_type")) in _SUPPORTED_NOTE_SOURCE_TYPES or _string(ref.get("source_type")) == "manual")
     ]
+    repaired["evidence_refs"] = [
+        ref for ref in repaired.get("evidence_refs", []) if isinstance(ref, str) and _is_note_evidence_ref(ref)
+    ]
     return repaired
 
 
@@ -955,13 +1018,13 @@ def _note_refs_from_selected_sources(state: WorkflowGraphState) -> tuple[list[st
             continue
         source_type = _string(ref.get("source_type"))
         source_id = _string(ref.get("source_id"))
-        if source_id is not None:
-            evidence_refs.append(source_id)
         note_source_type = _RETRIEVAL_TO_NOTE_SOURCE_TYPE.get(source_type or "")
         if note_source_type not in _SUPPORTED_NOTE_SOURCE_TYPES or source_id is None:
             continue
         if note_source_type == "artifact":
             source_id = _string(ref.get("artifact_id")) or source_id
+        if _is_note_evidence_ref(source_id):
+            evidence_refs.append(source_id)
         source_refs.append(
             {
                 "source_type": note_source_type,
@@ -972,6 +1035,32 @@ def _note_refs_from_selected_sources(state: WorkflowGraphState) -> tuple[list[st
             }
         )
     return _dedupe_strings(evidence_refs), source_refs
+
+
+def _is_note_evidence_ref(value: str) -> bool:
+    return value.startswith(
+        (
+            "application_",
+            "artifact_",
+            "career_profile_",
+            "collection_",
+            "fit_",
+            "jd_",
+            "jd_analysis_",
+            "note_",
+            "resume_profile_",
+            "resume_version_",
+            "sess_",
+        )
+    )
+
+
+def _route_after_note_write(state: WorkflowGraphState) -> str:
+    return "retry" if state.get("phase") == _PHASE_WRITE_RETRY else "final"
+
+
+def _route_after_write_retry(state: WorkflowGraphState) -> str:
+    return "final" if state.get("phase") == _PHASE_CANCELLED else "retry"
 
 
 def _runtime_plan_for_tool(
@@ -1077,6 +1166,8 @@ def _answer_for_interrupt(payload: dict[str, Any]) -> str:
         return "需要你选择用于生成笔记的来源，或补充要写入的内容。"
     if kind == "note_review":
         return "笔记草稿已生成，需要你确认、编辑或取消。"
+    if kind == "workflow_write_retry":
+        return "笔记保存失败，需要你选择重试或取消。"
     return "workflow 已暂停，等待你的输入。"
 
 

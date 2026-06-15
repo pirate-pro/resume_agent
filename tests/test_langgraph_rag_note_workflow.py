@@ -448,6 +448,62 @@ def test_rag_note_workflow_pauses_resumes_and_writes_one_note() -> None:
     assert used_gateway.note_create_count == 1
 
 
+def test_rag_note_workflow_repairs_learning_source_and_allows_write_retry() -> None:
+    gateway = _FakeGateway(include_learning_hit=True, fail_note_attempts=2)
+    runner = RagNoteWorkflowRunner(
+        tool_gateway=cast(ToolGateway, gateway),
+        model_client=_DraftModel(),
+        event_recorder=EventRecorder(cast(SessionRepository, _EventRepo())),
+        checkpoint_backend="memory",
+        node_timeout_seconds=30,
+        node_retry_attempts=2,
+    )
+
+    async def _exercise() -> tuple[Any, Any, Any, Any]:
+        first = await runner.run_stream(_run_input("根据已有材料生成一篇面试复盘笔记"))
+        assert first.interrupt_payload is not None
+        learning_ref = next(
+            candidate["source_ref"]
+            for candidate in first.interrupt_payload["candidates"]
+            if candidate["source_ref"]["source_type"] == "learning_task"
+        )
+        second = await runner.resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload({"selected_source_refs": [learning_ref]}),
+                context=_context(run_id="run_learning_source"),
+            )
+        )
+        third = await runner.resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload({"action": "approve"}),
+                context=_context(run_id="run_write_failure"),
+            )
+        )
+        assert third.status == "interrupted"
+        assert third.interrupt_payload is not None
+        assert third.interrupt_payload["type"] == "workflow_write_retry"
+        fourth = await runner.resume_stream(
+            WorkflowResumeRequest(
+                session_id="sess_langgraph",
+                workflow_instance_id=str(first.workflow_instance_id),
+                payload=WorkflowResumePayload({"action": "retry"}),
+                context=_context(run_id="run_write_retry"),
+            )
+        )
+        return first, second, third, fourth
+
+    _first, _second, _third, fourth = asyncio.run(_exercise())
+
+    assert fourth.status == "completed"
+    assert gateway.note_create_count == 3
+    note_calls = [call for call in gateway.calls if call.name == "note_create"]
+    assert all("learning_task_retry_source" not in call.arguments["evidence_refs"] for call in note_calls)
+
+
 def test_rag_note_workflow_resumes_from_sqlite_checkpoint_after_runner_restart(tmp_path: Path) -> None:
     JsonlSessionRepository(data_dir=tmp_path).create_session("sess_langgraph")
     store = JsonlWorkflowInstanceStore(data_dir=tmp_path)
@@ -812,6 +868,8 @@ class _FakeGateway:
         fail_search_once: bool = False,
         fail_merge_once: bool = False,
         include_note_hit: bool = False,
+        include_learning_hit: bool = False,
+        fail_note_attempts: int = 0,
     ) -> None:
         self.calls: list[ToolCall] = []
         self.note_create_count = 0
@@ -819,6 +877,8 @@ class _FakeGateway:
         self._fail_search_once = fail_search_once
         self._fail_merge_once = fail_merge_once
         self._include_note_hit = include_note_hit
+        self._include_learning_hit = include_learning_hit
+        self._fail_note_attempts = fail_note_attempts
 
     async def execute_async(
         self,
@@ -876,6 +936,25 @@ class _FakeGateway:
                         "evidence_refs": ["note_existing"],
                     }
                 )
+            if self._include_learning_hit:
+                hits.append(
+                    {
+                        "source": {
+                            "source_type": "learning_task",
+                            "source_id": "learning_task_retry_source",
+                            "source_session_id": context.session_id,
+                            "artifact_id": None,
+                        },
+                        "title": "RAG 写入重试练习",
+                        "summary": "作为内容来源，但不是 Note evidence ref。",
+                        "snippet": "验证写入失败后可恢复重试。",
+                        "tags": ["rag"],
+                        "score": 0.7,
+                        "match_reason": "keyword",
+                        "updated_at": "2026-06-08T00:00:00+08:00",
+                        "evidence_refs": ["application_langgraph"],
+                    }
+                )
             payload = {
                 "query": tool_call.arguments["query"],
                 "count": len(hits),
@@ -901,6 +980,16 @@ class _FakeGateway:
             return _gateway_result(tool_call, payload)
         if tool_call.name == "note_create":
             self.note_create_count += 1
+            if self._fail_note_attempts > 0:
+                self._fail_note_attempts -= 1
+                return ToolGatewayResult(
+                    tool_call=tool_call,
+                    result=ToolExecutionResult(
+                        tool_name=tool_call.name,
+                        success=False,
+                        content="temporary note write failure",
+                    ),
+                )
             payload = {
                 "record_type": "note",
                 "record_id": tool_call.arguments["note_id"],
