@@ -137,6 +137,27 @@ class ApiService {
     }
   }
 
+  Future<WorkflowInterruptView?> fetchPendingWorkflowInterrupt(
+    String sessionId,
+  ) async {
+    final resp = await http.get(
+      _uri("/api/sessions/$sessionId/workflows/pending"),
+    );
+    final data = _decodeResponseData(resp);
+    if (data is! List || data.isEmpty || data.first is! Map) {
+      return null;
+    }
+    final item = Map<String, dynamic>.from(data.first as Map);
+    final interrupt = Map<String, dynamic>.from(
+      item["interrupt"] is Map ? item["interrupt"] as Map : const {},
+    );
+    interrupt["workflow_instance_id"] =
+        item["workflow_instance_id"] ?? interrupt["workflow_instance_id"];
+    interrupt["workflow_version"] =
+        item["workflow_version"] ?? interrupt["workflow_version"];
+    return WorkflowInterruptView.fromJson(interrupt);
+  }
+
   StreamEvent? _parseSse(String raw) {
     String event = "message";
     final dataLines = <String>[];

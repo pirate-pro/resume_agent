@@ -18,6 +18,7 @@ final chatProvider = ChangeNotifierProvider<ChatProvider>((ref) {
 class ChatProvider extends ChangeNotifier {
   static const _uuid = Uuid();
   static const _streamFlushInterval = Duration(milliseconds: 48);
+  static const _activeSessionPreferenceKey = "active_session_id";
 
   final ApiService _api;
 
@@ -116,6 +117,10 @@ class ChatProvider extends ChangeNotifier {
     unawaited(refreshSkills());
     unawaited(refreshTokenUsageSummary());
     await refreshSessions();
+    final restoredSessionId = _sessionId;
+    if (restoredSessionId != null) {
+      await switchSession(restoredSessionId);
+    }
   }
 
   Future<void> _checkHealth() async {
@@ -153,9 +158,26 @@ class ChatProvider extends ChangeNotifier {
           );
         }
         _sortSessions();
+        final activeSessionId =
+            prefs.getString(_activeSessionPreferenceKey)?.trim();
+        if (activeSessionId != null &&
+            activeSessionId.isNotEmpty &&
+            _sessions.any((session) => session.id == activeSessionId)) {
+          _sessionId = activeSessionId;
+        }
         notifyListeners();
       } catch (_) {}
     }
+  }
+
+  Future<void> _saveActiveSessionId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final sessionId = _sessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      await prefs.remove(_activeSessionPreferenceKey);
+      return;
+    }
+    await prefs.setString(_activeSessionPreferenceKey, sessionId);
   }
 
   Future<void> _saveSessions() async {
@@ -312,6 +334,7 @@ class ChatProvider extends ChangeNotifier {
     _lastMemoryHits = [];
     _streamEvents = [];
     _sessionArtifacts = [];
+    unawaited(_saveActiveSessionId());
     notifyListeners();
   }
 
@@ -377,6 +400,7 @@ class ChatProvider extends ChangeNotifier {
     _clearRecentActivatedArtifact(notify: false);
     _error = null;
     _streamEvents = [];
+    await _saveActiveSessionId();
     notifyListeners();
 
     // Load messages from backend
@@ -388,6 +412,7 @@ class ChatProvider extends ChangeNotifier {
 
     await refreshSessionArtifacts();
     await refreshEvents();
+    await refreshPendingWorkflow();
   }
 
   Future<void> deleteSession(String sessionId) async {
@@ -399,6 +424,7 @@ class ChatProvider extends ChangeNotifier {
       _sessionId = null;
       _pendingWorkflowInterrupt = null;
       _messages.clear();
+      await _saveActiveSessionId();
     }
     await _saveSessions();
     notifyListeners();
@@ -621,6 +647,7 @@ class ChatProvider extends ChangeNotifier {
       if (_sessionId != null) {
         await refreshSessionArtifacts();
         await refreshSessions();
+        await refreshPendingWorkflow();
       }
     } on ApiException catch (e) {
       _flushPendingStreamDelta(notify: false);
@@ -694,6 +721,7 @@ class ChatProvider extends ChangeNotifier {
       }
       await refreshSessionArtifacts();
       await refreshSessions();
+      await refreshPendingWorkflow();
     } on ApiException catch (e) {
       _error = e.message;
     } catch (e) {
@@ -716,6 +744,7 @@ class ChatProvider extends ChangeNotifier {
         final sid = data["session_id"]?.toString();
         if (sid != null && sid.isNotEmpty) {
           _sessionId = sid;
+          unawaited(_saveActiveSessionId());
           _startEventPolling();
         }
         notifyListeners();
@@ -924,6 +953,23 @@ class ChatProvider extends ChangeNotifier {
       _sessionArtifacts = resp.artifacts;
       _activeArtifactIds = resp.activeArtifactIds;
     } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> refreshPendingWorkflow() async {
+    final sessionId = _sessionId;
+    if (sessionId == null || sessionId.isEmpty) {
+      _pendingWorkflowInterrupt = null;
+      notifyListeners();
+      return;
+    }
+    try {
+      final interrupt = await _api.fetchPendingWorkflowInterrupt(sessionId);
+      _pendingWorkflowInterrupt =
+          interrupt != null && interrupt.isValid ? interrupt : null;
+    } catch (_) {
+      // A discovery failure must not block chat or erase an SSE interrupt.
+    }
     notifyListeners();
   }
 
