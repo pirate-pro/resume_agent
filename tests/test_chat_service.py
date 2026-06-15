@@ -5,11 +5,19 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import Any, cast
 
 from app.domain.models import AgentRunInput, AgentRunOutput
 from app.domain.protocols import ModelResponse
 from app.runtime.event_channel import EventChannel
-from app.schemas.chat import ChatRequest, ChatResponse, SessionUpdateRequest
+from app.runtime.langgraph import (
+    INTERVIEW_REVIEW_WORKFLOW_ID,
+    WorkflowGraphRunResult,
+    WorkflowResumeRequest,
+    WorkflowRouter,
+    WorkflowRunnerDispatcher,
+)
+from app.schemas.chat import ChatRequest, ChatResponse, SessionUpdateRequest, WorkflowResumeStreamRequest
 from tests.helpers import SequenceModelClient, StaticModelClient, build_chat_service, build_chat_service_bundle
 
 __all__ = []
@@ -313,6 +321,148 @@ def test_chat_stream_generates_session_title_after_first_turn(tmp_path: Path) ->
     assert meta.title == "文件总结整理"
 
 
+def test_chat_stream_routes_langgraph_workflow_and_resume(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=StaticModelClient(content="fallback"),
+    )
+    runner = _FakeWorkflowRunner()
+    service._workflow_router = WorkflowRouter(enabled=True, interactive_note_enabled=True)  # noqa: SLF001
+    service._workflow_runner = cast(Any, runner)  # noqa: SLF001
+
+    async def _exercise() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        start_events: list[dict[str, object]] = []
+        async for item in service.chat_stream(
+            ChatRequest(
+                session_id="sess_workflow_stream",
+                message="根据已有材料生成一篇笔记",
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        ):
+            start_events.append(item)
+        resume_events: list[dict[str, object]] = []
+        async for item in service.resume_workflow_stream(
+            "wf_stream",
+            WorkflowResumeStreamRequest(
+                session_id="sess_workflow_stream",
+                payload={"action": "approve"},
+            ),
+        ):
+            resume_events.append(item)
+        return start_events, resume_events
+
+    start_events, resume_events = asyncio.run(_exercise())
+
+    assert [item.get("event") for item in start_events] == [
+        "session",
+        "workflow_waiting_for_input",
+        "done",
+    ]
+    start_done = start_events[-1].get("data")
+    assert isinstance(start_done, dict)
+    assert start_done["answer"] == "等待输入"
+    assert [item.get("event") for item in resume_events] == [
+        "session",
+        "workflow_completed",
+        "done",
+    ]
+    resume_done = resume_events[-1].get("data")
+    assert isinstance(resume_done, dict)
+    assert resume_done["answer"] == "已保存笔记"
+
+
+def test_chat_stream_routes_interview_workflow_through_dispatcher(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=StaticModelClient(content="fallback"),
+    )
+    runner = _FakeWorkflowRunner()
+    service._workflow_router = WorkflowRouter(  # noqa: SLF001
+        enabled=True,
+        interactive_note_enabled=True,
+        interactive_interview_review_enabled=True,
+    )
+    service._workflow_runner = WorkflowRunnerDispatcher(  # noqa: SLF001
+        runners={INTERVIEW_REVIEW_WORKFLOW_ID: runner}
+    )
+
+    async def _exercise() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        start_events: list[dict[str, object]] = []
+        async for item in service.chat_stream(
+            ChatRequest(
+                session_id="sess_interview_workflow_stream",
+                message=(
+                    "我刚面完星河智能一面，请把这次面试复盘保存成一条 Note，"
+                    "并更新当前求职项目的阶段、风险、下一步行动和项目备注。"
+                ),
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        ):
+            start_events.append(item)
+        resume_events: list[dict[str, object]] = []
+        async for item in service.resume_workflow_stream(
+            "wf_stream",
+            WorkflowResumeStreamRequest(
+                session_id="sess_interview_workflow_stream",
+                payload={"action": "approve"},
+            ),
+        ):
+            resume_events.append(item)
+        return start_events, resume_events
+
+    start_events, resume_events = asyncio.run(_exercise())
+
+    assert [item.get("event") for item in start_events] == [
+        "session",
+        "workflow_waiting_for_input",
+        "done",
+    ]
+    start_done = start_events[-1].get("data")
+    assert isinstance(start_done, dict)
+    assert start_done.get("answer") == "等待输入"
+    assert [item.get("event") for item in resume_events] == [
+        "session",
+        "workflow_completed",
+        "done",
+    ]
+    resume_done = resume_events[-1].get("data")
+    assert isinstance(resume_done, dict)
+    assert resume_done.get("answer") == "已保存笔记"
+
+
+def test_chat_service_falls_back_for_unwired_langgraph_workflow(tmp_path: Path) -> None:
+    service, _ = build_chat_service(
+        data_dir=tmp_path,
+        model_client=StaticModelClient(content="fallback runtime answer"),
+    )
+    service._session_repository.create_session("sess_unwired_workflow")  # noqa: SLF001
+    service._session_repository.update_session_title("sess_unwired_workflow", "已有标题")  # noqa: SLF001
+    service._workflow_router = WorkflowRouter(  # noqa: SLF001
+        enabled=True,
+        interactive_note_enabled=True,
+        interactive_interview_review_enabled=True,
+    )
+    service._workflow_runner = cast(Any, _ExplodingWorkflowRunner())  # noqa: SLF001
+
+    response = asyncio.run(
+        service.chat(
+            ChatRequest(
+                session_id="sess_unwired_workflow",
+                message=(
+                    "我刚面完星河智能一面，请把这次面试复盘保存成一条 Note，"
+                    "并更新当前求职项目的阶段、风险、下一步行动和项目备注。"
+                ),
+                skill_names=["base"],
+                max_tool_rounds=1,
+            )
+        )
+    )
+
+    assert response.answer == "fallback runtime answer"
+
+
 def test_chat_service_does_not_block_on_session_title_generation(tmp_path: Path) -> None:
     service, _ = build_chat_service(
         data_dir=tmp_path,
@@ -373,3 +523,75 @@ def test_chat_stream_done_does_not_wait_for_session_title_generation(tmp_path: P
     assert done_payload is not None
     assert done_payload["title_pending"] is True
     assert elapsed < 0.08
+
+
+class _FakeWorkflowRunner:
+    async def run_stream(
+        self,
+        run_input: AgentRunInput,
+        *,
+        channel: EventChannel | None = None,
+    ) -> WorkflowGraphRunResult:
+        if channel is not None:
+            await channel.emit(
+                "workflow_waiting_for_input",
+                {
+                    "workflow_instance_id": "wf_stream",
+                    "thread_id": f"{run_input.session_id}:wf_stream",
+                    "type": "source_selection",
+                },
+            )
+        output = AgentRunOutput(
+            session_id=run_input.session_id,
+            answer="等待输入",
+            tool_calls=[],
+            memory_hits=[],
+        )
+        return WorkflowGraphRunResult(
+            handled=True,
+            output=output,
+            status="interrupted",
+            workflow_instance_id="wf_stream",
+            thread_id=f"{run_input.session_id}:wf_stream",
+            interrupt_payload={"type": "source_selection"},
+        )
+
+    async def resume_stream(
+        self,
+        request: WorkflowResumeRequest,
+        *,
+        channel: EventChannel | None = None,
+    ) -> WorkflowGraphRunResult:
+        if channel is not None:
+            await channel.emit(
+                "workflow_completed",
+                {
+                    "workflow_instance_id": request.workflow_instance_id,
+                    "thread_id": request.thread_id,
+                    "note_id": "note_stream",
+                },
+            )
+        output = AgentRunOutput(
+            session_id=request.session_id,
+            answer="已保存笔记",
+            tool_calls=[],
+            memory_hits=[],
+        )
+        return WorkflowGraphRunResult(
+            handled=True,
+            output=output,
+            status="completed",
+            workflow_instance_id=request.workflow_instance_id,
+            thread_id=request.thread_id,
+        )
+
+
+class _ExplodingWorkflowRunner:
+    async def run_stream(
+        self,
+        run_input: AgentRunInput,
+        *,
+        channel: EventChannel | None = None,
+    ) -> WorkflowGraphRunResult:
+        _ = (run_input, channel)
+        raise AssertionError("unwired workflow should fall back before runner execution")

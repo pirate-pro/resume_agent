@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi.testclient import TestClient
 
@@ -15,9 +15,11 @@ from app.api.deps import (
     get_session_query_service,
 )
 from app.core.time import app_now
-from app.domain.models import RunContext, SessionArtifact, ToolCall
+from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, SessionArtifact, ToolCall
 from app.domain.protocols import ModelResponse
 from app.main import app
+from app.runtime.event_channel import EventChannel
+from app.runtime.langgraph import WorkflowGraphRunResult, WorkflowResumeRequest, WorkflowRouter
 from tests.helpers import ChatServiceBundle, SequenceModelClient, StaticModelClient, build_chat_service_bundle
 
 __all__ = []
@@ -186,6 +188,43 @@ def test_chat_stream_endpoint(tmp_path: Path) -> None:
             assert done_payload["render_hint"] == "markdown_document"
             assert done_payload["layout_hint"] == "paragraph"
             assert done_payload["presentation_kind"] == "chat_text"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_workflow_resume_stream_endpoint(tmp_path: Path) -> None:
+    bundle = build_chat_service_bundle(data_dir=tmp_path, model_client=StaticModelClient(content="fallback"))
+    bundle.chat_service._workflow_router = WorkflowRouter(enabled=True, interactive_note_enabled=True)  # noqa: SLF001
+    bundle.chat_service._workflow_runner = cast(Any, _ApiFakeWorkflowRunner())  # noqa: SLF001
+    _override_api_services(bundle)
+
+    try:
+        with TestClient(app) as client:
+            start_response = client.post(
+                "/api/chat/stream",
+                json={
+                    "session_id": "sess_workflow_api",
+                    "message": "根据已有材料生成一篇笔记",
+                    "skill_names": ["base"],
+                    "max_tool_rounds": 1,
+                },
+            )
+            assert start_response.status_code == 200
+            start_events = _parse_sse_events(start_response.text)
+            assert "workflow_waiting_for_input" in [name for name, _ in start_events]
+
+            resume_response = client.post(
+                "/api/workflows/wf_api/resume/stream",
+                json={
+                    "session_id": "sess_workflow_api",
+                    "payload": {"action": "approve"},
+                },
+            )
+            assert resume_response.status_code == 200
+            resume_events = _parse_sse_events(resume_response.text)
+            assert "workflow_completed" in [name for name, _ in resume_events]
+            done_payload = next(payload for name, payload in resume_events if name == "done")
+            assert done_payload["answer"] == "已保存笔记"
     finally:
         app.dependency_overrides.clear()
 
@@ -510,6 +549,67 @@ def _override_api_services(bundle: ChatServiceBundle) -> None:
     app.dependency_overrides[get_session_query_service] = lambda: bundle.session_query_service
     app.dependency_overrides[get_session_artifact_service] = lambda: bundle.session_artifact_service
     app.dependency_overrides[get_memory_query_service] = lambda: bundle.memory_query_service
+
+
+class _ApiFakeWorkflowRunner:
+    async def run_stream(
+        self,
+        run_input: AgentRunInput,
+        *,
+        channel: EventChannel | None = None,
+    ) -> WorkflowGraphRunResult:
+        if channel is not None:
+            await channel.emit(
+                "workflow_waiting_for_input",
+                {
+                    "workflow_instance_id": "wf_api",
+                    "thread_id": f"{run_input.session_id}:wf_api",
+                    "type": "source_selection",
+                },
+            )
+        output = AgentRunOutput(
+            session_id=run_input.session_id,
+            answer="等待输入",
+            tool_calls=[],
+            memory_hits=[],
+        )
+        return WorkflowGraphRunResult(
+            handled=True,
+            output=output,
+            status="interrupted",
+            workflow_instance_id="wf_api",
+            thread_id=f"{run_input.session_id}:wf_api",
+            interrupt_payload={"type": "source_selection"},
+        )
+
+    async def resume_stream(
+        self,
+        request: WorkflowResumeRequest,
+        *,
+        channel: EventChannel | None = None,
+    ) -> WorkflowGraphRunResult:
+        if channel is not None:
+            await channel.emit(
+                "workflow_completed",
+                {
+                    "workflow_instance_id": request.workflow_instance_id,
+                    "thread_id": request.thread_id,
+                    "note_id": "note_api",
+                },
+            )
+        output = AgentRunOutput(
+            session_id=request.session_id,
+            answer="已保存笔记",
+            tool_calls=[],
+            memory_hits=[],
+        )
+        return WorkflowGraphRunResult(
+            handled=True,
+            output=output,
+            status="completed",
+            workflow_instance_id=request.workflow_instance_id,
+            thread_id=request.thread_id,
+        )
 
 
 def _add_test_text_artifact(

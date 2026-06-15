@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.runtime.workflow.delegation import (
     delegate_jd_fit_source_key,
     delegate_semantic_signature,
@@ -172,7 +174,7 @@ def test_delegate_semantic_signature_tracks_phase_sources_and_outputs() -> None:
 
 
 def test_delegate_jd_fit_helpers_identify_source_and_application_boundary() -> None:
-    task = {
+    task: dict[str, Any] = {
         "target_agent_id": "job_agent",
         "instruction": "基于 jd_live_001 生成岗位匹配报告。",
         "artifact_refs": ["jd_live_001"],

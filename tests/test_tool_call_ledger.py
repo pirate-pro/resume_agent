@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.jsonl_tool_call_ledger import JsonlToolCallLedger
 
 
-def test_tool_call_ledger_persists_and_finds_records(tmp_path) -> None:
+def test_tool_call_ledger_persists_and_finds_records(tmp_path: Path) -> None:
     session_repo = JsonlSessionRepository(data_dir=tmp_path)
     session_repo.create_session("sess_tool_ledger")
     ledger = JsonlToolCallLedger(data_dir=tmp_path)
