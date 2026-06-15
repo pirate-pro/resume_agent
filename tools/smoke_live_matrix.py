@@ -37,6 +37,7 @@ from app.core.time import app_now, to_app_iso
 from app.domain.models import AgentRunInput, RunContext
 from app.notes.models import Note, NoteOrigin, NoteRecordStatus, NoteSourceRef, NoteSourceType, NoteType
 from app.runtime.event_channel import EventChannel
+from app.schemas.chat import ChatRequest, WorkflowResumeStreamRequest
 from tools.smoke_career_live_flow import (
     FlowReport,
     LiveStack,
@@ -77,8 +78,26 @@ P1_SCENARIOS = (
     "rag_to_note",
     "rag_to_learning_task",
     "interview_review",
+    "interactive_rag_to_note_source_select",
+    "interactive_rag_to_note_user_supplement",
+    "interactive_rag_to_note_review_edit",
+    "interactive_rag_to_note_retry_retrieval",
+    "interactive_interview_review_scope_select",
+    "interactive_interview_review_user_supplement",
+    "interactive_interview_review_review_edit",
 )
 ALL_SCENARIOS = P0_SCENARIOS + P1_SCENARIOS
+INTERACTIVE_RAG_TO_NOTE_SCENARIOS = {
+    "interactive_rag_to_note_source_select",
+    "interactive_rag_to_note_user_supplement",
+    "interactive_rag_to_note_review_edit",
+    "interactive_rag_to_note_retry_retrieval",
+}
+INTERACTIVE_INTERVIEW_REVIEW_SCENARIOS = {
+    "interactive_interview_review_scope_select",
+    "interactive_interview_review_user_supplement",
+    "interactive_interview_review_review_edit",
+}
 
 
 class _DiscardingEventChannel(EventChannel):
@@ -158,6 +177,7 @@ class ScenarioReport:
     errors: list[str] = field(default_factory=list)
     efficiency: dict[str, Any] = field(default_factory=dict)
     retrieval_quality: dict[str, Any] = field(default_factory=dict)
+    workflow_event_counts: dict[str, int] = field(default_factory=dict)
     last_events: list[str] = field(default_factory=list)
 
 
@@ -172,6 +192,26 @@ def run_matrix_scenario(
     progress: Callable[[str], None] | None = None,
 ) -> ScenarioReport:
     scenario = _normalize_scenario(scenario)
+    if scenario in INTERACTIVE_RAG_TO_NOTE_SCENARIOS:
+        return _run_interactive_rag_to_note_scenario(
+            scenario=scenario,
+            run_index=run_index,
+            root_data_dir=root_data_dir,
+            settings=settings,
+            max_tool_rounds=max_tool_rounds,
+            stream=stream,
+            progress=progress,
+        )
+    if scenario in INTERACTIVE_INTERVIEW_REVIEW_SCENARIOS:
+        return _run_interactive_interview_review_scenario(
+            scenario=scenario,
+            run_index=run_index,
+            root_data_dir=root_data_dir,
+            settings=settings,
+            max_tool_rounds=max_tool_rounds,
+            stream=stream,
+            progress=progress,
+        )
     if scenario in {"career_full", "career_custom_resume", "rag_to_note", "rag_to_learning_task", "interview_review"}:
         return _run_career_backed_scenario(
             scenario=scenario,
@@ -232,6 +272,7 @@ def inspect_matrix_outputs(*, stack: LiveStack, report: ScenarioReport) -> None:
     report.artifact_count = len(stack.session_repository.list_session_artifacts(report.session_id))
     report.efficiency = efficiency_summary(stack.session_repository, report.session_id)
     report.retrieval_quality = retrieval_quality_summary(stack.session_repository, report.session_id)
+    report.workflow_event_counts = _workflow_event_counts(stack=stack, session_id=report.session_id)
 
     _apply_common_gates(stack=stack, report=report)
     _apply_scenario_gates(report)
@@ -316,6 +357,467 @@ def _scenario_report_from_flow(scenario: str, flow: FlowReport) -> ScenarioRepor
     _apply_product_stop_line(report)
     report.success = flow.success and not report.errors
     return report
+
+
+def _run_interactive_rag_to_note_scenario(
+    *,
+    scenario: str,
+    run_index: int,
+    root_data_dir: Path,
+    settings: Settings,
+    max_tool_rounds: int,
+    stream: bool,
+    progress: Callable[[str], None] | None,
+) -> ScenarioReport:
+    _ = stream
+    langgraph_settings = settings.model_copy(
+        update={
+            "langgraph_workflow_enabled": True,
+            "langgraph_interactive_note_enabled": True,
+            "langgraph_workflow_backend": "memory",
+        }
+    )
+    run_data_dir = _prepare_clean_run_data_dir(root_data_dir / scenario, run_index)
+    stack = build_live_stack(data_dir=run_data_dir, settings=langgraph_settings)
+    if stack.chat_service is None:
+        raise RuntimeError("ChatService is required for interactive LangGraph smoke.")
+    session_id = f"sess_live_{scenario}_{run_index:03d}_{uuid4().hex[:8]}"
+    report = ScenarioReport(
+        scenario=scenario,
+        tier=_scenario_tier(scenario),
+        run_index=run_index,
+        session_id=session_id,
+        data_dir=run_data_dir,
+        success=False,
+        elapsed_seconds=0.0,
+    )
+    started = time.perf_counter()
+    try:
+        stack.session_repository.create_session(session_id)
+        stack.session_repository.update_session_title(session_id, f"M59 {scenario}")
+        resume_artifact_id = f"artifact_resume_interactive_{run_index:03d}"
+        jd_artifact_id = f"artifact_jd_interactive_{run_index:03d}"
+        add_resume_artifact(stack.session_repository, session_id=session_id, artifact_id=resume_artifact_id)
+        add_jd_artifact(stack.session_repository, session_id=session_id, artifact_id=jd_artifact_id)
+        _seed_retrieval_products(
+            stack=stack,
+            session_id=session_id,
+            resume_artifact_id=resume_artifact_id,
+            jd_artifact_id=jd_artifact_id,
+        )
+        stack.session_repository.set_active_artifact_ids(session_id, [resume_artifact_id, jd_artifact_id])
+
+        report.turns.append(
+            _run_chat_service_turn(
+                stack=stack,
+                session_id=session_id,
+                name="LangGraph发起并等待来源选择",
+                message=(
+                    "根据已有材料生成一篇星河智能二面 RAG 面试复盘笔记。"
+                    "先让我选择使用哪些来源，再保存成笔记。"
+                ),
+                max_tool_rounds=max_tool_rounds,
+                run_index=run_index,
+                progress=progress,
+            )
+        )
+        source_payload = _latest_workflow_waiting_payload(
+            stack=stack,
+            session_id=session_id,
+            payload_type="source_selection",
+        )
+        workflow_instance_id = _workflow_instance_id(source_payload)
+        workflow_version = _workflow_version(source_payload)
+        selected_ref = _first_candidate_source_ref(source_payload)
+        source_resume_payload: dict[str, Any] = {
+            "selected_source_refs": [selected_ref],
+        }
+        if scenario in {
+            "interactive_rag_to_note_user_supplement",
+            "interactive_rag_to_note_review_edit",
+            "interactive_rag_to_note_retry_retrieval",
+        }:
+            source_resume_payload["user_supplement"] = (
+                "补充：请重点记录 RAG 召回评估、chunk 策略和 Agent 工具权限边界。"
+            )
+        report.turns.append(
+            _run_workflow_resume_turn(
+                stack=stack,
+                session_id=session_id,
+                workflow_instance_id=workflow_instance_id,
+                expected_version=workflow_version,
+                name="LangGraph恢复到草稿确认",
+                payload=source_resume_payload,
+                run_index=run_index,
+                progress=progress,
+            )
+        )
+        review_payload = _latest_workflow_waiting_payload(
+            stack=stack,
+            session_id=session_id,
+            payload_type="note_review",
+        )
+        workflow_version = _workflow_version(review_payload)
+        if scenario == "interactive_rag_to_note_review_edit":
+            review_resume_payload = {
+                "action": "edit",
+                "edited_draft": _edited_review_draft(review_payload),
+            }
+        else:
+            review_resume_payload = {"action": "approve"}
+        report.turns.append(
+            _run_workflow_resume_turn(
+                stack=stack,
+                session_id=session_id,
+                workflow_instance_id=workflow_instance_id,
+                expected_version=workflow_version,
+                name="LangGraph确认并保存笔记",
+                payload=review_resume_payload,
+                run_index=run_index,
+                progress=progress,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        report.errors.append(str(exc) or exc.__class__.__name__)
+        _progress(progress, scenario, run_index, f"异常：{report.errors[-1]}")
+    report.elapsed_seconds = time.perf_counter() - started
+    inspect_matrix_outputs(stack=stack, report=report)
+    _progress(
+        progress,
+        scenario,
+        run_index,
+        f"结束：{'通过' if report.success else '失败'}，耗时 {report.elapsed_seconds:.2f}s",
+    )
+    return report
+
+
+def _run_interactive_interview_review_scenario(
+    *,
+    scenario: str,
+    run_index: int,
+    root_data_dir: Path,
+    settings: Settings,
+    max_tool_rounds: int,
+    stream: bool,
+    progress: Callable[[str], None] | None,
+) -> ScenarioReport:
+    _ = stream
+    langgraph_settings = settings.model_copy(
+        update={
+            "langgraph_workflow_enabled": True,
+            "langgraph_interactive_interview_review_enabled": True,
+            "langgraph_workflow_backend": "memory",
+        }
+    )
+    run_data_dir = _prepare_clean_run_data_dir(root_data_dir / scenario, run_index)
+    stack = build_live_stack(data_dir=run_data_dir, settings=langgraph_settings)
+    if stack.chat_service is None:
+        raise RuntimeError("ChatService is required for interactive LangGraph smoke.")
+    session_id = f"sess_live_{scenario}_{run_index:03d}_{uuid4().hex[:8]}"
+    report = ScenarioReport(
+        scenario=scenario,
+        tier=_scenario_tier(scenario),
+        run_index=run_index,
+        session_id=session_id,
+        data_dir=run_data_dir,
+        success=False,
+        elapsed_seconds=0.0,
+    )
+    started = time.perf_counter()
+    try:
+        stack.session_repository.create_session(session_id)
+        stack.session_repository.update_session_title(session_id, f"M60 {scenario}")
+        resume_artifact_id = f"artifact_resume_interview_{run_index:03d}"
+        jd_artifact_id = f"artifact_jd_interview_{run_index:03d}"
+        add_resume_artifact(stack.session_repository, session_id=session_id, artifact_id=resume_artifact_id)
+        add_jd_artifact(stack.session_repository, session_id=session_id, artifact_id=jd_artifact_id)
+        _seed_retrieval_products(
+            stack=stack,
+            session_id=session_id,
+            resume_artifact_id=resume_artifact_id,
+            jd_artifact_id=jd_artifact_id,
+        )
+        stack.session_repository.set_active_artifact_ids(session_id, [resume_artifact_id, jd_artifact_id])
+
+        report.turns.append(
+            _run_chat_service_turn(
+                stack=stack,
+                session_id=session_id,
+                name="LangGraph发起并等待面试复盘范围确认",
+                message=(
+                    "我刚面完星河智能 AI 应用开发岗位的一面。请把这次面试复盘保存成一条 Note，"
+                    "并更新当前求职项目的阶段、风险、下一步行动和项目备注。"
+                    "面试里问到了 RAG chunk 策略、向量召回评估、Celery 延迟队列和 Agent 工具权限边界。"
+                ),
+                max_tool_rounds=max_tool_rounds,
+                run_index=run_index,
+                progress=progress,
+            )
+        )
+        scope_payload = _latest_workflow_waiting_payload(
+            stack=stack,
+            session_id=session_id,
+            payload_type="interview_review_scope",
+        )
+        workflow_instance_id = _workflow_instance_id(scope_payload)
+        workflow_version = _workflow_version(scope_payload)
+        selected_application_id = _first_application_candidate_id(scope_payload)
+        scope_resume_payload: dict[str, Any] = {
+            "selected_application_id": selected_application_id,
+            "save_note": True,
+            "update_application": True,
+            "update_fields": ["stage", "risks", "next_actions", "notes"],
+        }
+        if scenario in {
+            "interactive_interview_review_user_supplement",
+            "interactive_interview_review_review_edit",
+        }:
+            scope_resume_payload["user_supplement"] = (
+                "补充：回答 chunk 策略时需要强调按语义边界切分、保留标题层级，"
+                "召回评估要讲 hit rate、precision 和人工抽检闭环。"
+            )
+        report.turns.append(
+            _run_workflow_resume_turn(
+                stack=stack,
+                session_id=session_id,
+                workflow_instance_id=workflow_instance_id,
+                expected_version=workflow_version,
+                name="LangGraph恢复到复盘草稿确认",
+                payload=scope_resume_payload,
+                run_index=run_index,
+                progress=progress,
+            )
+        )
+        confirmation_payload = _latest_workflow_waiting_payload(
+            stack=stack,
+            session_id=session_id,
+            payload_type="interview_review_confirmation",
+        )
+        workflow_version = _workflow_version(confirmation_payload)
+        if scenario == "interactive_interview_review_review_edit":
+            confirmation_resume_payload = _edited_interview_review_payload(confirmation_payload)
+        else:
+            confirmation_resume_payload = {"action": "approve"}
+        report.turns.append(
+            _run_workflow_resume_turn(
+                stack=stack,
+                session_id=session_id,
+                workflow_instance_id=workflow_instance_id,
+                expected_version=workflow_version,
+                name="LangGraph确认并写入面试复盘",
+                payload=confirmation_resume_payload,
+                run_index=run_index,
+                progress=progress,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        report.errors.append(str(exc) or exc.__class__.__name__)
+        _progress(progress, scenario, run_index, f"异常：{report.errors[-1]}")
+    report.elapsed_seconds = time.perf_counter() - started
+    inspect_matrix_outputs(stack=stack, report=report)
+    _progress(
+        progress,
+        scenario,
+        run_index,
+        f"结束：{'通过' if report.success else '失败'}，耗时 {report.elapsed_seconds:.2f}s",
+    )
+    return report
+
+
+def _run_chat_service_turn(
+    *,
+    stack: LiveStack,
+    session_id: str,
+    name: str,
+    message: str,
+    max_tool_rounds: int,
+    run_index: int,
+    progress: Callable[[str], None] | None,
+) -> TurnReport:
+    if stack.chat_service is None:
+        raise RuntimeError("ChatService is not enabled.")
+    before_counts = tool_call_counts(stack.session_repository, session_id)
+    started = time.perf_counter()
+    _progress(progress, "matrix", run_index, f"阶段开始：{name}")
+    answer = asyncio.run(
+        _consume_chat_stream(
+            stack.chat_service.chat_stream(
+                ChatRequest(
+                    session_id=session_id,
+                    message=message,
+                    skill_names=["base", "tools", "memory", "file-reader"],
+                    max_tool_rounds=max_tool_rounds,
+                    trace_level="verbose",
+                )
+            )
+        )
+    )
+    elapsed = time.perf_counter() - started
+    after_counts = tool_call_counts(stack.session_repository, session_id)
+    tool_calls = _diff_tool_calls(before_counts, after_counts)
+    _progress(progress, "matrix", run_index, f"阶段完成：{name}，耗时 {elapsed:.2f}s，tools={tool_calls}")
+    return TurnReport(name=name, answer=answer, elapsed_seconds=elapsed, tool_calls=tool_calls)
+
+
+def _run_workflow_resume_turn(
+    *,
+    stack: LiveStack,
+    session_id: str,
+    workflow_instance_id: str,
+    expected_version: int,
+    name: str,
+    payload: dict[str, Any],
+    run_index: int,
+    progress: Callable[[str], None] | None,
+) -> TurnReport:
+    if stack.chat_service is None:
+        raise RuntimeError("ChatService is not enabled.")
+    before_counts = tool_call_counts(stack.session_repository, session_id)
+    started = time.perf_counter()
+    _progress(progress, "matrix", run_index, f"阶段开始：{name}")
+    answer = asyncio.run(
+        _consume_chat_stream(
+            stack.chat_service.resume_workflow_stream(
+                workflow_instance_id,
+                WorkflowResumeStreamRequest(
+                    session_id=session_id,
+                    payload=payload,
+                    expected_version=expected_version,
+                    trace_level="verbose",
+                ),
+            )
+        )
+    )
+    elapsed = time.perf_counter() - started
+    after_counts = tool_call_counts(stack.session_repository, session_id)
+    tool_calls = _diff_tool_calls(before_counts, after_counts)
+    _progress(progress, "matrix", run_index, f"阶段完成：{name}，耗时 {elapsed:.2f}s，tools={tool_calls}")
+    return TurnReport(name=name, answer=answer, elapsed_seconds=elapsed, tool_calls=tool_calls)
+
+
+async def _consume_chat_stream(stream: Any) -> str:
+    answer = ""
+    async for item in stream:
+        event = item.get("event") if isinstance(item, dict) else None
+        data = item.get("data") if isinstance(item, dict) else None
+        if event == "error":
+            detail = data.get("detail") if isinstance(data, dict) else None
+            raise RuntimeError(str(detail or "chat stream error"))
+        if event == "done" and isinstance(data, dict):
+            raw_answer = data.get("answer")
+            if isinstance(raw_answer, str):
+                answer = raw_answer
+    return answer
+
+
+def _latest_workflow_waiting_payload(*, stack: LiveStack, session_id: str, payload_type: str) -> dict[str, Any]:
+    for event in reversed(stack.session_repository.list_events(session_id)):
+        if event.type != "workflow_waiting_for_input":
+            continue
+        payload = event.payload
+        if isinstance(payload, dict) and payload.get("type") == payload_type:
+            return payload
+    raise RuntimeError(f"missing workflow_waiting_for_input payload: {payload_type}")
+
+
+def _workflow_instance_id(payload: dict[str, Any]) -> str:
+    value = payload.get("workflow_instance_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise RuntimeError("workflow_waiting_for_input payload missing workflow_instance_id")
+
+
+def _workflow_version(payload: dict[str, Any]) -> int:
+    value = payload.get("workflow_version")
+    if isinstance(value, int) and value > 0:
+        return value
+    raise RuntimeError("workflow_waiting_for_input payload missing workflow_version")
+
+
+def _first_candidate_source_ref(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise RuntimeError("source_selection interrupt did not include candidates")
+    first = candidates[0]
+    if not isinstance(first, dict):
+        raise RuntimeError("source_selection candidate is invalid")
+    source_ref = first.get("source_ref")
+    if not isinstance(source_ref, dict):
+        raise RuntimeError("source_selection candidate missing source_ref")
+    output = dict(source_ref)
+    if isinstance(first.get("title"), str):
+        output["title"] = first["title"]
+    if isinstance(first.get("snippet"), str):
+        output["quote"] = first["snippet"]
+    return output
+
+
+def _first_application_candidate_id(payload: dict[str, Any]) -> str:
+    candidates = payload.get("application_candidates")
+    if isinstance(candidates, list):
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            application_id = item.get("application_id")
+            if isinstance(application_id, str) and application_id.strip():
+                return application_id.strip()
+    source_candidates = payload.get("source_candidates")
+    if isinstance(source_candidates, list):
+        for item in source_candidates:
+            if not isinstance(item, dict):
+                continue
+            raw_ref = item.get("source_ref")
+            ref = raw_ref if isinstance(raw_ref, dict) else {}
+            if ref.get("source_type") != "career_application":
+                continue
+            source_id = ref.get("source_id")
+            if isinstance(source_id, str) and source_id.strip():
+                return source_id.strip()
+    raise RuntimeError("interview_review_scope interrupt did not include a career application candidate")
+
+
+def _edited_review_draft(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_draft = payload.get("draft")
+    draft = raw_draft if isinstance(raw_draft, dict) else {}
+    title = str(draft.get("title") or "星河智能 RAG 面试复盘").strip()
+    body = str(draft.get("body_markdown") or "").strip()
+    if body:
+        body = body + "\n\n## 用户补充\n已人工确认：重点补强 RAG 评估指标和 Agent 工具权限边界。"
+    else:
+        body = "# 星河智能 RAG 面试复盘\n\n重点补强 RAG 评估指标和 Agent 工具权限边界。"
+    return {
+        "title": title,
+        "body_markdown": body,
+        "summary": "已编辑确认的 RAG 面试复盘。",
+        "tags": ["星河智能", "RAG", "面试复盘"],
+    }
+
+
+def _edited_interview_review_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_draft = payload.get("note_draft")
+    draft = raw_draft if isinstance(raw_draft, dict) else {}
+    title = str(draft.get("title") or "星河智能一面复盘").strip()
+    body = str(draft.get("body_markdown") or "").strip()
+    edit_line = "已人工确认：补强 RAG 评估闭环和 Agent 工具权限边界表达。"
+    if body:
+        body = f"{body}\n\n## 用户确认\n{edit_line}"
+    else:
+        body = f"# 星河智能一面复盘\n\n{edit_line}"
+    return {
+        "action": "edit",
+        "edited_note_draft": {
+            "title": title,
+            "body_markdown": body,
+            "summary": "已编辑确认的星河智能一面复盘。",
+            "tags": ["星河智能", "一面", "RAG", "Agent"],
+        },
+        "edited_application_updates": {
+            "stage": "interviewing",
+            "next_actions": ["补强 RAG 评估指标表达", "复盘 Celery 延迟队列设计", "整理 Agent 工具权限边界案例"],
+            "risks": ["RAG 评估闭环表达需要更体系化"],
+            "notes": "一面后已确认：下一轮重点准备 RAG 评估、Celery 队列和工具权限边界。",
+        },
+    }
 
 
 def _setup_simple_scenario(*, stack: LiveStack, scenario: str, session_id: str, run_index: int) -> None:
@@ -482,6 +984,52 @@ def _apply_scenario_gates(report: ScenarioReport) -> None:
         _require_min_record_count(report, "jd_analyses", 1)
         _require_min_record_count(report, "job_fit_reports", 1)
         _forbid_record_counts(report, {"career_applications", "resume_versions"})
+        return
+    if report.scenario in INTERACTIVE_RAG_TO_NOTE_SCENARIOS:
+        _require_tool(report, "retrieval_search")
+        _require_tool(report, "retrieval_context_pack")
+        note_writes = report.tool_call_counts.get("note_create", 0) + report.tool_call_counts.get("note_append", 0)
+        if note_writes < 1:
+            report.errors.append(f"{report.scenario} 应调用 note_create 或 note_append。")
+        if note_writes > 1:
+            report.errors.append(f"{report.scenario} note_create/note_append 不应超过 1 次，actual={note_writes}。")
+        _forbid_tools(report, {"memory_write", "career_application_create", "career_application_merge"})
+        _require_min_record_count(report, "notes", 1)
+        waiting_count = report.workflow_event_counts.get("workflow_waiting_for_input", 0)
+        if waiting_count < 2:
+            report.errors.append(f"{report.scenario} 应至少产生两次 workflow_waiting_for_input，actual={waiting_count}。")
+        if report.workflow_event_counts.get("workflow_completed", 0) < 1:
+            report.errors.append(f"{report.scenario} 缺少 workflow_completed 事件。")
+        return
+    if report.scenario in INTERACTIVE_INTERVIEW_REVIEW_SCENARIOS:
+        _require_tool(report, "retrieval_search")
+        _require_tool(report, "retrieval_context_pack")
+        _require_exact_tool(report, "note_create", 1)
+        _require_exact_tool(report, "career_application_merge", 1)
+        _forbid_tools(
+            report,
+            {
+                "career_application_create",
+                "career_jd_analysis_save",
+                "career_job_fit_report_save",
+                "career_profile_merge",
+                "career_resume_version_create",
+                "delegate_agents",
+                "learning_task_create",
+                "memory_write",
+                "note_append",
+            },
+        )
+        _require_min_record_count(report, "notes", 2)
+        _require_min_record_count(report, "career_applications", 1)
+        waiting_count = report.workflow_event_counts.get("workflow_waiting_for_input", 0)
+        if waiting_count < 2:
+            report.errors.append(f"{report.scenario} 应至少产生两次 workflow_waiting_for_input，actual={waiting_count}。")
+        if report.workflow_event_counts.get("workflow_completed", 0) < 1:
+            report.errors.append(f"{report.scenario} 缺少 workflow_completed 事件。")
+        if report.workflow_event_counts.get("workflow_failed", 0) > 0:
+            report.errors.append(f"{report.scenario} 出现 workflow_failed 事件。")
+        return
 
 
 def _apply_live_quality_gate(*, stack: LiveStack, report: ScenarioReport) -> None:
@@ -576,6 +1124,12 @@ def _require_tool(report: ScenarioReport, tool_name: str) -> None:
         report.errors.append(f"{report.scenario} 应调用 {tool_name}。")
 
 
+def _require_exact_tool(report: ScenarioReport, tool_name: str, count: int) -> None:
+    actual = report.tool_call_counts.get(tool_name, 0)
+    if actual != count:
+        report.errors.append(f"{report.scenario} 应调用 {tool_name} {count} 次，actual={actual}。")
+
+
 def _has_any_tool(report: ScenarioReport, tool_names: set[str]) -> bool:
     return any(report.tool_call_counts.get(name, 0) > 0 for name in tool_names)
 
@@ -639,6 +1193,15 @@ def _record_counts_for_session(*, stack: LiveStack, session_id: str) -> dict[str
             if item.source_session_id == session_id
         ),
     }
+
+
+def _workflow_event_counts(*, stack: LiveStack, session_id: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for event in stack.session_repository.list_events(session_id):
+        if not event.type.startswith("workflow_"):
+            continue
+        counts[event.type] = counts.get(event.type, 0) + 1
+    return counts
 
 
 def _seed_resume_products(*, stack: LiveStack, session_id: str, resume_artifact_id: str) -> None:
@@ -878,6 +1441,8 @@ def print_report(reports: list[ScenarioReport]) -> None:
                 f"context_pack={item.retrieval_quality.get('context_pack_calls', 0)} "
                 f"budget_violations={item.retrieval_quality.get('budget_violations', 0)}"
             )
+        if item.workflow_event_counts:
+            print(f"  workflow_event_counts: {_compact_json(item.workflow_event_counts)}")
         if item.warnings:
             print(f"  warnings: {_preview_list(item.warnings, limit=4)}")
         if item.errors:

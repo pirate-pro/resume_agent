@@ -38,6 +38,7 @@ from app.core.time import app_now, to_app_iso
 from app.core.settings import Settings
 from app.domain.models import AgentRunInput, AgentRunOutput, RunContext, SessionArtifact
 from app.infra.llm.openai_compatible_client import OpenAICompatibleClient
+from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_agent_task_store import JsonlAgentTaskStore
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.jsonl_tool_call_ledger import JsonlToolCallLedger
@@ -51,16 +52,28 @@ from app.notes.store import NoteStore
 from app.retrieval.service import RetrievalService
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
 from app.runtime.agent_registry import load_agent_registry
+from app.runtime.agent.tool_gateway import ToolGateway
 from app.runtime.agent_runtime import AgentRuntime
 from app.runtime.context_assembler import ContextAssembler
 from app.runtime.event_channel import EventChannel
 from app.runtime.event_recorder import EventRecorder
+from app.runtime.langgraph import (
+    INTERVIEW_REVIEW_WORKFLOW_ID,
+    RAG_NOTE_WORKFLOW_ID,
+    InterviewReviewWorkflowRunner,
+    RagNoteWorkflowRunner,
+    WorkflowRouter,
+    WorkflowRunnerDispatcher,
+)
 from app.runtime.memory_manager import MemoryManager
 from app.runtime.session_manager import SessionManager
 from app.runtime.workflow import WorkflowRuntimeGuard
 from app.runtime.workflow.tool_plan_provider import build_runtime_tool_plan_provider
 from app.services.agent_invocation_service import AgentInvocationService
 from app.services.agent_task_runtime import AgentTaskRuntime
+from app.services.answer_normalizer import AnswerNormalizer
+from app.services.chat_service import ChatService
+from app.services.session_title_service import SessionTitleService
 from app.services.task_context_builder import TaskContextBuilder
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
@@ -169,6 +182,7 @@ _UNUSABLE_FINAL_ANSWER_MARKERS = (
 @dataclass(slots=True)
 class LiveStack:
     runtime: AgentRuntime
+    chat_service: ChatService | None
     session_repository: JsonlSessionRepository
     career_store: CareerProductStore
     note_store: NoteStore
@@ -247,8 +261,10 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         career_store=career_store,
         session_repository=session_repository,
     )
+    session_manager = SessionManager(session_repository=session_repository)
+    tool_call_ledger = JsonlToolCallLedger(data_dir=data_dir) if settings.enable_tool_gateway_ledger else None
     runtime = AgentRuntime(
-        session_manager=SessionManager(session_repository=session_repository),
+        session_manager=session_manager,
         event_recorder=event_recorder,
         context_assembler=context_assembler,
         model_client=model_client,
@@ -257,7 +273,7 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         tool_schema_always_visible=settings.tool_schema_always_visible,
         tool_context_window_mode=settings.tool_context_window_mode,
         workflow_guard=workflow_guard,
-        tool_call_ledger=JsonlToolCallLedger(data_dir=data_dir) if settings.enable_tool_gateway_ledger else None,
+        tool_call_ledger=tool_call_ledger,
     )
     agent_registry = load_agent_registry(
         settings.agent_registry_path,
@@ -294,8 +310,53 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
         task_store=task_store,
         retrieval_tool_backend=settings.retrieval_tool_backend,
     )
+    workflow_runner: WorkflowRunnerDispatcher | None = None
+    if settings.langgraph_workflow_enabled:
+        workflow_tool_gateway = ToolGateway(
+            tool_executor=tool_registry,
+            ledger=tool_call_ledger or JsonlToolCallLedger(data_dir=data_dir),
+            workflow_guard=workflow_guard,
+        )
+        workflow_runners: dict[str, Any] = {}
+        if settings.langgraph_interactive_note_enabled:
+            workflow_runners[RAG_NOTE_WORKFLOW_ID] = RagNoteWorkflowRunner(
+                tool_gateway=workflow_tool_gateway,
+                model_client=model_client,
+                event_recorder=event_recorder,
+                checkpoint_backend=settings.langgraph_workflow_backend,
+                node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+                node_retry_attempts=settings.langgraph_node_retry_attempts,
+            )
+        if settings.langgraph_interactive_interview_review_enabled:
+            workflow_runners[INTERVIEW_REVIEW_WORKFLOW_ID] = InterviewReviewWorkflowRunner(
+                tool_gateway=workflow_tool_gateway,
+                model_client=model_client,
+                event_recorder=event_recorder,
+                checkpoint_backend=settings.langgraph_workflow_backend,
+                node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+                node_retry_attempts=settings.langgraph_node_retry_attempts,
+            )
+        workflow_runner = WorkflowRunnerDispatcher(runners=workflow_runners)
+    chat_service = ChatService(
+        runtime=runtime,
+        session_manager=session_manager,
+        session_repository=session_repository,
+        capability_registry=capability_registry,
+        session_lock_manager=SessionLockManager(),
+        session_title_service=SessionTitleService(model_client=model_client),
+        answer_normalizer=AnswerNormalizer(),
+        workflow_router=WorkflowRouter(
+            enabled=settings.langgraph_workflow_enabled,
+            interactive_note_enabled=settings.langgraph_interactive_note_enabled,
+            interactive_interview_review_enabled=settings.langgraph_interactive_interview_review_enabled,
+        ),
+        workflow_runner=workflow_runner,
+        stream_heartbeat_interval_seconds=settings.chat_stream_heartbeat_interval_seconds,
+        stream_run_timeout_seconds=settings.chat_stream_run_timeout_seconds,
+    )
     return LiveStack(
         runtime=runtime,
+        chat_service=chat_service,
         session_repository=session_repository,
         career_store=career_store,
         note_store=note_store,
