@@ -216,6 +216,57 @@ tools/smoke_live_matrix.py \
 
 这些场景功能通过、无 harmful duplicates、无 hidden runs，但已经超过 M43 的 360s 性能关注线，应作为后续产品化优化项单独处理。
 
+2026-06-16 追加第一层 smoke 优化：
+
+- 问题判断：上述 P1 长尾主要不是交互式 workflow 超时，而是非交互 P1 smoke 在每个动作前重复跑完整 career setup。
+- 调整方式：`career_full` 仍保留完整链路；`career_custom_resume`、`rag_to_note`、`rag_to_learning_task`、`interview_review` 改为 seeded 已有求职项目后只验证动作链路。
+- seeded fixture 会直接准备 `ResumeProfile`、`CareerProfile`、`JDAnalysis`、`JobFitReport`、`CareerApplication` 和可召回 Note；定制简历场景不预置 `ResumeVersion`，避免把已有版本误判为新生成。
+- RAG 动作 smoke 仍要求短路径：`retrieval_search -> retrieval_context_pack -> 对应写入动作`。
+- 修正 `save_note` smoke 提示中的 Note source type：真实支持 `career_application`、`job_fit_report`、`resume_profile`、`jd_analysis`、`career_profile`、`resume_version`、`artifact`、`chat_message`、`manual`，不支持 `note`。
+
+本地验证：
+
+```text
+.venv/bin/python -m pytest tests/test_career_live_smoke_report.py::test_save_note_smoke_message_uses_supported_note_source_types tests/test_career_live_smoke_report.py::test_seeded_career_project_fixture_creates_complete_action_context tests/test_career_live_smoke_report.py::test_seeded_career_project_fixture_can_skip_existing_resume_version tests/test_career_live_smoke_report.py::test_live_smoke_passes_project_action_argument_to_run tests/test_career_live_smoke_report.py::test_live_smoke_passes_retrieval_action_argument_to_run tests/test_smoke_live_matrix.py::test_matrix_uses_seeded_setup_for_noninteractive_p1 tests/test_smoke_live_matrix.py::test_matrix_keeps_career_full_on_full_setup -q
+.venv/bin/python -m py_compile tools/smoke_career_live_flow.py tools/smoke_live_matrix.py
+.venv/bin/python -m mypy app tests
+```
+
+结果：
+
+- 7 个目标 tests 通过；
+- smoke 工具 py_compile 通过；
+- mypy 355 个 source files 通过。
+
+优化后 4 场景 live smoke：
+
+```text
+.venv/bin/python tools/smoke_live_matrix.py --scenario career_custom_resume --scenario rag_to_note --scenario rag_to_learning_task --scenario interview_review --runs 1 --concurrency 2 --stream --max-tool-rounds 24 --data-dir data/live_smoke_matrix_m62_seeded_p1_final_20260616/runs --json-report data/live_smoke_matrix_m62_seeded_p1_final_20260616/report.json
+```
+
+结果：
+
+- 4 runs；
+- 4 success；
+- 0 failed；
+- 平均耗时 139.34s；
+- 最大耗时 196.38s；
+- harmful duplicate 0/4；
+- hidden run 0/4。
+
+分场景结果：
+
+- `career_custom_resume`：196.38s，工具链路 `career_application_get/list -> career_resume_version_create -> career_application_merge`；
+- `rag_to_note`：126.35s，工具链路 `retrieval_search -> retrieval_context_pack -> note_create`；
+- `rag_to_learning_task`：105.53s，工具链路 `retrieval_search -> retrieval_context_pack -> learning_task_create`；
+- `interview_review`：129.07s，工具链路 `retrieval_search -> retrieval_context_pack -> note_create -> career_application_merge`。
+
+剩余问题：
+
+- 第一层已经去掉重复完整 setup，P1 动作场景从 381-540s 降到 105-196s；
+- `career_custom_resume` 仍有 2 次 `tool_search` 和 7 次 LLM call，后续第二层应优化工具选择/required tool hint，而不是继续改 career setup；
+- live LLM 仍出现长等待，模型容量或 provider 超时问题仍需单独处理。
+
 最终报告：
 
 - `/tmp/m62_final_p0_matrix_report.json`

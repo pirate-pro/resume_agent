@@ -32,7 +32,15 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.career.models import CareerApplication, CareerProfile, JDAnalysis, JobFitReport, ResumeProfile, ResumeVersion
+from app.career.models import (
+    CareerApplication,
+    CareerProfile,
+    CareerRecordStatus,
+    JDAnalysis,
+    JobFitReport,
+    ResumeProfile,
+    ResumeVersion,
+)
 from app.career.store import CareerProductStore
 from app.core.time import app_now, to_app_iso
 from app.core.settings import Settings
@@ -49,7 +57,7 @@ from app.infra.storage.sqlite_workflow_resume_lease_store import SqliteWorkflowR
 from app.knowledge.store import KnowledgeStore
 from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
-from app.notes.models import Note, NoteRecordStatus, NoteSourceRef, NoteSourceType, NoteType
+from app.notes.models import Note, NoteOrigin, NoteRecordStatus, NoteSourceRef, NoteSourceType, NoteType
 from app.notes.store import NoteStore
 from app.retrieval.service import RetrievalService
 from app.runtime.agent_capability import AgentCapabilityRegistry, load_agent_capability_registry
@@ -491,9 +499,13 @@ def run_live_flow(
     max_tool_rounds: int,
     project_action: str = "none",
     retrieval_action: str = "none",
+    setup_mode: str = "full",
     stream: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> FlowReport:
+    setup_mode = _normalize_setup_mode(setup_mode)
+    if setup_mode == "seeded" and project_action == "none" and retrieval_action == "none":
+        raise ValueError("setup_mode=seeded requires project_action or retrieval_action.")
     run_data_dir = _prepare_clean_run_data_dir(root_data_dir, run_index)
     _progress(progress, run_index, f"开始，data_dir={run_data_dir}")
     stack = build_live_stack(data_dir=run_data_dir, settings=settings)
@@ -515,65 +527,30 @@ def run_live_flow(
         add_jd_artifact(stack.session_repository, session_id=session_id, artifact_id=jd_artifact_id)
         stack.session_repository.set_active_artifact_ids(session_id, [resume_artifact_id, jd_artifact_id])
 
-        current_stage = "简历诊断与画像沉淀"
-        report.turns.append(
-            run_turn(
+        if setup_mode == "seeded":
+            current_stage = "准备已有求职项目资产"
+            application = _seed_career_project_fixture(
                 stack=stack,
                 session_id=session_id,
-                name=current_stage,
-                message=(
-                    "我上传了一份简历，请读取并诊断这份简历，沉淀结构化简历画像，"
-                    f"并更新职业画像。简历 artifact_id 是 {resume_artifact_id}。"
-                ),
-                max_tool_rounds=max_tool_rounds,
-                run_index=run_index,
-                stream=stream,
-                progress=progress,
+                resume_artifact_id=resume_artifact_id,
+                jd_artifact_id=jd_artifact_id,
+                include_resume_version=project_action != "custom_resume",
             )
-        )
-        current_stage = "JD 匹配分析"
-        report.turns.append(
-            run_turn(
-                stack=stack,
-                session_id=session_id,
-                name=current_stage,
-                message=(
-                    f"目标 JD 已经作为当前会话 artifact 保存，artifact_id 是 {jd_artifact_id}。"
-                    "请直接基于这个 JD artifact 分析我和岗位的匹配度，并保存岗位分析和匹配报告。"
-                    "如果委派 job_agent，必须把这个 artifact_id 放入 delegate_agents.tasks[].artifact_refs，"
-                    "并在 instruction 中要求 job_agent 使用该 artifact_id 作为 JDAnalysis.source_artifact_id。"
-                    "不要重新创建 JD artifact，不要自造或猜测任何 artifact_id。"
-                    "拿到匹配报告后，请创建或复用 CareerApplication 求职项目。"
-                ),
-                max_tool_rounds=max_tool_rounds,
-                run_index=run_index,
-                stream=stream,
-                progress=progress,
+            _progress(
+                progress,
+                run_index,
+                f"已准备 seeded 求职项目: {application.application_id}",
             )
-        )
-        if project_action != "custom_resume":
-            current_stage = "定制简历版本"
+        else:
+            current_stage = "简历诊断与画像沉淀"
             report.turns.append(
                 run_turn(
                     stack=stack,
                     session_id=session_id,
                     name=current_stage,
                     message=(
-                        "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport，生成一版 markdown "
-                        "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
-                        "保存 ResumeVersion 后，请调用 career_application_merge 把 resume_version_id 合并进当前求职项目；"
-                        "如果尚未创建 CareerApplication，则先用 career_application_create 基于 job_fit_report_id 创建。"
-                        "career_resume_version_create.keyword_strategy 只写已放进简历或已有证据支撑的关键词，"
-                        "不要把风险项、证据不足、缺失、需补充、需用户提供写进 keyword_strategy。"
-                        "career_resume_version_create 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
-                        "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
-                        "这些禁用词本身也不能出现在否定说明里；只描述实际改动、已验证事实或缺失事实风险。"
-                        "如果公司、学校、时间、联系方式等事实缺失，不要在简历正文里写“待补充”，"
-                        "应省略对应字段或使用更保守的已知事实，并把缺失项写入 CareerApplication 的 risks/next_actions。"
-                        "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
-                        "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
-                        "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"
-                        "不要猜测或编造 id。"
+                        "我上传了一份简历，请读取并诊断这份简历，沉淀结构化简历画像，"
+                        f"并更新职业画像。简历 artifact_id 是 {resume_artifact_id}。"
                     ),
                     max_tool_rounds=max_tool_rounds,
                     run_index=run_index,
@@ -581,6 +558,56 @@ def run_live_flow(
                     progress=progress,
                 )
             )
+            current_stage = "JD 匹配分析"
+            report.turns.append(
+                run_turn(
+                    stack=stack,
+                    session_id=session_id,
+                    name=current_stage,
+                    message=(
+                        f"目标 JD 已经作为当前会话 artifact 保存，artifact_id 是 {jd_artifact_id}。"
+                        "请直接基于这个 JD artifact 分析我和岗位的匹配度，并保存岗位分析和匹配报告。"
+                        "如果委派 job_agent，必须把这个 artifact_id 放入 delegate_agents.tasks[].artifact_refs，"
+                        "并在 instruction 中要求 job_agent 使用该 artifact_id 作为 JDAnalysis.source_artifact_id。"
+                        "不要重新创建 JD artifact，不要自造或猜测任何 artifact_id。"
+                        "拿到匹配报告后，请创建或复用 CareerApplication 求职项目。"
+                    ),
+                    max_tool_rounds=max_tool_rounds,
+                    run_index=run_index,
+                    stream=stream,
+                    progress=progress,
+                )
+            )
+            if project_action != "custom_resume":
+                current_stage = "定制简历版本"
+                report.turns.append(
+                    run_turn(
+                        stack=stack,
+                        session_id=session_id,
+                        name=current_stage,
+                        message=(
+                            "请基于刚才已经保存的 ResumeProfile、JDAnalysis 和 JobFitReport，生成一版 markdown "
+                            "定制简历，并保存为可复用的简历版本。优先直接调用 career_resume_version_create 并传入 markdown content，"
+                            "保存 ResumeVersion 后，请调用 career_application_merge 把 resume_version_id 合并进当前求职项目；"
+                            "如果尚未创建 CareerApplication，则先用 career_application_create 基于 job_fit_report_id 创建。"
+                            "career_resume_version_create.keyword_strategy 只写已放进简历或已有证据支撑的关键词，"
+                            "不要把风险项、证据不足、缺失、需补充、需用户提供写进 keyword_strategy。"
+                            "career_resume_version_create 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
+                            "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
+                            "这些禁用词本身也不能出现在否定说明里；只描述实际改动、已验证事实或缺失事实风险。"
+                            "如果公司、学校、时间、联系方式等事实缺失，不要在简历正文里写“待补充”，"
+                            "应省略对应字段或使用更保守的已知事实，并把缺失项写入 CareerApplication 的 risks/next_actions。"
+                            "让工具一次性创建 artifact 和 ResumeVersion。不要重新诊断简历，不要委派任何 child-agent，"
+                            "不要再次委派 resume_agent 或 job_agent，不要调用 career_resume_profile_save，"
+                            "不要创建新的 JDAnalysis 或 JobFitReport；如果不确定产品记录 id，先使用 list 工具确认，"
+                            "不要猜测或编造 id。"
+                        ),
+                        max_tool_rounds=max_tool_rounds,
+                        run_index=run_index,
+                        stream=stream,
+                        progress=progress,
+                    )
+                )
         if project_action != "none":
             application = _latest_career_application_for_session(stack, session_id)
             if application is None:
@@ -785,6 +812,8 @@ def inspect_flow_outputs(*, stack: LiveStack, report: FlowReport) -> None:
                 report.errors.append("项目动作未读取 CareerApplication。")
             if "career_application_merge" not in turn.tool_calls:
                 report.errors.append("项目动作未回写 CareerApplication。")
+            if turn.name == "项目动作：生成定制简历" and "career_resume_version_create" not in turn.tool_calls:
+                report.errors.append("定制简历项目动作未创建 ResumeVersion。")
         if turn.name.startswith(("M12动作", "M16动作", "M17动作", "M20动作")):
             _validate_retrieval_action_turn(turn=turn, report=report)
 
@@ -1066,6 +1095,202 @@ def _record_touches_session(
     return bool(set(record.evidence_refs).intersection(artifact_ids))
 
 
+def _normalize_setup_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in {"full", "seeded"}:
+        raise ValueError("setup_mode must be full or seeded.")
+    return normalized
+
+
+def _seed_career_project_fixture(
+    *,
+    stack: LiveStack,
+    session_id: str,
+    resume_artifact_id: str,
+    jd_artifact_id: str,
+    include_resume_version: bool = True,
+) -> CareerApplication:
+    """Prepare a valid existing project so action smoke tests measure only the action."""
+
+    now = app_now()
+    resume = stack.career_store.save_resume_profile(
+        ResumeProfile(
+            resume_profile_id=f"resume_profile_seed_{uuid4().hex[:8]}",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=resume_artifact_id,
+            evidence_refs=[resume_artifact_id],
+            created_at=now,
+            updated_at=now,
+            basic_info={"name": "张三", "target_role": "AI 应用开发工程师"},
+            project_experience=["简历诊断 Agent，多 Agent 委派，RAG 与工具调用审计。"],
+            skills=["Python", "FastAPI", "RAG", "Agent Runtime"],
+            diagnosis={"summary": "后端和 Agent 工程经验匹配 AI 应用岗位。"},
+        )
+    )
+    career = stack.career_store.save_career_profile(
+        CareerProfile(
+            career_profile_id="career_profile_default",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=resume_artifact_id,
+            evidence_refs=[resume_artifact_id],
+            created_at=now,
+            updated_at=now,
+            career_goal="AI 应用开发 / 后端工程师",
+            target_roles=["AI 应用开发工程师", "后端工程师"],
+            strengths=["Python 后端", "Agent 工具调用"],
+            weaknesses=["RAG 评估指标表达需要加强"],
+            skills=["Python", "FastAPI", "RAG", "Agent Runtime"],
+        )
+    )
+    jd = stack.career_store.save_jd_analysis(
+        JDAnalysis(
+            jd_analysis_id=f"jd_seed_{uuid4().hex[:8]}",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=jd_artifact_id,
+            evidence_refs=[jd_artifact_id],
+            created_at=now,
+            updated_at=now,
+            company="星河智能",
+            position="AI 应用开发工程师",
+            required_skills=["Python", "FastAPI", "RAG", "Agent 工程"],
+            responsibilities=["建设 RAG 与 Agent Runtime 后端服务"],
+            keywords=["RAG", "Agent Runtime", "向量检索"],
+            interview_focus=["chunk 策略", "召回评估", "工具权限边界"],
+        )
+    )
+    fit = stack.career_store.save_job_fit_report(
+        JobFitReport(
+            job_fit_report_id=f"fit_seed_{uuid4().hex[:8]}",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=jd_artifact_id,
+            evidence_refs=[resume_artifact_id, jd_artifact_id, resume.resume_profile_id, jd.jd_analysis_id],
+            created_at=now,
+            updated_at=now,
+            jd_analysis_id=jd.jd_analysis_id,
+            resume_profile_id=resume.resume_profile_id,
+            career_profile_id=career.career_profile_id,
+            overall_score=82,
+            score_breakdown={"backend": 86, "rag": 78, "agent": 84},
+            matched_evidence=["Python/FastAPI 后端经验", "Agent 工具调用项目经验"],
+            gaps=["RAG 评估指标需要更强表达"],
+            resume_optimization_direction=["补充 RAG 评估闭环"],
+            interview_preparation_focus=["chunk 策略", "precision/recall/hit rate", "权限边界"],
+            recommendation="recommended",
+            report_artifact_id=_add_generated_text_artifact(
+                stack.session_repository,
+                session_id=session_id,
+                artifact_id=f"artifact_fit_seed_{uuid4().hex[:8]}",
+                title="岗位匹配报告.md",
+                content="# 岗位匹配报告\n\n匹配度 82/100，建议重点补充 RAG 评估闭环。",
+            ),
+        )
+    )
+    resume_version_ids: list[str] = []
+    if include_resume_version:
+        resume_version_artifact_id = _add_generated_text_artifact(
+            stack.session_repository,
+            session_id=session_id,
+            artifact_id=f"artifact_resume_version_seed_{uuid4().hex[:8]}",
+            title="定制简历版本.md",
+            content="# 张三 - AI 应用开发工程师\n\n- Python / FastAPI 后端经验\n- RAG 与 Agent Runtime 项目经验\n",
+        )
+        resume_version = stack.career_store.save_resume_version(
+            ResumeVersion(
+                resume_version_id=f"resume_version_seed_{uuid4().hex[:8]}",
+                status=CareerRecordStatus.ACTIVE,
+                source_session_id=session_id,
+                source_artifact_id=resume_version_artifact_id,
+                evidence_refs=[
+                    resume.resume_profile_id,
+                    career.career_profile_id,
+                    jd.jd_analysis_id,
+                    fit.job_fit_report_id,
+                    resume_artifact_id,
+                    jd_artifact_id,
+                    resume_version_artifact_id,
+                ],
+                created_at=now,
+                updated_at=now,
+                base_resume_profile_id=resume.resume_profile_id,
+                target_jd_analysis_id=jd.jd_analysis_id,
+                title="AI 应用开发工程师定制简历",
+                format="markdown",
+                artifact_id=resume_version_artifact_id,
+                change_summary=["强化 RAG 与 Agent Runtime 项目表达"],
+                keyword_strategy=["Python", "FastAPI", "RAG", "Agent Runtime"],
+                risk_notes=["RAG 评估指标表达仍需面试前复盘"],
+            )
+        )
+        resume_version_ids.append(resume_version.resume_version_id)
+    application = stack.career_store.save_career_application(
+        CareerApplication(
+            application_id=f"application_seed_{uuid4().hex[:8]}",
+            status=CareerRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=jd_artifact_id,
+            evidence_refs=[
+                resume_artifact_id,
+                jd_artifact_id,
+                resume.resume_profile_id,
+                career.career_profile_id,
+                jd.jd_analysis_id,
+                fit.job_fit_report_id,
+                *resume_version_ids,
+            ],
+            created_at=now,
+            updated_at=now,
+            company="星河智能",
+            position="AI 应用开发工程师",
+            location="上海",
+            stage="interviewing",
+            priority="high",
+            resume_profile_id=resume.resume_profile_id,
+            career_profile_id=career.career_profile_id,
+            jd_analysis_id=jd.jd_analysis_id,
+            job_fit_report_id=fit.job_fit_report_id,
+            resume_version_ids=resume_version_ids,
+            summary="星河智能 AI 应用开发岗位进入二面准备阶段。",
+            next_actions=["准备 RAG 召回评估", "复盘 Agent Runtime 工具权限边界"],
+            risks=["RAG 评估指标表达不够体系化"],
+            notes="二面重点是 RAG、Agent Runtime 和后端工程化。",
+        )
+    )
+    stack.note_store.save_note(
+        Note(
+            note_id=f"note_seed_{uuid4().hex[:8]}",
+            status=NoteRecordStatus.ACTIVE,
+            source_session_id=session_id,
+            source_artifact_id=None,
+            evidence_refs=[application.application_id, fit.job_fit_report_id],
+            created_at=now,
+            updated_at=now,
+            title="星河智能 AI 应用开发岗位面试准备记录",
+            body_markdown=(
+                "面试准备重点：星河智能 AI 应用开发岗位二面，覆盖 RAG chunk 策略、"
+                "向量召回评估、失败恢复、Agent Runtime 工具权限边界和后端工程化。"
+            ),
+            note_type=NoteType.NOTE,
+            tags=["星河智能", "AI 应用开发", "面试准备", "二面", "RAG"],
+            source_refs=[
+                NoteSourceRef(
+                    source_type=NoteSourceType.CAREER_APPLICATION,
+                    source_id=application.application_id,
+                    source_session_id=session_id,
+                    title="星河智能 AI 应用开发工程师",
+                )
+            ],
+            related_application_id=application.application_id,
+            summary="二面准备聚焦 RAG 评估和 Agent Runtime。",
+            origin=NoteOrigin.AGENT,
+        )
+    )
+    return application
+
+
 def _latest_career_application_for_session(stack: LiveStack, session_id: str) -> CareerApplication | None:
     records = [
         item for item in stack.career_store.list_career_applications() if item.source_session_id == session_id
@@ -1192,8 +1417,9 @@ def _project_action_message(project_action: str, application_id: str) -> str:
     if project_action == "custom_resume":
         return (
             f"{context}"
-            "请生成或更新一版定制简历。必须调用 career_resume_version_create 保存 ResumeVersion，"
-            "再调用 career_application_merge 把新的 resume_version_id 合并进当前求职项目。"
+            "请生成一版新的定制简历。必须先调用 career_resume_version_create 保存新的 ResumeVersion，"
+            "再调用 career_application_merge 把这个新 resume_version_id 合并进当前求职项目；"
+            "只调用 career_application_merge 或只复用已有 resume_version_id 都不算完成。"
             "简历正文只能使用已有产品记录和源 artifact 明确出现的事实，不要编造指标或经历。"
             "ResumeVersion 的 content、change_summary、keyword_strategy、risk_notes 都不能包含"
             "“占位”“替换为真实数据”“待填”“待补”“待完善”“TODO”“TBD”；"
@@ -1243,9 +1469,12 @@ def _retrieval_action_message(retrieval_action: str) -> str:
     if retrieval_action == "save_note":
         return (
             f"{base}"
-            "请把这次面试准备内容保存为一条可编辑笔记。先召回依据，再调用 note_create。"
-            "Note 的 evidence_refs 只能使用 NoteService 支持的受控引用，例如 application、fit、"
-            "resume_profile、jd、career_profile、resume_version、note 或 artifact。"
+            "请把星河智能 AI 应用开发岗位二面准备内容保存为一条可编辑笔记。"
+            "retrieval_search 的 query 必须包含“星河智能 AI 应用开发 面试准备 RAG”。"
+            "先召回依据，再调用 note_create。"
+            "Note 的 source_refs.source_type 只能使用 career_application、job_fit_report、resume_profile、"
+            "jd_analysis、career_profile、resume_version、artifact、chat_message 或 manual，不能使用 note。"
+            "evidence_refs 可以引用受控产品记录 id 或 artifact id。"
         )
     if retrieval_action == "pre_apply_check":
         return (
@@ -1359,6 +1588,44 @@ def infer_stage_from_tool(tool_name: str) -> str:
     return "工具执行"
 
 
+def _add_generated_text_artifact(
+    repository: JsonlSessionRepository,
+    *,
+    session_id: str,
+    artifact_id: str,
+    title: str,
+    content: str,
+) -> str:
+    root = repository.get_session_root_path(session_id)
+    artifact_dir = root / "artifacts" / artifact_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    original_path = artifact_dir / "original.md"
+    text_path = artifact_dir / "content.txt"
+    original_path.write_text(content, encoding="utf-8")
+    text_path.write_text(content, encoding="utf-8")
+    now = app_now()
+    repository.add_or_update_session_artifact(
+        SessionArtifact(
+            artifact_id=artifact_id,
+            session_id=session_id,
+            kind="generated_file",
+            title=title,
+            media_type="text/markdown",
+            size_bytes=original_path.stat().st_size,
+            status="ready",
+            visibility="session_shared",
+            created_at=now,
+            updated_at=now,
+            storage_relpath=str(original_path.relative_to(root)),
+            text_relpath=str(text_path.relative_to(root)),
+            text_char_count=len(content),
+            token_estimate=max(1, (len(content) + 3) // 4),
+            parsed_at=now,
+        )
+    )
+    return artifact_id
+
+
 def add_resume_artifact(repository: JsonlSessionRepository, *, session_id: str, artifact_id: str) -> None:
     content = """候选人：张三
 目标方向：AI 应用开发 / 后端工程师
@@ -1367,41 +1634,47 @@ def add_resume_artifact(repository: JsonlSessionRepository, *, session_id: str, 
 经历：3 年后端开发经验，负责 API、任务队列、日志审计和部署。
 教育：计算机相关专业本科。
 """
-    root = repository.get_session_root_path(session_id)
-    artifact_dir = root / "artifacts" / artifact_id
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    original_path = artifact_dir / "original.bin"
-    text_path = artifact_dir / "content.txt"
-    original_path.write_text(content, encoding="utf-8")
-    text_path.write_text(content, encoding="utf-8")
-    now = app_now()
-    repository.add_or_update_session_artifact(
-        SessionArtifact(
-            artifact_id=artifact_id,
-            session_id=session_id,
-            kind="uploaded_file",
-            title="候选人简历.txt",
-            media_type="text/plain",
-            size_bytes=original_path.stat().st_size,
-            status="ready",
-            visibility="session_shared",
-            created_at=now,
-            updated_at=now,
-            storage_relpath=str(original_path.relative_to(root)),
-            text_relpath=str(text_path.relative_to(root)),
-            text_char_count=len(content),
-            token_estimate=max(1, (len(content) + 3) // 4),
-            parsed_at=now,
-        )
+    _add_text_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id=artifact_id,
+        kind="uploaded_file",
+        title="候选人简历.txt",
+        media_type="text/plain",
+        original_name="original.bin",
+        content=content,
     )
 
 
 def add_jd_artifact(repository: JsonlSessionRepository, *, session_id: str, artifact_id: str) -> None:
     content = "公司招聘 AI 应用开发工程师，要求 Python、FastAPI、RAG、Agent 工程经验，熟悉向量检索和后端服务落地。"
+    _add_text_artifact(
+        repository,
+        session_id=session_id,
+        artifact_id=artifact_id,
+        kind="pasted_text",
+        title="目标岗位 JD.txt",
+        media_type="text/plain",
+        original_name="original.txt",
+        content=content,
+    )
+
+
+def _add_text_artifact(
+    repository: JsonlSessionRepository,
+    *,
+    session_id: str,
+    artifact_id: str,
+    kind: str,
+    title: str,
+    media_type: str,
+    original_name: str,
+    content: str,
+) -> str:
     root = repository.get_session_root_path(session_id)
     artifact_dir = root / "artifacts" / artifact_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    original_path = artifact_dir / "original.txt"
+    original_path = artifact_dir / original_name
     text_path = artifact_dir / "content.txt"
     original_path.write_text(content, encoding="utf-8")
     text_path.write_text(content, encoding="utf-8")
@@ -1410,9 +1683,9 @@ def add_jd_artifact(repository: JsonlSessionRepository, *, session_id: str, arti
         SessionArtifact(
             artifact_id=artifact_id,
             session_id=session_id,
-            kind="pasted_text",
-            title="目标岗位 JD.txt",
-            media_type="text/plain",
+            kind=kind,
+            title=title,
+            media_type=media_type,
             size_bytes=original_path.stat().st_size,
             status="ready",
             visibility="session_shared",
@@ -1425,6 +1698,7 @@ def add_jd_artifact(repository: JsonlSessionRepository, *, session_id: str, arti
             parsed_at=now,
         )
     )
+    return artifact_id
 
 
 def run_context(session_id: str) -> RunContext:
@@ -2178,6 +2452,7 @@ async def run_all(args: argparse.Namespace) -> list[FlowReport]:
                 max_tool_rounds=args.max_tool_rounds,
                 project_action=args.project_action,
                 retrieval_action=args.retrieval_action,
+                setup_mode=args.setup_mode,
                 stream=getattr(args, "stream", False),
                 progress=progress,
             )
@@ -2301,6 +2576,12 @@ def parse_args() -> argparse.Namespace:
         ),
         default="none",
         help="是否追加一轮召回驱动动作验证；默认不追加以控制 live smoke 成本。",
+    )
+    parser.add_argument(
+        "--setup-mode",
+        choices=("full", "seeded"),
+        default="full",
+        help="full 跑完整 career 前置链路；seeded 直接准备已有项目资产后验证动作。",
     )
     parser.add_argument("--verbose", action="store_true", help="打开应用日志。")
     parser.add_argument("--quiet", action="store_true", help="关闭逐 run / 逐阶段进度输出，只打印最终报告。")

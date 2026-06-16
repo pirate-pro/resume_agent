@@ -27,8 +27,12 @@ from tools.smoke_career_live_flow import (
     FlowReport,
     LiveStack,
     TurnReport,
+    _retrieval_action_message,
+    _seed_career_project_fixture,
     _prepare_clean_run_data_dir,
     _runtime_config_text,
+    add_jd_artifact,
+    add_resume_artifact,
     build_live_stack,
     efficiency_summary,
     infer_failure_stage,
@@ -66,6 +70,16 @@ def test_live_smoke_runtime_config_text() -> None:
     )
 
 
+def test_save_note_smoke_message_uses_supported_note_source_types() -> None:
+    message = _retrieval_action_message("save_note")
+
+    assert "不能使用 note" in message
+    assert "career_application" in message
+    assert "job_fit_report" in message
+    assert "source_type=note" not in message
+    assert "source_type 是 note" not in message
+
+
 def test_live_stack_wires_durable_langgraph_resume_state(tmp_path: Path) -> None:
     settings = Settings().model_copy(
         update={
@@ -85,6 +99,59 @@ def test_live_stack_wires_durable_langgraph_resume_state(tmp_path: Path) -> None
     assert workflow_runner.resume_lease_store is not None
     for runner in workflow_runner.runners.values():
         assert getattr(runner, "_workflow_store") is workflow_runner.workflow_store
+
+
+def test_seeded_career_project_fixture_creates_complete_action_context(tmp_path: Path) -> None:
+    settings = Settings().model_copy(update={"data_dir": tmp_path})
+    stack = build_live_stack(data_dir=tmp_path, settings=settings)
+    session_id = "sess_seeded_action"
+    resume_artifact_id = "artifact_resume_seeded"
+    jd_artifact_id = "artifact_jd_seeded"
+    stack.session_repository.create_session(session_id)
+    add_resume_artifact(stack.session_repository, session_id=session_id, artifact_id=resume_artifact_id)
+    add_jd_artifact(stack.session_repository, session_id=session_id, artifact_id=jd_artifact_id)
+
+    application = _seed_career_project_fixture(
+        stack=stack,
+        session_id=session_id,
+        resume_artifact_id=resume_artifact_id,
+        jd_artifact_id=jd_artifact_id,
+    )
+
+    assert application.source_session_id == session_id
+    assert application.resume_profile_id
+    assert application.career_profile_id
+    assert application.jd_analysis_id
+    assert application.job_fit_report_id
+    assert application.resume_version_ids
+    assert len(stack.career_store.list_resume_profiles()) == 1
+    assert len(stack.career_store.list_jd_analyses()) == 1
+    assert len(stack.career_store.list_job_fit_reports()) == 1
+    assert len(stack.career_store.list_resume_versions()) == 1
+    assert len(stack.career_store.list_career_applications()) == 1
+    assert len(stack.note_store.list_notes(include_archived=True, related_application_id=application.application_id)) == 1
+
+
+def test_seeded_career_project_fixture_can_skip_existing_resume_version(tmp_path: Path) -> None:
+    settings = Settings().model_copy(update={"data_dir": tmp_path})
+    stack = build_live_stack(data_dir=tmp_path, settings=settings)
+    session_id = "sess_seeded_custom_resume"
+    resume_artifact_id = "artifact_resume_seeded"
+    jd_artifact_id = "artifact_jd_seeded"
+    stack.session_repository.create_session(session_id)
+    add_resume_artifact(stack.session_repository, session_id=session_id, artifact_id=resume_artifact_id)
+    add_jd_artifact(stack.session_repository, session_id=session_id, artifact_id=jd_artifact_id)
+
+    application = _seed_career_project_fixture(
+        stack=stack,
+        session_id=session_id,
+        resume_artifact_id=resume_artifact_id,
+        jd_artifact_id=jd_artifact_id,
+        include_resume_version=False,
+    )
+
+    assert application.resume_version_ids == []
+    assert stack.career_store.list_resume_versions() == []
 
 
 def test_live_smoke_report_prints_concise_failure_summary(
@@ -452,6 +519,7 @@ def test_live_smoke_passes_project_action_argument_to_run(monkeypatch: pytest.Mo
         max_tool_rounds=8,
         project_action="checklist",
         retrieval_action="none",
+        setup_mode="full",
         quiet=True,
     )
 
@@ -459,6 +527,7 @@ def test_live_smoke_passes_project_action_argument_to_run(monkeypatch: pytest.Mo
 
     assert reports[0].success is True
     assert seen["project_action"] == "checklist"
+    assert seen["setup_mode"] == "full"
 
 
 def test_live_smoke_passes_retrieval_action_argument_to_run(
@@ -486,6 +555,7 @@ def test_live_smoke_passes_retrieval_action_argument_to_run(
         max_tool_rounds=8,
         project_action="none",
         retrieval_action="learning_task",
+        setup_mode="seeded",
         quiet=True,
     )
 
@@ -493,6 +563,7 @@ def test_live_smoke_passes_retrieval_action_argument_to_run(
 
     assert reports[0].success is True
     assert seen["retrieval_action"] == "learning_task"
+    assert seen["setup_mode"] == "seeded"
 
 
 def test_retrieval_quality_summary_reports_context_budget(tmp_path: Path) -> None:

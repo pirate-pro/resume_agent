@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.settings import Settings
+from tools.smoke_career_live_flow import FlowReport
 from tools.smoke_live_matrix import (
     INTERACTIVE_INTERVIEW_REVIEW_SCENARIOS,
     INTERACTIVE_RAG_TO_NOTE_SCENARIOS,
@@ -14,6 +16,7 @@ from tools.smoke_live_matrix import (
     _apply_product_stop_line,
     _apply_scenario_gates,
     _selected_scenarios,
+    run_matrix_scenario,
     write_json_report,
 )
 
@@ -36,6 +39,76 @@ def test_all_p1_includes_interactive_langgraph_scenarios() -> None:
     assert selected == list(P1_SCENARIOS)
     assert INTERACTIVE_RAG_TO_NOTE_SCENARIOS <= set(selected)
     assert INTERACTIVE_INTERVIEW_REVIEW_SCENARIOS <= set(selected)
+
+
+def test_matrix_uses_seeded_setup_for_noninteractive_p1(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run_live_flow(**kwargs: object) -> FlowReport:
+        seen.update(kwargs)
+        return FlowReport(
+            run_index=1,
+            session_id="sess_fake",
+            data_dir=tmp_path / "run_001",
+            success=True,
+            elapsed_seconds=1.0,
+        )
+
+    monkeypatch.setattr("tools.smoke_live_matrix.run_live_flow", fake_run_live_flow)
+
+    report = run_matrix_scenario(
+        scenario="rag_to_note",
+        run_index=1,
+        root_data_dir=tmp_path,
+        settings=Settings().model_copy(update={"data_dir": tmp_path}),
+        max_tool_rounds=8,
+        stream=True,
+    )
+
+    assert report.success is True
+    assert seen["setup_mode"] == "seeded"
+    assert seen["retrieval_action"] == "save_note"
+
+
+def test_matrix_keeps_career_full_on_full_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run_live_flow(**kwargs: object) -> FlowReport:
+        seen.update(kwargs)
+        return FlowReport(
+            run_index=1,
+            session_id="sess_fake",
+            data_dir=tmp_path / "run_001",
+            success=True,
+            elapsed_seconds=1.0,
+            record_ids={
+                "resume_profiles": ["resume_profile_fake"],
+                "jd_analyses": ["jd_fake"],
+                "job_fit_reports": ["fit_fake"],
+                "career_applications": ["application_fake"],
+                "resume_versions": ["resume_version_fake"],
+            },
+        )
+
+    monkeypatch.setattr("tools.smoke_live_matrix.run_live_flow", fake_run_live_flow)
+
+    report = run_matrix_scenario(
+        scenario="career_full",
+        run_index=1,
+        root_data_dir=tmp_path,
+        settings=Settings().model_copy(update={"data_dir": tmp_path}),
+        max_tool_rounds=8,
+        stream=True,
+    )
+
+    assert report.success is True
+    assert seen["setup_mode"] == "full"
 
 
 def test_chat_only_gate_rejects_tool_calls(tmp_path: Path) -> None:

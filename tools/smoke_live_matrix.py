@@ -312,6 +312,7 @@ def _run_career_backed_scenario(
         max_tool_rounds=max_tool_rounds,
         project_action=project_action,
         retrieval_action=retrieval_action,
+        setup_mode="full" if scenario == "career_full" else "seeded",
         stream=stream,
         progress=lambda message: _progress(progress, scenario, run_index, message),
     )
