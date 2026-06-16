@@ -194,6 +194,118 @@ void main() {
 
     expect(submitted, {"action": "retry"});
   });
+
+  testWidgets("career input confirmation submits resume and jd artifacts",
+      (tester) async {
+    Map<String, dynamic>? submitted;
+    await tester.pumpWidget(
+      _host(
+        WorkflowInterruptPanel(
+          interrupt: WorkflowInterruptView.fromJson({
+            "workflow_instance_id": "wf_career",
+            "workflow_version": 1,
+            "type": "career_input_confirmation",
+            "question": "请选择简历和 JD",
+            "candidates": [
+              {
+                "artifact_id": "artifact_resume",
+                "title": "候选人简历",
+                "role_hint": "resume",
+              },
+              {
+                "artifact_id": "artifact_jd",
+                "title": "后端岗位 JD",
+                "role_hint": "jd",
+              },
+            ],
+          }),
+          isSubmitting: false,
+          onSubmit: (payload) async => submitted = payload,
+        ),
+      ),
+    );
+
+    await tester.ensureVisible(find.byKey(const Key("workflow-continue")));
+    await tester.tap(find.byKey(const Key("workflow-continue")));
+    await tester.pump();
+
+    expect(submitted?["resume_artifact_id"], "artifact_resume");
+    expect(submitted?["jd_artifact_id"], "artifact_jd");
+  });
+
+  testWidgets("task retry only retries failed steps", (tester) async {
+    Map<String, dynamic>? submitted;
+    await tester.pumpWidget(
+      _host(
+        WorkflowInterruptPanel(
+          interrupt: WorkflowInterruptView.fromJson({
+            "workflow_instance_id": "wf_career",
+            "workflow_version": 2,
+            "type": "workflow_task_retry",
+            "question": "部分步骤失败",
+            "failed_tasks": [
+              {
+                "task_key": "jd_analysis",
+                "title": "分析岗位",
+                "attempt": 1,
+                "error": "服务暂时不可用",
+              },
+            ],
+            "completed_tasks": ["resume_analysis"],
+          }),
+          isSubmitting: false,
+          onSubmit: (payload) async => submitted = payload,
+        ),
+      ),
+    );
+
+    expect(find.text("分析岗位"), findsOneWidget);
+    expect(find.textContaining("已完成步骤会保留"), findsOneWidget);
+    await tester.tap(find.byKey(const Key("workflow-retry-failed")));
+    await tester.pump();
+
+    expect(submitted, {"action": "retry_failed"});
+  });
+
+  testWidgets("career project confirmation submits edited fields",
+      (tester) async {
+    Map<String, dynamic>? submitted;
+    await tester.pumpWidget(
+      _host(
+        WorkflowInterruptPanel(
+          interrupt: WorkflowInterruptView.fromJson({
+            "workflow_instance_id": "wf_career",
+            "workflow_version": 3,
+            "type": "career_project_confirmation",
+            "question": "确认后创建求职项目",
+            "project_preview": {
+              "company": "原公司",
+              "position": "后端工程师",
+              "stage": "draft",
+              "priority": "medium",
+              "summary": "匹配度 82 分",
+            },
+          }),
+          isSubmitting: false,
+          onSubmit: (payload) async => submitted = payload,
+        ),
+      ),
+    );
+
+    await tester.enterText(
+      find.byKey(const Key("workflow-project-company")),
+      "星河科技",
+    );
+    await tester.ensureVisible(find.byKey(const Key("workflow-approve")));
+    await tester.tap(find.byKey(const Key("workflow-approve")));
+    await tester.pump();
+
+    expect(submitted?["action"], "edit_project_fields");
+    expect(
+      (submitted?["edited_project_fields"] as Map)["company"],
+      "星河科技",
+    );
+  });
 }
 
 Widget _host(Widget child) {

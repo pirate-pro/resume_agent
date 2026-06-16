@@ -31,11 +31,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('求职项目'), findsWidgets);
-    expect(find.text('岗位工作台'), findsWidgets);
+    expect(find.text('在这里推进一个目标岗位，跟踪进度，提升命中率'), findsWidgets);
     expect(api.workbenchListCalls, greaterThanOrEqualTo(1));
     final callsAfterOpen = api.workbenchListCalls;
 
     await tester.tap(find.text('生成定制简历').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开始生成草案'));
     await tester.pumpAndSettle();
 
     expect(api.sentMessages.last, contains('application_home_staragent'));
@@ -44,7 +46,7 @@ void main() {
     await tester.tap(find.text('求职项目').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('已完成：生成定制简历'), findsOneWidget);
+    expect(find.text('生成岗位定制简历已完成'), findsOneWidget);
     expect(find.textContaining('已刷新项目状态'), findsOneWidget);
   });
 
@@ -72,11 +74,13 @@ void main() {
 
     await tester.tap(find.text('生成定制简历').first);
     await tester.pumpAndSettle();
+    await tester.tap(find.text('开始生成草案'));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('求职项目').first);
     await tester.pumpAndSettle();
 
-    expect(find.text('执行失败：生成定制简历'), findsOneWidget);
+    expect(find.text('生成岗位定制简历失败'), findsOneWidget);
     expect(find.textContaining('模拟聊天失败'), findsOneWidget);
   });
 
@@ -109,19 +113,19 @@ void main() {
     }
 
     await openProductPage('求职项目');
-    expect(find.text('岗位工作台'), findsWidgets);
+    expect(find.text('在这里推进一个目标岗位，跟踪进度，提升命中率'), findsWidgets);
 
     await openProductPage('简历资料');
     expect(find.text('版本管理'), findsWidgets);
 
     await openProductPage('JD 匹配');
-    expect(find.text('智能分析'), findsWidgets);
+    expect(find.text('匹配分析'), findsWidgets);
 
     await openProductPage('学习计划');
-    expect(find.text('补短板'), findsWidgets);
+    expect(find.text('当前学习状态'), findsWidgets);
 
     await openProductPage('笔记');
-    expect(find.text('知识沉淀'), findsWidgets);
+    expect(find.text('沉淀面试准备、复盘和资料摘记'), findsWidgets);
   });
 
   testWidgets('桌面端会话历史入口直接进入 Agent 对话工作区', (tester) async {

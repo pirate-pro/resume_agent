@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:resume_agent_app/features/workspace/workspace_models.dart';
 import 'package:resume_agent_app/features/workspace/workspace_shell.dart';
@@ -14,27 +15,30 @@ void main() {
     var openedHistory = false;
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: StatefulBuilder(
-          builder: (context, setState) {
-            return ProductWorkspaceShell(
-              activePage: activePage,
-              badges: const WorkspaceBadges(
-                applications: 3,
-                resumes: 2,
-                jdMatches: 1,
-                learningTasks: 4,
-                notes: 5,
-              ),
-              serverReachable: true,
-              onPageChanged: (page) => setState(() => activePage = page),
-              onNewSession: () {},
-              onOpenChat: () => setState(() => activePage = WorkspacePage.chat),
-              onOpenSessionHistory: () => openedHistory = true,
-              onCommandSubmitted: (_) {},
-              child: const Center(child: Text('workspace content')),
-            );
-          },
+      ProviderScope(
+        child: MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              return ProductWorkspaceShell(
+                activePage: activePage,
+                badges: const WorkspaceBadges(
+                  applications: 3,
+                  resumes: 2,
+                  jdMatches: 1,
+                  learningTasks: 4,
+                  notes: 5,
+                ),
+                serverReachable: true,
+                onPageChanged: (page) => setState(() => activePage = page),
+                onNewSession: () {},
+                onOpenChat: () =>
+                    setState(() => activePage = WorkspacePage.chat),
+                onOpenSessionHistory: () => openedHistory = true,
+                onCommandSubmitted: (_) {},
+                child: const Center(child: Text('workspace content')),
+              );
+            },
+          ),
         ),
       ),
     );

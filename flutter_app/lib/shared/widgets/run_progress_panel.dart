@@ -2444,7 +2444,7 @@ class _RunProgressSnapshot {
           for (final raw in rawTasks) {
             if (raw is! Map) continue;
             final taskPayload = Map<String, dynamic>.from(raw);
-            final taskId = _payloadText(taskPayload, "task_id");
+            final taskId = _taskIdentity(taskPayload);
             if (taskId.isEmpty) continue;
             final task = _AgentTaskProgress.fromPayload(taskPayload);
             task.timeline.add(
@@ -2469,7 +2469,7 @@ class _RunProgressSnapshot {
         continue;
       }
 
-      var taskId = _payloadText(payload, "task_id");
+      var taskId = _taskIdentity(payload);
       if (taskId.isEmpty) {
         final childRunId = _payloadText(payload, "child_run_id");
         taskId = taskIdsByChildRunId[childRunId] ?? "";
@@ -2898,6 +2898,12 @@ class _AgentTaskProgress {
       timeline: [],
     );
   }
+}
+
+String _taskIdentity(Map<String, dynamic> payload) {
+  final taskKey = _payloadText(payload, "task_key");
+  if (taskKey.isNotEmpty) return "graph:$taskKey";
+  return _payloadText(payload, "task_id");
 }
 
 class _TimelineItem {

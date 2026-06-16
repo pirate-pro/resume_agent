@@ -185,6 +185,88 @@ void main() {
     expect(find.textContaining('调用：读取文件内容'), findsNothing);
     expect(find.textContaining('session_read_artifact'), findsNothing);
   });
+
+  testWidgets('LangGraph task 重试按 task_key 更新原步骤', (tester) async {
+    final now = DateTime(2026, 6, 15, 20);
+    final events = [
+      _event(
+        type: 'agent_task_group_created',
+        createdAt: now,
+        payload: {
+          'status': 'running',
+          'tasks': [
+            {
+              'task_id': 'attempt_1',
+              'task_key': 'jd_analysis',
+              'target_agent_id': 'job_agent',
+              'status': 'queued',
+              'title': '分析岗位',
+              'detail': '等待执行',
+            },
+          ],
+        },
+      ),
+      _event(
+        type: 'agent_task_failed',
+        createdAt: now.add(const Duration(seconds: 2)),
+        payload: {
+          'task_id': 'attempt_1',
+          'task_key': 'jd_analysis',
+          'target_agent_id': 'job_agent',
+          'status': 'failed',
+          'title': '分析岗位',
+          'detail': '服务暂时不可用',
+        },
+      ),
+      _event(
+        type: 'agent_task_group_created',
+        createdAt: now.add(const Duration(seconds: 3)),
+        payload: {
+          'status': 'running',
+          'tasks': [
+            {
+              'task_id': 'attempt_2',
+              'task_key': 'jd_analysis',
+              'target_agent_id': 'job_agent',
+              'status': 'queued',
+              'title': '分析岗位',
+              'detail': '等待重试',
+            },
+          ],
+        },
+      ),
+      _event(
+        type: 'agent_task_completed',
+        createdAt: now.add(const Duration(seconds: 5)),
+        payload: {
+          'task_id': 'attempt_2',
+          'task_key': 'jd_analysis',
+          'target_agent_id': 'job_agent',
+          'status': 'completed',
+          'title': '分析岗位',
+          'detail': 'JD 分析已完成',
+          'product_refs': ['jd_alpha'],
+        },
+      ),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: SizedBox(
+              width: 720,
+              child: RunProgressPanel(events: events),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('1 个 agent'), findsOneWidget);
+    expect(find.textContaining('2 个 agent'), findsNothing);
+  });
 }
 
 EventView _event({
