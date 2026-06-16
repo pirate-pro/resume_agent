@@ -1,6 +1,6 @@
 # M63 工具路由收敛方案
 
-> 状态：第一层已实现并完成 targeted tests + P1 focused live smoke。本文定义工具选择、工具可见性、ToolGateway、RAG MCP 与 LangGraph 的边界。
+> 状态：第一层及完成态补丁已实现，并完成 targeted tests + P1 focused live smoke。本文定义工具选择、工具可见性、ToolGateway、RAG MCP 与 LangGraph 的边界。
 
 ## 0. 本轮落地结果
 
@@ -11,6 +11,9 @@
 - `build_runtime_tool_plan` 信任 phase snapshot 里已完成输出的 refs，避免已有上下文只停留在提示文本里。
 - `tool_search` 被 runtime plan 接管时输出 `tool_route_decision_source=runtime_plan`，并保留 catalog 命中字段用于排查。
 - `learning_task_create.output_artifact_id` 对不存在的可选输出 artifact 做忽略容错，避免可恢复伪 id 造成一次失败工具结果和重复写调用。
+- 已完成 action workflow 不再默认调用 final answer recovery LLM。`resume_version`、`rag_note_write`、`rag_learning_task_create`、`interview_review_update`、`note_write` 进入 `final_answer_ready` 后，优先从 `FinalizationPacket` 生成确定性用户答复。
+- `retrieval_search` / `retrieval_context_pack` 的 `related_application_id` 只接受 `application_*`；明显不是项目 id 的 refs 会被丢弃，避免把 `fit_*`、`resume_profile_*` 等产物 id 当成项目过滤条件。
+- strict runtime 模式下，如果 required tool 已可见但模型继续调用隐藏工具，runtime 继续 suppress 并追加 runtime notice，不再用 `tool_hidden_by_runtime_plan` tool result 结束正向 action。
 
 验证结果：
 
@@ -19,6 +22,33 @@
   - `rag_to_note`：通过，工具链为 `retrieval_search -> retrieval_context_pack -> note_create`。
   - `interview_review`：通过，工具链为 `retrieval_search -> retrieval_context_pack -> note_create -> career_application_merge`。
   - `rag_to_learning_task`：第一次暴露出 `learning_task_create.output_artifact_id` 伪 id 容错问题；修复后重跑通过，工具链为 `retrieval_search -> retrieval_context_pack -> learning_task_create`，重复=0，hidden=0。
+
+完成态补丁后的最终 focused live smoke：
+
+```text
+uv run python tools/smoke_live_matrix.py \
+  --scenario career_custom_resume \
+  --scenario rag_to_note \
+  --scenario rag_to_learning_task \
+  --scenario interview_review \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m63_p1_focused_final_answer_fast_final_c1_r1 \
+  --json-report data/live_smoke_matrix_m63_p1_focused_final_answer_fast_final_c1_r1/report.json \
+  --quiet
+```
+
+结果：
+
+- 4/4 passed，avg 90.63s，max 120.56s。
+- `final_answer_recovery_calls=0`，`final_answer_recovery_tokens=0`。
+- `finalization_packet_count=4`，且事件 payload 标记 `used_for_recovery=false`。
+- hidden tool result 0，failed tool result 0，harmful duplicate 0。
+- `career_custom_resume`：64.85s，3 LLM calls，`career_application_get -> career_resume_version_create -> career_application_merge`。
+- `rag_to_note`：88.39s，4 LLM calls，`retrieval_search -> retrieval_context_pack -> note_create`。
+- `rag_to_learning_task`：88.72s，4 LLM calls，`retrieval_search -> retrieval_context_pack -> learning_task_create`。
+- `interview_review`：120.56s，5 LLM calls，`retrieval_search -> retrieval_context_pack -> note_create -> career_application_merge`。
 
 ## 1. 背景
 
@@ -401,6 +431,51 @@ tools/smoke_live_matrix.py \
 --scenario interactive_interview_review_scope_select
 ```
 
+### M63-F：完成态 final answer 快路径与边界修正
+
+本步处理第一层收敛后暴露的三个实际问题：
+
+1. P1 action 工具链已经完成，但 final answer recovery 仍会额外消耗一次 LLM。
+2. RAG action 中模型可能把 `fit_*` 等非项目 ref 填进 `related_application_id`，导致 `retrieval_context_pack` 参数校验失败。
+3. strict runtime 已经知道 required tool，但模型继续调用隐藏 retrieval/tool_search 时，旧逻辑可能产生 `tool_hidden_by_runtime_plan` tool result，被 live smoke 判失败。
+
+落地策略：
+
+- 只对白名单完成态 action phase 使用确定性最终答复：
+  - `resume_version`
+  - `rag_note_write`
+  - `rag_learning_task_create`
+  - `interview_review_update`
+  - `note_write`
+- 确定性答复只从 `FinalizationPacket` 和 runtime plan 已完成 refs 生成；packet 事件保留 `used_for_recovery=false`，并用 `fallback_reason=deterministic_final_answer` 标记。
+- `resume_diagnosis` 等非白名单终态仍走原 recovery 路径，避免把复杂质量总结降级成机械答复。
+- `RetrievalQuery.related_application_id` 继续严格要求 `application_*`；facade 层对清晰非 application refs 做 drop，对未知格式仍报错。
+- strict runtime 下 required tool 已可见时，隐藏工具调用继续被 suppress，不再返回隐藏工具 result；这样不改变业务副作用，只减少错误回灌和 smoke 假失败。
+
+验证：
+
+```text
+.venv/bin/python -m pytest \
+  tests/test_agent_runtime.py \
+  tests/test_finalization_packet.py \
+  tests/test_retrieval_facade.py \
+  tests/test_retrieval_service.py \
+  tests/test_retrieval_agent_flow.py \
+  tests/test_career_live_smoke_report.py \
+  tests/test_smoke_live_matrix.py -q
+
+.venv/bin/python -m mypy --explicit-package-bases \
+  app/runtime/agent_runtime.py \
+  app/runtime/agent/finalization_packet.py \
+  app/retrieval/facade.py \
+  app/retrieval/models.py \
+  tests/test_agent_runtime.py \
+  tests/test_finalization_packet.py \
+  tests/test_retrieval_facade.py
+```
+
+结果：上述 targeted tests、mypy、py_compile 和最终 4 场景 live smoke 均通过。
+
 ## 8. 验收标准
 
 ### 8.1 结构验收
@@ -409,6 +484,7 @@ tools/smoke_live_matrix.py \
 - `retrieval_search` 默认仍走 MCP proxy。
 - LangGraph 节点不调用 `tool_search`。
 - search disclosure 在 runtime plan 为空时仍可用。
+- 完成态 action 的最终答复不绕过业务事实，只读取 `FinalizationPacket` / runtime plan refs。
 
 ### 8.2 行为验收
 
@@ -449,6 +525,7 @@ workflow_node_started / workflow_node_succeeded 正常
 - `career_custom_resume` LLM round 数下降；
 - `career_custom_resume` 不再出现 `tool_search`；
 - P1 seeded 4 场景仍 4/4 passed；
+- P1 seeded 4 场景 `final_answer_recovery_calls=0`；
 - harmful duplicate 0；
 - hidden run 0。
 
