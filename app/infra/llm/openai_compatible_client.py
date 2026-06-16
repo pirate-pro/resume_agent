@@ -15,8 +15,10 @@ from app.domain.protocols import ModelResponse, StreamChunk
 from app.infra.llm.openai_response import (
     build_chat_completions_url as _build_chat_completions_url,
     build_model_request_error_message as _build_model_request_error_message,
+    build_model_request_error_message_from_status as _build_model_request_error_message_from_status,
     is_auto_tool_choice_error as _is_auto_tool_choice_error,
     is_auto_tool_choice_error_detail as _is_auto_tool_choice_error_detail,
+    model_endpoint_label as _model_endpoint_label,
     normalize_content as _normalize_content,
     parse_token_usage as _parse_token_usage,
     parse_tool_calls as _parse_tool_calls,
@@ -107,14 +109,48 @@ class OpenAICompatibleClient:
                         payload=retry_payload,
                     )
                 except httpx.HTTPError as retry_exc:
-                    _logger.exception("模型请求回退后仍失败: %s", retry_exc)
-                    raise ModelClientError(_build_model_request_error_message(retry_exc)) from retry_exc
+                    _logger.exception(
+                        "模型请求回退后仍失败: model=%s endpoint=%s error=%s",
+                        self._model,
+                        _model_endpoint_label(self._base_url),
+                        retry_exc,
+                    )
+                    raise ModelClientError(
+                        _build_model_request_error_message(
+                            retry_exc,
+                            model=self._model,
+                            base_url=self._base_url,
+                        )
+                    ) from retry_exc
             else:
-                _logger.exception("模型请求失败(HTTP 状态异常): %s", exc)
-                raise ModelClientError(_build_model_request_error_message(exc)) from exc
+                _logger.exception(
+                    "模型请求失败(HTTP 状态异常): model=%s endpoint=%s status=%s error=%s",
+                    self._model,
+                    _model_endpoint_label(self._base_url),
+                    exc.response.status_code,
+                    exc,
+                )
+                raise ModelClientError(
+                    _build_model_request_error_message(
+                        exc,
+                        model=self._model,
+                        base_url=self._base_url,
+                    )
+                ) from exc
         except httpx.HTTPError as exc:
-            _logger.exception("模型请求失败(网络异常): %s", exc)
-            raise ModelClientError(_build_model_request_error_message(exc)) from exc
+            _logger.exception(
+                "模型请求失败(网络异常): model=%s endpoint=%s error=%s",
+                self._model,
+                _model_endpoint_label(self._base_url),
+                exc,
+            )
+            raise ModelClientError(
+                _build_model_request_error_message(
+                    exc,
+                    model=self._model,
+                    base_url=self._base_url,
+                )
+            ) from exc
 
         try:
             body = response.json()
@@ -185,8 +221,20 @@ class OpenAICompatibleClient:
                             payload.pop("tools", None)
                             tools_enabled = False
                             continue
+                        _logger.warning(
+                            "流式模型请求失败: model=%s endpoint=%s status=%s detail=%s",
+                            self._model,
+                            _model_endpoint_label(self._base_url),
+                            response.status_code,
+                            detail[:400],
+                        )
                         raise ModelClientError(
-                            f"Model request failed: HTTP {response.status_code} | provider_detail={detail}"
+                            _build_model_request_error_message_from_status(
+                                response.status_code,
+                                detail,
+                                model=self._model,
+                                base_url=self._base_url,
+                            )
                         )
 
                     content_type = response.headers.get("content-type", "").lower()

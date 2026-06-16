@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -14,8 +15,10 @@ from app.domain.protocols import TokenUsage
 __all__ = [
     "build_chat_completions_url",
     "build_model_request_error_message",
+    "build_model_request_error_message_from_status",
     "is_auto_tool_choice_error",
     "is_auto_tool_choice_error_detail",
+    "model_endpoint_label",
     "normalize_content",
     "normalize_stream_content",
     "parse_token_usage",
@@ -163,16 +166,62 @@ def build_chat_completions_url(base_url: str) -> str:
     return f"{normalized}/chat/completions"
 
 
-def build_model_request_error_message(error: httpx.HTTPError) -> str:
-    base = f"Model request failed: {error}"
+def build_model_request_error_message(
+    error: httpx.HTTPError,
+    *,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    base = _decorate_model_error_base(f"Model request failed: {error}", model=model, base_url=base_url)
     if not isinstance(error, httpx.HTTPStatusError):
         return base
 
     response = error.response
     detail = _extract_provider_error_detail(response)
-    if detail:
-        return f"{base} | provider_detail={detail}"
-    return base
+    return build_model_request_error_message_from_status(
+        response.status_code,
+        detail,
+        base=base,
+        model=model,
+        base_url=base_url,
+    )
+
+
+def build_model_request_error_message_from_status(
+    status_code: int,
+    detail: str,
+    *,
+    base: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    message_base = base or _decorate_model_error_base(
+        f"Model request failed: HTTP {status_code}",
+        model=model,
+        base_url=base_url,
+    )
+    normalized_detail = detail.strip()[:400]
+    if _is_provider_capacity_error(status_code=status_code, detail=normalized_detail):
+        friendly = _decorate_model_error_base(
+            "模型暂不可用，可重试或切换模型",
+            model=model,
+            base_url=base_url,
+        )
+        return f"{friendly} | status={status_code} | provider_detail={normalized_detail}"
+    if normalized_detail:
+        return f"{message_base} | provider_detail={normalized_detail}"
+    return message_base
+
+
+def model_endpoint_label(base_url: str | None) -> str:
+    if not base_url:
+        return "unknown"
+    parsed = urlparse(base_url)
+    if parsed.netloc:
+        return parsed.netloc
+    if parsed.path:
+        return parsed.path
+    return base_url
 
 
 def _extract_provider_error_detail(response: httpx.Response) -> str:
@@ -191,6 +240,37 @@ def _extract_provider_error_detail(response: httpx.Response) -> str:
         if isinstance(message, str) and message.strip():
             return message.strip()
     return json.dumps(payload, ensure_ascii=False)[:400]
+
+
+def _decorate_model_error_base(base: str, *, model: str | None, base_url: str | None) -> str:
+    parts = [base]
+    if model:
+        parts.append(f"model={model}")
+    if base_url:
+        parts.append(f"endpoint={model_endpoint_label(base_url)}")
+    return " | ".join(parts)
+
+
+def _is_provider_capacity_error(*, status_code: int, detail: str) -> bool:
+    if status_code in {429, 503}:
+        return True
+    lowered = detail.lower()
+    capacity_markers = (
+        "at capacity",
+        "capacity",
+        "try a different model",
+        "overloaded",
+        "too many requests",
+        "rate limit",
+        "temporarily unavailable",
+        "server busy",
+        "容量",
+        "限流",
+        "频率限制",
+        "繁忙",
+        "暂不可用",
+    )
+    return any(marker in lowered for marker in capacity_markers)
 
 
 def _read_token_count(payload: dict[str, Any], *keys: str) -> int | None:
