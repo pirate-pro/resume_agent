@@ -43,31 +43,35 @@ def tool_idempotency_key(
     """Return a conservative business idempotency key for high-value workflow tools."""
 
     args = tool_call.arguments
+    graph_task_scope = _graph_task_idempotency_scope(context, pending_runtime_plan)
     if tool_call.name == "delegate_agents":
         signature = _delegate_semantic_signature(args)
         return f"delegate_agents:{context.session_id}:{context.run_id}:{signature}" if signature is not None else None
     if tool_call.name == "career_resume_profile_save":
-        return _key_from_fields("career_resume_profile_save", context.session_id, args, ("source_artifact_id",))
+        scope = f"{context.session_id}:{graph_task_scope}" if graph_task_scope is not None else context.session_id
+        return _key_from_fields("career_resume_profile_save", scope, args, ("source_artifact_id",))
     if tool_call.name == "career_jd_analysis_save":
-        return _key_from_fields("career_jd_analysis_save", context.session_id, args, ("source_artifact_id",))
+        scope = f"{context.session_id}:{graph_task_scope}" if graph_task_scope is not None else context.session_id
+        return _key_from_fields("career_jd_analysis_save", scope, args, ("source_artifact_id",))
     if tool_call.name == "session_create_text_artifact":
         output_kind = _workflow_output_kind_from_runtime_plan(pending_runtime_plan) or _workflow_output_kind(args)
         if output_kind is None:
             return None
         source_scope = _workflow_output_source_scope(output_kind, pending_runtime_plan)
-        task_or_run = _string_or_none(context.parent_run_id) or context.run_id
+        task_or_run = graph_task_scope or _string_or_none(context.parent_run_id) or context.run_id
         scope = f"{task_or_run}:{source_scope}" if source_scope is not None else task_or_run
         return f"session_create_text_artifact:{context.session_id}:{scope}:{output_kind}"
     if tool_call.name == "career_job_fit_report_save":
+        scope = f"{context.session_id}:{graph_task_scope}" if graph_task_scope is not None else context.session_id
         key = _key_from_fields(
             "career_job_fit_report_save",
-            context.session_id,
+            scope,
             args,
             ("jd_analysis_id", "resume_profile_id"),
         )
         if key is not None:
             return key
-        return _key_from_fields("career_job_fit_report_save", context.session_id, args, ("report_artifact_id",))
+        return _key_from_fields("career_job_fit_report_save", scope, args, ("report_artifact_id",))
     if tool_call.name == "career_application_create":
         return _key_from_fields(
             "career_application_create",
@@ -202,14 +206,30 @@ def _workflow_output_kind_from_runtime_plan(plan: dict[str, Any] | None) -> str 
         return None
     if phase == "resume_diagnosis" and "diagnosis_artifact" in missing_outputs:
         return "resume_diagnosis"
+    if phase == "resume_analysis" and "diagnosis_artifact_id" in missing_outputs:
+        return "resume_diagnosis"
     if phase == "jd_fit":
         if "jd_source_artifact" in missing_outputs:
             return "jd_source"
         if "job_fit_report_artifact" in missing_outputs or "job_fit_report" in missing_outputs:
             return "job_fit_report"
+    if phase == "job_fit_analysis" and "report_artifact_id" in missing_outputs:
+        return "job_fit_report"
     if phase == "resume_version" and "resume_version" in missing_outputs:
         return "resume_version_artifact"
     return None
+
+
+def _graph_task_idempotency_scope(
+    context: RunContext,
+    plan: dict[str, Any] | None,
+) -> str | None:
+    if not isinstance(plan, dict):
+        return None
+    phase = _string_or_none(plan.get("phase"))
+    if phase not in {"resume_analysis", "jd_analysis", "job_fit_analysis"}:
+        return None
+    return _string_or_none(context.task_id) or context.run_id
 
 
 def _workflow_output_source_scope(output_kind: str, plan: dict[str, Any] | None) -> str | None:

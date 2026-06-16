@@ -42,7 +42,11 @@ from app.tools.registry import ToolRegistry
 __all__ = []
 
 
-def _context(session_id: str = "sess_career", agent_id: str = "agent_main") -> RunContext:
+def _context(
+    session_id: str = "sess_career",
+    agent_id: str = "agent_main",
+    task_id: str | None = None,
+) -> RunContext:
     return RunContext(
         session_id=session_id,
         run_id=f"run_{session_id}_{agent_id}",
@@ -50,6 +54,7 @@ def _context(session_id: str = "sess_career", agent_id: str = "agent_main") -> R
         turn_id=f"turn_{session_id}_{agent_id}",
         entry_agent_id="agent_main",
         parent_run_id=None,
+        task_id=task_id,
         trace_flags={},
     )
 
@@ -739,6 +744,40 @@ def test_resume_profile_save_updates_existing_record_with_diagnosis_artifact(tmp
     assert second_payload["idempotent_update"] is True
     assert second_payload["record"]["diagnosis_artifact_id"] == diagnosis_artifact_id
     assert diagnosis_artifact_id in second_payload["record"]["evidence_refs"]
+
+
+def test_graph_task_resume_retry_can_create_fresh_profile(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_career")
+    resume_artifact_id = _create_text_artifact(registry, agent_id="resume_agent", title="简历.txt")
+    first = _execute(
+        registry,
+        "career_resume_profile_save",
+        {
+            "resume_profile_id": "resume_profile_first",
+            "source_artifact_id": resume_artifact_id,
+            "evidence_refs": [resume_artifact_id],
+            "basic_info": {"name": "张三"},
+        },
+        _context(agent_id="resume_agent", task_id="graph_task_attempt_1"),
+    )
+    retried = _execute(
+        registry,
+        "career_resume_profile_save",
+        {
+            "resume_profile_id": "resume_profile_retry",
+            "source_artifact_id": resume_artifact_id,
+            "evidence_refs": [resume_artifact_id],
+            "basic_info": {"name": "张三"},
+            "education": [{"school": "上海理工大学"}],
+        },
+        _context(agent_id="resume_agent", task_id="graph_task_attempt_2"),
+    )
+
+    assert first["record_id"] == "resume_profile_first"
+    assert retried["record_id"] == "resume_profile_retry"
+    assert retried["record"]["education"] == [{"school": "上海理工大学"}]
+    assert "idempotent_reused" not in retried
 
 
 def test_resume_profile_save_accepts_single_object_wrapped_diagnosis_list(tmp_path: Path) -> None:

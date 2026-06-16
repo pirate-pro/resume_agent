@@ -363,10 +363,14 @@ class CareerResumeProfileSaveTool:
                 args.get("diagnosis_artifact_id"),
                 field_name="diagnosis_artifact_id",
             )
-            existing = _find_current_session_record(
-                self._career_store.list_resume_profiles(),
-                run_context.session_id,
-                lambda item: item.source_artifact_id == source_artifact_id,
+            existing = (
+                None
+                if _is_graph_task_attempt(run_context)
+                else _find_current_session_record(
+                    self._career_store.list_resume_profiles(),
+                    run_context.session_id,
+                    lambda item: item.source_artifact_id == source_artifact_id,
+                )
             )
             if existing is not None:
                 if existing.diagnosis_artifact_id is None and diagnosis_artifact_id is not None:
@@ -695,10 +699,14 @@ class CareerJDAnalysisSaveTool:
                 args,
                 "source_artifact_id",
             )
-            existing = _find_current_session_record(
-                self._career_store.list_jd_analyses(),
-                run_context.session_id,
-                lambda item: item.source_artifact_id == source_artifact_id,
+            existing = (
+                None
+                if _is_graph_task_attempt(run_context)
+                else _find_current_session_record(
+                    self._career_store.list_jd_analyses(),
+                    run_context.session_id,
+                    lambda item: item.source_artifact_id == source_artifact_id,
+                )
             )
             if existing is not None:
                 return _record_result(
@@ -932,17 +940,21 @@ class CareerJobFitReportSaveTool:
                 run_context.session_id,
                 evidence_refs,
             )
-            existing = _find_current_session_record(
-                self._career_store.list_job_fit_reports(),
-                run_context.session_id,
-                lambda item: (
-                    item.jd_analysis_id == jd_analysis_id
-                    and item.resume_profile_id == resume_profile_id
-                    and (
-                        item.report_artifact_id == report_artifact_id
-                        or item.source_artifact_id == source_artifact_id
-                    )
-                ),
+            existing = (
+                None
+                if _is_graph_task_attempt(run_context)
+                else _find_current_session_record(
+                    self._career_store.list_job_fit_reports(),
+                    run_context.session_id,
+                    lambda item: (
+                        item.jd_analysis_id == jd_analysis_id
+                        and item.resume_profile_id == resume_profile_id
+                        and (
+                            item.report_artifact_id == report_artifact_id
+                            or item.source_artifact_id == source_artifact_id
+                        )
+                    ),
+                )
             )
             if existing is not None:
                 return _record_result(
@@ -4562,6 +4574,10 @@ def _existing_current_session_resume_version_ids(
         if item.source_session_id == session_id and item.status == CareerRecordStatus.ACTIVE
     }
     return [item for item in resume_version_ids if item in valid_ids]
+
+
+def _is_graph_task_attempt(context: RunContext) -> bool:
+    return bool(context.task_id and context.task_id.startswith("graph_task_"))
 
 
 def _find_current_session_record(records: list[Any], session_id: str, predicate: Callable[[Any], bool]) -> Any | None:

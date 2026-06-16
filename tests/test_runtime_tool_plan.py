@@ -33,6 +33,64 @@ def _output(name: str, ref_key: str, ref_value: str | None = None) -> WorkflowRe
     )
 
 
+def test_graph_jd_analysis_finishes_after_jd_save() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_jd_analysis_save",
+        """
+        {
+          "record_type": "jd_analysis",
+          "record_id": "jd_alpha",
+          "record": {"jd_analysis_id": "jd_alpha"}
+        }
+        """,
+        previous_pending_plan={
+            "phase": "jd_analysis",
+            "known_refs": {"jd_artifact_id": "artifact_jd_alpha"},
+            "missing_outputs": ["jd_analysis_id"],
+            "next_allowed_tools": ["career_jd_analysis_save"],
+            "required_tools": ["career_jd_analysis_save"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["phase"] == "jd_analysis"
+    assert plan["final_answer_ready"] is True
+    assert plan["missing_outputs"] == []
+    assert plan["required_tools"] == []
+    assert plan["known_refs"]["jd_analysis_id"] == "jd_alpha"
+
+
+def test_graph_job_fit_transitions_from_artifact_to_structured_save() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "session_create_text_artifact",
+        """
+        {
+          "artifact_id": "artifact_fit_report",
+          "title": "岗位匹配报告",
+          "kind": "generated_file"
+        }
+        """,
+        previous_pending_plan={
+            "phase": "job_fit_analysis",
+            "known_refs": {
+                "resume_profile_id": "resume_profile_alpha",
+                "career_profile_id": "career_profile_default",
+                "jd_analysis_id": "jd_alpha"
+            },
+            "missing_outputs": ["report_artifact_id", "job_fit_report_id"],
+            "next_allowed_tools": ["session_create_text_artifact"],
+            "required_tools": ["session_create_text_artifact"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["phase"] == "job_fit_analysis"
+    assert plan["next_allowed_tools"] == ["career_job_fit_report_save"]
+    assert plan["required_tools"] == ["career_job_fit_report_save"]
+    assert plan["known_refs"]["report_artifact_id"] == "artifact_fit_report"
+    assert "评分拆分" in plan["next_action"]
+
+
 def test_runtime_tool_plan_guides_resume_version_create_when_refs_are_ready() -> None:
     plan = build_runtime_tool_plan(
         workflow_phase=WorkflowPhaseSnapshot(

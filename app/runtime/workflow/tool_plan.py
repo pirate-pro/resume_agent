@@ -429,6 +429,13 @@ def pending_runtime_plan_from_successful_tool_result(
     )
     if action_plan is not None:
         return action_plan
+    graph_task_plan = _pending_graph_task_plan_after_tool_result(
+        tool_name,
+        payload,
+        previous_pending_plan=previous_pending_plan,
+    )
+    if graph_task_plan is not None:
+        return graph_task_plan
 
     if tool_name == "delegate_agents":
         return _pending_plan_after_delegate_agents(payload, previous_pending_plan=previous_pending_plan)
@@ -477,6 +484,123 @@ def pending_runtime_plan_from_successful_tool_result(
             "career_application_list",
         ],
     }
+
+
+def _pending_graph_task_plan_after_tool_result(
+    tool_name: str,
+    payload: dict[str, Any],
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    phase = _string_or_none((previous_pending_plan or {}).get("phase"))
+    if phase not in {"resume_analysis", "jd_analysis", "job_fit_analysis"}:
+        return None
+    known_refs = _pending_known_refs(previous_pending_plan)
+    known_refs.update(_runtime_known_refs_from_payload(payload))
+    record_id = _string_or_none(payload.get("record_id"))
+
+    if phase == "resume_analysis":
+        if tool_name == "session_create_text_artifact":
+            artifact_id = _string_or_none(payload.get("artifact_id"))
+            if artifact_id is None:
+                return None
+            known_refs["diagnosis_artifact_id"] = artifact_id
+            return _graph_task_pending_plan(
+                phase=phase,
+                known_refs=known_refs,
+                required_tool="career_resume_profile_save",
+                missing_outputs=["resume_profile_id"],
+                next_action=(
+                    "简历诊断 artifact 已创建；下一步只调用 career_resume_profile_save，"
+                    "并引用已有 diagnosis_artifact_id。"
+                ),
+            )
+        if tool_name == "career_resume_profile_save" and record_id is not None:
+            known_refs["resume_profile_id"] = record_id
+            return _graph_task_final_plan(phase=phase, known_refs=known_refs)
+
+    if phase == "jd_analysis":
+        if tool_name == "career_jd_analysis_save" and record_id is not None:
+            known_refs["jd_analysis_id"] = record_id
+            return _graph_task_final_plan(phase=phase, known_refs=known_refs)
+
+    if phase == "job_fit_analysis":
+        if tool_name == "session_create_text_artifact":
+            artifact_id = _string_or_none(payload.get("artifact_id"))
+            if artifact_id is None:
+                return None
+            known_refs["report_artifact_id"] = artifact_id
+            return _graph_task_pending_plan(
+                phase=phase,
+                known_refs=known_refs,
+                required_tool="career_job_fit_report_save",
+                missing_outputs=["job_fit_report_id"],
+                next_action=(
+                    "岗位匹配报告 artifact 已创建；下一步只调用 career_job_fit_report_save。"
+                    "必须保存非空的评分拆分、匹配证据、差距和准备建议。"
+                ),
+            )
+        if tool_name == "career_job_fit_report_save" and record_id is not None:
+            known_refs["job_fit_report_id"] = record_id
+            return _graph_task_final_plan(phase=phase, known_refs=known_refs)
+    return None
+
+
+def _graph_task_pending_plan(
+    *,
+    phase: str,
+    known_refs: dict[str, Any],
+    required_tool: str,
+    missing_outputs: list[str],
+    next_action: str,
+) -> dict[str, Any]:
+    return {
+        "phase": phase,
+        "next_action": next_action,
+        "next_allowed_tools": [required_tool],
+        "required_tools": [required_tool],
+        "known_refs": known_refs,
+        "missing_outputs": missing_outputs,
+        "discouraged_tools": _graph_task_discouraged_tools(required_tool),
+    }
+
+
+def _graph_task_final_plan(
+    *,
+    phase: str,
+    known_refs: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "phase": phase,
+        "next_action": "当前 LangGraph 子任务的必需产物已完成；停止工具调用并返回真实引用。",
+        "next_allowed_tools": [],
+        "required_tools": [],
+        "known_refs": known_refs,
+        "missing_outputs": [],
+        "final_answer_ready": True,
+        "discouraged_tools": _graph_task_discouraged_tools(None),
+    }
+
+
+def _graph_task_discouraged_tools(required_tool: str | None) -> list[str]:
+    tools = [
+        "tool_search",
+        "delegate_agents",
+        "session_read_artifact",
+        "session_list_artifacts",
+        "session_plan_artifact_access",
+        "session_search_artifact",
+        "session_create_text_artifact",
+        "career_resume_profile_get",
+        "career_resume_profile_save",
+        "career_profile_get",
+        "career_jd_analysis_get",
+        "career_jd_analysis_save",
+        "career_job_fit_report_get",
+        "career_job_fit_report_save",
+        "career_application_create",
+    ]
+    return [tool for tool in tools if tool != required_tool]
 
 
 def known_refs_from_successful_tool_result(tool_name: str, content: str) -> dict[str, Any]:

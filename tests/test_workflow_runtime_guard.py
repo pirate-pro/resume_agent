@@ -27,13 +27,21 @@ def _now() -> datetime:
     return datetime(2026, 5, 19, 12, 0, tzinfo=UTC)
 
 
-def _context(session_id: str = "sess_guard", run_id: str = "run_guard") -> RunContext:
+def _context(
+    session_id: str = "sess_guard",
+    run_id: str = "run_guard",
+    *,
+    agent_id: str = "agent_main",
+    entry_agent_id: str = "agent_main",
+    task_id: str | None = None,
+) -> RunContext:
     return RunContext(
         session_id=session_id,
         run_id=run_id,
-        agent_id="agent_main",
+        agent_id=agent_id,
         turn_id="turn_guard",
-        entry_agent_id="agent_main",
+        entry_agent_id=entry_agent_id,
+        task_id=task_id,
     )
 
 
@@ -216,6 +224,33 @@ def test_resume_profile_save_reuses_same_source_artifact(tmp_path: Path) -> None
     assert payload["policy"] == "reuse"
     assert decision.event_payload is not None
     assert decision.event_payload["record_type"] == "resume_profile"
+
+
+def test_graph_task_resume_profile_save_does_not_reuse_stale_same_source_record(tmp_path: Path) -> None:
+    guard, store, _ = _guard(tmp_path)
+    store.save_resume_profile(_resume_profile())
+
+    decision = guard.inspect(
+        ToolCall(
+            name="career_resume_profile_save",
+            arguments={
+                "source_artifact_id": "artifact_resume",
+                "resume_profile_id": "resume_profile_retry",
+                "diagnosis_artifact_id": "artifact_retry_diagnosis",
+                "education": [{"school": "上海理工大学"}],
+            },
+            tool_call_id="call_graph_retry_resume_profile",
+        ),
+        _context(
+            run_id="run_graph_retry",
+            agent_id="resume_agent",
+            entry_agent_id="agent_main",
+            task_id="graph_task_retry_2",
+        ),
+    )
+
+    assert decision.result is None
+    assert decision.tool_call.arguments["resume_profile_id"] == "resume_profile_retry"
 
 
 def test_session_create_text_artifact_blocks_empty_content_as_noop(tmp_path: Path) -> None:

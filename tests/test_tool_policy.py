@@ -17,6 +17,18 @@ def _context() -> RunContext:
     )
 
 
+def _graph_context(task_id: str) -> RunContext:
+    return RunContext(
+        session_id="sess_policy",
+        run_id=f"run_{task_id}",
+        agent_id="resume_agent",
+        turn_id=f"turn_{task_id}",
+        entry_agent_id="agent_main",
+        parent_run_id="run_parent",
+        task_id=task_id,
+    )
+
+
 def test_read_only_tool_hash_is_stable_and_ignores_dict_order() -> None:
     first = canonical_tool_input_hash(
         "career_application_get",
@@ -72,6 +84,65 @@ def test_text_artifact_idempotency_uses_runtime_plan_before_content_guess() -> N
     )
 
     assert key == "session_create_text_artifact:sess_policy:run_policy:resume_diagnosis"
+
+
+def test_graph_retry_attempts_use_distinct_product_write_keys() -> None:
+    call = ToolCall(
+        name="career_resume_profile_save",
+        arguments={"source_artifact_id": "artifact_resume"},
+    )
+    plan = {
+        "phase": "resume_analysis",
+        "required_tools": ["career_resume_profile_save"],
+        "missing_outputs": ["resume_profile_id"],
+    }
+
+    first = tool_idempotency_key(
+        call,
+        _graph_context("graph_task_attempt_1"),
+        pending_runtime_plan=plan,
+    )
+    repeated = tool_idempotency_key(
+        call,
+        _graph_context("graph_task_attempt_1"),
+        pending_runtime_plan=plan,
+    )
+    retried = tool_idempotency_key(
+        call,
+        _graph_context("graph_task_attempt_2"),
+        pending_runtime_plan=plan,
+    )
+
+    assert first == repeated
+    assert first != retried
+    assert "graph_task_attempt_1" in (first or "")
+    assert "graph_task_attempt_2" in (retried or "")
+
+
+def test_graph_text_artifact_is_scoped_to_attempt() -> None:
+    call = ToolCall(
+        name="session_create_text_artifact",
+        arguments={
+            "title": "简历诊断报告.md",
+            "content": "诊断内容",
+            "kind": "generated_file",
+        },
+    )
+    plan = {
+        "phase": "resume_analysis",
+        "required_tools": ["session_create_text_artifact"],
+        "missing_outputs": ["diagnosis_artifact_id", "resume_profile_id"],
+    }
+
+    key = tool_idempotency_key(
+        call,
+        _graph_context("graph_task_attempt_2"),
+        pending_runtime_plan=plan,
+    )
+
+    assert key == (
+        "session_create_text_artifact:sess_policy:graph_task_attempt_2:resume_diagnosis"
+    )
 
 
 def test_text_artifact_idempotency_classifies_ascii_resume_diagnosis_title() -> None:

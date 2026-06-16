@@ -1957,6 +1957,9 @@ class WorkflowRuntimeGuard:
         if existing is None:
             repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
             return _repair_decision(tool_call, repaired_call, repair_actions)
+        if _is_graph_task_attempt(context):
+            repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
+            return _repair_decision(tool_call, repaired_call, repair_actions)
         if existing.diagnosis_artifact_id is None and diagnosis_artifact_id is not None:
             repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
             return _repair_decision(tool_call, repaired_call, repair_actions)
@@ -1988,7 +1991,7 @@ class WorkflowRuntimeGuard:
             and item.status == CareerRecordStatus.ACTIVE
             and item.source_artifact_id == source_artifact_id,
         )
-        if existing is None:
+        if existing is None or _is_graph_task_attempt(context):
             return WorkflowGuardDecision(tool_call=tool_call)
         return _reuse_decision(
             tool_call,
@@ -2031,6 +2034,9 @@ class WorkflowRuntimeGuard:
             ),
         )
         if existing is not None:
+            if _is_graph_task_attempt(context):
+                repaired_call = _replace_arguments(tool_call, args) if repair_actions else tool_call
+                return _repair_decision(tool_call, repaired_call, repair_actions)
             return _reuse_decision(
                 tool_call,
                 tool_name="career_job_fit_report_save",
@@ -3417,6 +3423,10 @@ def _find_one(records: list[Any], predicate: Callable[[Any], bool]) -> Any | Non
 
 def _string_or_none(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _is_graph_task_attempt(context: RunContext) -> bool:
+    return bool(context.task_id and context.task_id.startswith("graph_task_"))
 
 
 def _child_output_kind(agent_id: str, text: str) -> str | None:
