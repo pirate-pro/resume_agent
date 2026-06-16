@@ -173,6 +173,23 @@ UI 截图：
 - `/tmp/m62-live-project-confirmation-fixed.png`
 - `/tmp/m62-live-quality-gate.png`
 
+Release Web UI 验证：
+
+- release 站点：`flutter_app/build/web`
+- 截图目录：`/tmp/resume-agent-ui-release-verify-20260616`
+- 覆盖页面：总览、Agent 助手、求职项目、简历资料、JD 匹配、学习计划、笔记、移动端总览
+- 最终结果：无 console error，无 failed request
+- 总览重截：`/tmp/resume-agent-ui-release-verify-20260616/desktop-overview-retry.png`
+- Agent 助手：`/tmp/resume-agent-ui-release-verify-20260616/desktop-agent-chat.png`
+- 简历资料：`/tmp/resume-agent-ui-release-verify-20260616/desktop-resume.png`
+- 移动端：`/tmp/resume-agent-ui-release-verify-20260616/mobile-overview.png`
+
+UI 验证期间发现并修复：
+
+- Agent 助手右侧推荐操作卡片在 1440x1000 下有轻微 RenderFlex overflow；
+- 简历资料页摘要卡片高度不足，真实文案下有 RenderFlex overflow；
+- 修复提交：`8166393 fix: prevent workspace rail overflow`。
+
 ## 6. 本地验证
 
 后端：
@@ -213,6 +230,20 @@ flutter build web --release
 - analyze 无问题；
 - release web build 成功。
 
+UI 修复后补充验证：
+
+```text
+flutter test test/home_screen_test.dart test/career_workbench_page_test.dart test/resume_library_page_test.dart
+flutter analyze
+flutter build web --release
+```
+
+结果：
+
+- 7 个相关 Flutter tests 通过；
+- analyze 无问题；
+- release web build 成功。
+
 已知非阻断告警：
 
 - `file_picker` 的 linux/macos/windows default_package 声明告警；
@@ -240,6 +271,6 @@ flutter build web --release
 
 ## 8. 下一步建议
 
-合并前建议只做一件事：重启后端，用当前分支再跑一次轻量 live smoke，确认新模型容量错误文案已经在接口错误和日志中生效。
+当前分支不合并到 `main`，先保留为可审阅状态。
 
-之后再考虑 provider fallback 或模型降级策略；这应该作为独立任务，不混进 M62。
+后续如果继续处理模型容量问题，建议作为独立任务评估 provider fallback、模型降级、限流和并发控制，不混进 M62。
