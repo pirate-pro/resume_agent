@@ -1224,8 +1224,8 @@ class _ActionRow extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Container(
-          height: 58,
-          padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+          constraints: const BoxConstraints(minHeight: 60),
+          padding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
           decoration: BoxDecoration(
             color: ProductColors.surface,
             borderRadius: BorderRadius.circular(12),
@@ -1246,6 +1246,7 @@ class _ActionRow extends StatelessWidget {
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       title.trim().isEmpty ? '继续推进' : title.trim(),

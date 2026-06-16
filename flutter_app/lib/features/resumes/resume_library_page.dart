@@ -1320,6 +1320,7 @@ class _ResumeVersionSummary extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
+          mainAxisExtent: 118,
           childAspectRatio: columns == 1 ? 4.2 : 1.9,
           children: [
             _ResumeSummaryCard(
