@@ -200,7 +200,7 @@ def test_multi_agent_workflow_restart_retries_only_failed_task(tmp_path: Path) -
         )
     )
 
-    assert cancelled.status == "completed"
+    assert cancelled.status == "cancelled"
     assert gateway.calls == []
 
 

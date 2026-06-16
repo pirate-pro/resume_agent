@@ -108,6 +108,10 @@ ProductStore / SessionArtifact 负责：
    - 处理：LLM 客户端现在会把 429、503 和 capacity/rate-limit/overloaded 类 provider detail 归类为“模型暂不可用，可重试或切换模型”，并带上 `model` 与脱敏 `endpoint`。
    - 当前判断：该问题发生在主模型 `mimo-v2.5-pro` 调用链路，不是 LangGraph 或 RAG 自身逻辑错误。
 
+7. workflow 取消被上层误判为完成。
+   - 现象：用户选择取消后，持久化状态为 `cancelled`，但 `WorkflowGraphRunResult.status` 仍返回 `completed`。
+   - 处理：`WorkflowGraphRunResult.status` 增加 `cancelled`，并对齐多 Agent career、RAG note 和 interview review 三条 LangGraph runner 的终态映射。
+
 ## 5. Live-smoke 证据
 
 M62 手工全链路：
@@ -243,6 +247,18 @@ flutter build web --release
 - 7 个相关 Flutter tests 通过；
 - analyze 无问题；
 - release web build 成功。
+
+审阅前补充自审：
+
+```text
+.venv/bin/python -m pytest tests/test_langgraph_multi_agent_workflow.py tests/test_langgraph_rag_note_workflow.py -q
+.venv/bin/python -m mypy app/runtime/langgraph/types.py app/runtime/langgraph/multi_agent_career.py app/runtime/langgraph/rag_note.py app/runtime/langgraph/interview_review.py tests/test_langgraph_multi_agent_workflow.py
+```
+
+结果：
+
+- 20 个 LangGraph workflow tests 通过；
+- mypy 5 个相关 source files 通过。
 
 已知非阻断告警：
 

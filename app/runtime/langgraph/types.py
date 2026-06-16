@@ -124,7 +124,7 @@ class WorkflowGraphRunResult:
 
     handled: bool
     output: AgentRunOutput | None = None
-    status: Literal["completed", "interrupted", "failed", "skipped"] = "skipped"
+    status: Literal["completed", "interrupted", "failed", "cancelled", "skipped"] = "skipped"
     workflow_instance_id: str | None = None
     thread_id: str | None = None
     interrupt_payload: dict[str, Any] | None = None

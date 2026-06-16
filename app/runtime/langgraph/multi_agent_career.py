@@ -1102,7 +1102,7 @@ class MultiAgentCareerWorkflowRunner:
             tool_calls=_tool_calls_from_state(state),
             memory_hits=[],
         )
-        status: Any = "failed" if state.get("phase") == _PHASE_FAILED else "completed"
+        status: Any = _terminal_result_status(state)
         await self._persist_workflow_state(
             context,
             state,
@@ -1524,6 +1524,15 @@ def _answer_for_interrupt(payload: dict[str, Any]) -> str:
 def _application_id(workflow_instance_id: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9_-]+", "_", workflow_instance_id).strip("_")
     return f"application_{stem or uuid4().hex[:12]}"
+
+
+def _terminal_result_status(state: dict[str, Any]) -> str:
+    phase = state.get("phase")
+    if phase == _PHASE_FAILED:
+        return "failed"
+    if phase == _PHASE_CANCELLED:
+        return "cancelled"
+    return "completed"
 
 
 def _append_tool_call(

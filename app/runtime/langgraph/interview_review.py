@@ -815,7 +815,7 @@ class InterviewReviewWorkflowRunner:
             tool_calls=_tool_calls_from_state(state),
             memory_hits=[],
         )
-        status: Any = "failed" if state.get("phase") == _PHASE_FAILED else "completed"
+        status: Any = _terminal_result_status(state)
         if status == "failed":
             await self._persist_workflow_state(
                 context,
@@ -1543,6 +1543,15 @@ def _persisted_terminal_status(state: dict[str, Any]) -> str:
     if phase == _PHASE_FAILED:
         return WORKFLOW_STATUS_FAILED
     return WORKFLOW_STATUS_COMPLETED
+
+
+def _terminal_result_status(state: dict[str, Any]) -> str:
+    phase = _string(state.get("phase"))
+    if phase == _PHASE_FAILED:
+        return "failed"
+    if phase == _PHASE_CANCELLED:
+        return "cancelled"
+    return "completed"
 
 
 def _non_empty(value: Any, fallback: str) -> str:
