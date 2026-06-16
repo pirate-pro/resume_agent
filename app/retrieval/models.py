@@ -189,7 +189,7 @@ class RetrievalQuery:
         self.query = _normalize_text("query", self.query, allow_empty=True)
         self.session_id = _normalize_session_id("session_id", self.session_id)
         self.source_types = _normalize_source_types(self.source_types)
-        self.related_application_id = _normalize_optional_safe_id(
+        self.related_application_id = _normalize_optional_application_id(
             "related_application_id",
             self.related_application_id,
         )
@@ -334,6 +334,15 @@ def _normalize_optional_safe_id(field_name: str, value: str | None) -> str | Non
         raise ValidationError(f"{field_name} must not contain path segments.")
     if not re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,160}$").fullmatch(normalized):
         raise ValidationError(f"{field_name} has invalid format: {normalized}")
+    return normalized
+
+
+def _normalize_optional_application_id(field_name: str, value: str | None) -> str | None:
+    normalized = _normalize_optional_safe_id(field_name, value)
+    if normalized is None:
+        return None
+    if not normalized.startswith("application_"):
+        raise ValidationError(f"{field_name} must be an application_* id.")
     return normalized
 
 

@@ -136,6 +136,26 @@ def test_recovery_context_falls_back_when_no_grounded_facts() -> None:
     assert context.messages[-1]["content"] == "请补最终答复"
 
 
+def test_finalization_packet_event_payload_can_mark_deterministic_answer() -> None:
+    packet = build_finalization_packet(
+        messages=[],
+        original_user_message="保存笔记",
+        pending_runtime_plan={
+            "phase": "rag_note_write",
+            "final_answer_ready": True,
+            "known_refs": {"note_id": "note_alpha"},
+        },
+    )
+
+    payload = packet.to_event_payload(
+        used_for_recovery=False,
+        fallback_reason="deterministic_final_answer",
+    )
+
+    assert payload["used_for_recovery"] is False
+    assert payload["fallback_reason"] == "deterministic_final_answer"
+
+
 def test_finalization_packet_filters_orchestration_refs() -> None:
     messages = [
         {

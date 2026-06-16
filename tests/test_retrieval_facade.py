@@ -15,6 +15,7 @@ from app.retrieval.facade import (
     retrieval_search_payload,
     retrieval_tool_input_from_arguments,
 )
+from app.retrieval.models import RetrievalQuery
 from tests.test_retrieval_service import _seed_stores, _service
 
 __all__ = []
@@ -26,6 +27,25 @@ def test_retrieval_facade_rejects_model_owned_session_and_path_fields() -> None:
 
     with pytest.raises(ValidationError, match="Path arguments are not allowed"):
         retrieval_tool_input_from_arguments({"query": "星河智能", "file_path": "/tmp/source.txt"})
+
+
+def test_retrieval_facade_drops_non_application_related_ref() -> None:
+    tool_input = retrieval_tool_input_from_arguments(
+        {
+            "query": "匹配短板学习任务",
+            "related_application_id": "fit_alpha",
+            "source_types": ["career", "learning"],
+        }
+    )
+    request = build_retrieval_query(tool_input, principal=RetrievalPrincipal(session_id="sess_alpha"))
+
+    assert tool_input.related_application_id is None
+    assert request.related_application_id is None
+
+
+def test_retrieval_query_requires_application_related_ref() -> None:
+    with pytest.raises(ValidationError, match="application_\\* id"):
+        RetrievalQuery(query="匹配短板", session_id="sess_alpha", related_application_id="fit_alpha")
 
 
 def test_retrieval_facade_expands_external_query_without_session_artifacts() -> None:

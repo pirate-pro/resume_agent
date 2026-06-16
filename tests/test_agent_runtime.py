@@ -127,6 +127,25 @@ def _build_runtime(
     return runtime, session_repo, memory_manager
 
 
+def _assert_resume_version_deterministic_answer(answer: str) -> None:
+    assert "定制简历版本生成已完成" in answer
+    assert "CareerApplication: `application_alpha`" in answer
+    assert "ResumeVersion: `resume_version_alpha`" in answer
+
+
+def _assert_interview_review_deterministic_answer(answer: str) -> None:
+    assert "面试复盘更新已完成" in answer
+    assert "CareerApplication: `application_alpha`" in answer
+    assert "Note: `note_alpha`" in answer
+
+
+def _assert_deterministic_finalization_packet(events: list[EventRecord]) -> None:
+    packets = [event.payload for event in events if event.type == "finalization_packet"]
+    assert packets
+    assert packets[-1]["used_for_recovery"] is False
+    assert packets[-1]["fallback_reason"] == "deterministic_final_answer"
+
+
 
 def test_runtime_without_tool_calls_finishes(tmp_path: Path) -> None:
     runtime, session_repo, _ = _build_runtime(tmp_path, StaticModelClient(content="hello"))
@@ -1556,6 +1575,170 @@ def test_runtime_search_disclosure_does_not_charge_schema_search_against_tool_ro
     assert model.calls == 3
 
 
+def test_runtime_keeps_suppressing_hidden_retrieval_after_rag_context_pack(tmp_path: Path) -> None:
+    class RetrievalSearchTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="retrieval_search",
+                description="Search saved context.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="retrieval_search",
+                success=True,
+                content=json.dumps({"query": "匹配短板", "count": 1, "hits": []}, ensure_ascii=False),
+            )
+
+    class RetrievalContextPackTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="retrieval_context_pack",
+                description="Build context pack.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="retrieval_context_pack",
+                success=True,
+                content=json.dumps(
+                    {
+                        "query": "匹配短板",
+                        "count": 1,
+                        "context_pack": {
+                            "hits": [
+                                {
+                                    "source": {"source_type": "job_fit_report", "source_id": "fit_alpha"},
+                                    "summary": "RAG 评估指标表达需要加强。",
+                                }
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class LearningTaskCreateTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="learning_task_create",
+                description="Create learning task.",
+                parameters_schema={"type": "object", "properties": {"title": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="learning_task_create",
+                success=True,
+                content=json.dumps(
+                    {"record_type": "learning_task", "record_id": "learning_task_alpha"},
+                    ensure_ascii=False,
+                ),
+            )
+
+    class RepeatedHiddenRetrievalModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                assert tool_names == {"retrieval_search"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="retrieval_search", arguments={"query": "匹配短板"})],
+                )
+            if self.calls == 2:
+                assert tool_names == {"retrieval_context_pack"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="retrieval_search",
+                            arguments={"query": "匹配短板", "source_types": '["career"]', "top_k": "10"},
+                        )
+                    ],
+                )
+            if self.calls == 3:
+                assert tool_names == {"learning_task_create"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="retrieval_search", arguments={"query": "再搜一次"})],
+                )
+            if self.calls == 4:
+                assert tool_names == {"learning_task_create"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="retrieval_context_pack", arguments={"query": "再组一次"})],
+                )
+            if self.calls == 5:
+                assert tool_names == {"learning_task_create"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="retrieval_search", arguments={"query": "第三次检索"})],
+                )
+            assert tool_names == {"learning_task_create"}
+            return ModelResponse(
+                content="",
+                tool_calls=[ToolCall(name="learning_task_create", arguments={"title": "补强 RAG 评估"})],
+            )
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    model = RepeatedHiddenRetrievalModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[RetrievalSearchTool(), RetrievalContextPackTool(), LearningTaskCreateTool()],
+        tool_schema_disclosure_mode="search",
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_rag_learning_hidden_retrieval_suppressed",
+            user_message="根据之前的匹配短板创建今天的学习任务。",
+            skill_names=["base", "tools"],
+            max_tool_rounds=6,
+            context=_context("sess_rag_learning_hidden_retrieval_suppressed"),
+        )
+    )
+
+    events = session_repo.list_events("sess_rag_learning_hidden_retrieval_suppressed")
+    tool_results = [event.payload for event in events if event.type == "tool_result"]
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+
+    assert "学习任务已创建" in output.answer
+    assert model.calls == 6
+    assert [item["tool_name"] for item in tool_results] == [
+        "retrieval_search",
+        "retrieval_context_pack",
+        "learning_task_create",
+    ]
+    assert not any("tool_hidden_by_runtime_plan" in item.get("content", "") for item in tool_results)
+    assert any(item.get("suppression_budget_exceeded") is True for item in decisions)
+
+
 def test_runtime_search_disclosure_resets_schema_budget_after_business_tool(tmp_path: Path) -> None:
     class RetrievalTool:
         def definition(self) -> ToolDefinition:
@@ -2285,20 +2468,22 @@ def test_runtime_requires_application_merge_after_resume_version_success(tmp_pat
         )
     )
 
-    assert output.answer == "定制简历已生成并关联项目。"
-    assert model.calls == 4
+    _assert_resume_version_deterministic_answer(output.answer)
+    assert model.calls == 3
+    events = session_repo.list_events("sess_resume_version_then_merge")
     tool_calls = [
         event.payload["name"]
-        for event in session_repo.list_events("sess_resume_version_then_merge")
+        for event in events
         if event.type == "tool_call"
     ]
     assert tool_calls == ["career_resume_version_create", "career_application_merge"]
     decisions = [
         event.payload
-        for event in session_repo.list_events("sess_resume_version_then_merge")
+        for event in events
         if event.type == "workflow_runtime_decision"
     ]
     assert decisions[0]["reason"] == "premature_final_answer_with_pending_runtime_tools"
+    _assert_deterministic_finalization_packet(events)
 
 
 def test_runtime_auto_executes_strict_required_tool_when_hidden_read_is_called(tmp_path: Path) -> None:
@@ -2407,7 +2592,7 @@ def test_runtime_auto_executes_strict_required_tool_when_hidden_read_is_called(t
         )
     )
 
-    assert output.answer == "定制简历已生成并关联项目。"
+    _assert_resume_version_deterministic_answer(output.answer)
     events = session_repo.list_events("sess_strict_auto_required_tool")
     tool_results = [event.payload for event in events if event.type == "tool_result"]
     assert [item["tool_name"] for item in tool_results] == [
@@ -2418,6 +2603,7 @@ def test_runtime_auto_executes_strict_required_tool_when_hidden_read_is_called(t
     decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
     assert any(item["reason"] == "strict_hidden_tool_replaced_with_required_tool" for item in decisions)
     assert any(item["reason"] == "workflow_final_answer_ready" for item in decisions)
+    _assert_deterministic_finalization_packet(events)
 
 
 def test_runtime_deterministic_final_fallback_lists_completed_refs(tmp_path: Path) -> None:
@@ -2537,7 +2723,7 @@ def test_runtime_deterministic_final_fallback_lists_completed_refs(tmp_path: Pat
     assert "ResumeVersion: `resume_version_alpha`" in output.answer
     assert "CareerApplication: `application_alpha`" in output.answer
     assert "模型没有生成可用总结" not in output.answer
-    assert model.calls == 3
+    assert model.calls == 2
     decisions = [
         event.payload
         for event in session_repo.list_events("sess_deterministic_completed_fallback")
@@ -2546,7 +2732,7 @@ def test_runtime_deterministic_final_fallback_lists_completed_refs(tmp_path: Pat
     assert any(item["reason"] == "workflow_final_answer_ready" for item in decisions)
 
 
-def test_runtime_rejects_weak_answer_after_workflow_is_complete(tmp_path: Path) -> None:
+def test_runtime_skips_weak_recovery_after_workflow_is_complete(tmp_path: Path) -> None:
     class ResumeVersionTool:
         def definition(self) -> ToolDefinition:
             return ToolDefinition(
@@ -2664,13 +2850,16 @@ def test_runtime_rejects_weak_answer_after_workflow_is_complete(tmp_path: Path) 
         )
     )
 
-    assert output.answer == "定制简历已生成并关联项目。"
-    rejected = [
-        event.payload
-        for event in session_repo.list_events("sess_weak_completed_workflow_answer")
-        if event.type == "assistant_answer_rejected"
-    ]
-    assert any(item["reason"] == "weak_completed_workflow_answer" for item in rejected)
+    assert "定制简历版本生成已完成" in output.answer
+    assert "ResumeVersion: `resume_version_alpha`" in output.answer
+    assert "CareerApplication: `application_alpha`" in output.answer
+    assert model.calls == 2
+    events = session_repo.list_events("sess_weak_completed_workflow_answer")
+    rejected = [event.payload for event in events if event.type == "assistant_answer_rejected"]
+    assert rejected == []
+    packets = [event.payload for event in events if event.type == "finalization_packet"]
+    assert packets[-1]["used_for_recovery"] is False
+    assert packets[-1]["fallback_reason"] == "deterministic_final_answer"
 
 
 def test_runtime_suppresses_hidden_read_when_required_tool_is_visible(tmp_path: Path) -> None:
@@ -2855,7 +3044,7 @@ def test_runtime_suppresses_hidden_read_when_required_tool_is_visible(tmp_path: 
         )
     )
 
-    assert output.answer == "定制简历已生成并关联项目。"
+    _assert_resume_version_deterministic_answer(output.answer)
     events = session_repo.list_events("sess_hidden_read_suppressed_required_visible")
     tool_calls = [event.payload["name"] for event in events if event.type == "tool_call"]
     assert tool_calls == [
@@ -2871,6 +3060,7 @@ def test_runtime_suppresses_hidden_read_when_required_tool_is_visible(tmp_path: 
     )
     decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
     assert any(item["reason"] == "strict_hidden_tool_replaced_with_required_tool" for item in decisions)
+    _assert_deterministic_finalization_packet(events)
 
 
 def test_runtime_auto_executes_resume_version_safe_fallback_on_premature_answer(tmp_path: Path) -> None:
@@ -3055,7 +3245,7 @@ def test_runtime_auto_executes_resume_version_safe_fallback_on_premature_answer(
         )
     )
 
-    assert output.answer == "定制简历已生成并关联项目。"
+    _assert_resume_version_deterministic_answer(output.answer)
     events = session_repo.list_events("sess_resume_version_auto_safe_fallback")
     tool_results = [event.payload["tool_name"] for event in events if event.type == "tool_result"]
     assert tool_results == [
@@ -3066,6 +3256,7 @@ def test_runtime_auto_executes_resume_version_safe_fallback_on_premature_answer(
     ]
     decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
     assert any(item["reason"] == "strict_premature_answer_replaced_with_required_tool" for item in decisions)
+    _assert_deterministic_finalization_packet(events)
 
 
 def test_runtime_executor_runs_resume_version_project_action_without_tool_loop(tmp_path: Path) -> None:
@@ -3615,23 +3806,24 @@ def test_runtime_breaks_repeated_schema_search_after_resume_version_pending_merg
         )
     )
 
-    assert output.answer == "定制简历已生成并关联项目。"
-    assert model.calls == 6
+    _assert_resume_version_deterministic_answer(output.answer)
+    assert model.calls == 5
+    events = session_repo.list_events("sess_resume_version_search_then_merge")
     tool_calls = [
         event.payload["name"]
-        for event in session_repo.list_events("sess_resume_version_search_then_merge")
+        for event in events
         if event.type == "tool_call"
     ]
     assert tool_calls == ["career_resume_version_create", "career_application_merge"]
     hidden_search_results = [
         event
-        for event in session_repo.list_events("sess_resume_version_search_then_merge")
+        for event in events
         if event.type == "tool_result" and event.payload["tool_name"] == "tool_search"
     ]
     assert hidden_search_results == []
     decisions = [
         event.payload
-        for event in session_repo.list_events("sess_resume_version_search_then_merge")
+        for event in events
         if event.type == "workflow_runtime_decision"
     ]
     assert [item["reason"] for item in decisions] == [
@@ -3640,6 +3832,7 @@ def test_runtime_breaks_repeated_schema_search_after_resume_version_pending_merg
         "schema_search_suppressed_required_tool_visible",
         "workflow_final_answer_ready",
     ]
+    _assert_deterministic_finalization_packet(events)
 
 
 def test_gateway_runtime_allows_one_schema_search_correction_before_stagnation(tmp_path: Path) -> None:
@@ -3762,11 +3955,12 @@ def test_gateway_runtime_allows_one_schema_search_correction_before_stagnation(t
         )
     )
 
-    assert output.answer == "定制简历已生成并关联项目。"
-    assert model.calls == 4
+    _assert_resume_version_deterministic_answer(output.answer)
+    assert model.calls == 3
+    events = session_repo.list_events("sess_gateway_schema_search_correction")
     tool_calls = [
         event.payload["name"]
-        for event in session_repo.list_events("sess_gateway_schema_search_correction")
+        for event in events
         if event.type == "tool_call"
     ]
     assert tool_calls == [
@@ -3775,11 +3969,12 @@ def test_gateway_runtime_allows_one_schema_search_correction_before_stagnation(t
     ]
     decisions = [
         event.payload
-        for event in session_repo.list_events("sess_gateway_schema_search_correction")
+        for event in events
         if event.type == "workflow_runtime_decision"
     ]
     assert any(item.get("reason") == "schema_search_suppressed_required_tool_visible" for item in decisions)
     assert not any(item.get("reason") == "tool_loop_stagnation" for item in decisions)
+    _assert_deterministic_finalization_packet(events)
 
 
 def test_runtime_auto_executes_interview_review_application_merge_after_repeated_schema_search(
@@ -3914,7 +4109,8 @@ def test_runtime_auto_executes_interview_review_application_merge_after_repeated
         )
     )
 
-    assert output.answer == "面试复盘已保存并更新到求职项目。"
+    _assert_interview_review_deterministic_answer(output.answer)
+    events = session_repo.list_events("sess_interview_review_schema_search_auto_merge")
     assert search_tool.calls == 1
     assert len(merge_tool.calls) == 1
     merge_args = merge_tool.calls[0]
@@ -3925,17 +4121,18 @@ def test_runtime_auto_executes_interview_review_application_merge_after_repeated
     assert "application_alpha" in merge_args["evidence_refs"]
     tool_calls = [
         event.payload["name"]
-        for event in session_repo.list_events("sess_interview_review_schema_search_auto_merge")
+        for event in events
         if event.type == "tool_call"
     ]
     assert tool_calls == ["tool_search", "career_application_merge"]
     decisions = [
         event.payload
-        for event in session_repo.list_events("sess_interview_review_schema_search_auto_merge")
+        for event in events
         if event.type == "workflow_runtime_decision"
     ]
     assert any(item.get("reason") == "schema_search_suppressed_required_tool_visible" for item in decisions)
     assert any(item.get("reason") == "strict_schema_search_replaced_with_required_tool" for item in decisions)
+    _assert_deterministic_finalization_packet(events)
 
 
 def test_runtime_replaces_malformed_same_name_interview_review_merge_args(tmp_path: Path) -> None:
@@ -4081,8 +4278,8 @@ def test_runtime_replaces_malformed_same_name_interview_review_merge_args(tmp_pa
         )
     )
 
-    assert output.answer == "面试复盘已保存并更新到求职项目。"
-    assert model.calls == 3
+    _assert_interview_review_deterministic_answer(output.answer)
+    assert model.calls == 2
     assert len(merge_tool.calls) == 1
     merge_args = merge_tool.calls[0]
     assert merge_args["application_id"] == "application_alpha"
@@ -4106,6 +4303,7 @@ def test_runtime_replaces_malformed_same_name_interview_review_merge_args(tmp_pa
     assert tool_calls[-1]["auto_executed"] is True
     decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
     assert any(item.get("reason") == "required_tool_arguments_replaced_by_action_payload" for item in decisions)
+    _assert_deterministic_finalization_packet(events)
     tool_results = [event.payload for event in events if event.type == "tool_result"]
     assert not any("tool_hidden_by_runtime_plan" in str(item.get("content", "")) for item in tool_results)
 

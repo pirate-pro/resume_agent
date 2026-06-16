@@ -127,8 +127,16 @@ class FinalizationPacket:
             }
         )
 
-    def to_event_payload(self, *, used_for_recovery: bool) -> dict[str, Any]:
+    def to_event_payload(
+        self,
+        *,
+        used_for_recovery: bool,
+        fallback_reason: str | None = None,
+    ) -> dict[str, Any]:
         payload = self.to_payload()
+        resolved_fallback_reason = fallback_reason
+        if resolved_fallback_reason is None and not used_for_recovery:
+            resolved_fallback_reason = "no_grounded_facts"
         return {
             "used_for_recovery": used_for_recovery,
             "phase": self.phase,
@@ -139,7 +147,7 @@ class FinalizationPacket:
             "known_ref_keys": sorted(self.known_refs),
             "fact_count": len(self.facts),
             "packet_estimate_tokens": estimate_tokens_from_object(payload),
-            "fallback_reason": None if used_for_recovery else "no_grounded_facts",
+            "fallback_reason": resolved_fallback_reason,
         }
 
 

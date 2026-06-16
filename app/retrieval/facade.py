@@ -31,6 +31,17 @@ _RETRIEVAL_ARGUMENT_FIELDS = {
 }
 _PATH_FIELDS = {"path", "file_path", "workspace_path", "absolute_path", "relative_path"}
 _STORE_OWNED_FIELDS = {"created_at", "updated_at", "source_session_id", "status", "session_id"}
+_NON_APPLICATION_REF_PREFIXES = (
+    "artifact_",
+    "career_profile_",
+    "fit_",
+    "jd_",
+    "job_fit_report_",
+    "learning_task_",
+    "note_",
+    "resume_profile_",
+    "resume_version_",
+)
 _SOURCE_TYPE_GROUP_ALIASES = {
     "career": (
         RetrievalSourceType.CAREER_APPLICATION,
@@ -152,7 +163,7 @@ def retrieval_tool_input_from_arguments(arguments: dict[str, Any]) -> RetrievalT
     return RetrievalToolInput(
         query=_required_string(args.get("query"), field_name="query"),
         source_types=_source_types(args.get("source_types")),
-        related_application_id=_optional_string(args.get("related_application_id")),
+        related_application_id=_optional_related_application_id(args.get("related_application_id")),
         top_k=_optional_int(args.get("top_k"), field_name="top_k", default=8),
         max_chars=_optional_int(args.get("max_chars"), field_name="max_chars", default=12000),
         include_archived=_optional_bool(args.get("include_archived")),
@@ -175,7 +186,7 @@ def build_retrieval_query(tool_input: RetrievalToolInput, *, principal: Retrieva
         query=_required_string(tool_input.query, field_name="query"),
         session_id=principal.session_id or _DEFAULT_EXTERNAL_SESSION_ID,
         source_types=source_types,
-        related_application_id=_optional_string(tool_input.related_application_id),
+        related_application_id=_optional_related_application_id(tool_input.related_application_id),
         top_k=_optional_int(tool_input.top_k, field_name="top_k", default=8),
         max_chars=_optional_int(tool_input.max_chars, field_name="max_chars", default=12000),
         include_archived=_optional_bool(tool_input.include_archived),
@@ -260,6 +271,17 @@ def _optional_string(raw: Any) -> str | None:
         raise ValidationError("optional string argument must be a string.")
     normalized = raw.strip()
     return normalized or None
+
+
+def _optional_related_application_id(raw: Any) -> str | None:
+    normalized = _optional_string(raw)
+    if normalized is None:
+        return None
+    if normalized.startswith("application_"):
+        return normalized
+    if normalized.startswith(_NON_APPLICATION_REF_PREFIXES):
+        return None
+    raise ValidationError("'related_application_id' must be an application_* id.")
 
 
 def _source_types(raw: Any) -> list[str]:

@@ -22,6 +22,7 @@ from app.runtime.agent import (
     ToolExecutionRunner,
     ToolGateway,
     MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN,
+    FinalizationPacket,
     build_assistant_tool_call_message,
     build_final_answer_recovery_context,
     build_tool_result_message,
@@ -79,6 +80,13 @@ _MAX_NO_PROGRESS_OBSERVATIONS = 3
 _MAX_REPEATED_NO_PROGRESS_FINGERPRINTS = 2
 _MAX_REPEATED_ERROR_SIGNATURES = 2
 _MAX_SCHEMA_SEARCH_WITHOUT_NEW_REVEAL = 2
+_DETERMINISTIC_COMPLETED_WORKFLOW_PHASES = {
+    "interview_review_update",
+    "note_write",
+    "rag_learning_task_create",
+    "rag_note_write",
+    "resume_version",
+}
 _MAX_SUPPRESSED_REQUIRED_SCHEMA_SEARCH_RETRY_ROUNDS = 1
 _TEXT_TOOL_INVOCATION_RE = re.compile(r"^\s*<tool_invocation\b[^>]*?/>\s*$", re.IGNORECASE | re.DOTALL)
 _TEXT_TOOL_CALL_MARKUP_RE = re.compile(
@@ -596,6 +604,23 @@ class AgentRuntime:
                 )
                 suppression_count = hidden_runtime_tool_suppression_counts.get(suppression_key, 0)
                 if suppression_count >= MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN:
+                    if strict_runtime_tool_mode:
+                        hidden_runtime_tool_suppression_counts[suppression_key] = suppression_count + 1
+                        self._event_recorder.record(
+                            context=run_context,
+                            event_type="workflow_runtime_decision",
+                            payload={
+                                "policy": "suppress",
+                                "reason": "hidden_tools_suppressed_required_tool_visible",
+                                "runtime_plan": pending_runtime_plan,
+                                "blocked_tools": hidden_runtime_tool_names,
+                                "reminder_index": suppression_count + 1,
+                                "suppression_budget_exceeded": True,
+                            },
+                        )
+                        tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
+                        round_index += 1
+                        continue
                     self._event_recorder.record(
                         context=run_context,
                         event_type="workflow_runtime_decision",
@@ -988,8 +1013,13 @@ class AgentRuntime:
                         "schema_search_rounds": schema_search_rounds,
                     },
                 )
-                if _skip_final_answer_recovery(pending_runtime_plan):
-                    answer = _deterministic_final_answer_fallback(pending_runtime_plan)
+                if _use_deterministic_completed_workflow_answer(pending_runtime_plan):
+                    answer = self._deterministic_completed_workflow_answer_sync(
+                        run_context=run_context,
+                        messages=tool_context_window.render_messages(),
+                        original_user_message=run_input.user_message,
+                        pending_runtime_plan=pending_runtime_plan,
+                    )
                 else:
                     answer = self._recover_final_answer(
                         run_context=run_context,
@@ -998,7 +1028,7 @@ class AgentRuntime:
                         original_user_message=run_input.user_message,
                         pending_runtime_plan=pending_runtime_plan,
                     )
-                answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
+                    answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
             if terminal_workflow_results and all(terminal_workflow_results):
                 answer = self._recover_final_answer(
@@ -2738,6 +2768,24 @@ class AgentRuntime:
                 )
                 suppression_count = hidden_runtime_tool_suppression_counts.get(suppression_key, 0)
                 if suppression_count >= MAX_HIDDEN_RUNTIME_TOOL_SUPPRESSIONS_PER_PLAN:
+                    if strict_runtime_tool_mode:
+                        hidden_runtime_tool_suppression_counts[suppression_key] = suppression_count + 1
+                        await self._event_recorder.record_async(
+                            context=run_context,
+                            event_type="workflow_runtime_decision",
+                            payload={
+                                "policy": "suppress",
+                                "reason": "hidden_tools_suppressed_required_tool_visible",
+                                "runtime_plan": pending_runtime_plan,
+                                "blocked_tools": hidden_runtime_tool_names,
+                                "reminder_index": suppression_count + 1,
+                                "suppression_budget_exceeded": True,
+                            },
+                            channel=channel,
+                        )
+                        tool_context_window.append_runtime_notice(runtime_plan_notice(pending_runtime_plan))
+                        round_index += 1
+                        continue
                     await self._event_recorder.record_async(
                         context=run_context,
                         event_type="workflow_runtime_decision",
@@ -3146,8 +3194,15 @@ class AgentRuntime:
                     },
                     channel=channel,
                 )
-                if _skip_final_answer_recovery(pending_runtime_plan):
-                    answer = _deterministic_final_answer_fallback(pending_runtime_plan)
+                if _use_deterministic_completed_workflow_answer(pending_runtime_plan):
+                    answer = await self._deterministic_completed_workflow_answer_stream(
+                        run_context=run_context,
+                        messages=tool_context_window.render_messages(),
+                        original_user_message=run_input.user_message,
+                        previous_tool_calls=used_tool_calls,
+                        channel=channel,
+                        pending_runtime_plan=pending_runtime_plan,
+                    )
                 else:
                     answer = await self._recover_final_answer_stream(
                         run_context=run_context,
@@ -3158,7 +3213,7 @@ class AgentRuntime:
                         channel=channel,
                         pending_runtime_plan=pending_runtime_plan,
                     )
-                answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
+                    answer = answer or _deterministic_final_answer_fallback(pending_runtime_plan)
                 break
             if terminal_workflow_results and all(terminal_workflow_results):
                 answer = await self._recover_final_answer_stream(
@@ -3337,6 +3392,33 @@ class AgentRuntime:
             )
         return _deterministic_final_answer_fallback(pending_runtime_plan)
 
+    def _deterministic_completed_workflow_answer_sync(
+        self,
+        *,
+        run_context: RunContext,
+        messages: list[dict[str, Any]],
+        original_user_message: str,
+        pending_runtime_plan: dict[str, Any] | None,
+    ) -> str:
+        recovery_context = build_final_answer_recovery_context(
+            messages=messages,
+            original_user_message=original_user_message,
+            recovery_prompt=FINAL_ANSWER_RECOVERY_PROMPT,
+            pending_runtime_plan=pending_runtime_plan,
+        )
+        packet = recovery_context.packet
+        self._event_recorder.record(
+            context=run_context,
+            event_type="finalization_packet",
+            payload=packet.to_event_payload(
+                used_for_recovery=False,
+                fallback_reason="deterministic_final_answer" if packet.has_grounding else None,
+            ),
+        )
+        return _deterministic_final_answer_from_packet(packet) or _deterministic_final_answer_fallback(
+            pending_runtime_plan
+        )
+
     async def _sanitize_final_answer_stream(
         self,
         *,
@@ -3388,6 +3470,45 @@ class AgentRuntime:
                 channel=channel,
             )
         return _deterministic_final_answer_fallback(pending_runtime_plan)
+
+    async def _deterministic_completed_workflow_answer_stream(
+        self,
+        *,
+        run_context: RunContext,
+        messages: list[dict[str, Any]],
+        original_user_message: str,
+        previous_tool_calls: list[ToolCall],
+        channel: EventChannel,
+        pending_runtime_plan: dict[str, Any] | None,
+    ) -> str:
+        recovery_context = build_final_answer_recovery_context(
+            messages=messages,
+            original_user_message=original_user_message,
+            recovery_prompt=FINAL_ANSWER_RECOVERY_PROMPT,
+            pending_runtime_plan=pending_runtime_plan,
+        )
+        packet = recovery_context.packet
+        await self._event_recorder.record_async(
+            context=run_context,
+            event_type="finalization_packet",
+            payload=packet.to_event_payload(
+                used_for_recovery=False,
+                fallback_reason="deterministic_final_answer" if packet.has_grounding else None,
+            ),
+            channel=channel,
+        )
+        answer = _deterministic_final_answer_from_packet(packet) or _deterministic_final_answer_fallback(
+            pending_runtime_plan
+        )
+        if answer:
+            await self._emit_stream_answer_meta_if_changed(
+                channel=channel,
+                content=answer,
+                tool_calls=previous_tool_calls,
+                previous_meta=None,
+            )
+            await channel.emit("answer_delta", {"delta": answer})
+        return answer
 
     def _recover_final_answer(
         self,
@@ -4129,7 +4250,8 @@ def _visible_tool_definitions_for_runtime_plan(
         return []
     next_allowed_tools = set(runtime_plan_next_allowed_tools(pending_runtime_plan))
     if next_allowed_tools:
-        return [definition for definition in visible_definitions if definition.name in next_allowed_tools]
+        allowed_definitions = [definition for definition in visible_definitions if definition.name in next_allowed_tools]
+        return allowed_definitions or visible_definitions
     required_tool_is_visible = any(
         tool_reveal_state.is_visible(tool_name) for tool_name in runtime_plan_completion_tools(pending_runtime_plan)
     )
@@ -4185,8 +4307,11 @@ def _is_final_answer_ready_runtime_plan(pending_runtime_plan: dict[str, Any] | N
     return pending_runtime_plan is not None and pending_runtime_plan.get("final_answer_ready") is True
 
 
-def _skip_final_answer_recovery(pending_runtime_plan: dict[str, Any] | None) -> bool:
-    return pending_runtime_plan is not None and pending_runtime_plan.get("phase") == "note_write"
+def _use_deterministic_completed_workflow_answer(pending_runtime_plan: dict[str, Any] | None) -> bool:
+    if pending_runtime_plan is None or pending_runtime_plan.get("final_answer_ready") is not True:
+        return False
+    phase = pending_runtime_plan.get("phase")
+    return isinstance(phase, str) and phase in _DETERMINISTIC_COMPLETED_WORKFLOW_PHASES
 
 
 def _hard_model_round_limit(max_tool_rounds: int) -> int:
@@ -4255,6 +4380,23 @@ def _deterministic_final_answer_fallback(pending_runtime_plan: dict[str, Any] | 
     return "当前没有生成可用的最终答复。我已停止继续执行重复步骤，避免无效消耗；请补充关键信息后再试。"
 
 
+def _deterministic_final_answer_from_packet(packet: FinalizationPacket) -> str:
+    if not packet.has_grounding:
+        return ""
+    phase_name = _workflow_phase_display_name(packet.phase)
+    lines = [f"{phase_name}已完成，关键产物已经写入系统。"]
+    ref_lines = _finalization_packet_ref_summary_lines(packet)
+    if ref_lines:
+        lines.append("")
+        lines.append("产物清单：")
+        lines.extend(ref_lines)
+    next_step = _workflow_completed_next_step(packet.phase)
+    if next_step:
+        lines.append("")
+        lines.append(next_step)
+    return "\n".join(lines)
+
+
 def _deterministic_completed_workflow_answer(pending_runtime_plan: dict[str, Any]) -> str:
     phase = pending_runtime_plan.get("phase")
     if phase == "note_write":
@@ -4292,6 +4434,45 @@ def _workflow_phase_display_name(phase: Any) -> str:
     if phase == "application_action":
         return "求职项目更新"
     return "当前阶段"
+
+
+def _finalization_packet_ref_summary_lines(packet: FinalizationPacket) -> list[str]:
+    output = _workflow_ref_summary_lines(packet.known_refs)
+    seen = _known_ref_values(packet.known_refs)
+    for ref in [*packet.product_refs, *packet.artifact_refs]:
+        if ref in seen:
+            continue
+        output.append(f"- {_ref_display_label(ref)}: `{ref}`")
+        seen.add(ref)
+    return output
+
+
+def _known_ref_values(known_refs: dict[str, Any]) -> set[str]:
+    return {value.strip() for value in known_refs.values() if isinstance(value, str) and value.strip()}
+
+
+def _ref_display_label(ref: str) -> str:
+    if ref.startswith("application_"):
+        return "CareerApplication"
+    if ref.startswith("resume_version_"):
+        return "ResumeVersion"
+    if ref.startswith("resume_profile_"):
+        return "ResumeProfile"
+    if ref.startswith("career_profile_"):
+        return "CareerProfile"
+    if ref.startswith("jd_") or ref.startswith("jd_analysis_"):
+        return "JDAnalysis"
+    if ref.startswith("fit_"):
+        return "JobFitReport"
+    if ref.startswith("note_"):
+        return "Note"
+    if ref.startswith("learning_task_"):
+        return "LearningTask"
+    if ref.startswith("learning_plan_"):
+        return "LearningPlan"
+    if ref.startswith("artifact_"):
+        return "Artifact"
+    return "记录"
 
 
 def _workflow_completed_next_step(phase: Any) -> str | None:
