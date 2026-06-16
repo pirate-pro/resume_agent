@@ -1,6 +1,6 @@
 # M62 LangGraph 多 Agent 编排迁移方案
 
-> 状态：待审核。本文只定义方案，不修改 `AgentTaskRuntime`、`delegate_agents`、LangGraph runner 或前端代码。
+> 状态：已按本方案完成首轮实现，待代码审阅与合并。实现与验证记录见 `docs/m62_langgraph_multi_agent_orchestration_report.md`。
 
 ## 1. 背景
 
