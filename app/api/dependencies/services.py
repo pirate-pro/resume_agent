@@ -147,6 +147,7 @@ def get_rag_note_workflow_runner() -> RagNoteWorkflowRunner:
         checkpoint_backend=settings.langgraph_workflow_backend,
         checkpoint_path=settings.langgraph_checkpoint_path,
         node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+        draft_node_timeout_seconds=settings.resolved_langgraph_draft_node_timeout_seconds(),
         node_retry_attempts=settings.langgraph_node_retry_attempts,
     )
 
@@ -162,6 +163,7 @@ def get_interview_review_workflow_runner() -> InterviewReviewWorkflowRunner:
         checkpoint_backend=settings.langgraph_workflow_backend,
         checkpoint_path=settings.langgraph_checkpoint_path,
         node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+        draft_node_timeout_seconds=settings.resolved_langgraph_draft_node_timeout_seconds(),
         node_retry_attempts=settings.langgraph_node_retry_attempts,
     )
 

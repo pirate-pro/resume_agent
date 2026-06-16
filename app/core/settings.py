@@ -21,6 +21,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    def resolved_langgraph_draft_node_timeout_seconds(self) -> float:
+        """Return the effective timeout for interactive draft-generation nodes."""
+
+        if self.langgraph_draft_node_timeout_seconds is not None:
+            return float(self.langgraph_draft_node_timeout_seconds)
+        stream_budget = max(self.chat_stream_run_timeout_seconds - 30.0, self.langgraph_node_timeout_seconds)
+        return float(max(self.langgraph_node_timeout_seconds, stream_budget))
+
     app_name: str = Field(default="single-agent-runtime", validation_alias=AliasChoices("APP_NAME"))
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG"))
     data_dir: Path = Field(default=Path("data"), validation_alias=AliasChoices("DATA_DIR"))
@@ -139,6 +147,10 @@ class Settings(BaseSettings):
     langgraph_node_timeout_seconds: float = Field(
         default=90.0,
         validation_alias=AliasChoices("LANGGRAPH_NODE_TIMEOUT_SECONDS"),
+    )
+    langgraph_draft_node_timeout_seconds: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LANGGRAPH_DRAFT_NODE_TIMEOUT_SECONDS"),
     )
     langgraph_node_retry_attempts: int = Field(
         default=3,
@@ -287,13 +299,13 @@ class Settings(BaseSettings):
             raise ValidationError("LLM timeout must be positive.")
         return value
 
-    @field_validator("maintenance_llm_timeout_seconds")
+    @field_validator("maintenance_llm_timeout_seconds", "langgraph_draft_node_timeout_seconds")
     @classmethod
     def _validate_optional_timeout(cls, value: float | None) -> float | None:
         if value is None:
             return None
         if value <= 0:
-            raise ValidationError("MAINTENANCE_LLM_TIMEOUT_SECONDS must be positive.")
+            raise ValidationError("optional timeout configuration values must be positive.")
         return value
 
     @field_validator("chat_stream_heartbeat_interval_seconds")

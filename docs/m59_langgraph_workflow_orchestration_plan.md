@@ -634,10 +634,16 @@ LANGGRAPH_CHECKPOINT_PATH=data/langgraph/checkpoints.sqlite
 LANGGRAPH_INTERACTIVE_NOTE_ENABLED=false
 LANGGRAPH_INTERACTIVE_INTERVIEW_REVIEW_ENABLED=false
 LANGGRAPH_NODE_TIMEOUT_SECONDS=90
+LANGGRAPH_DRAFT_NODE_TIMEOUT_SECONDS=270
 LANGGRAPH_NODE_RETRY_ATTEMPTS=3
 ```
 
 默认先关闭，开发验证通过后再打开特定 workflow。
+
+说明：
+
+- `LANGGRAPH_NODE_TIMEOUT_SECONDS` 用于检索、写入等普通节点，保持短超时和快速失败。
+- `LANGGRAPH_DRAFT_NODE_TIMEOUT_SECONDS` 只用于交互式草稿生成节点，例如 `draft_note` / `draft_review_update`。如果未显式配置，服务注入层会从 `CHAT_STREAM_RUN_TIMEOUT_SECONDS` 派生一个略低于外层 stream timeout 的值，避免 90 秒草稿节点超时触发多次无效重试。
 
 ## 13. 实施计划
 

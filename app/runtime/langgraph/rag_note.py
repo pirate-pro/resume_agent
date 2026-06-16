@@ -104,6 +104,7 @@ class RagNoteWorkflowRunner:
         checkpoint_backend: str = "memory",
         checkpoint_path: Path | None = None,
         node_timeout_seconds: float = 90.0,
+        draft_node_timeout_seconds: float | None = None,
         node_retry_attempts: int = 3,
     ) -> None:
         normalized_backend = checkpoint_backend.strip().lower()
@@ -111,6 +112,8 @@ class RagNoteWorkflowRunner:
             raise ValidationError("checkpoint_backend must be memory/sqlite.")
         if node_timeout_seconds <= 0:
             raise ValidationError("node_timeout_seconds must be positive.")
+        if draft_node_timeout_seconds is not None and draft_node_timeout_seconds <= 0:
+            raise ValidationError("draft_node_timeout_seconds must be positive.")
         if node_retry_attempts <= 0:
             raise ValidationError("node_retry_attempts must be positive.")
         self._tool_gateway = tool_gateway
@@ -121,6 +124,7 @@ class RagNoteWorkflowRunner:
         self._checkpoint_path = checkpoint_path
         self._memory_checkpointer = InMemorySaver() if normalized_backend == "memory" else None
         self._node_timeout_seconds = node_timeout_seconds
+        self._draft_node_timeout_seconds = draft_node_timeout_seconds or node_timeout_seconds
         self._node_retry_attempts = node_retry_attempts
 
     async def run_stream(
@@ -235,12 +239,13 @@ class RagNoteWorkflowRunner:
     ) -> Any:
         retry = RetryPolicy(max_attempts=self._node_retry_attempts)
         timeout = TimeoutPolicy(run_timeout=self._node_timeout_seconds)
+        draft_timeout = TimeoutPolicy(run_timeout=self._draft_node_timeout_seconds)
         builder = StateGraph(WorkflowGraphState)
         builder.add_node("init_request", self._init_request)
         builder.add_node("retrieval_search", self._retrieval_search, retry_policy=retry, timeout=timeout)
         builder.add_node("source_selection", self._source_selection)
         builder.add_node("retrieval_context_pack", self._retrieval_context_pack, retry_policy=retry, timeout=timeout)
-        builder.add_node("draft_note", self._draft_note, retry_policy=retry, timeout=timeout)
+        builder.add_node("draft_note", self._draft_note, retry_policy=retry, timeout=draft_timeout)
         builder.add_node("note_review", self._note_review)
         builder.add_node("write_note", self._write_note, retry_policy=retry, timeout=timeout)
         builder.add_node("write_retry", self._write_retry)

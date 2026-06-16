@@ -100,6 +100,35 @@ def test_interview_review_workflow_runner_builds_initial_state() -> None:
     assert gateway.calls == []
 
 
+def test_interactive_workflow_runners_keep_draft_timeout_separate() -> None:
+    gateway = _FakeGateway()
+    recorder = EventRecorder(cast(SessionRepository, _EventRepo()))
+
+    rag_runner = RagNoteWorkflowRunner(
+        tool_gateway=cast(ToolGateway, gateway),
+        model_client=_DraftModel(),
+        event_recorder=recorder,
+        checkpoint_backend="memory",
+        node_timeout_seconds=30,
+        draft_node_timeout_seconds=120,
+        node_retry_attempts=2,
+    )
+    review_runner = InterviewReviewWorkflowRunner(
+        tool_gateway=cast(ToolGateway, gateway),
+        model_client=_DraftModel(),
+        event_recorder=recorder,
+        checkpoint_backend="memory",
+        node_timeout_seconds=30,
+        draft_node_timeout_seconds=120,
+        node_retry_attempts=2,
+    )
+
+    assert rag_runner._node_timeout_seconds == 30
+    assert rag_runner._draft_node_timeout_seconds == 120
+    assert review_runner._node_timeout_seconds == 30
+    assert review_runner._draft_node_timeout_seconds == 120
+
+
 def test_interview_review_workflow_writes_note_and_merges_application() -> None:
     gateway = _FakeGateway()
     runner = InterviewReviewWorkflowRunner(

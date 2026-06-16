@@ -71,6 +71,23 @@ def test_live_smoke_runtime_config_text() -> None:
     )
 
 
+def test_settings_resolves_langgraph_draft_node_timeout() -> None:
+    settings = Settings().model_copy(
+        update={
+            "chat_stream_run_timeout_seconds": 300.0,
+            "langgraph_node_timeout_seconds": 90.0,
+            "langgraph_draft_node_timeout_seconds": None,
+        }
+    )
+
+    assert settings.resolved_langgraph_draft_node_timeout_seconds() == 270.0
+    assert (
+        settings.model_copy(update={"langgraph_draft_node_timeout_seconds": 180.0})
+        .resolved_langgraph_draft_node_timeout_seconds()
+        == 180.0
+    )
+
+
 def test_save_note_smoke_message_uses_supported_note_source_types() -> None:
     message = _retrieval_action_message("save_note")
 
@@ -89,6 +106,9 @@ def test_live_stack_wires_durable_langgraph_resume_state(tmp_path: Path) -> None
             "langgraph_interactive_note_enabled": True,
             "langgraph_interactive_interview_review_enabled": True,
             "langgraph_workflow_backend": "memory",
+            "chat_stream_run_timeout_seconds": 300.0,
+            "langgraph_node_timeout_seconds": 90.0,
+            "langgraph_draft_node_timeout_seconds": None,
         }
     )
 
@@ -100,6 +120,8 @@ def test_live_stack_wires_durable_langgraph_resume_state(tmp_path: Path) -> None
     assert workflow_runner.resume_lease_store is not None
     for runner in workflow_runner.runners.values():
         assert getattr(runner, "_workflow_store") is workflow_runner.workflow_store
+        assert getattr(runner, "_node_timeout_seconds") == 90.0
+        assert getattr(runner, "_draft_node_timeout_seconds") == 270.0
 
 
 def test_seeded_career_project_fixture_creates_complete_action_context(tmp_path: Path) -> None:

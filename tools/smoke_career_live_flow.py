@@ -340,6 +340,7 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
                 workflow_store=workflow_store,
                 checkpoint_backend=settings.langgraph_workflow_backend,
                 node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+                draft_node_timeout_seconds=settings.resolved_langgraph_draft_node_timeout_seconds(),
                 node_retry_attempts=settings.langgraph_node_retry_attempts,
             )
         if settings.langgraph_interactive_interview_review_enabled:
@@ -350,6 +351,7 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
                 workflow_store=workflow_store,
                 checkpoint_backend=settings.langgraph_workflow_backend,
                 node_timeout_seconds=settings.langgraph_node_timeout_seconds,
+                draft_node_timeout_seconds=settings.resolved_langgraph_draft_node_timeout_seconds(),
                 node_retry_attempts=settings.langgraph_node_retry_attempts,
             )
         workflow_runner = WorkflowRunnerDispatcher(

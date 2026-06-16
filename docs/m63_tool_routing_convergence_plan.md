@@ -1,6 +1,6 @@
 # M63 工具路由收敛方案
 
-> 状态：第一层及完成态补丁已实现，并完成 targeted tests + P1 focused live smoke。本文定义工具选择、工具可见性、ToolGateway、RAG MCP 与 LangGraph 的边界。
+> 状态：第一层、完成态补丁和 M63-G 产品级回归已完成。本文定义工具选择、工具可见性、ToolGateway、RAG MCP 与 LangGraph 的边界。
 
 ## 0. 本轮落地结果
 
@@ -475,6 +475,84 @@ tools/smoke_live_matrix.py \
 ```
 
 结果：上述 targeted tests、mypy、py_compile 和最终 4 场景 live smoke 均通过。
+
+### M63-G：全量产品回归与交互式草稿节点超时收敛
+
+本步把 M63 的 focused 验证扩展到 P0+P1 全量产品 live smoke，同时补齐本地全量回归。
+
+已完成的本地验证：
+
+```text
+.venv/bin/python -m pytest -q
+.venv/bin/python -m mypy app tests
+.venv/bin/python -m py_compile tools/smoke_career_live_flow.py tools/smoke_live_matrix.py app/runtime/agent_runtime.py app/runtime/workflow/tool_plan.py app/runtime/workflow/action_payloads.py app/runtime/agent/finalization_packet.py app/retrieval/facade.py app/retrieval/models.py
+```
+
+结果：本地 pytest 全量、mypy 和 py_compile 均通过。
+
+第一轮全量 live smoke：
+
+```text
+uv run python tools/smoke_live_matrix.py \
+  --all-p0 \
+  --all-p1 \
+  --runs 1 \
+  --concurrency 2 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m63_g_full_c2_r1 \
+  --json-report data/live_smoke_matrix_m63_g_full_c2_r1/report.json \
+  --quiet
+```
+
+结果：18 场景中 16 通过、2 失败；hidden=0，harmful duplicate=0。两个失败场景都是交互式 RAG note：
+
+- `interactive_rag_to_note_source_select`
+- `interactive_rag_to_note_review_edit`
+
+失败根因不是工具路由或 RAG MCP：`retrieval_search` / `retrieval_context_pack` 已成功，卡点在 LangGraph `draft_note`。原实现把 `draft_note` 和检索/写入节点共用 `LANGGRAPH_NODE_TIMEOUT_SECONDS=90`，真实模型草稿生成长尾超过 90 秒后被 LangGraph 重试 3 次，最终形成 4-5 分钟失败。
+
+修复策略：
+
+- 保留 `LANGGRAPH_NODE_TIMEOUT_SECONDS` 给检索、写入等普通节点，维持快速失败。
+- 新增 `LANGGRAPH_DRAFT_NODE_TIMEOUT_SECONDS`，只用于 `draft_note` / `draft_review_update` 这类交互式草稿 LLM 节点。
+- 未显式配置时，服务注入层从 `CHAT_STREAM_RUN_TIMEOUT_SECONDS` 派生草稿节点 timeout，避免外层 stream 还没超时但节点先被 90 秒切断并重复重试。
+
+修复后 focused rerun：
+
+```text
+uv run python tools/smoke_live_matrix.py \
+  --scenario interactive_rag_to_note_source_select \
+  --scenario interactive_rag_to_note_review_edit \
+  --runs 1 \
+  --concurrency 1 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m63_g_rag_note_timeout_rerun2_c1_r1 \
+  --json-report data/live_smoke_matrix_m63_g_rag_note_timeout_rerun2_c1_r1/report.json \
+  --quiet
+```
+
+结果：2/2 通过；两个场景都完成 `retrieval_search -> retrieval_context_pack -> note_create`，`workflow_waiting_for_input=2`，`workflow_completed=1`，hidden=0，harmful duplicate=0。`draft_note` 恢复阶段分别耗时 93.04s 和 106.36s，证明旧 90s 节点 timeout 是失败根因。
+
+P1 全量 rerun：
+
+```text
+uv run python tools/smoke_live_matrix.py \
+  --all-p1 \
+  --runs 1 \
+  --concurrency 2 \
+  --max-tool-rounds 24 \
+  --data-dir data/live_smoke_matrix_m63_g_p1_rerun_c2_r1 \
+  --json-report data/live_smoke_matrix_m63_g_p1_rerun_c2_r1/report.json \
+  --quiet
+```
+
+结果：11/11 通过，平均 94.81s，最大 131.10s，hidden=0，harmful duplicate=0。交互式 RAG note 和交互式 interview review 均完成两次等待、一次写入和 `workflow_completed`。
+
+验收结论：
+
+- 第一轮 P0+P1 全量里，P0 7/7 通过，P1 非失败场景已通过。
+- 修复后 P1 全量 11/11 通过，覆盖本次改动影响的全部 LangGraph 交互链路。
+- 当前剩余产品风险不是断链，而是 P0 长链路性能长尾：第一轮 `career_full` 仍达到 601.55s，后续应单独进入性能优化，不再和工具路由收敛混在一起。
 
 ## 8. 验收标准
 

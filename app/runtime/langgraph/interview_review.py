@@ -127,6 +127,7 @@ class InterviewReviewWorkflowRunner:
         checkpoint_backend: str = "memory",
         checkpoint_path: Path | None = None,
         node_timeout_seconds: float = 90.0,
+        draft_node_timeout_seconds: float | None = None,
         node_retry_attempts: int = 3,
     ) -> None:
         normalized_backend = checkpoint_backend.strip().lower()
@@ -134,6 +135,8 @@ class InterviewReviewWorkflowRunner:
             raise ValidationError("checkpoint_backend must be memory/sqlite.")
         if node_timeout_seconds <= 0:
             raise ValidationError("node_timeout_seconds must be positive.")
+        if draft_node_timeout_seconds is not None and draft_node_timeout_seconds <= 0:
+            raise ValidationError("draft_node_timeout_seconds must be positive.")
         if node_retry_attempts <= 0:
             raise ValidationError("node_retry_attempts must be positive.")
         self._tool_gateway = tool_gateway
@@ -145,6 +148,7 @@ class InterviewReviewWorkflowRunner:
         self._checkpoint_path = checkpoint_path
         self._memory_checkpointer = InMemorySaver() if normalized_backend == "memory" else None
         self._node_timeout_seconds = node_timeout_seconds
+        self._draft_node_timeout_seconds = draft_node_timeout_seconds or node_timeout_seconds
         self._node_retry_attempts = node_retry_attempts
 
     def initial_state_for(
@@ -267,12 +271,13 @@ class InterviewReviewWorkflowRunner:
     ) -> Any:
         retry = RetryPolicy(max_attempts=self._node_retry_attempts)
         timeout = TimeoutPolicy(run_timeout=self._node_timeout_seconds)
+        draft_timeout = TimeoutPolicy(run_timeout=self._draft_node_timeout_seconds)
         builder = StateGraph(InterviewReviewGraphState)
         builder.add_node("init_interview_review", self._init_interview_review)
         builder.add_node("retrieval_search", self._retrieval_search, retry_policy=retry, timeout=timeout)
         builder.add_node("review_scope", self._review_scope)
         builder.add_node("retrieval_context_pack", self._retrieval_context_pack, retry_policy=retry, timeout=timeout)
-        builder.add_node("draft_review_update", self._draft_review_update, retry_policy=retry, timeout=timeout)
+        builder.add_node("draft_review_update", self._draft_review_update, retry_policy=retry, timeout=draft_timeout)
         builder.add_node("review_confirmation", self._review_confirmation)
         builder.add_node("write_review_note", self._write_review_note, timeout=timeout)
         builder.add_node("merge_career_application", self._merge_career_application, timeout=timeout)
