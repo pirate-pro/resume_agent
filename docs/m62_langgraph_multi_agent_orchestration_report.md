@@ -112,6 +112,11 @@ ProductStore / SessionArtifact 负责：
    - 现象：用户选择取消后，持久化状态为 `cancelled`，但 `WorkflowGraphRunResult.status` 仍返回 `completed`。
    - 处理：`WorkflowGraphRunResult.status` 增加 `cancelled`，并对齐多 Agent career、RAG note 和 interview review 三条 LangGraph runner 的终态映射。
 
+8. live smoke 栈没有模拟产品态 durable workflow resume。
+   - 现象：全量 P0/P1 live smoke 中 7 个交互式 LangGraph 场景都停在第一轮 interrupt，报 `workflow_waiting_for_input payload missing workflow_version`。
+   - 原因：`tools/smoke_career_live_flow.py` 手工构造 `WorkflowRunnerDispatcher` 时没有传 `JsonlWorkflowInstanceStore` 和 resume lease store，导致 smoke 栈与产品依赖装配不一致。
+   - 处理：live stack 补齐 workflow instance store、resume lease store，并把同一个 store 传给 RAG note / interview review runner 和 dispatcher。
+
 ## 5. Live-smoke 证据
 
 M62 手工全链路：
@@ -150,6 +155,66 @@ tools/smoke_live_matrix.py --all-p0 --runs 1 --concurrency 3 --stream
 - main_resume_child；
 - main_job_child；
 - career_full。
+
+P0/P1 产品验收 live-smoke：
+
+```text
+tools/smoke_live_matrix.py --all-p0 --all-p1 --runs 1 --concurrency 6 --stream --max-tool-rounds 24
+```
+
+原始结果：
+
+- 18 runs；
+- 11 success；
+- 7 failed；
+- avg 152.26s；
+- max 540.38s；
+- harmful_duplicate_runs=0/18；
+- hidden_runs=0/18；
+- 失败场景全部是交互式 LangGraph 场景；
+- 失败根因：smoke live stack 缺 durable workflow resume store，waiting payload 没有 `workflow_version`。
+
+原始报告：
+
+- `data/live_smoke_matrix_m62_product_acceptance_20260616/report.json`
+
+修复后交互式 P1 回归：
+
+```text
+tools/smoke_live_matrix.py \
+  --scenario interactive_rag_to_note_source_select \
+  --scenario interactive_rag_to_note_user_supplement \
+  --scenario interactive_rag_to_note_review_edit \
+  --scenario interactive_rag_to_note_retry_retrieval \
+  --scenario interactive_interview_review_scope_select \
+  --scenario interactive_interview_review_user_supplement \
+  --scenario interactive_interview_review_review_edit \
+  --runs 1 --concurrency 3 --stream --max-tool-rounds 24
+```
+
+结果：
+
+- 7 runs；
+- 7 success；
+- 0 failed；
+- avg 68.68s；
+- max 77.16s；
+- harmful_duplicate_runs=0/7；
+- hidden_runs=0/7。
+
+回归报告：
+
+- `data/live_smoke_matrix_m62_interactive_fix_20260616/report.json`
+
+性能观察：
+
+- `career_full` 526.83s；
+- `rag_to_learning_task` 540.38s；
+- `interview_review` 491.24s；
+- `rag_to_note` 472.31s；
+- `career_custom_resume` 381.82s。
+
+这些场景功能通过、无 harmful duplicates、无 hidden runs，但已经超过 M43 的 360s 性能关注线，应作为后续产品化优化项单独处理。
 
 最终报告：
 
@@ -259,6 +324,20 @@ flutter build web --release
 
 - 20 个 LangGraph workflow tests 通过；
 - mypy 5 个相关 source files 通过。
+
+产品验收补充修复后验证：
+
+```text
+.venv/bin/python -m pytest tests/test_career_live_smoke_report.py::test_live_stack_wires_durable_langgraph_resume_state tests/test_workflow_instance_store.py tests/test_langgraph_rag_note_workflow.py -q
+.venv/bin/python -m py_compile tools/smoke_career_live_flow.py tools/smoke_live_matrix.py
+.venv/bin/python -m mypy app tests
+```
+
+结果：
+
+- 21 个相关 tests 通过；
+- smoke 工具 py_compile 通过；
+- mypy 355 个 source files 通过。
 
 已知非阻断告警：
 

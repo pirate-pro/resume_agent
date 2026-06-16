@@ -42,8 +42,10 @@ from app.infra.locks.session_lock_manager import SessionLockManager
 from app.infra.storage.jsonl_agent_task_store import JsonlAgentTaskStore
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
 from app.infra.storage.jsonl_tool_call_ledger import JsonlToolCallLedger
+from app.infra.storage.jsonl_workflow_instance_store import JsonlWorkflowInstanceStore
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
+from app.infra.storage.sqlite_workflow_resume_lease_store import SqliteWorkflowResumeLeaseStore
 from app.knowledge.store import KnowledgeStore
 from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
@@ -263,6 +265,10 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
     )
     session_manager = SessionManager(session_repository=session_repository)
     tool_call_ledger = JsonlToolCallLedger(data_dir=data_dir) if settings.enable_tool_gateway_ledger else None
+    workflow_store = JsonlWorkflowInstanceStore(data_dir=data_dir)
+    workflow_resume_lease_store = SqliteWorkflowResumeLeaseStore(
+        path=data_dir / "langgraph" / "resume_locks.sqlite",
+    )
     runtime = AgentRuntime(
         session_manager=session_manager,
         event_recorder=event_recorder,
@@ -323,6 +329,7 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
                 tool_gateway=workflow_tool_gateway,
                 model_client=model_client,
                 event_recorder=event_recorder,
+                workflow_store=workflow_store,
                 checkpoint_backend=settings.langgraph_workflow_backend,
                 node_timeout_seconds=settings.langgraph_node_timeout_seconds,
                 node_retry_attempts=settings.langgraph_node_retry_attempts,
@@ -332,11 +339,17 @@ def build_live_stack(*, data_dir: Path, settings: Settings) -> LiveStack:
                 tool_gateway=workflow_tool_gateway,
                 model_client=model_client,
                 event_recorder=event_recorder,
+                workflow_store=workflow_store,
                 checkpoint_backend=settings.langgraph_workflow_backend,
                 node_timeout_seconds=settings.langgraph_node_timeout_seconds,
                 node_retry_attempts=settings.langgraph_node_retry_attempts,
             )
-        workflow_runner = WorkflowRunnerDispatcher(runners=workflow_runners)
+        workflow_runner = WorkflowRunnerDispatcher(
+            runners=workflow_runners,
+            workflow_store=workflow_store,
+            resume_lease_store=workflow_resume_lease_store,
+            resume_lease_ttl_seconds=settings.langgraph_resume_lease_ttl_seconds,
+        )
     chat_service = ChatService(
         runtime=runtime,
         session_manager=session_manager,

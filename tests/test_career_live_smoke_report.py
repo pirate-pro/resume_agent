@@ -16,6 +16,7 @@ from app.career.models import (
     ResumeVersion,
 )
 from app.career.store import CareerProductStore
+from app.core.settings import Settings
 from app.core.time import app_now
 from app.domain.models import EventRecord, SessionArtifact
 from app.infra.storage.jsonl_session_repository import JsonlSessionRepository
@@ -28,6 +29,7 @@ from tools.smoke_career_live_flow import (
     TurnReport,
     _prepare_clean_run_data_dir,
     _runtime_config_text,
+    build_live_stack,
     efficiency_summary,
     infer_failure_stage,
     inspect_flow_outputs,
@@ -62,6 +64,27 @@ def test_live_smoke_runtime_config_text() -> None:
         "TOOL_CONTEXT_WINDOW_MODE=compact "
         "WORKFLOW_RULE_SELECTION_MODE=sparse"
     )
+
+
+def test_live_stack_wires_durable_langgraph_resume_state(tmp_path: Path) -> None:
+    settings = Settings().model_copy(
+        update={
+            "data_dir": tmp_path,
+            "langgraph_workflow_enabled": True,
+            "langgraph_interactive_note_enabled": True,
+            "langgraph_interactive_interview_review_enabled": True,
+            "langgraph_workflow_backend": "memory",
+        }
+    )
+
+    stack = build_live_stack(data_dir=tmp_path, settings=settings)
+
+    workflow_runner = getattr(stack.chat_service, "_workflow_runner")
+    assert workflow_runner is not None
+    assert workflow_runner.workflow_store is not None
+    assert workflow_runner.resume_lease_store is not None
+    for runner in workflow_runner.runners.values():
+        assert getattr(runner, "_workflow_store") is workflow_runner.workflow_store
 
 
 def test_live_smoke_report_prints_concise_failure_summary(
