@@ -693,6 +693,39 @@ class AgentRuntime:
                     },
                 )
                 execution_tool_call = tool_call
+                action_payload_replacement = (
+                    _same_name_action_payload_replacement(
+                        tool_call,
+                        pending_runtime_plan=pending_runtime_plan,
+                        visible_tool_names_for_round=visible_tool_names_for_round,
+                    )
+                    if strict_runtime_tool_mode
+                    else None
+                )
+                if action_payload_replacement is not None:
+                    execution_tool_call = action_payload_replacement
+                    self._event_recorder.record(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload=tool_call_controller.strict_auto_execute_event_payload(
+                            blocked_tool_call=tool_call,
+                            replacement_tool_call=action_payload_replacement,
+                            pending_runtime_plan=pending_runtime_plan,
+                            reason="required_tool_arguments_replaced_by_action_payload",
+                        ),
+                    )
+                    self._event_recorder.record(
+                        context=run_context,
+                        event_type="tool_call",
+                        payload={
+                            "name": action_payload_replacement.name,
+                            "arguments": action_payload_replacement.arguments,
+                            "tool_call_id": action_payload_replacement.tool_call_id,
+                            "auto_executed": True,
+                            "replaced_tool_name": tool_call.name,
+                        },
+                    )
+                    used_tool_calls.append(action_payload_replacement)
                 if tool_call.name not in visible_tool_names_for_round:
                     support_tool_allowed = tool_call_controller.hidden_runtime_support_tool_allowed(
                         tool_call,
@@ -806,7 +839,7 @@ class AgentRuntime:
                 else:
                     if self._tool_gateway is not None:
                         gateway_result = self._tool_gateway.execute(
-                            tool_call,
+                            execution_tool_call,
                             run_context,
                             pending_runtime_plan=pending_runtime_plan,
                         )
@@ -819,7 +852,7 @@ class AgentRuntime:
                                 payload=gateway_result.event_payload,
                             )
                     else:
-                        guard_decision = self._inspect_workflow_guard(tool_call, run_context)
+                        guard_decision = self._inspect_workflow_guard(execution_tool_call, run_context)
                         execution_tool_call = guard_decision.tool_call
                         if guard_decision.event_payload is not None:
                             self._event_recorder.record(
@@ -2805,6 +2838,41 @@ class AgentRuntime:
                     channel=channel,
                 )
                 execution_tool_call = tool_call
+                action_payload_replacement = (
+                    _same_name_action_payload_replacement(
+                        tool_call,
+                        pending_runtime_plan=pending_runtime_plan,
+                        visible_tool_names_for_round=visible_tool_names_for_round,
+                    )
+                    if strict_runtime_tool_mode
+                    else None
+                )
+                if action_payload_replacement is not None:
+                    execution_tool_call = action_payload_replacement
+                    await self._event_recorder.record_async(
+                        context=run_context,
+                        event_type="workflow_runtime_decision",
+                        payload=tool_call_controller.strict_auto_execute_event_payload(
+                            blocked_tool_call=tool_call,
+                            replacement_tool_call=action_payload_replacement,
+                            pending_runtime_plan=pending_runtime_plan,
+                            reason="required_tool_arguments_replaced_by_action_payload",
+                        ),
+                        channel=channel,
+                    )
+                    await self._event_recorder.record_async(
+                        context=run_context,
+                        event_type="tool_call",
+                        payload={
+                            "name": action_payload_replacement.name,
+                            "arguments": action_payload_replacement.arguments,
+                            "tool_call_id": action_payload_replacement.tool_call_id,
+                            "auto_executed": True,
+                            "replaced_tool_name": tool_call.name,
+                        },
+                        channel=channel,
+                    )
+                    used_tool_calls.append(action_payload_replacement)
                 if tool_call.name not in visible_tool_names_for_round:
                     support_tool_allowed = tool_call_controller.hidden_runtime_support_tool_allowed(
                         tool_call,
@@ -2924,7 +2992,7 @@ class AgentRuntime:
                 else:
                     if self._tool_gateway is not None:
                         gateway_result = await self._tool_gateway.execute_async(
-                            tool_call,
+                            execution_tool_call,
                             run_context,
                             pending_runtime_plan=pending_runtime_plan,
                         )
@@ -2938,7 +3006,7 @@ class AgentRuntime:
                                 channel=channel,
                             )
                     else:
-                        guard_decision = self._inspect_workflow_guard(tool_call, run_context)
+                        guard_decision = self._inspect_workflow_guard(execution_tool_call, run_context)
                         execution_tool_call = guard_decision.tool_call
                         if guard_decision.event_payload is not None:
                             await self._event_recorder.record_async(
@@ -4093,6 +4161,24 @@ def _is_premature_workflow_answer(
         pending_runtime_plan=pending_runtime_plan,
         visible_tool_names=visible_tool_names,
     )
+
+
+def _same_name_action_payload_replacement(
+    tool_call: ToolCall,
+    *,
+    pending_runtime_plan: dict[str, Any] | None,
+    visible_tool_names_for_round: set[str],
+) -> ToolCall | None:
+    replacement = build_action_payload_tool_call_from_plan(
+        pending_runtime_plan=pending_runtime_plan,
+        visible_tool_names_for_round=visible_tool_names_for_round,
+        tool_call_id=tool_call.tool_call_id,
+    )
+    if replacement is None or replacement.name != tool_call.name:
+        return None
+    if replacement.arguments == tool_call.arguments:
+        return None
+    return replacement
 
 
 def _is_final_answer_ready_runtime_plan(pending_runtime_plan: dict[str, Any] | None) -> bool:

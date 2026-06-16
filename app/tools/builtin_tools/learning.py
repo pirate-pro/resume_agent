@@ -19,6 +19,7 @@ from app.learning.models import (
     LearningTask,
     ProgressCheckin,
     WeaknessTracker,
+    validate_evidence_refs,
 )
 from app.learning.store import LearningStore
 from app.tools.builtin_tools.common import validate_context
@@ -387,21 +388,36 @@ class LearningTaskCreateTool:
                 run_context.session_id,
                 args.get("output_artifact_id"),
             )
+            source_artifact_id = _optional_current_artifact(
+                self._session_repository,
+                run_context.session_id,
+                args.get("source_artifact_id"),
+                field_name="source_artifact_id",
+            )
+            learning_plan_id = _optional_prefixed_id(args.get("learning_plan_id"), "learning_plan")
+            resource_refs = _optional_resource_refs(args.get("resource_refs"))
+            evidence_refs = _required_evidence_refs(
+                args.get("evidence_refs"),
+                fallback_refs=_learning_task_evidence_fallback_refs(
+                    self._session_repository,
+                    self._learning_store,
+                    run_context.session_id,
+                    source_artifact_id=source_artifact_id,
+                    output_artifact_id=output_artifact_id,
+                    resource_refs=resource_refs,
+                    learning_plan_id=learning_plan_id,
+                ),
+            )
             record = LearningTask(
                 learning_task_id=record_id,
                 status=LearningRecordStatus.ACTIVE,
                 source_session_id=run_context.session_id,
-                source_artifact_id=_optional_current_artifact(
-                    self._session_repository,
-                    run_context.session_id,
-                    args.get("source_artifact_id"),
-                    field_name="source_artifact_id",
-                ),
-                evidence_refs=_required_evidence_refs(args.get("evidence_refs")),
+                source_artifact_id=source_artifact_id,
+                evidence_refs=evidence_refs,
                 created_at=_now(),
                 updated_at=_now(),
                 title=_required_string(args.get("title"), field_name="title"),
-                learning_plan_id=_optional_prefixed_id(args.get("learning_plan_id"), "learning_plan"),
+                learning_plan_id=learning_plan_id,
                 description=_optional_string(args.get("description")) or "",
                 task_type=_optional_string(args.get("task_type")) or "custom",
                 priority=_optional_string(args.get("priority")) or "medium",
@@ -410,7 +426,7 @@ class LearningTaskCreateTool:
                 estimated_minutes=_optional_int(args.get("estimated_minutes"), field_name="estimated_minutes"),
                 planned_start_date=_optional_datetime(args.get("planned_start_date"), field_name="planned_start_date"),
                 due_date=_optional_datetime(args.get("due_date"), field_name="due_date"),
-                resource_refs=_optional_resource_refs(args.get("resource_refs")),
+                resource_refs=resource_refs,
                 question_refs=_optional_prefixed_id_list(args.get("question_refs"), "question", field_name="question_refs"),
                 note_refs=_optional_prefixed_id_list(args.get("note_refs"), "note", field_name="note_refs"),
                 output_artifact_id=output_artifact_id,
@@ -857,18 +873,29 @@ def _optional_string_list(raw: Any, *, field_name: str) -> list[str]:
     return output
 
 
-def _required_evidence_refs(raw: Any) -> list[str]:
-    refs = _optional_evidence_ref_list(raw)
+def _required_evidence_refs(raw: Any, *, fallback_refs: list[str] | None = None) -> list[str]:
+    refs = _valid_evidence_refs(_optional_evidence_ref_list(raw))
+    if not refs:
+        refs = _valid_evidence_refs(fallback_refs or [])
     if not refs:
         raise ToolExecutionError("'evidence_refs' must include at least one reference.")
+    return refs
+
+
+def _valid_evidence_refs(refs: list[str]) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
     for ref in refs:
         normalized = _normalize_evidence_ref(ref)
-        if normalized in seen:
+        try:
+            validated_refs = validate_evidence_refs([normalized])
+        except ValidationError:
             continue
-        output.append(normalized)
-        seen.add(normalized)
+        for validated_ref in validated_refs:
+            if validated_ref in seen:
+                continue
+            output.append(validated_ref)
+            seen.add(validated_ref)
     return output
 
 
@@ -939,6 +966,54 @@ def _normalize_evidence_ref(raw: str) -> str:
     if kind == "weakness" and record_id.startswith("weakness_"):
         return record_id
     return value
+
+
+def _learning_task_evidence_fallback_refs(
+    session_repository: SessionRepository,
+    learning_store: LearningStore,
+    session_id: str,
+    *,
+    source_artifact_id: str | None,
+    output_artifact_id: str | None,
+    resource_refs: list[str],
+    learning_plan_id: str | None,
+) -> list[str]:
+    refs: list[str] = []
+    _append_unique_ref(refs, source_artifact_id)
+    for artifact_id in _current_session_artifact_ids(session_repository, session_id):
+        _append_unique_ref(refs, artifact_id)
+    _append_unique_ref(refs, output_artifact_id)
+    for resource_ref in resource_refs:
+        _append_unique_ref(refs, resource_ref)
+    if learning_plan_id is not None and learning_store.get_learning_plan(learning_plan_id) is not None:
+        _append_unique_ref(refs, learning_plan_id)
+    return refs
+
+
+def _current_session_artifact_ids(session_repository: SessionRepository, session_id: str) -> list[str]:
+    artifacts = [
+        item
+        for item in session_repository.list_session_artifacts(session_id)
+        if item.visibility == "session_shared" and item.status in {"uploaded", "parsing", "ready"}
+    ]
+    by_id = {item.artifact_id: item for item in artifacts}
+    output: list[str] = []
+    for artifact_id in session_repository.get_active_artifact_ids(session_id):
+        if artifact_id in by_id:
+            _append_unique_ref(output, artifact_id)
+    for artifact in artifacts:
+        if artifact.status == "ready":
+            _append_unique_ref(output, artifact.artifact_id)
+    return output
+
+
+def _append_unique_ref(output: list[str], raw: str | None) -> None:
+    if raw is None:
+        return
+    value = raw.strip()
+    if not value or value in output:
+        return
+    output.append(value)
 
 
 def _optional_resource_refs(raw: Any) -> list[str]:

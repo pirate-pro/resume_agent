@@ -3938,6 +3938,178 @@ def test_runtime_auto_executes_interview_review_application_merge_after_repeated
     assert any(item.get("reason") == "strict_schema_search_replaced_with_required_tool" for item in decisions)
 
 
+def test_runtime_replaces_malformed_same_name_interview_review_merge_args(tmp_path: Path) -> None:
+    class RuntimePlanSearchTool:
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="tool_search",
+                description="Search tools.",
+                parameters_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = (arguments, context)
+            return ToolExecutionResult(
+                tool_name="tool_search",
+                success=True,
+                content=json.dumps(
+                    {
+                        "runtime_plan_applied": True,
+                        "runtime_plan_phase": "interview_review_update",
+                        "runtime_final_answer_ready": False,
+                        "runtime_next_action": "面试复盘 Note 已保存；下一步只调用 career_application_merge 更新项目。",
+                        "runtime_next_allowed_tools": ["career_application_merge"],
+                        "runtime_missing_outputs": ["career_application_update"],
+                        "runtime_known_refs": {
+                            "application_id": "application_alpha",
+                            "note_id": "note_alpha",
+                            "resume_profile_id": "resume_profile_alpha",
+                            "career_profile_id": "career_profile_default",
+                            "jd_analysis_id": "jd_alpha",
+                            "job_fit_report_id": "fit_alpha",
+                        },
+                        "revealed_tool_names": ["career_application_merge"],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+
+    class ApplicationMergeTool:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+
+        def definition(self) -> ToolDefinition:
+            return ToolDefinition(
+                name="career_application_merge",
+                description="Merge application.",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {
+                        "application_id": {"type": "string"},
+                        "updates": {"type": "object"},
+                        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["application_id", "updates", "evidence_refs"],
+                },
+            )
+
+        def execute(self, arguments: dict[str, Any], context: RunContext) -> ToolExecutionResult:
+            _ = context
+            self.calls.append(arguments)
+            if not isinstance(arguments.get("updates"), dict):
+                return ToolExecutionResult(
+                    tool_name="career_application_merge",
+                    success=False,
+                    content="updates is required",
+                )
+            return ToolExecutionResult(
+                tool_name="career_application_merge",
+                success=True,
+                content=json.dumps(
+                    {"record_type": "career_application", "record_id": arguments["application_id"]},
+                    ensure_ascii=False,
+                ),
+            )
+
+    class MalformedSameNameMergeModelClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> ModelResponse:
+            _ = (system_prompt, messages)
+            self.calls += 1
+            tool_names = {item["function"]["name"] for item in tools}
+            if self.calls == 1:
+                assert "tool_search" in tool_names
+                return ModelResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="tool_search", arguments={"query": "career_application_merge"})],
+                )
+            if self.calls == 2:
+                assert tool_names == {"career_application_merge"}
+                return ModelResponse(
+                    content="",
+                    tool_calls=[
+                        ToolCall(
+                            name="career_application_merge",
+                            arguments={
+                                "application_id": "application_alpha",
+                                "stage": "interview_round1_done",
+                                "risks": "RAG 评估表达不足",
+                                "next_actions": "补强 LangGraph 失败重试设计",
+                                "summary": "面试复盘已保存",
+                            },
+                        )
+                    ],
+                )
+            assert tools == []
+            return ModelResponse(content="面试复盘已保存并更新到求职项目。", tool_calls=[])
+
+        async def generate_stream(
+            self,
+            system_prompt: str,
+            messages: list[dict[str, Any]],
+            tools: list[dict[str, Any]],
+        ) -> AsyncIterator[StreamChunk]:
+            _ = (system_prompt, messages, tools)
+            if False:
+                yield StreamChunk(delta="", finished=True, has_tool_call_delta=False)
+            raise NotImplementedError("stream path is not used in this test")
+
+    merge_tool = ApplicationMergeTool()
+    model = MalformedSameNameMergeModelClient()
+    runtime, session_repo, _ = _build_runtime(
+        tmp_path,
+        model,
+        extra_tools=[RuntimePlanSearchTool(), merge_tool],
+        tool_schema_disclosure_mode="search",
+        tool_schema_always_visible=["tool_search", "memory_write"],
+    )
+
+    output = runtime.run(
+        AgentRunInput(
+            session_id="sess_interview_review_same_name_payload_repair",
+            user_message="继续",
+            skill_names=["base", "tools"],
+            max_tool_rounds=5,
+            context=_context("sess_interview_review_same_name_payload_repair"),
+        )
+    )
+
+    assert output.answer == "面试复盘已保存并更新到求职项目。"
+    assert model.calls == 3
+    assert len(merge_tool.calls) == 1
+    merge_args = merge_tool.calls[0]
+    assert merge_args["application_id"] == "application_alpha"
+    assert merge_args["updates"]["stage"] == "interviewing"
+    assert "note_alpha" in merge_args["updates"]["notes"]
+    assert merge_args["evidence_refs"] == [
+        "application_alpha",
+        "note_alpha",
+        "resume_profile_alpha",
+        "career_profile_default",
+        "jd_alpha",
+        "fit_alpha",
+    ]
+    events = session_repo.list_events("sess_interview_review_same_name_payload_repair")
+    tool_calls = [event.payload for event in events if event.type == "tool_call"]
+    assert [item["name"] for item in tool_calls] == [
+        "tool_search",
+        "career_application_merge",
+        "career_application_merge",
+    ]
+    assert tool_calls[-1]["auto_executed"] is True
+    decisions = [event.payload for event in events if event.type == "workflow_runtime_decision"]
+    assert any(item.get("reason") == "required_tool_arguments_replaced_by_action_payload" for item in decisions)
+    tool_results = [event.payload for event in events if event.type == "tool_result"]
+    assert not any("tool_hidden_by_runtime_plan" in str(item.get("content", "")) for item in tool_results)
+
+
 def test_runtime_uses_workflow_guard_next_allowed_tools_as_pending_plan(tmp_path: Path) -> None:
     class DelegateTool:
         def definition(self) -> ToolDefinition:

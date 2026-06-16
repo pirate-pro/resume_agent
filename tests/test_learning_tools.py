@@ -109,13 +109,19 @@ def _execute(registry: ToolRegistry, name: str, arguments: dict[str, Any], conte
     return cast(dict[str, Any], json.loads(result.content))
 
 
-def _create_text_artifact(registry: ToolRegistry, *, session_id: str = "sess_learning") -> str:
+def _create_text_artifact(
+    registry: ToolRegistry,
+    *,
+    session_id: str = "sess_learning",
+    title: str = "匹配报告.md",
+    content: str = "# 匹配报告\n\nRAG 项目证据不足，需要学习计划跟进。",
+) -> str:
     payload = _execute(
         registry,
         "session_create_text_artifact",
         {
-            "title": "匹配报告.md",
-            "content": "# 匹配报告\n\nRAG 项目证据不足，需要学习计划跟进。",
+            "title": title,
+            "content": content,
             "kind": "generated_file",
             "media_type": "text/markdown",
         },
@@ -189,6 +195,57 @@ def test_learning_task_create_ignores_missing_optional_output_artifact(tmp_path:
 
     assert payload["record"]["output_artifact_id"] is None
     assert payload["ignored_invalid_output_artifact_id"] == "learning_task_created_20260617"
+
+
+def test_learning_task_create_falls_back_to_session_artifacts_for_invalid_evidence_refs(tmp_path: Path) -> None:
+    registry, session_repository, _ = _registry(tmp_path)
+    session_repository.create_session("sess_learning")
+    resume_artifact_id = _create_text_artifact(
+        registry,
+        title="简历.md",
+        content="# 简历\n\n后端工程经验。",
+    )
+    jd_artifact_id = _create_text_artifact(
+        registry,
+        title="JD.md",
+        content="# JD\n\n需要 RAG 和 LangGraph。",
+    )
+    session_repository.set_active_artifact_ids("sess_learning", [resume_artifact_id, jd_artifact_id])
+
+    payload = _execute(
+        registry,
+        "learning_task_create",
+        {
+            "title": "补齐 LangGraph 失败重试设计",
+            "evidence_refs": ["ltask_002", "product:learning_task:ltask_002"],
+            "learning_plan_id": "lplan_001",
+        },
+        _context(),
+    )
+
+    assert payload["record"]["evidence_refs"] == [resume_artifact_id, jd_artifact_id]
+    assert payload["record"]["learning_plan_id"] == "learning_plan_lplan_001"
+
+
+def test_learning_task_create_drops_invalid_evidence_refs_without_fallback_when_valid_refs_exist(
+    tmp_path: Path,
+) -> None:
+    registry, session_repository, _ = _registry(tmp_path)
+    session_repository.create_session("sess_learning")
+    fallback_artifact_id = _create_text_artifact(registry)
+    session_repository.set_active_artifact_ids("sess_learning", [fallback_artifact_id])
+
+    payload = _execute(
+        registry,
+        "learning_task_create",
+        {
+            "title": "复盘 RAG 证据",
+            "evidence_refs": ["application_alpha", "ltask_002", "product:learning_task:ltask_002"],
+        },
+        _context(),
+    )
+
+    assert payload["record"]["evidence_refs"] == ["application_alpha"]
 
 
 def test_main_agent_creates_reads_lists_checkins_and_updates_learning_records(tmp_path: Path) -> None:

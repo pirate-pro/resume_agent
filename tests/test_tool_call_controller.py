@@ -60,6 +60,43 @@ def test_controller_auto_call_uses_generic_required_tool_hint() -> None:
     }
 
 
+def test_controller_replaces_repeated_retrieval_search_with_context_pack() -> None:
+    controller = ToolCallController()
+
+    tool_call = controller.strict_required_tool_auto_call(
+        ToolCall(
+            name="retrieval_search",
+            arguments={
+                "query": "匹配 报告 简历 JD 分析",
+                "source_types": '["career", "notes"]',
+                "top_k": "20",
+                "max_chars": "50000",
+                "include_archived": "False",
+            },
+            tool_call_id="call_retrieval",
+        ),
+        pending_runtime_plan={
+            "phase": "rag_learning_task_create",
+            "final_answer_ready": False,
+            "required_tools": ["retrieval_context_pack"],
+            "next_allowed_tools": ["retrieval_context_pack"],
+            "missing_outputs": ["retrieval_context_pack", "learning_task"],
+        },
+        visible_tool_names_for_round={"retrieval_context_pack"},
+    )
+
+    assert tool_call is not None
+    assert tool_call.name == "retrieval_context_pack"
+    assert tool_call.tool_call_id == "call_retrieval"
+    assert tool_call.arguments == {
+        "query": "匹配 报告 简历 JD 分析",
+        "source_types": ["career", "notes"],
+        "top_k": 20,
+        "max_chars": 50000,
+        "include_archived": False,
+    }
+
+
 def test_controller_does_not_auto_call_when_required_tool_hidden_or_ambiguous() -> None:
     controller = ToolCallController()
 

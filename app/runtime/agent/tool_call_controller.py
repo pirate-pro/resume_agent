@@ -48,6 +48,13 @@ class ToolCallController:
         visible_tool_names_for_round: set[str],
     ) -> ToolCall | None:
         completion_tools = runtime_plan_completion_tools(pending_runtime_plan or {})
+        retrieval_context_pack_call = _retrieval_context_pack_auto_call_from_repeated_search(
+            tool_call,
+            completion_tools=completion_tools,
+            visible_tool_names_for_round=visible_tool_names_for_round,
+        )
+        if retrieval_context_pack_call is not None:
+            return retrieval_context_pack_call
         if _is_read_only_probe_tool(tool_call.name) and completion_tools == ["career_application_create"]:
             return None
         return self.strict_required_tool_auto_call_from_plan(
@@ -220,6 +227,109 @@ def _strict_resume_version_create_auto_args(hint: dict[str, Any]) -> dict[str, A
     if _non_empty_string(arguments.get("artifact_id")) is None and _non_empty_string(arguments.get("content")) is None:
         arguments["use_safe_fallback"] = True
     return arguments
+
+
+def _retrieval_context_pack_auto_call_from_repeated_search(
+    tool_call: ToolCall,
+    *,
+    completion_tools: list[str],
+    visible_tool_names_for_round: set[str],
+) -> ToolCall | None:
+    if completion_tools != ["retrieval_context_pack"]:
+        return None
+    if "retrieval_context_pack" not in visible_tool_names_for_round:
+        return None
+    if tool_call.name != "retrieval_search":
+        return None
+    arguments = _retrieval_context_pack_args_from_search_args(tool_call.arguments)
+    if arguments is None:
+        return None
+    return ToolCall(
+        name="retrieval_context_pack",
+        arguments=arguments,
+        tool_call_id=tool_call.tool_call_id,
+    )
+
+
+def _retrieval_context_pack_args_from_search_args(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    query = _non_empty_string(raw.get("query"))
+    if query is None:
+        return None
+    arguments: dict[str, Any] = {"query": query}
+    source_types = _optional_string_list_arg(raw.get("source_types"))
+    if source_types:
+        arguments["source_types"] = source_types
+    related_application_id = _non_empty_string(raw.get("related_application_id"))
+    if related_application_id is not None:
+        arguments["related_application_id"] = related_application_id
+    arguments["top_k"] = _bounded_int_arg(raw.get("top_k"), default=8, minimum=1, maximum=50)
+    arguments["max_chars"] = _bounded_int_arg(raw.get("max_chars"), default=12000, minimum=200, maximum=50000)
+    arguments["include_archived"] = _bool_arg(raw.get("include_archived"), default=False)
+    return arguments
+
+
+def _optional_string_list_arg(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    value = raw
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return []
+        if stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                value = parsed
+            else:
+                value = [stripped]
+        else:
+            value = [stripped]
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        normalized = item.strip()
+        if normalized in seen:
+            continue
+        output.append(normalized)
+        seen.add(normalized)
+    return output
+
+
+def _bounded_int_arg(raw: Any, *, default: int, minimum: int, maximum: int) -> int:
+    value: int
+    if isinstance(raw, bool):
+        value = default
+    elif isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, str) and raw.strip():
+        try:
+            value = int(raw.strip())
+        except ValueError:
+            value = default
+    else:
+        value = default
+    return min(max(value, minimum), maximum)
+
+
+def _bool_arg(raw: Any, *, default: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+    return default
 
 
 def _looks_like_resume_version_artifact_title(title: str) -> bool:

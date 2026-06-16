@@ -77,6 +77,8 @@ _SOURCE_TYPE_ALIASES = {
     "artifact": NoteSourceType.ARTIFACT.value,
     "chat_message": NoteSourceType.CHAT_MESSAGE.value,
     "message": NoteSourceType.CHAT_MESSAGE.value,
+    "note": NoteSourceType.MANUAL.value,
+    "notes": NoteSourceType.MANUAL.value,
     "manual": NoteSourceType.MANUAL.value,
 }
 _TYPED_REF_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*[:=]\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$")
@@ -682,12 +684,15 @@ def _source_refs(raw: Any) -> list[NoteSourceRef]:
     for item in raw:
         if not isinstance(item, dict):
             raise ToolExecutionError("each 'source_refs' item must be an object.")
-        source_type = _canonical_source_type(
-            _required_string(item.get("source_type"), field_name="source_type")
-        )
-        source_id = _normalize_source_ref_id(
-            _optional_string(item.get("source_id")),
-            source_type=source_type,
+        raw_source_type = _required_string(item.get("source_type"), field_name="source_type")
+        source_type = _canonical_source_type(raw_source_type)
+        source_id = (
+            None
+            if _is_note_source_type_alias(raw_source_type)
+            else _normalize_source_ref_id(
+                _optional_string(item.get("source_id")),
+                source_type=source_type,
+            )
         )
         refs.append(
             NoteSourceRef(
@@ -704,6 +709,10 @@ def _source_refs(raw: Any) -> list[NoteSourceRef]:
 def _canonical_source_type(raw: str) -> str:
     normalized = raw.strip().lower()
     return _SOURCE_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _is_note_source_type_alias(raw: str) -> bool:
+    return raw.strip().lower() in {"note", "notes"}
 
 
 def _normalize_source_ref_id(raw: str | None, *, source_type: str) -> str | None:

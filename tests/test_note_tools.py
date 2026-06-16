@@ -328,6 +328,33 @@ def test_note_create_canonicalizes_career_reference_aliases(tmp_path: Path) -> N
     assert note_payload["record"]["source_refs"][-1]["source_id"] == "resume_version_alpha"
 
 
+def test_note_create_treats_note_source_ref_as_manual_context(tmp_path: Path) -> None:
+    registry, session_repository = _registry(tmp_path)
+    session_repository.create_session("sess_notes")
+
+    note_payload = _execute(
+        registry,
+        "note_create",
+        {
+            "title": "面试复盘",
+            "body_markdown": "## 复盘\n补齐召回评估指标。",
+            "source_refs": [
+                {
+                    "source_type": "note",
+                    "source_id": "note_seed_alpha",
+                    "title": "历史面试准备记录",
+                }
+            ],
+        },
+        _context(),
+    )
+
+    source_ref = note_payload["record"]["source_refs"][0]
+    assert source_ref["source_type"] == "manual"
+    assert source_ref["source_id"] is None
+    assert source_ref["title"] == "历史面试准备记录"
+
+
 def test_note_collection_tools_update_and_archive(tmp_path: Path) -> None:
     registry, session_repository = _registry(tmp_path)
     session_repository.create_session("sess_notes")
