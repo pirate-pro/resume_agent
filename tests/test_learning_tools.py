@@ -172,6 +172,25 @@ def test_learning_task_create_treats_blank_optional_artifact_refs_as_absent(tmp_
     assert payload["record"]["output_artifact_id"] is None
 
 
+def test_learning_task_create_ignores_missing_optional_output_artifact(tmp_path: Path) -> None:
+    registry, session_repository, _ = _registry(tmp_path)
+    session_repository.create_session("sess_learning")
+
+    payload = _execute(
+        registry,
+        "learning_task_create",
+        {
+            "title": "补齐 RAG 证据表达",
+            "evidence_refs": ["application_alpha", "fit_alpha"],
+            "output_artifact_id": "learning_task_created_20260617",
+        },
+        _context(),
+    )
+
+    assert payload["record"]["output_artifact_id"] is None
+    assert payload["ignored_invalid_output_artifact_id"] == "learning_task_created_20260617"
+
+
 def test_main_agent_creates_reads_lists_checkins_and_updates_learning_records(tmp_path: Path) -> None:
     registry, session_repository, learning_store = _registry(tmp_path)
     session_repository.create_session("sess_learning")

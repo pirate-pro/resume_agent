@@ -382,6 +382,11 @@ class LearningTaskCreateTool:
                     existing,
                     extra={"idempotent_reused": True},
                 )
+            output_artifact_id, ignored_invalid_output_artifact_id = _optional_output_artifact(
+                self._session_repository,
+                run_context.session_id,
+                args.get("output_artifact_id"),
+            )
             record = LearningTask(
                 learning_task_id=record_id,
                 status=LearningRecordStatus.ACTIVE,
@@ -408,19 +413,19 @@ class LearningTaskCreateTool:
                 resource_refs=_optional_resource_refs(args.get("resource_refs")),
                 question_refs=_optional_prefixed_id_list(args.get("question_refs"), "question", field_name="question_refs"),
                 note_refs=_optional_prefixed_id_list(args.get("note_refs"), "note", field_name="note_refs"),
-                output_artifact_id=_optional_current_artifact(
-                    self._session_repository,
-                    run_context.session_id,
-                    args.get("output_artifact_id"),
-                    field_name="output_artifact_id",
-                ),
+                output_artifact_id=output_artifact_id,
                 success_criteria=_optional_string_list(args.get("success_criteria"), field_name="success_criteria"),
                 progress_notes=_optional_string(args.get("progress_notes")) or "",
             )
             saved = self._learning_store.save_learning_task(record)
         except (StorageError, ValidationError) as exc:
             raise ToolExecutionError(str(exc)) from exc
-        return _record_result("learning_task_create", "learning_task", saved.learning_task_id, saved)
+        extra = (
+            {"ignored_invalid_output_artifact_id": ignored_invalid_output_artifact_id}
+            if ignored_invalid_output_artifact_id is not None
+            else None
+        )
+        return _record_result("learning_task_create", "learning_task", saved.learning_task_id, saved, extra=extra)
 
 
 class LearningTaskGetTool:
@@ -782,6 +787,21 @@ def _optional_current_artifact(
     except ToolExecutionError as exc:
         raise ToolExecutionError(f"{field_name} must reference a current session artifact: {artifact_id}") from exc
     return artifact.artifact_id
+
+
+def _optional_output_artifact(
+    session_repository: SessionRepository,
+    session_id: str,
+    raw: Any,
+) -> tuple[str | None, str | None]:
+    artifact_id = _optional_string(raw)
+    if artifact_id is None:
+        return None, None
+    try:
+        artifact = require_session_artifact(session_repository, session_id, artifact_id)
+    except ToolExecutionError:
+        return None, artifact_id
+    return artifact.artifact_id, None
 
 
 def _required_string(raw: Any, *, field_name: str) -> str:
