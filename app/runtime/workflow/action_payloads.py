@@ -101,6 +101,7 @@ class ActionPayloadBuilder:
             "application_id": application_id,
             "updates": {
                 "stage": "interviewing",
+                "summary": f"面试复盘已完成，详见 Note {note_id}；当前项目进入面试跟进状态。",
                 "next_actions": [
                     f"根据面试复盘 Note {note_id} 补强薄弱问题并准备后续面试。",
                     "复盘下一轮可能追问的系统设计、RAG 评估和工程化问题。",
@@ -108,7 +109,7 @@ class ActionPayloadBuilder:
                 "risks": [
                     f"本次面试复盘仍有待补强问题，详见 Note {note_id}。",
                 ],
-                "notes": f"面试复盘已保存为 Note {note_id}；项目阶段已更新为面试中。",
+                "notes": f"面试复盘已保存为 Note {note_id}；项目阶段已更新为面试中；本次不创建学习任务。",
             },
             "evidence_refs": evidence_refs,
         }

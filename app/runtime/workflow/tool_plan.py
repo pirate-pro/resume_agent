@@ -451,6 +451,8 @@ def pending_runtime_plan_from_successful_tool_result(
         return _pending_plan_after_jd_analysis_save(payload, previous_pending_plan=previous_pending_plan)
     if tool_name == "career_job_fit_report_save":
         return _pending_plan_after_job_fit_report_save(payload, previous_pending_plan=previous_pending_plan)
+    if tool_name == "career_application_create":
+        return _pending_plan_after_application_create(payload, previous_pending_plan=previous_pending_plan)
     if tool_name == "career_application_get":
         return _pending_plan_after_application_get(payload, previous_pending_plan=previous_pending_plan)
     if tool_name == "career_application_merge":
@@ -683,6 +685,45 @@ def _pending_plan_after_application_merge(
             "career_resume_version_list",
         ],
     }
+
+
+def _pending_plan_after_application_create(
+    payload: dict[str, Any],
+    *,
+    previous_pending_plan: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if payload.get("record_type") != "career_application":
+        return None
+    if previous_pending_plan is None:
+        return None
+    if "career_application_create" not in runtime_plan_completion_tools(previous_pending_plan):
+        return None
+    known_refs = _pending_known_refs(previous_pending_plan)
+    known_refs.update(_runtime_known_refs_from_payload(payload))
+    application_id = known_refs.get("application_id") or payload.get("record_id")
+    if isinstance(application_id, str) and application_id.strip():
+        known_refs["application_id"] = application_id.strip()
+    phase = previous_pending_plan.get("phase")
+    if phase == "jd_fit":
+        return _job_fit_final_plan(known_refs=known_refs)
+    if phase == "resume_version":
+        return {
+            "phase": "resume_version",
+            "next_action": "定制简历和求职项目已创建；停止工具调用，直接面向用户总结结果。",
+            "next_allowed_tools": [],
+            "required_tools": [],
+            "known_refs": known_refs,
+            "missing_outputs": [],
+            "final_answer_ready": True,
+            "discouraged_tools": _final_discouraged_tools()
+            + [
+                "career_application_create",
+                "career_resume_version_create",
+                "career_application_list",
+                "career_resume_version_list",
+            ],
+        }
+    return None
 
 
 def _pending_plan_after_retrieval_search(

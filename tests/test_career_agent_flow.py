@@ -201,7 +201,7 @@ class JobFitFlowModel:
         tool_names = _tool_names(tools)
         if "career_job_fit_report_save" in tool_names:
             return self._job_agent_response(messages)
-        return self._main_response(messages)
+        return self._main_response(messages, tool_names=tool_names)
 
     async def generate_stream(
         self,
@@ -214,7 +214,7 @@ class JobFitFlowModel:
             yield StreamChunk()
         raise NotImplementedError("streaming is not used in this test")
 
-    def _main_response(self, messages: list[dict[str, Any]]) -> ModelResponse:
+    def _main_response(self, messages: list[dict[str, Any]], *, tool_names: set[str]) -> ModelResponse:
         if not _assistant_called(messages, "session_create_text_artifact"):
             return ModelResponse(
                 content="",
@@ -254,17 +254,7 @@ class JobFitFlowModel:
                     )
                 ],
             )
-        if not _assistant_called(messages, "career_job_fit_report_get"):
-            return ModelResponse(
-                content="",
-                tool_calls=[
-                    ToolCall(
-                        name="career_job_fit_report_get",
-                        arguments={"job_fit_report_id": "fit_alpha"},
-                    )
-                ],
-            )
-        if not _assistant_called(messages, "career_application_create"):
+        if "career_application_create" in tool_names and not _assistant_called(messages, "career_application_create"):
             return ModelResponse(
                 content="",
                 tool_calls=[
@@ -287,6 +277,16 @@ class JobFitFlowModel:
                                 "fit_alpha",
                             ],
                         },
+                    )
+                ],
+            )
+        if "career_job_fit_report_get" in tool_names and not _assistant_called(messages, "career_job_fit_report_get"):
+            return ModelResponse(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        name="career_job_fit_report_get",
+                        arguments={"job_fit_report_id": "fit_alpha"},
                     )
                 ],
             )
@@ -1026,7 +1026,7 @@ def test_main_agent_flow_creates_markdown_resume_version(tmp_path: Path) -> None
     version = bundle.career_store.get_resume_version("resume_version_alpha")
     application = bundle.career_store.get_career_application("application_alpha")
 
-    assert output.answer == "已创建定制简历版本并更新求职项目。"
+    assert output.answer == "定制简历版本已生成并关联到求职项目。"
     assert version is not None
     assert version.format == "markdown"
     assert version.source_artifact_id == version.artifact_id

@@ -435,6 +435,83 @@ def test_runtime_tool_plan_creates_application_when_resume_stage_lacks_applicati
     assert "直接调用 career_application_create" in (plan.next_action or "")
 
 
+def test_successful_application_create_finishes_jd_fit_plan() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_application_create",
+        """
+        {
+          "record_type": "career_application",
+          "record_id": "application_alpha",
+          "record": {
+            "application_id": "application_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "jd_analysis_id": "jd_alpha",
+            "job_fit_report_id": "fit_alpha"
+          }
+        }
+        """,
+        previous_pending_plan={
+            "phase": "jd_fit",
+            "next_allowed_tools": ["career_application_create"],
+            "required_tools": ["career_application_create"],
+            "known_refs": {
+                "resume_profile_id": "resume_profile_alpha",
+                "career_profile_id": "career_profile_default",
+                "jd_analysis_id": "jd_alpha",
+                "job_fit_report_id": "fit_alpha",
+            },
+            "missing_outputs": ["career_application"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["phase"] == "jd_fit"
+    assert plan["final_answer_ready"] is True
+    assert plan["missing_outputs"] == []
+    assert plan["known_refs"]["application_id"] == "application_alpha"
+    assert plan["known_refs"]["job_fit_report_id"] == "fit_alpha"
+
+
+def test_successful_application_create_finishes_resume_version_plan() -> None:
+    plan = pending_runtime_plan_from_successful_tool_result(
+        "career_application_create",
+        """
+        {
+          "record_type": "career_application",
+          "record_id": "application_alpha",
+          "record": {
+            "application_id": "application_alpha",
+            "resume_profile_id": "resume_profile_alpha",
+            "career_profile_id": "career_profile_default",
+            "jd_analysis_id": "jd_alpha",
+            "job_fit_report_id": "fit_alpha",
+            "resume_version_ids": ["resume_version_alpha"]
+          }
+        }
+        """,
+        previous_pending_plan={
+            "phase": "resume_version",
+            "next_allowed_tools": ["career_application_create"],
+            "required_tools": ["career_application_create"],
+            "known_refs": {
+                "resume_profile_id": "resume_profile_alpha",
+                "jd_analysis_id": "jd_alpha",
+                "job_fit_report_id": "fit_alpha",
+                "resume_version_id": "resume_version_alpha",
+            },
+            "missing_outputs": ["career_application"],
+        },
+    )
+
+    assert plan is not None
+    assert plan["phase"] == "resume_version"
+    assert plan["final_answer_ready"] is True
+    assert plan["missing_outputs"] == []
+    assert plan["known_refs"]["application_id"] == "application_alpha"
+    assert plan["known_refs"]["resume_version_id"] == "resume_version_alpha"
+
+
 def test_runtime_tool_plan_application_action_reads_application_first() -> None:
     plan = build_runtime_tool_plan(
         workflow_phase=WorkflowPhaseSnapshot(

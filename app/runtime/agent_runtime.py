@@ -4383,6 +4383,9 @@ def _deterministic_final_answer_fallback(pending_runtime_plan: dict[str, Any] | 
 def _deterministic_final_answer_from_packet(packet: FinalizationPacket) -> str:
     if not packet.has_grounding:
         return ""
+    summary = _workflow_completion_summary(packet.phase, known_refs=packet.known_refs)
+    if summary is not None:
+        return summary
     phase_name = _workflow_phase_display_name(packet.phase)
     lines = [f"{phase_name}已完成，关键产物已经写入系统。"]
     ref_lines = _finalization_packet_ref_summary_lines(packet)
@@ -4399,10 +4402,11 @@ def _deterministic_final_answer_from_packet(packet: FinalizationPacket) -> str:
 
 def _deterministic_completed_workflow_answer(pending_runtime_plan: dict[str, Any]) -> str:
     phase = pending_runtime_plan.get("phase")
-    if phase == "note_write":
-        return "已保存为笔记。"
-    phase_name = _workflow_phase_display_name(phase)
     known_refs = _runtime_plan_known_refs(pending_runtime_plan)
+    summary = _workflow_completion_summary(phase, known_refs=known_refs)
+    if summary is not None:
+        return summary
+    phase_name = _workflow_phase_display_name(phase)
     lines = [f"{phase_name}已完成，关键产物已经写入系统。"]
     ref_lines = _workflow_ref_summary_lines(known_refs)
     if ref_lines:
@@ -4414,6 +4418,25 @@ def _deterministic_completed_workflow_answer(pending_runtime_plan: dict[str, Any
         lines.append("")
         lines.append(next_step)
     return "\n".join(lines)
+
+
+def _workflow_completion_summary(phase: Any, *, known_refs: dict[str, Any] | None = None) -> str | None:
+    refs = known_refs or {}
+    if phase == "jd_fit" and isinstance(refs.get("application_id"), str) and refs["application_id"].strip():
+        return "已创建 JD 分析、岗位匹配报告和求职项目。"
+    if phase == "note_write":
+        return "已保存为笔记。"
+    if phase == "rag_note_write":
+        return "已保存为笔记。"
+    if phase == "rag_learning_task_create":
+        return "学习任务已创建并加入计划。"
+    if phase == "interview_review_update":
+        return "已记录面试复盘并更新求职项目。"
+    if phase == "resume_version":
+        return "定制简历版本已生成并关联到求职项目。"
+    if phase == "application_action":
+        return "求职项目已更新。"
+    return None
 
 
 def _workflow_phase_display_name(phase: Any) -> str:

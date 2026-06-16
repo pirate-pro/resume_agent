@@ -70,22 +70,24 @@ class CareerToLearningPlanModel:
     ) -> ModelResponse:
         _ = system_prompt
         tool_names = _tool_names(tools)
-        assert "career_application_get" in tool_names
-        assert "career_job_fit_report_get" in tool_names
-        assert "learning_plan_create" in tool_names
-        assert "learning_task_create" in tool_names
-        assert "learning_checkin_create" in tool_names
-        assert "learning_task_update_state" in tool_names
-        assert "learning_weakness_update" in tool_names
 
         if not _assistant_called(messages, "career_application_get"):
+            assert "career_application_get" in tool_names
             return ModelResponse(
                 content="",
                 tool_calls=[
                     ToolCall(
                         name="career_application_get",
                         arguments={"application_id": "application_stargazer_backend"},
-                    ),
+                    )
+                ],
+            )
+
+        if not _assistant_called(messages, "career_job_fit_report_get"):
+            assert "career_job_fit_report_get" in tool_names
+            return ModelResponse(
+                content="",
+                tool_calls=[
                     ToolCall(
                         name="career_job_fit_report_get",
                         arguments={"job_fit_report_id": "fit_stargazer_backend"},
@@ -94,6 +96,9 @@ class CareerToLearningPlanModel:
             )
 
         if not _assistant_called(messages, "learning_plan_create"):
+            assert "learning_plan_create" in tool_names
+            assert "learning_task_create" in tool_names
+            assert "learning_weakness_create" in tool_names
             return ModelResponse(
                 content="",
                 tool_calls=[
@@ -201,6 +206,9 @@ class CareerToLearningPlanModel:
             )
 
         if not _assistant_called(messages, "learning_checkin_create"):
+            assert "learning_checkin_create" in tool_names
+            assert "learning_task_update_state" in tool_names
+            assert "learning_weakness_update" in tool_names
             return ModelResponse(
                 content="",
                 tool_calls=[

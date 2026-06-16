@@ -586,7 +586,7 @@ def test_m12_learning_schedule_retrieves_then_creates_task_without_memory(tmp_pa
     task = bundle.stores.learning.get_learning_task("learning_task_today_rag_drill")
     events = bundle.stores.sessions.list_events("sess_alpha")
 
-    assert output.answer == "已加入今天的 RAG 学习任务。"
+    assert output.answer == "学习任务已创建并加入计划。"
     assert task is not None
     assert task.source_session_id == "sess_alpha"
     assert task.learning_plan_id == "learning_plan_stargazer"
@@ -672,16 +672,16 @@ def test_m16_interview_review_writes_note_and_updates_application_without_memory
     events = bundle.stores.sessions.list_events("sess_alpha")
     after = _product_counts(bundle.stores)
 
-    assert output.answer == "已记录一面复盘并更新求职项目。"
+    assert output.answer == "已记录面试复盘并更新求职项目。"
     assert note is not None
     assert note.related_application_id == "application_alpha"
     assert getattr(note.note_type, "value", note.note_type) == "note"
     assert "RAG chunk 策略" in note.body_markdown
     assert application is not None
     assert application.stage == "interviewing"
-    assert "一面已完成" in application.summary
-    assert "RAG 评估链路回答不完整" in application.risks
-    assert "补一版 RAG chunk 策略与评估回答" in application.next_actions
+    assert "面试复盘已完成" in application.summary
+    assert any("面试复盘" in item for item in application.risks)
+    assert any("note_stargazer_first_round_review" in item for item in application.next_actions)
     assert "不创建学习任务" in application.notes
     assert after.applications == before.applications
     assert after.notes == before.notes + 1
@@ -690,6 +690,13 @@ def test_m16_interview_review_writes_note_and_updates_application_without_memory
     assert after.jd_analyses == before.jd_analyses
     assert after.job_fit_reports == before.job_fit_reports
     assert _tool_call_names(events) == [
+        "retrieval_search",
+        "retrieval_context_pack",
+        "note_create",
+        "career_application_merge",
+        "career_application_merge",
+    ]
+    assert _successful_tool_result_names(events) == [
         "retrieval_search",
         "retrieval_context_pack",
         "note_create",
@@ -741,7 +748,7 @@ def test_m17_review_advice_creates_learning_task_only_when_user_confirms(tmp_pat
     events = bundle.stores.sessions.list_events("sess_alpha")
     after = _product_counts(bundle.stores)
 
-    assert output.answer == "已把复盘建议转成学习任务。"
+    assert output.answer == "学习任务已创建并加入计划。"
     assert task is not None
     assert task.source_session_id == "sess_alpha"
     assert task.learning_plan_id == "learning_plan_stargazer"
@@ -868,3 +875,11 @@ def _product_counts(stores: RetrievalStores) -> ProductCounts:
         learning_tasks=len(stores.learning.list_learning_tasks(include_archived=True)),
         artifacts=len(stores.sessions.list_session_artifacts("sess_alpha")),
     )
+
+
+def _successful_tool_result_names(events: list[Any]) -> list[str]:
+    return [
+        event.payload["tool_name"]
+        for event in events
+        if event.type == "tool_result" and event.payload.get("success") is True
+    ]

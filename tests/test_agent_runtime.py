@@ -128,15 +128,11 @@ def _build_runtime(
 
 
 def _assert_resume_version_deterministic_answer(answer: str) -> None:
-    assert "定制简历版本生成已完成" in answer
-    assert "CareerApplication: `application_alpha`" in answer
-    assert "ResumeVersion: `resume_version_alpha`" in answer
+    assert answer == "定制简历版本已生成并关联到求职项目。"
 
 
 def _assert_interview_review_deterministic_answer(answer: str) -> None:
-    assert "面试复盘更新已完成" in answer
-    assert "CareerApplication: `application_alpha`" in answer
-    assert "Note: `note_alpha`" in answer
+    assert answer == "已记录面试复盘并更新求职项目。"
 
 
 def _assert_deterministic_finalization_packet(events: list[EventRecord]) -> None:
@@ -2719,9 +2715,7 @@ def test_runtime_deterministic_final_fallback_lists_completed_refs(tmp_path: Pat
         )
     )
 
-    assert "定制简历版本生成已完成" in output.answer
-    assert "ResumeVersion: `resume_version_alpha`" in output.answer
-    assert "CareerApplication: `application_alpha`" in output.answer
+    assert output.answer == "定制简历版本已生成并关联到求职项目。"
     assert "模型没有生成可用总结" not in output.answer
     assert model.calls == 2
     decisions = [
@@ -2850,9 +2844,7 @@ def test_runtime_skips_weak_recovery_after_workflow_is_complete(tmp_path: Path) 
         )
     )
 
-    assert "定制简历版本生成已完成" in output.answer
-    assert "ResumeVersion: `resume_version_alpha`" in output.answer
-    assert "CareerApplication: `application_alpha`" in output.answer
+    assert output.answer == "定制简历版本已生成并关联到求职项目。"
     assert model.calls == 2
     events = session_repo.list_events("sess_weak_completed_workflow_answer")
     rejected = [event.payload for event in events if event.type == "assistant_answer_rejected"]
@@ -5299,6 +5291,7 @@ def test_runtime_uses_workflow_guard_tool_search_block_to_reveal_next_allowed_sc
     assert [decision["reason"] for decision in decisions] == [
         "main_jd_fit_records_ready_create_application",
         "premature_final_answer_with_pending_runtime_tools",
+        "workflow_final_answer_ready",
     ]
 
 
