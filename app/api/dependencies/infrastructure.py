@@ -14,6 +14,7 @@ from app.infra.storage.jsonl_workflow_instance_store import JsonlWorkflowInstanc
 from app.infra.storage.markdown_agent_document_repository import MarkdownAgentDocumentRepository
 from app.infra.storage.markdown_skill_repository import MarkdownSkillRepository
 from app.infra.storage.sqlite_workflow_resume_lease_store import SqliteWorkflowResumeLeaseStore
+from app.infra.storage.sqlite_graph_agent_task_store import SqliteGraphAgentTaskStore
 from app.knowledge.store import KnowledgeStore
 from app.learning.store import LearningStore
 from app.memory.file_store import FileMemoryStore
@@ -34,6 +35,7 @@ __all__ = [
     "get_skill_repository",
     "get_state_store",
     "get_tool_call_ledger",
+    "get_graph_agent_task_store",
     "get_workflow_instance_store",
     "get_workflow_resume_lease_store",
 ]
@@ -61,6 +63,12 @@ def get_workflow_instance_store() -> JsonlWorkflowInstanceStore:
 def get_workflow_resume_lease_store() -> SqliteWorkflowResumeLeaseStore:
     settings = get_settings()
     return SqliteWorkflowResumeLeaseStore(path=settings.langgraph_resume_lease_path)
+
+
+@lru_cache(maxsize=1)
+def get_graph_agent_task_store() -> SqliteGraphAgentTaskStore:
+    settings = get_settings()
+    return SqliteGraphAgentTaskStore(path=settings.langgraph_task_store_path)
 
 
 @lru_cache(maxsize=1)

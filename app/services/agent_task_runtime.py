@@ -32,6 +32,7 @@ __all__ = [
     "AgentTaskResult",
     "AgentTaskRuntime",
     "AgentTaskSpec",
+    "child_completion_error",
 ]
 
 _DEFAULT_MAX_CONCURRENCY = 3
@@ -264,7 +265,7 @@ class AgentTaskRuntime:
                         product_refs=[],
                         error=error,
                     )
-                completion_error = _child_completion_error(spec=spec, result=result)
+                completion_error = child_completion_error(spec=spec, result=result)
                 if completion_error is not None:
                     failed = self._task_store.mark_failed(
                         request.source_context.session_id,
@@ -528,7 +529,9 @@ def _group_completion_detail(status: str, results: list[AgentTaskResult]) -> str
     return f"{completed} 个完成，{failed} 个失败"
 
 
-def _child_completion_error(*, spec: AgentTaskSpec, result: object) -> str | None:
+def child_completion_error(*, spec: AgentTaskSpec, result: object) -> str | None:
+    """Validate child output facts before marking a task completed."""
+
     answer = _result_text(result, "answer")
     summary = _result_text(result, "summary")
     if _TOOL_CALL_LIMIT_MESSAGE in answer or _TOOL_CALL_LIMIT_MESSAGE in summary:

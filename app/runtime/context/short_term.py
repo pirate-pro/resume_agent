@@ -152,32 +152,45 @@ def is_other_agent_related_event(event: EventRecord, context: RunContext) -> boo
     return event.parent_run_id == context.run_id
 
 
-def _bounded_context_value(value: Any, *, depth: int = 0) -> Any:
+def _bounded_context_value(
+    value: Any,
+    *,
+    depth: int = 0,
+    string_limit: int = 1200,
+) -> Any:
     if depth >= 5:
-        return _shorten_scalar(value)
+        return _shorten_scalar(value, limit=string_limit)
     if isinstance(value, dict):
         output: dict[str, Any] = {}
         for index, (raw_key, raw_value) in enumerate(value.items()):
             if index >= 32:
                 output["_truncated_keys"] = max(0, len(value) - 32)
                 break
-            output[str(raw_key)] = _bounded_context_value(raw_value, depth=depth + 1)
+            key = str(raw_key)
+            output[key] = _bounded_context_value(
+                raw_value,
+                depth=depth + 1,
+                string_limit=3000 if key == "text_preview" else string_limit,
+            )
         return output
     if isinstance(value, list):
-        items = [_bounded_context_value(item, depth=depth + 1) for item in value[:16]]
+        items = [
+            _bounded_context_value(item, depth=depth + 1, string_limit=string_limit)
+            for item in value[:16]
+        ]
         if len(value) > 16:
             items.append({"_truncated_items": len(value) - 16})
         return items
-    return _shorten_scalar(value)
+    return _shorten_scalar(value, limit=string_limit)
 
 
-def _shorten_scalar(value: Any) -> Any:
+def _shorten_scalar(value: Any, *, limit: int = 1200) -> Any:
     if not isinstance(value, str):
         return value
     text = value.strip()
-    if len(text) <= 1200:
+    if len(text) <= limit:
         return text
-    return text[:1200].rstrip() + "...(truncated)"
+    return text[:limit].rstrip() + "...(truncated)"
 
 
 def is_main_agent_orchestration_event(event: EventRecord, context: RunContext) -> bool:

@@ -8,6 +8,7 @@ from typing import Any
 from app.api.dependencies.config import get_settings
 from app.api.dependencies.infrastructure import (
     get_career_product_store,
+    get_graph_agent_task_store,
     get_lock_manager,
     get_session_repository,
     get_tool_call_ledger,
@@ -27,8 +28,10 @@ from app.api.dependencies.tools import get_tool_registry
 from app.runtime.agent.tool_gateway import ToolGateway
 from app.runtime.langgraph import (
     INTERVIEW_REVIEW_WORKFLOW_ID,
+    MULTI_AGENT_CAREER_WORKFLOW_ID,
     RAG_NOTE_WORKFLOW_ID,
     InterviewReviewWorkflowRunner,
+    MultiAgentCareerWorkflowRunner,
     RagNoteWorkflowRunner,
     WorkflowRouter,
     WorkflowRunnerDispatcher,
@@ -38,6 +41,8 @@ from app.services.agent_invocation_service import AgentInvocationService
 from app.services.agent_task_runtime import AgentTaskRuntime
 from app.services.answer_normalizer import AnswerNormalizer
 from app.services.chat_service import ChatService
+from app.services.graph_agent_task_executor import GraphAgentTaskExecutor
+from app.services.graph_agent_task_output_validator import GraphAgentTaskOutputValidator
 from app.services.memory_query_service import MemoryQueryService
 from app.services.session_artifact_service import SessionArtifactService
 from app.services.session_query_service import SessionQueryService
@@ -50,8 +55,10 @@ __all__ = [
     "get_agent_task_store",
     "get_answer_normalizer",
     "get_chat_service",
+    "get_graph_agent_task_executor",
     "get_memory_query_service",
     "get_interview_review_workflow_runner",
+    "get_multi_agent_career_workflow_runner",
     "get_rag_note_workflow_runner",
     "get_session_artifact_service",
     "get_session_query_service",
@@ -91,6 +98,24 @@ def get_agent_invocation_service() -> AgentInvocationService:
 
 
 @lru_cache(maxsize=1)
+def get_graph_agent_task_executor() -> GraphAgentTaskExecutor:
+    settings = get_settings()
+    return GraphAgentTaskExecutor(
+        invocation_service=get_agent_invocation_service(),
+        task_store=get_graph_agent_task_store(),
+        task_context_builder=TaskContextBuilder(
+            session_repository=get_session_repository(),
+            career_store=get_career_product_store(),
+        ),
+        output_validator=GraphAgentTaskOutputValidator(
+            career_store=get_career_product_store(),
+            session_repository=get_session_repository(),
+        ),
+        lease_ttl_seconds=settings.langgraph_task_lease_ttl_seconds,
+    )
+
+
+@lru_cache(maxsize=1)
 def get_answer_normalizer() -> AnswerNormalizer:
     return AnswerNormalizer()
 
@@ -107,6 +132,7 @@ def get_workflow_router() -> WorkflowRouter:
         enabled=settings.langgraph_workflow_enabled,
         interactive_note_enabled=settings.langgraph_interactive_note_enabled,
         interactive_interview_review_enabled=settings.langgraph_interactive_interview_review_enabled,
+        multi_agent_career_enabled=settings.langgraph_multi_agent_career_enabled,
     )
 
 
@@ -141,6 +167,25 @@ def get_interview_review_workflow_runner() -> InterviewReviewWorkflowRunner:
 
 
 @lru_cache(maxsize=1)
+def get_multi_agent_career_workflow_runner() -> MultiAgentCareerWorkflowRunner:
+    settings = get_settings()
+    return MultiAgentCareerWorkflowRunner(
+        task_executor=get_graph_agent_task_executor(),
+        tool_gateway=_build_workflow_tool_gateway(),
+        event_recorder=get_event_recorder(),
+        session_repository=get_session_repository(),
+        career_store=get_career_product_store(),
+        workflow_store=get_workflow_instance_store(),
+        checkpoint_backend=settings.langgraph_workflow_backend,
+        checkpoint_path=settings.langgraph_checkpoint_path,
+        node_timeout_seconds=max(
+            settings.langgraph_node_timeout_seconds,
+            settings.chat_stream_run_timeout_seconds,
+        ),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_workflow_runner_dispatcher() -> WorkflowRunnerDispatcher:
     settings = get_settings()
     runners: dict[str, Any] = {}
@@ -148,6 +193,8 @@ def get_workflow_runner_dispatcher() -> WorkflowRunnerDispatcher:
         runners[RAG_NOTE_WORKFLOW_ID] = get_rag_note_workflow_runner()
     if settings.langgraph_interactive_interview_review_enabled:
         runners[INTERVIEW_REVIEW_WORKFLOW_ID] = get_interview_review_workflow_runner()
+    if settings.langgraph_multi_agent_career_enabled:
+        runners[MULTI_AGENT_CAREER_WORKFLOW_ID] = get_multi_agent_career_workflow_runner()
     return WorkflowRunnerDispatcher(
         runners=runners,
         workflow_store=get_workflow_instance_store(),

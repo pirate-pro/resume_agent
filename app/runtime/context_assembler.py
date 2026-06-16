@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import cast
+from typing import Any, cast
 
 from app.core.errors import StorageError
 from app.core.errors import ValidationError
@@ -538,6 +538,14 @@ def _runtime_tool_plan_from_assigned_task_context(
             continue
         phase = _non_empty_string(task_context.get("phase"))
         known_refs = _task_context_known_refs(task_context.get("known_refs"))
+        graph_plan = _graph_task_runtime_plan(
+            task_context=task_context,
+            target_agent_id=task.target_agent_id,
+            phase=phase,
+            known_refs=known_refs,
+        )
+        if graph_plan is not None:
+            return graph_plan
         if phase == "resume_diagnosis" and task.target_agent_id == "resume_agent":
             return RuntimeToolPlan(
                 phase="resume_diagnosis",
@@ -586,6 +594,71 @@ def _runtime_tool_plan_from_assigned_task_context(
                 ),
             )
     return None
+
+
+def _graph_task_runtime_plan(
+    *,
+    task_context: dict[str, Any],
+    target_agent_id: str,
+    phase: str | None,
+    known_refs: dict[str, str],
+) -> RuntimeToolPlan | None:
+    if not _non_empty_string(task_context.get("graph_contract_id")):
+        return None
+    initial_steps = {
+        "resume_analysis": (
+            "resume_agent",
+            "session_create_text_artifact",
+            ["diagnosis_artifact_id", "resume_profile_id"],
+            "TaskContext 已提供简历正文；先创建唯一的简历诊断 artifact，再保存 ResumeProfile。",
+        ),
+        "jd_analysis": (
+            "job_agent",
+            "career_jd_analysis_save",
+            ["jd_analysis_id"],
+            "TaskContext 已提供 JD 正文；本任务只保存 JDAnalysis，不生成岗位匹配报告。",
+        ),
+        "job_fit_analysis": (
+            "job_agent",
+            "session_create_text_artifact",
+            ["report_artifact_id", "job_fit_report_id"],
+            "TaskContext 已提供 ResumeProfile 和 JDAnalysis；先创建唯一的岗位匹配报告 artifact，再保存 JobFitReport。",
+        ),
+    }
+    definition = initial_steps.get(phase or "")
+    if definition is None or definition[0] != target_agent_id:
+        return None
+    required_tool = definition[1]
+    return RuntimeToolPlan(
+        phase=phase,
+        known_refs=known_refs,
+        missing_outputs=definition[2],
+        next_allowed_tools=[required_tool],
+        required_tools=[required_tool],
+        discouraged_tools=_graph_task_discouraged_tools(required_tool),
+        next_action=definition[3],
+    )
+
+
+def _graph_task_discouraged_tools(required_tool: str | None) -> list[str]:
+    tools = [
+        "tool_search",
+        "delegate_agents",
+        "session_read_artifact",
+        "session_list_artifacts",
+        "session_plan_artifact_access",
+        "session_search_artifact",
+        "session_create_text_artifact",
+        "career_resume_profile_get",
+        "career_resume_profile_save",
+        "career_profile_get",
+        "career_jd_analysis_get",
+        "career_jd_analysis_save",
+        "career_job_fit_report_get",
+        "career_job_fit_report_save",
+        "career_application_create",
+    ]
+    return [tool for tool in tools if tool != required_tool]
 
 
 def _task_context_known_refs(raw_refs: object) -> dict[str, str]:

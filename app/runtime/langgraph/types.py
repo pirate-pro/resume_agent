@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from operator import add
+from typing import Annotated, Any, Literal, TypedDict
 
 from app.core.errors import ValidationError
 from app.domain.models import AgentRunOutput, RunContext, ToolCall
@@ -11,6 +12,8 @@ from app.domain.models import AgentRunOutput, RunContext, ToolCall
 __all__ = [
     "INTERVIEW_REVIEW_WORKFLOW_ID",
     "InterviewReviewGraphState",
+    "MULTI_AGENT_CAREER_WORKFLOW_ID",
+    "MultiAgentCareerGraphState",
     "RAG_NOTE_WORKFLOW_ID",
     "WorkflowGraphRunResult",
     "WorkflowGraphState",
@@ -20,6 +23,7 @@ __all__ = [
 
 RAG_NOTE_WORKFLOW_ID = "rag.note.write.interactive.v1"
 INTERVIEW_REVIEW_WORKFLOW_ID = "interview.review.update.interactive.v1"
+MULTI_AGENT_CAREER_WORKFLOW_ID = "career.intake.analysis.interactive.v1"
 
 
 class WorkflowGraphState(TypedDict, total=False):
@@ -57,6 +61,23 @@ class InterviewReviewGraphState(WorkflowGraphState, total=False):
     update_fields: list[str]
     save_note: bool
     update_application: bool
+
+
+class MultiAgentCareerGraphState(WorkflowGraphState, total=False):
+    """State for the code-owned multi-agent career intake workflow."""
+
+    resume_artifact_id: str | None
+    jd_artifact_id: str | None
+    selected_career_profile_id: str | None
+    task_specs: dict[str, dict[str, Any]]
+    task_execution_keys: dict[str, str]
+    task_attempts: dict[str, int]
+    task_results: dict[str, dict[str, Any]]
+    task_updates: Annotated[list[dict[str, Any]], add]
+    failed_task_keys: list[str]
+    retry_task_keys: list[str]
+    input_candidates: list[dict[str, Any]]
+    project_preview: dict[str, Any] | None
 
 
 @dataclass(frozen=True, slots=True)

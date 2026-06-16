@@ -20,7 +20,11 @@ from app.runtime.agent_events import (
     AgentTaskAssignedPayload,
 )
 from app.runtime.agent_registry import AgentRegistry
-from app.runtime.context_assembler import ContextAssembler, ContextAssemblyRole
+from app.runtime.context_assembler import (
+    ContextAssembler,
+    ContextAssemblyRole,
+    _runtime_tool_plan_from_assigned_task_context,
+)
 from app.runtime.memory_manager import MemoryManager
 from app.state.manager import StateManager
 from app.state.stores.jsonl_file_store import JsonlFileStateStore
@@ -966,6 +970,102 @@ def test_context_assembler_builds_child_runtime_plan_from_task_context(tmp_path:
     assert "jd_analysis_id" not in bundle.runtime_tool_plan["known_refs"]
     assert "Runtime tool plan for this model round:" in bundle.system_prompt
     assert "TaskContext 已提供 JD 正文" in bundle.system_prompt
+
+
+def test_context_assembler_builds_narrow_graph_jd_analysis_plan() -> None:
+    plan = _runtime_tool_plan_from_assigned_task_context(
+        [
+            AgentTaskAssignedPayload(
+                task_id="graph_task_jd",
+                source_agent_id="agent_main",
+                target_agent_id="job_agent",
+                instruction="只保存 JDAnalysis。",
+                artifact_refs=["artifact_jd_alpha"],
+                task_context={
+                    "schema_version": 1,
+                    "phase": "jd_analysis",
+                    "graph_contract_id": "career.intake.analysis.v1",
+                    "provided_inputs_complete": True,
+                    "known_refs": {"jd_artifact_id": "artifact_jd_alpha"},
+                    "required_outputs": ["jd_analysis_id"],
+                    "allowed_initial_tools": ["career_jd_analysis_save"],
+                },
+                parent_run_id="run_main",
+                child_run_id="run_child_jd",
+            )
+        ]
+    )
+
+    assert plan is not None
+    assert plan.phase == "jd_analysis"
+    assert plan.next_allowed_tools == ["career_jd_analysis_save"]
+    assert plan.required_tools == ["career_jd_analysis_save"]
+    assert plan.missing_outputs == ["jd_analysis_id"]
+    assert "session_create_text_artifact" in plan.discouraged_tools
+
+
+def test_context_assembler_keeps_full_controlled_artifact_preview(tmp_path: Path) -> None:
+    session_repo = JsonlSessionRepository(data_dir=tmp_path)
+    session_repo.create_session("sess_task_long_preview")
+    long_preview = "A" * 1400 + "\n## 教育经历\n上海理工大学"
+    session_repo.append_event(
+        "sess_task_long_preview",
+        EventRecord(
+            event_id="evt_assign_long_preview",
+            session_id="sess_task_long_preview",
+            type=AGENT_TASK_ASSIGNED_EVENT,
+            payload=AgentTaskAssignedPayload(
+                task_id="graph_task_resume",
+                source_agent_id="agent_main",
+                target_agent_id="resume_agent",
+                instruction="解析全部简历章节。",
+                artifact_refs=["artifact_resume"],
+                task_context={
+                    "schema_version": 1,
+                    "phase": "resume_analysis",
+                    "graph_contract_id": "career.intake.analysis.v1",
+                    "provided_inputs_complete": True,
+                    "known_refs": {"resume_artifact_id": "artifact_resume"},
+                    "provided_artifacts": [
+                        {
+                            "artifact_id": "artifact_resume",
+                            "text_preview": long_preview,
+                        }
+                    ],
+                },
+                parent_run_id="run_main",
+                child_run_id="run_child_resume",
+            ).to_payload(),
+            created_at=datetime.now(UTC),
+            agent_id="agent_main",
+            run_id="run_main",
+        ),
+    )
+    assembler = ContextAssembler(
+        session_repository=session_repo,
+        skill_repository=MarkdownSkillRepository(skills_dir=Path("app/skills")),
+        agent_document_repository=_agent_document_repository(),
+        memory_manager=_memory_manager(tmp_path),
+        state_manager=_state_manager(tmp_path),
+        tool_executor=ToolRegistry(capability_registry=_capability_registry()),
+    )
+
+    bundle = assembler.assemble(
+        context=RunContext(
+            session_id="sess_task_long_preview",
+            run_id="run_child_resume",
+            agent_id="resume_agent",
+            turn_id="turn_child_resume",
+            entry_agent_id="agent_main",
+            parent_run_id="run_main",
+            task_id="graph_task_resume",
+            trace_flags={},
+        ),
+        user_message="开始执行子任务",
+        skill_names=["base"],
+    )
+
+    assert "上海理工大学" in bundle.system_prompt
 
 
 def test_context_assembler_injects_child_result_summary_for_main_agent(tmp_path: Path) -> None:

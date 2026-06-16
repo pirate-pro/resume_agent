@@ -108,6 +108,10 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("LANGGRAPH_INTERACTIVE_INTERVIEW_REVIEW_ENABLED"),
     )
+    langgraph_multi_agent_career_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("LANGGRAPH_MULTI_AGENT_CAREER_ENABLED"),
+    )
     langgraph_workflow_backend: str = Field(
         default="memory",
         validation_alias=AliasChoices("LANGGRAPH_WORKFLOW_BACKEND"),
@@ -123,6 +127,14 @@ class Settings(BaseSettings):
     langgraph_resume_lease_ttl_seconds: float = Field(
         default=600.0,
         validation_alias=AliasChoices("LANGGRAPH_RESUME_LEASE_TTL_SECONDS"),
+    )
+    langgraph_task_store_path: Path = Field(
+        default=Path("data/langgraph/task_attempts.sqlite"),
+        validation_alias=AliasChoices("LANGGRAPH_TASK_STORE_PATH"),
+    )
+    langgraph_task_lease_ttl_seconds: float = Field(
+        default=900.0,
+        validation_alias=AliasChoices("LANGGRAPH_TASK_LEASE_TTL_SECONDS"),
     )
     langgraph_node_timeout_seconds: float = Field(
         default=90.0,
@@ -259,6 +271,7 @@ class Settings(BaseSettings):
         "agent_registry_path",
         "langgraph_checkpoint_path",
         "langgraph_resume_lease_path",
+        "langgraph_task_store_path",
     )
     @classmethod
     def _validate_path_value(cls, value: Path) -> Path:
@@ -290,7 +303,12 @@ class Settings(BaseSettings):
             raise ValidationError("CHAT_STREAM_HEARTBEAT_INTERVAL_SECONDS must be positive.")
         return value
 
-    @field_validator("chat_stream_run_timeout_seconds", "langgraph_node_timeout_seconds", "langgraph_resume_lease_ttl_seconds")
+    @field_validator(
+        "chat_stream_run_timeout_seconds",
+        "langgraph_node_timeout_seconds",
+        "langgraph_resume_lease_ttl_seconds",
+        "langgraph_task_lease_ttl_seconds",
+    )
     @classmethod
     def _validate_chat_stream_run_timeout(cls, value: float) -> float:
         if value <= 0:
@@ -313,6 +331,7 @@ class Settings(BaseSettings):
         "langgraph_workflow_enabled",
         "langgraph_interactive_note_enabled",
         "langgraph_interactive_interview_review_enabled",
+        "langgraph_multi_agent_career_enabled",
         mode="before",
     )
     @classmethod
