@@ -40,6 +40,7 @@ from tools.smoke_career_live_flow import (
     print_report,
     retrieval_quality_summary,
     run_all,
+    tool_call_counts,
 )
 
 
@@ -618,6 +619,41 @@ def test_retrieval_quality_summary_reports_context_budget(tmp_path: Path) -> Non
     assert summary["max_requested_chars"] == 500
     assert summary["budget_violations"] == 0
     assert summary["source_type_counts"] == {"note": 2, "career_application": 1}
+
+
+def test_tool_call_counts_uses_auto_executed_replacement_tool(tmp_path: Path) -> None:
+    session_id = "sess_live_replaced_tool"
+    repository = JsonlSessionRepository(data_dir=tmp_path)
+    repository.create_session(session_id)
+    _append_tool_call(
+        repository,
+        session_id=session_id,
+        event_id="evt_original_wrong_tool",
+        tool_name="retrieval_search",
+        arguments={"query": "AI 应用开发工程师 面试"},
+        tool_call_id="call_replace_me",
+    )
+    repository.append_agent_event(
+        session_id,
+        "agent_main",
+        EventRecord(
+            event_id="evt_replacement_tool",
+            session_id=session_id,
+            type="tool_call",
+            payload={
+                "name": "career_application_merge",
+                "arguments": {"application_id": "application_alpha"},
+                "tool_call_id": "call_replace_me",
+                "auto_executed": True,
+                "replaced_tool_name": "retrieval_search",
+            },
+            created_at=app_now(),
+            agent_id="agent_main",
+            run_id="run_test",
+        ),
+    )
+
+    assert tool_call_counts(repository, session_id) == {"career_application_merge": 1}
 
 
 def test_efficiency_summary_reports_cost_duplicates_hidden_and_decisions(tmp_path: Path) -> None:

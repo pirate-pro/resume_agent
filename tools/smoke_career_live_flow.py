@@ -609,8 +609,8 @@ def run_live_flow(
                     )
                 )
         if project_action != "none":
-            application = _latest_career_application_for_session(stack, session_id)
-            if application is None:
+            latest_application = _latest_career_application_for_session(stack, session_id)
+            if latest_application is None:
                 raise RuntimeError("项目动作前未找到 CareerApplication，无法验证 application_id 链路。")
             current_stage = _project_action_stage(project_action)
             report.turns.append(
@@ -618,7 +618,7 @@ def run_live_flow(
                     stack=stack,
                     session_id=session_id,
                     name=current_stage,
-                    message=_project_action_message(project_action, application.application_id),
+                    message=_project_action_message(project_action, latest_application.application_id),
                     max_tool_rounds=max_tool_rounds,
                     run_index=run_index,
                     stream=stream,
@@ -1715,8 +1715,21 @@ def run_context(session_id: str) -> RunContext:
 
 def tool_call_counts(repository: JsonlSessionRepository, session_id: str) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for event in _all_relevant_events(repository, session_id):
+    events = _all_relevant_events(repository, session_id)
+    replaced_call_ids = {
+        str(event.payload.get("tool_call_id"))
+        for event in events
+        if event.type == "tool_call"
+        and isinstance(event.payload, dict)
+        and event.payload.get("auto_executed") is True
+        and isinstance(event.payload.get("replaced_tool_name"), str)
+        and isinstance(event.payload.get("tool_call_id"), str)
+    }
+    for event in events:
         if event.type != "tool_call" or not isinstance(event.payload, dict):
+            continue
+        tool_call_id = event.payload.get("tool_call_id")
+        if event.payload.get("auto_executed") is not True and tool_call_id in replaced_call_ids:
             continue
         name = event.payload.get("name")
         if isinstance(name, str):
