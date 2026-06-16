@@ -150,6 +150,9 @@ def _apply_runtime_plan(
 ) -> dict[str, Any]:
     output = dict(payload)
     output["runtime_plan_applied"] = True
+    output["tool_route_decision_source"] = "runtime_plan"
+    output["catalog_matched_groups"] = payload.get("matched_groups", [])
+    output["catalog_revealed_tool_names"] = payload.get("revealed_tool_names", [])
     output["runtime_plan_phase"] = runtime_plan.phase
     output["runtime_next_action"] = runtime_plan.next_action
     output["runtime_current_allowed_tools"] = runtime_plan.next_allowed_tools
@@ -168,6 +171,7 @@ def _apply_runtime_plan(
         output["revealed_tool_count"] = 0
         output["next_step"] = "RuntimeToolPlan 判断关键产物已完成；不要继续 reveal 工具，直接最终答复。"
         output["search_guidance"] = "当前阶段不需要新的工具 schema。"
+        output["routing_guidance"] = None
         return output
 
     if runtime_plan.next_allowed_tools:
@@ -187,6 +191,7 @@ def _apply_runtime_plan(
                 output["runtime_unavailable_next_allowed_tools"] = unavailable
             output["next_step"] = "下一轮优先直接调用 runtime_next_allowed_tools；不要为同一步继续 tool_search。"
             output["search_guidance"] = "RuntimeToolPlan 已收窄当前阶段工具面。"
+            output["routing_guidance"] = None
     return output
 
 

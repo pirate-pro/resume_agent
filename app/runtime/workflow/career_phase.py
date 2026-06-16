@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from app.domain.models import RunContext, SessionArtifact
+from app.domain.reference_ids import is_reserved_reference_value
 from app.runtime.context.models import CareerFlowState, CurrentWorkflowState
 from app.runtime.workflow.intent_boundary import build_turn_intent_boundary
 from app.runtime.workflow.phase import WorkflowPhaseSnapshot, WorkflowRequiredOutput
@@ -27,6 +28,7 @@ def build_career_phase_snapshot(
 
     intent = _career_intent(user_message)
     refs = _merged_refs(workflow_state=workflow_state, career_flow_state=career_flow_state)
+    refs.update(_message_refs(user_message))
     multi_refs = career_flow_state.multi_refs
     active_input_refs = _active_input_refs(active_artifacts)
     if not intent and not refs and not multi_refs and not active_input_refs:
@@ -224,6 +226,25 @@ def _output(name: str, ref_key: str, ref_value: str | None) -> WorkflowRequiredO
 def _merged_refs(*, workflow_state: CurrentWorkflowState, career_flow_state: CareerFlowState) -> dict[str, str]:
     refs = dict(workflow_state.refs)
     refs.update(career_flow_state.refs)
+    return refs
+
+
+def _message_refs(user_message: str) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    for match in _CONTROLLED_REF_RE.finditer(user_message):
+        ref = match.group(0)
+        if ref in _CONTROLLED_REF_FIELD_NAMES or is_reserved_reference_value(ref):
+            continue
+        if ref == "career_profile_default" or ref.startswith("career_profile_"):
+            refs["career_profile_id"] = ref
+        elif ref.startswith("resume_profile_"):
+            refs["resume_profile_id"] = ref
+        elif ref.startswith("jd_analysis_") or ref.startswith("jd_"):
+            refs["jd_analysis_id"] = ref
+        elif ref.startswith("job_fit_report_") or ref.startswith("fit_"):
+            refs["job_fit_report_id"] = ref
+        elif ref.startswith("application_"):
+            refs["application_id"] = ref
     return refs
 
 
@@ -628,3 +649,25 @@ def _resume_version_requires_application_read(
         and "application_read_required" in intent
         and "career_application_get" not in set(career_flow_state.do_not_repeat_tools)
     )
+
+
+_CONTROLLED_REF_RE = re.compile(
+    r"(?:"
+    r"application_[A-Za-z0-9_-]+"
+    r"|career_profile_default"
+    r"|career_profile_[A-Za-z0-9_-]+"
+    r"|resume_profile_[A-Za-z0-9_-]+"
+    r"|jd_analysis_[A-Za-z0-9_-]+"
+    r"|job_fit_report_[A-Za-z0-9_-]+"
+    r"|jd_[A-Za-z0-9_-]+"
+    r"|fit_[A-Za-z0-9_-]+"
+    r")(?![A-Za-z0-9_])"
+)
+
+_CONTROLLED_REF_FIELD_NAMES = {
+    "application_id",
+    "career_profile_id",
+    "jd_analysis_id",
+    "job_fit_report_id",
+    "resume_profile_id",
+}

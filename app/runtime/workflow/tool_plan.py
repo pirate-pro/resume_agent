@@ -129,6 +129,7 @@ def build_runtime_tool_plan(
 
     phase = workflow_phase.phase_name
     known_refs = _known_refs(workflow_state=workflow_state, career_flow_state=career_flow_state)
+    known_refs.update(_known_refs_from_workflow_phase(workflow_phase))
     missing_outputs = [item.name for item in workflow_phase.missing_outputs]
     final_answer_ready = workflow_phase.final_answer_ready or (
         phase in _FINAL_WHEN_NO_MISSING_PHASES and not missing_outputs
@@ -1775,6 +1776,14 @@ def _known_refs(*, workflow_state: CurrentWorkflowState, career_flow_state: Care
     resume_version_artifact_ids = career_flow_state.multi_refs.get("resume_version_artifact_ids") or []
     if resume_version_artifact_ids:
         output["resume_version_artifact_id"] = resume_version_artifact_ids[-1]
+    return {key: output[key] for key in _REF_KEY_ORDER if key in output}
+
+
+def _known_refs_from_workflow_phase(workflow_phase: WorkflowPhaseSnapshot) -> dict[str, str]:
+    output: dict[str, str] = {}
+    for item in workflow_phase.completed_outputs:
+        if item.ref_value:
+            output[item.ref_key] = item.ref_value
     return {key: output[key] for key in _REF_KEY_ORDER if key in output}
 
 

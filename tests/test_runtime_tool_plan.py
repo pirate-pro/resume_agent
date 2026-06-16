@@ -260,6 +260,31 @@ def test_runtime_tool_plan_reads_application_before_project_resume_version() -> 
     assert "先调用 career_application_get" in (plan.next_action or "")
 
 
+def test_runtime_tool_plan_uses_completed_phase_refs_from_current_message() -> None:
+    plan = build_runtime_tool_plan(
+        workflow_phase=WorkflowPhaseSnapshot(
+            phase_name="resume_version",
+            confidence="high",
+            required_outputs=[
+                _output("resume_profile", "resume_profile_id"),
+                _output("jd_analysis", "jd_analysis_id"),
+                _output("job_fit_report", "job_fit_report_id"),
+                _output("career_application", "application_id", "application_alpha"),
+                _output("career_application_read", "application_id"),
+                _output("resume_version", "resume_version_id"),
+                _output("career_application_resume_version_link", "application_id"),
+            ],
+        ),
+        career_flow_state=CareerFlowState(),
+        workflow_state=CurrentWorkflowState(),
+    )
+
+    assert plan.phase == "resume_version"
+    assert plan.known_refs["application_id"] == "application_alpha"
+    assert plan.next_allowed_tools == ["career_application_get"]
+    assert "career_resume_version_create" in plan.discouraged_tools
+
+
 def test_runtime_tool_plan_guides_application_merge_after_resume_version() -> None:
     plan = build_runtime_tool_plan(
         workflow_phase=WorkflowPhaseSnapshot(

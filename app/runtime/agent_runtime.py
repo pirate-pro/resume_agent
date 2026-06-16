@@ -4059,6 +4059,9 @@ def _visible_tool_definitions_for_runtime_plan(
         return visible_definitions
     if pending_runtime_plan.get("final_answer_ready") is True:
         return []
+    next_allowed_tools = set(runtime_plan_next_allowed_tools(pending_runtime_plan))
+    if next_allowed_tools:
+        return [definition for definition in visible_definitions if definition.name in next_allowed_tools]
     required_tool_is_visible = any(
         tool_reveal_state.is_visible(tool_name) for tool_name in runtime_plan_completion_tools(pending_runtime_plan)
     )

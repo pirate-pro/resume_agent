@@ -60,6 +60,9 @@ def test_tool_search_prefers_runtime_plan_next_allowed_tools_for_career_query() 
     assert payload["runtime_current_allowed_tools"] == ["career_resume_version_create"]
     assert payload["runtime_next_allowed_tools"] == ["career_resume_version_create"]
     assert payload["runtime_upcoming_required_tools"] == ["career_application_merge"]
+    assert payload["tool_route_decision_source"] == "runtime_plan"
+    assert payload["catalog_matched_groups"]
+    assert payload["routing_guidance"] is None
     assert payload["revealed_tool_names"] == ["career_resume_version_create"]
     assert "session_read_artifact" in payload["runtime_discouraged_tools"]
     assert "不要为同一步继续 tool_search" in payload["next_step"]

@@ -224,6 +224,31 @@ def test_phase_snapshot_keeps_resume_version_when_negative_refs_then_positive_re
     ]
 
 
+def test_phase_snapshot_reads_application_id_from_current_message() -> None:
+    snapshot = build_career_phase_snapshot(
+        context=_context(),
+        user_message=(
+            "当前求职项目 application_id 是 application_alpha。请先调用 career_application_get 读取项目，"
+            "再基于项目内已有资料生成一版定制简历。"
+        ),
+        workflow_state=CurrentWorkflowState(),
+        career_flow_state=CareerFlowState(),
+        active_artifacts=[],
+    )
+
+    assert snapshot.phase_name == "resume_version"
+    completed = {item.name: item.ref_value for item in snapshot.completed_outputs}
+    assert completed["career_application"] == "application_alpha"
+    assert [item.name for item in snapshot.missing_outputs] == [
+        "resume_profile",
+        "jd_analysis",
+        "job_fit_report",
+        "career_application_read",
+        "resume_version",
+        "career_application_resume_version_link",
+    ]
+
+
 def test_phase_snapshot_direct_note_write_does_not_require_retrieval() -> None:
     snapshot = build_career_phase_snapshot(
         context=_context(),
